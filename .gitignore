@@ -1,0 +1,17 @@
+.DS_Store
+
+# Node
+frontend/node_modules/
+
+# Python caches
+**/__pycache__/
+*.pyc
+
+# Env files
+.env
+backend/.env
+frontend/.env.local
+
+# IDE
+.idea/
+.vscode/
