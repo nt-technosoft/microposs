@@ -11,6 +11,7 @@ type Locale = 'ru' | 'uz' | 'en'
 export const useUIStore = defineStore('ui', () => {
   const theme = ref<Theme>(loadTheme())
   const locale = ref<Locale>(loadLocale())
+  const simpleSellerMode = ref(loadSimpleSellerMode())
   const isBottomSheetOpen = ref(false)
   const bottomSheetComponent = ref<string | null>(null)
 
@@ -24,12 +25,20 @@ export const useUIStore = defineStore('ui', () => {
     localStorage.setItem('microposs_locale', newLocale)
   })
 
+  watch(simpleSellerMode, (enabled) => {
+    localStorage.setItem('microposs_simple_seller_mode', String(enabled))
+  })
+
   function toggleTheme() {
     theme.value = theme.value === 'light' ? 'dark' : 'light'
   }
 
   function setLocale(newLocale: Locale) {
     locale.value = newLocale
+  }
+
+  function setSimpleSellerMode(enabled: boolean) {
+    simpleSellerMode.value = enabled
   }
 
   function openBottomSheet(component: string) {
@@ -52,13 +61,19 @@ export const useUIStore = defineStore('ui', () => {
     return (localStorage.getItem('microposs_locale') as Locale) || 'ru'
   }
 
+  function loadSimpleSellerMode(): boolean {
+    return localStorage.getItem('microposs_simple_seller_mode') === 'true'
+  }
+
   return {
     theme,
     locale,
+    simpleSellerMode,
     isBottomSheetOpen,
     bottomSheetComponent,
     toggleTheme,
     setLocale,
+    setSimpleSellerMode,
     openBottomSheet,
     closeBottomSheet,
   }

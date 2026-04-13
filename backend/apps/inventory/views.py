@@ -28,6 +28,7 @@ class LocationViewSet(viewsets.ModelViewSet):
     serializer_class = LocationSerializer
     permission_classes = [IsOwner]
     search_fields = ['name']
+    ordering = ['name']
 
     def get_queryset(self):
         return Location.objects.filter(tenant_id=self.request.tenant_id)

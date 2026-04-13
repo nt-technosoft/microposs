@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ShoppingBag, ShoppingCart, ArrowLeft, Trash2 } from 'lucide-vue-next'
+import { ShoppingBag, ShoppingCart, ArrowLeft, Trash2, CircleAlert } from 'lucide-vue-next'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
 import { formatPrice } from '@/utils/currency'
@@ -80,13 +80,15 @@ function cancelClear(): void {
 
     <!-- No session warning -->
     <div v-if="!sessionStore.isOpen" class="session-warning">
-      <div class="session-warning__icon">⚠️</div>
+      <div class="session-warning__icon">
+        <CircleAlert :size="18" :stroke-width="2" />
+      </div>
       <div class="session-warning__body">
         <p class="session-warning__title">Нет открытой смены</p>
         <p class="session-warning__text">Откройте кассовую смену, чтобы оформлять продажи</p>
       </div>
-      <BaseButton variant="secondary" size="sm" @click="router.push('/sessions')">
-        Открыть
+      <BaseButton variant="secondary" size="sm" @click="router.push('/sales')">
+        В каталог
       </BaseButton>
     </div>
 
@@ -285,7 +287,10 @@ function cancelClear(): void {
 }
 
 .session-warning__icon {
-  font-size: var(--text-xl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-warning);
   flex-shrink: 0;
 }
 
@@ -313,7 +318,9 @@ function cancelClear(): void {
 .cart-content {
   flex: 1;
   padding: var(--space-4);
-  padding-bottom: calc(var(--space-4) + 140px); /* room for footer */
+  padding-bottom: calc(
+    var(--space-4) + 140px + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px)
+  ); /* room for footer + bottom nav */
 }
 
 /* ==============================
@@ -471,7 +478,7 @@ function cancelClear(): void {
    ============================== */
 .cart-footer {
   position: fixed;
-  bottom: 0;
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   left: 0;
   right: 0;
   z-index: var(--z-sticky);
@@ -614,6 +621,16 @@ function cancelClear(): void {
     left: 50%;
     transform: translateX(-50%);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .cart-content {
+    padding-bottom: calc(var(--space-4) + 140px);
+  }
+
+  .cart-footer {
+    bottom: 0;
   }
 }
 

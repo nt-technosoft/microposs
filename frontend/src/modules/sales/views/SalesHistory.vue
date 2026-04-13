@@ -138,8 +138,12 @@ function formatDateTime(dateStr: string): string {
   })
 }
 
-function itemsLabel(lines: SaleLine[]): string {
-  const count = lines.reduce((sum, l) => sum + l.quantity, 0)
+function itemsLabel(sale: Sale): string {
+  const hasLines = Array.isArray(sale.lines) && sale.lines.length > 0
+  const countFromLines = hasLines ? sale.lines.reduce((sum: number, line: SaleLine) => sum + line.quantity, 0) : 0
+  const countFromList = (sale as Sale & { lines_count?: number }).lines_count ?? 0
+  const count = hasLines ? countFromLines : countFromList
+
   const mod10 = count % 10
   const mod100 = count % 100
   if (mod10 === 1 && mod100 !== 11) return `${count} товар`
@@ -264,7 +268,7 @@ function handleReturnPlaceholder(): void {
                 <span class="sale-time">{{ formatTime(sale.created_at) }}</span>
                 <span v-if="isReturned(sale)" class="badge badge-return">Возврат</span>
               </div>
-              <span class="sale-items">{{ itemsLabel(sale.lines) }}</span>
+              <span class="sale-items">{{ itemsLabel(sale) }}</span>
             </div>
 
             <div class="sale-right">

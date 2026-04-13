@@ -225,6 +225,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
     serializer_class = ProductVariantSerializer
     permission_classes = [IsOwner]
+    ordering = ['-created_at']
 
     def get_queryset(self):
         return ProductVariant.objects.filter(

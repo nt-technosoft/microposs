@@ -2,6 +2,8 @@
 
 from django.utils.deprecation import MiddlewareMixin
 
+from .permissions import resolve_tenant_id_for_user
+
 
 class TenantMiddleware(MiddlewareMixin):
     """
@@ -9,11 +11,23 @@ class TenantMiddleware(MiddlewareMixin):
     All views can then access request.tenant_id.
     """
 
-    def process_request(self, request):
-        request.tenant_id = None
+    @staticmethod
+    def _coerce_tenant_id(raw_value):
+        if raw_value in (None, ''):
+            return None
+        try:
+            tenant_id = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return tenant_id if tenant_id > 0 else None
 
+    def process_request(self, request):
+        header_tenant_id = request.headers.get('X-Tenant-ID')
         if hasattr(request, 'user') and request.user.is_authenticated:
-            tenant_id = getattr(request.user, 'active_tenant_id', None)
-            if tenant_id is None:
-                tenant_id = request.headers.get('X-Tenant-ID')
-            request.tenant_id = tenant_id
+            request.tenant_id = resolve_tenant_id_for_user(
+                request.user,
+                header_tenant_id=header_tenant_id,
+            )
+            return
+
+        request.tenant_id = self._coerce_tenant_id(header_tenant_id)

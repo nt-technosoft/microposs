@@ -31,6 +31,28 @@ export const useSessionStore = defineStore('session', {
   },
 
   actions: {
+    normalizeLocation(session: PosSession): Location | null {
+      const rawLocation = session.location as unknown
+
+      if (rawLocation && typeof rawLocation === 'object' && 'id' in rawLocation) {
+        return rawLocation as Location
+      }
+
+      if (typeof rawLocation === 'number') {
+        const fallbackName = (session as PosSession & { location_name?: string }).location_name
+        return {
+          id: rawLocation,
+          name: fallbackName ?? `Локация #${rawLocation}`,
+          location_type: 'store',
+          is_active: true,
+          created_at: '',
+          updated_at: '',
+        }
+      }
+
+      return null
+    },
+
     async loadCurrentSession(locationId?: number): Promise<void> {
       this.isLoading = true
       this.error = null
@@ -45,7 +67,7 @@ export const useSessionStore = defineStore('session', {
 
         if (sessions.length > 0) {
           this.currentSession = { ...sessions[0] }
-          this.location = { ...sessions[0].location }
+          this.location = this.normalizeLocation(sessions[0])
         } else {
           this.currentSession = null
           this.location = null
@@ -66,7 +88,7 @@ export const useSessionStore = defineStore('session', {
       try {
         const session = await apiOpenSession({ location_id: locationId, opening_cash: openingCash })
         this.currentSession = { ...session }
-        this.location = { ...session.location }
+        this.location = this.normalizeLocation(session)
         return session
       } catch (error: unknown) {
         this.error = error instanceof Error

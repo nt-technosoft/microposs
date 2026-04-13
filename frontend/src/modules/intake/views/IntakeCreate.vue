@@ -314,7 +314,8 @@ const formError = ref<string | null>(null)
 function buildPayload() {
   const payload: Record<string, unknown> = {
     receipt_type: selectedType.value,
-    location_id: selectedLocationId.value,
+    date: new Date().toISOString(),
+    destination_id: selectedLocationId.value,
     client_request_id: generateRequestId(),
     lines: lines.value.map((l) => ({
       product_variant_id: l.variant!.id,
@@ -329,7 +330,7 @@ function buildPayload() {
 
   if (needsParticipants.value && participants.value.length > 0) {
     payload.participants = participants.value.map((p) => ({
-      entity_type: 'investor',
+      participant_type: 'investor',
       entity_id: p.entity_id,
       capital_amount: parseFloat(p.capital_amount),
       profit_ratio: parseFloat(p.profit_ratio),

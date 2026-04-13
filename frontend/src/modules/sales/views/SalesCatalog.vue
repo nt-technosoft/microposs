@@ -2,9 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ShoppingCart, Package } from 'lucide-vue-next'
+import { fetchProductVariants } from '@/api/catalog'
 import { useProductsStore } from '@/stores/products'
 import { useCartStore } from '@/stores/cart'
-import type { Product } from '@/types/models'
+import type { Product, ProductVariant } from '@/types/models'
 import BaseSearch from '@/components/base/BaseSearch.vue'
 import CategoryChips from '@/components/forms/CategoryChips.vue'
 import ProductCard from '@/components/data/ProductCard.vue'
@@ -30,8 +31,14 @@ const SKELETON_COUNT = 6
 const cartItemCount = computed(() => cartStore.itemCount)
 
 function inCartQuantity(product: Product): number {
+  const resolveVariantProductId = (variant: ProductVariant): number | null => {
+    if (typeof variant.product_id === 'number') return variant.product_id
+    if (typeof variant.product === 'number') return variant.product
+    return null
+  }
+
   return cartStore.items
-    .filter((item) => item.product_variant.product_id === product.id)
+    .filter((item) => resolveVariantProductId(item.product_variant) === product.id)
     .reduce((sum, item) => sum + item.quantity, 0)
 }
 
@@ -55,19 +62,29 @@ function triggerFlash(productId: number) {
   }, 1400)
 }
 
-function onAddToCart(product: Product) {
+async function onAddToCart(product: Product) {
   if (product.has_variants) {
     router.push({ name: 'product-detail', params: { id: product.id } })
     return
   }
 
-  const variant = product.variants[0] ?? null
+  const localVariants = Array.isArray(product.variants) ? product.variants : []
+  let variant: ProductVariant | null = localVariants[0] ?? null
+  if (!variant) {
+    try {
+      const loadedVariants = await fetchProductVariants(product.id)
+      variant = loadedVariants[0] ?? null
+    } catch {
+      variant = null
+    }
+  }
+
   if (!variant) {
     router.push({ name: 'product-detail', params: { id: product.id } })
     return
   }
 
-  const price = product.base_price ?? variant.effective_price
+  const price = product.base_price ?? variant.effective_price ?? variant.price ?? '0'
 
   cartStore.addItem({
     product_variant: variant,

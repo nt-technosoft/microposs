@@ -2,6 +2,8 @@
 Customers serializers.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import Customer, CustomerPayment
 
@@ -40,6 +42,10 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
 
 
 class CustomerPaymentCreateSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0.01)
+    amount = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        min_value=Decimal('0.01'),
+    )
     payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
     notes = serializers.CharField(required=False, default='', allow_blank=True)

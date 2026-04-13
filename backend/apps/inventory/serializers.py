@@ -2,6 +2,8 @@
 Inventory serializers.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import (
     Location, Receipt, ReceiptLine, ReceiptParticipant,
@@ -60,7 +62,7 @@ class ReceiptLineInputSerializer(serializers.Serializer):
     product_variant_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
     cost_per_unit = serializers.DecimalField(
-        max_digits=12, decimal_places=2, min_value=0.01,
+        max_digits=12, decimal_places=2, min_value=Decimal('0.01'),
     )
 
 

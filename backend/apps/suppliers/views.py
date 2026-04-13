@@ -89,6 +89,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class ConsignmentAgreementViewSet(viewsets.ModelViewSet):
     serializer_class = ConsignmentAgreementSerializer
     permission_classes = [IsOwner]
+    ordering = ['-created_at']
 
     def get_queryset(self):
         qs = ConsignmentAgreement.objects.filter(

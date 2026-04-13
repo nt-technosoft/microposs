@@ -1,17 +1,51 @@
 .DS_Store
 
-# Node
+# Frontend / Node
 frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/.eslintcache
+frontend/.cache/
+dist/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Python caches
+# Python / Backend
 **/__pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+.python-version
+.venv/
+venv/
+backend/.venv/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/htmlcov/
+backend/.coverage
+backend/.coverage.*
+backend/db.sqlite3
+backend/db.sqlite3-*
 
 # Env files
 .env
+.env.*
+!.env.example
 backend/.env
+backend/.env.*
+!backend/.env.example
 frontend/.env.local
+frontend/.env.*
+!frontend/.env.example
 
 # IDE
 .idea/
 .vscode/
+
+# Logs
+*.log

@@ -2,6 +2,8 @@
 Investors serializers.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import (
     Investor, InvestorContract,
@@ -57,7 +59,9 @@ class InvestorContractCreateSerializer(serializers.Serializer):
     investor_id = serializers.IntegerField()
     contract_type = serializers.ChoiceField(choices=['MUDARABA', 'MUSHARAKA'])
     default_profit_ratio = serializers.DecimalField(
-        max_digits=5, decimal_places=4, min_value=0, max_value=1,
+        max_digits=5, decimal_places=4,
+        min_value=Decimal('0'),
+        max_value=Decimal('1'),
     )
     start_date = serializers.DateField()
     notes = serializers.CharField(required=False, default='', allow_blank=True)

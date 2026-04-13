@@ -18,10 +18,14 @@ const emit = defineEmits<{
   'view-detail': [product: Product]
 }>()
 
+const productVariants = computed(() => (
+  Array.isArray(props.product.variants) ? props.product.variants : []
+))
+
 const effectivePrice = computed((): string => {
   if (props.product.base_price) return props.product.base_price
-  if (props.product.variants.length > 0) {
-    return props.product.variants[0].effective_price
+  if (productVariants.value.length > 0) {
+    return productVariants.value[0].effective_price
   }
   return '0'
 })

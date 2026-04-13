@@ -116,6 +116,15 @@ const canAddToCart = computed((): boolean => {
   return true
 })
 
+const categoryLabel = computed((): string | null => {
+  if (!product.value) return null
+  if (product.value.category && typeof product.value.category === 'object' && 'name' in product.value.category) {
+    return product.value.category.name
+  }
+  const fallback = (product.value as Product & { category_name?: string | null }).category_name
+  return fallback ?? null
+})
+
 const addButtonLabel = computed((): string => {
   if (!product.value?.has_variants || matchedVariant.value) {
     return `В корзину`
@@ -259,11 +268,11 @@ onMounted(() => {
 
           <!-- Category + SKU row -->
           <div class="product-meta">
-            <span v-if="product.category" class="meta-category">
-              {{ product.category.name }}
+            <span v-if="categoryLabel" class="meta-category">
+              {{ categoryLabel }}
             </span>
             <span
-              v-if="product.category && matchedVariant?.sku"
+              v-if="categoryLabel && matchedVariant?.sku"
               class="meta-separator"
               aria-hidden="true"
             >·</span>

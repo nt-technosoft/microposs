@@ -26,6 +26,20 @@ const PAGE_SIZE = 20
 // --- Computed ---
 const isEmpty = computed(() => !isLoading.value && products.value.length === 0)
 
+function getCategoryName(product: Product): string | null {
+  if (product.category && typeof product.category === 'object' && 'name' in product.category) {
+    return product.category.name
+  }
+  const fallback = (product as Product & { category_name?: string | null }).category_name
+  return fallback ?? null
+}
+
+function getVariantCount(product: Product): number {
+  if (Array.isArray(product.variants)) return product.variants.length
+  const fallback = (product as Product & { variants_count?: number }).variants_count
+  return Number.isFinite(fallback) ? Number(fallback) : 0
+}
+
 function stockBadgeVariant(stock: number): 'error' | 'warning' | null {
   if (stock === 0) return 'error'
   if (stock < 5) return 'warning'
@@ -39,7 +53,12 @@ function stockBadgeLabel(stock: number): string {
 }
 
 function productStock(product: Product): number {
-  return product.variants.reduce((sum, v) => sum + (v.stock_quantity ?? 0), 0)
+  if (Array.isArray(product.variants) && product.variants.length > 0) {
+    return product.variants.reduce((sum, v) => sum + (v.stock_quantity ?? 0), 0)
+  }
+
+  const fallback = (product as Product & { total_stock?: number }).total_stock
+  return Number.isFinite(fallback) ? Number(fallback) : 0
 }
 
 function formatPrice(price: string | null): string {
@@ -219,15 +238,15 @@ onMounted(async () => {
         <div class="product-info">
           <div class="product-name">{{ product.name }}</div>
           <div class="product-meta">
-            <span v-if="product.category" class="product-category">
-              {{ product.category.name }}
+            <span v-if="getCategoryName(product)" class="product-category">
+              {{ getCategoryName(product) }}
             </span>
-            <span v-if="product.category && product.has_variants" class="meta-sep">•</span>
+            <span v-if="getCategoryName(product) && product.has_variants" class="meta-sep">•</span>
             <span v-if="product.has_variants" class="product-variants">
-              {{ product.variants.length }}
-              {{ product.variants.length === 1 ? 'вариант' : product.variants.length < 5 ? 'варианта' : 'вариантов' }}
+              {{ getVariantCount(product) }}
+              {{ getVariantCount(product) === 1 ? 'вариант' : getVariantCount(product) < 5 ? 'варианта' : 'вариантов' }}
             </span>
-            <span v-if="!product.has_variants && !product.category" class="product-no-variants">
+            <span v-if="!product.has_variants && !getCategoryName(product)" class="product-no-variants">
               нет вариантов
             </span>
           </div>

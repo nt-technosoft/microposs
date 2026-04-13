@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUIStore } from '@/stores/ui'
 import {
   ShoppingBag,
   Package,
@@ -13,6 +14,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const ui = useUIStore()
 
 interface NavItem {
   name: string
@@ -31,8 +33,12 @@ const allTabs: NavItem[] = [
 ]
 
 const visibleTabs = computed(() => {
+  if (ui.simpleSellerMode) {
+    return allTabs.filter((tab) => tab.name === 'sales')
+  }
+
   const role = auth.role
-  if (!role) return allTabs
+  if (!role) return allTabs.filter((tab) => tab.name === 'sales')
   return allTabs.filter((tab) => tab.roles.includes(role))
 })
 

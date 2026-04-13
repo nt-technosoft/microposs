@@ -363,7 +363,9 @@ function goToHistory(): void {
 .checkout-content {
   flex: 1;
   padding: var(--space-4);
-  padding-bottom: calc(var(--space-4) + 88px);
+  padding-bottom: calc(
+    var(--space-4) + 88px + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px)
+  );
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
@@ -671,7 +673,7 @@ function goToHistory(): void {
    ============================== */
 .checkout-footer {
   position: fixed;
-  bottom: 0;
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   left: 0;
   right: 0;
   z-index: var(--z-sticky);
@@ -719,6 +721,16 @@ function goToHistory(): void {
     left: 50%;
     transform: translateX(-50%);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .checkout-content {
+    padding-bottom: calc(var(--space-4) + 88px);
+  }
+
+  .checkout-footer {
+    bottom: 0;
   }
 }
 

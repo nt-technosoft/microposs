@@ -37,7 +37,8 @@ export interface Attribute extends BaseModel {
 }
 
 export interface ProductVariant extends BaseModel {
-  product_id: number
+  product?: number
+  product_id?: number
   sku: string
   price: string | null
   effective_price: string

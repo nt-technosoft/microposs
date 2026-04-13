@@ -24,7 +24,7 @@ function onSelect(id: number | null) {
       <button
         class="chip"
         :class="{ 'chip--active': selected === null }"
-        aria-pressed="{ selected === null }"
+        :aria-pressed="selected === null"
         @click="onSelect(null)"
       >
         Все

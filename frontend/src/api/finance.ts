@@ -55,6 +55,30 @@ export interface TrialBalanceEntry {
   balance: string
 }
 
+interface BackendDailySummary {
+  date: string
+  total_revenue: string
+  total_cogs: string
+  gross_profit: string
+  total_sales_count: number
+  total_returns_count: number
+}
+
+interface BackendCashFlowItem {
+  date: string
+  cash_in_sales: string
+  cash_in_debt_payments: string
+  cash_in_investor: string
+  cash_out_purchases: string
+  cash_out_supplier_payments: string
+  cash_out_investor_payments: string
+  net_cash_flow: string
+}
+
+interface PaginatedMaybe<T> {
+  results: T[]
+}
+
 interface FetchJournalEntriesParams {
   account?: number
   date_from?: string
@@ -74,9 +98,33 @@ interface FetchCashFlowParams {
   location?: number
 }
 
+function extractList<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) {
+    return payload as T[]
+  }
+  if (
+    payload
+    && typeof payload === 'object'
+    && Array.isArray((payload as PaginatedMaybe<T>).results)
+  ) {
+    return (payload as PaginatedMaybe<T>).results
+  }
+  return []
+}
+
+function toMoneyString(value: number): string {
+  return value.toFixed(2)
+}
+
+function toNumber(raw: string | number | null | undefined): number {
+  if (typeof raw === 'number') return raw
+  if (typeof raw === 'string') return Number.parseFloat(raw) || 0
+  return 0
+}
+
 export async function fetchAccounts(): Promise<Account[]> {
-  const { data } = await api.get<Account[]>('/api/v1/finance/accounts/')
-  return data
+  const { data } = await api.get<PaginatedResponse<Account> | Account[]>('/api/v1/finance/accounts/')
+  return extractList<Account>(data)
 }
 
 export async function fetchJournalEntries(
@@ -90,16 +138,48 @@ export async function fetchJournalEntries(
 }
 
 export async function fetchDailySummaries(params?: FetchDailySummariesParams): Promise<DailySummary[]> {
-  const { data } = await api.get<DailySummary[]>('/api/v1/finance/daily-summaries/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<BackendDailySummary> | BackendDailySummary[]>(
+    '/api/v1/finance/daily-summaries/',
+    { params },
+  )
+  return extractList<BackendDailySummary>(data).map((item) => ({
+    date: item.date,
+    total_sales: String(item.total_sales_count),
+    total_cogs: item.total_cogs,
+    gross_profit: item.gross_profit,
+    total_returns: String(item.total_returns_count),
+    net_sales: item.total_revenue,
+    cash_collected: item.total_revenue,
+  }))
 }
 
 export async function fetchCashFlow(params?: FetchCashFlowParams): Promise<CashFlowItem[]> {
-  const { data } = await api.get<CashFlowItem[]>('/api/v1/finance/cash-flow/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<BackendCashFlowItem> | BackendCashFlowItem[]>(
+    '/api/v1/finance/cash-flow/',
+    { params },
+  )
+  return extractList<BackendCashFlowItem>(data).map((item) => {
+    const inflows = (
+      toNumber(item.cash_in_sales)
+      + toNumber(item.cash_in_debt_payments)
+      + toNumber(item.cash_in_investor)
+    )
+    const outflows = (
+      toNumber(item.cash_out_purchases)
+      + toNumber(item.cash_out_supplier_payments)
+      + toNumber(item.cash_out_investor_payments)
+    )
+
+    return {
+      date: item.date,
+      inflows: toMoneyString(inflows),
+      outflows: toMoneyString(outflows),
+      net: item.net_cash_flow,
+    }
+  })
 }
 
 export async function fetchTrialBalance(): Promise<TrialBalanceEntry[]> {
-  const { data } = await api.get<TrialBalanceEntry[]>('/api/v1/finance/trial-balance/')
+  const { data } = await api.get<TrialBalanceEntry[]>('/api/v1/finance/accounts/trial-balance/')
   return data
 }

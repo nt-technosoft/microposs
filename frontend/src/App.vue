@@ -16,7 +16,15 @@ const showNav = computed(() => {
 })
 
 const showCart = computed(() => {
-  return auth.isAuthenticated && route.meta.layout !== 'investor' && route.meta.layout !== 'blank'
+  if (!auth.isAuthenticated || route.meta.layout === 'investor' || route.meta.layout === 'blank') {
+    return false
+  }
+
+  if (route.name === 'cart' || route.name === 'checkout') {
+    return false
+  }
+
+  return true
 })
 </script>
 

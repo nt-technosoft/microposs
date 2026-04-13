@@ -5,7 +5,6 @@ import { Plus, RotateCcw, PackageOpen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import { ReceiptType, ReceiptStatus } from '@/types/enums'
-import type { Receipt, ReceiptLine } from '@/types/models'
 import api from '@/api/client'
 import type { PaginatedResponse } from '@/api/catalog'
 
@@ -23,13 +22,23 @@ interface FilterChip {
   label: string
 }
 
+interface ReceiptListItem {
+  id: number
+  receipt_type: ReceiptType
+  status: ReceiptStatus
+  date: string
+  created_at: string
+  lines_count: number
+  total_amount: string
+}
+
 const FILTER_CHIPS: FilterChip[] = [
   { value: 'all', label: 'Все' },
   { value: ReceiptStatus.DRAFT, label: 'Черновик' },
   { value: ReceiptStatus.CONFIRMED, label: 'Подтверждён' },
 ]
 
-const receipts = ref<Receipt[]>([])
+const receipts = ref<ReceiptListItem[]>([])
 const isLoading = ref(false)
 const error = ref<string | null>(null)
 const activeFilter = ref<StatusFilter>('all')
@@ -46,7 +55,7 @@ async function loadReceipts(): Promise<void> {
       params.status = activeFilter.value
     }
 
-    const { data } = await api.get<PaginatedResponse<Receipt>>(
+    const { data } = await api.get<PaginatedResponse<ReceiptListItem>>(
       '/api/v1/inventory/receipts/',
       { params },
     )
@@ -64,7 +73,7 @@ onMounted(loadReceipts)
 
 // ── Computed ─────────────────────────────────────────────────────────────────
 
-const filteredReceipts = computed<Receipt[]>(() => {
+const filteredReceipts = computed<ReceiptListItem[]>(() => {
   if (activeFilter.value === 'all') return receipts.value
   return receipts.value.filter((r) => r.status === activeFilter.value)
 })
@@ -106,13 +115,13 @@ function formatDate(dateStr: string): string {
   })
 }
 
-function totalCost(lines: ReceiptLine[]): string {
-  const total = lines.reduce((sum, l) => sum + parseFloat(l.total_cost), 0)
-  return formatPrice(total)
+function totalCost(totalAmount: string): string {
+  const total = parseFloat(totalAmount || '0')
+  return formatPrice(Number.isNaN(total) ? 0 : total)
 }
 
-function linesLabel(lines: ReceiptLine[]): string {
-  const count = lines.length
+function linesLabel(countRaw: number): string {
+  const count = Number.isFinite(countRaw) ? countRaw : 0
   const mod10 = count % 10
   const mod100 = count % 100
   if (mod10 === 1 && mod100 !== 11) return `${count} позиция`
@@ -211,12 +220,12 @@ function onFilterChange(value: StatusFilter): void {
 
           <!-- Bottom row: lines count + total + status -->
           <div class="card-bottom">
-            <span class="card-lines">{{ linesLabel(receipt.lines) }}</span>
-            <div class="card-right">
-              <span class="card-total tabular-nums">{{ totalCost(receipt.lines) }}</span>
-              <span
-                class="badge-status"
-                :class="getStatusMeta(receipt.status).colorClass"
+              <span class="card-lines">{{ linesLabel(receipt.lines_count) }}</span>
+              <div class="card-right">
+                <span class="card-total tabular-nums">{{ totalCost(receipt.total_amount) }}</span>
+                <span
+                  class="badge-status"
+                  :class="getStatusMeta(receipt.status).colorClass"
               >
                 {{ getStatusMeta(receipt.status).label }}
               </span>
