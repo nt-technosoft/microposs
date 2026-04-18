@@ -282,3 +282,111 @@ class BalanceWithdrawal(TenantModel):
         indexes = [
             models.Index(fields=['balance']),
         ]
+
+
+# ─── Partner Ledger ────────────────────────────────────────────────────────────
+
+class ProcurementPartnerLedger(TenantModel):
+    """
+    Per-procurement ledger for a single partner.
+    Accumulates capital in/out, accrued profit, dividends paid, losses.
+    Replaces the old denormalized InvestorSummary.
+    """
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='partner_ledgers',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='ledgers',
+    )
+
+    class Meta:
+        db_table = 'partnerships_partner_ledger'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['procurement', 'partner'],
+                name='uq_ledger_procurement_partner',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['tenant', 'partner']),
+        ]
+
+    def __str__(self):
+        return f"Ledger procurement={self.procurement_id} partner={self.partner_id}"
+
+
+class PartnerLedgerEntry(TenantModel):
+    """
+    Immutable double-entry line on a partner ledger.
+    Always append-only — never update or delete.
+    """
+
+    class EntryType(models.TextChoices):
+        CAPITAL_IN = 'CAPITAL_IN', 'Внос капитала'
+        CAPITAL_OUT = 'CAPITAL_OUT', 'Вывод капитала'
+        PROFIT_ACCRUED = 'PROFIT_ACCRUED', 'Начислена прибыль'
+        PROFIT_REVERSED = 'PROFIT_REVERSED', 'Сторно прибыли'
+        DIVIDEND_PAID = 'DIVIDEND_PAID', 'Выплачен дивиденд'
+        LOSS_INCURRED = 'LOSS_INCURRED', 'Зафиксирован убыток'
+
+    ledger = models.ForeignKey(
+        ProcurementPartnerLedger,
+        on_delete=models.PROTECT,
+        related_name='entries',
+    )
+    date = models.DateTimeField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    entry_type = models.CharField(max_length=20, choices=EntryType.choices)
+    source_ref = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text='E.g. "sale_line:42", "risk_event:7", "contribution:3"',
+    )
+
+    class Meta:
+        db_table = 'partnerships_ledger_entry'
+        indexes = [
+            models.Index(fields=['ledger', 'entry_type']),
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('PartnerLedgerEntry is append-only. Physical delete forbidden.')
+
+
+class DividendPayment(TenantModel):
+    """
+    Actual dividend payout to a partner from procurement profit.
+    Invariant enforced in services: amount <= profit_pending_payout.
+    """
+
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='dividend_payments',
+    )
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='dividend_payments',
+    )
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    # FK to finance.CashAccount lands in PR-7; int placeholder for now.
+    paid_from_account_id = models.IntegerField(null=True, blank=True)
+    date = models.DateTimeField()
+
+    class Meta:
+        db_table = 'partnerships_dividend_payment'
+        indexes = [
+            models.Index(fields=['partner', 'date']),
+            models.Index(fields=['procurement']),
+        ]

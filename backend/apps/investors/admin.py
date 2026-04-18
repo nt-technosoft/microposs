@@ -1,8 +1,5 @@
 from django.contrib import admin
-from .models import (
-    Investor, InvestorContract,
-    InvestorProfitRecord, InvestorSummary,
-)
+from .models import Investor, InvestorContract
 
 
 class InvestorContractInline(admin.TabularInline):
@@ -28,24 +25,3 @@ class InvestorContractAdmin(admin.ModelAdmin):
     )
     list_filter = ('contract_type', 'status')
     readonly_fields = ('closed_at', 'final_settlement')
-
-
-@admin.register(InvestorProfitRecord)
-class InvestorProfitRecordAdmin(admin.ModelAdmin):
-    list_display = (
-        'id', 'investor', 'contract',
-        'record_type', 'amount',
-        'source_type', 'source_id',
-        'created_at',
-    )
-    list_filter = ('record_type',)
-
-
-@admin.register(InvestorSummary)
-class InvestorSummaryAdmin(admin.ModelAdmin):
-    list_display = (
-        'id', 'investor', 'contract',
-        'total_invested', 'total_profit',
-        'total_losses', 'business_owes',
-        'last_updated',
-    )

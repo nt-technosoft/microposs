@@ -5,10 +5,7 @@ Investors serializers.
 from decimal import Decimal
 
 from rest_framework import serializers
-from .models import (
-    Investor, InvestorContract,
-    InvestorProfitRecord, InvestorSummary,
-)
+from .models import Investor, InvestorContract
 
 
 class InvestorSerializer(serializers.ModelSerializer):
@@ -67,35 +64,6 @@ class InvestorContractCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, default='', allow_blank=True)
 
 
-class InvestorProfitRecordSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = InvestorProfitRecord
-        fields = [
-            'id', 'contract', 'investor',
-            'record_type', 'amount',
-            'source_type', 'source_id',
-            'lot', 'description',
-            'created_at',
-        ]
-        read_only_fields = ['id', 'created_at']
-
-
-class InvestorSummarySerializer(serializers.ModelSerializer):
-    investor_name = serializers.CharField(
-        source='investor.name', read_only=True,
-    )
-    contract_type = serializers.CharField(
-        source='contract.contract_type', read_only=True,
-    )
-
-    class Meta:
-        model = InvestorSummary
-        fields = [
-            'id', 'investor', 'investor_name',
-            'contract', 'contract_type',
-            'total_invested', 'in_stock_value',
-            'total_sold_revenue', 'total_profit',
-            'total_losses', 'turnover_ratio',
-            'business_owes', 'last_updated',
-        ]
-        read_only_fields = fields
+# InvestorProfitRecordSerializer and InvestorSummarySerializer removed in PR-5.
+# Aggregate data is now computed via partnerships.services.get_partner_aggregate()
+# and returned as a plain dict from InvestorContractViewSet.summary().

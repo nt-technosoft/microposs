@@ -8,14 +8,10 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsInvestor
 
-from .models import (
-    Investor, InvestorContract,
-    InvestorProfitRecord, InvestorSummary,
-)
+from .models import Investor, InvestorContract
 from .serializers import (
     InvestorSerializer, InvestorCreateSerializer,
     InvestorContractSerializer, InvestorContractCreateSerializer,
-    InvestorProfitRecordSerializer, InvestorSummarySerializer,
 )
 from .services import close_investor_contract, update_investor_summary
 
@@ -49,8 +45,7 @@ class InvestorViewSet(viewsets.ModelViewSet):
             email=data.get('email', ''),
             notes=data.get('notes', ''),
         )
-        output = InvestorSerializer(investor)
-        return Response(output.data, status=status.HTTP_201_CREATED)
+        return Response(InvestorSerializer(investor).data, status=status.HTTP_201_CREATED)
 
     def perform_destroy(self, instance):
         instance.soft_delete()
@@ -95,77 +90,26 @@ class InvestorContractViewSet(viewsets.ModelViewSet):
             notes=data.get('notes', ''),
             status='active',
         )
-        output = InvestorContractSerializer(contract)
-        return Response(output.data, status=status.HTTP_201_CREATED)
+        return Response(InvestorContractSerializer(contract).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='close')
     def close(self, request, pk=None):
-        """Close an investor contract with final settlement."""
         contract = self.get_object()
         contract = close_investor_contract(
             tenant_id=request.tenant_id,
             contract_id=contract.pk,
         )
-        output = InvestorContractSerializer(contract)
-        return Response(output.data)
+        return Response(InvestorContractSerializer(contract).data)
 
-    @action(detail=True, methods=['post'], url_path='refresh-summary')
-    def refresh_summary(self, request, pk=None):
-        """Manually refresh investor summary for this contract."""
+    @action(detail=True, methods=['get'], url_path='summary')
+    def summary(self, request, pk=None):
+        """
+        Computed investor summary for this contract.
+        Backed by PartnerLedgerEntry — replaces deprecated InvestorSummary model.
+        """
         contract = self.get_object()
-        summary = update_investor_summary(
+        data = update_investor_summary(
             tenant_id=request.tenant_id,
             contract_id=contract.pk,
         )
-        output = InvestorSummarySerializer(summary)
-        return Response(output.data)
-
-
-class InvestorProfitRecordViewSet(viewsets.ReadOnlyModelViewSet):
-    """Read-only profit records. Created automatically by services."""
-
-    serializer_class = InvestorProfitRecordSerializer
-    ordering = ['-created_at']
-
-    def get_permissions(self):
-        return [IsInvestor()]
-
-    def get_queryset(self):
-        qs = InvestorProfitRecord.objects.filter(
-            tenant_id=self.request.tenant_id,
-        )
-
-        contract_id = self.request.query_params.get('contract')
-        if contract_id:
-            qs = qs.filter(contract_id=contract_id)
-
-        investor_id = self.request.query_params.get('investor')
-        if investor_id:
-            qs = qs.filter(investor_id=investor_id)
-
-        record_type = self.request.query_params.get('type')
-        if record_type:
-            qs = qs.filter(record_type=record_type)
-
-        return qs
-
-
-class InvestorSummaryViewSet(viewsets.ReadOnlyModelViewSet):
-    """Denormalized investor dashboard data."""
-
-    serializer_class = InvestorSummarySerializer
-    ordering = ['-last_updated']
-
-    def get_permissions(self):
-        return [IsInvestor()]
-
-    def get_queryset(self):
-        qs = InvestorSummary.objects.filter(
-            tenant_id=self.request.tenant_id,
-        ).select_related('investor', 'contract')
-
-        investor_id = self.request.query_params.get('investor')
-        if investor_id:
-            qs = qs.filter(investor_id=investor_id)
-
-        return qs
+        return Response(data)

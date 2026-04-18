@@ -4,6 +4,7 @@ from .models import (
     Procurement, ProcurementItem, ProcurementExpense,
     InvestmentContract, ContractPartner,
     ProcurementBalance, BalanceContribution, BalanceWithdrawal,
+    ProcurementPartnerLedger, PartnerLedgerEntry, DividendPayment,
 )
 
 
@@ -49,3 +50,21 @@ class BalanceWithdrawalInline(admin.TabularInline):
 class ProcurementBalanceAdmin(admin.ModelAdmin):
     list_display = ('id', 'procurement', 'balances')
     inlines = [BalanceContributionInline, BalanceWithdrawalInline]
+
+
+class PartnerLedgerEntryInline(admin.TabularInline):
+    model = PartnerLedgerEntry
+    extra = 0
+    readonly_fields = ('date', 'amount', 'currency', 'entry_type', 'source_ref')
+
+
+@admin.register(ProcurementPartnerLedger)
+class ProcurementPartnerLedgerAdmin(admin.ModelAdmin):
+    list_display = ('id', 'procurement', 'partner')
+    inlines = [PartnerLedgerEntryInline]
+
+
+@admin.register(DividendPayment)
+class DividendPaymentAdmin(admin.ModelAdmin):
+    list_display = ('id', 'partner', 'procurement', 'amount', 'currency', 'date')
+    list_filter = ('currency',)
