@@ -8,12 +8,15 @@ from datetime import date, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
 
-from .models import Account, Expense, ExchangeRate, JournalEntry, JournalLine
+from .models import (
+    Account, CashAccount, CashEntry, CurrencyExchange, Expense,
+    ExchangeRate, JournalEntry, JournalLine, OwnerContribution, Refund,
+)
 
 
 _CBU_RATE_URL_TEMPLATE = 'https://cbu.uz/ru/arkhiv-kursov-valyut/json/{currency}/{rate_date}/'
@@ -742,3 +745,390 @@ def get_trial_balance(tenant_id: int) -> list[dict]:
             })
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Cash layer
+# ---------------------------------------------------------------------------
+
+def create_cash_entry(
+    *,
+    tenant_id: int,
+    account: CashAccount,
+    direction: str,
+    amount: Decimal,
+    date,
+    source_ref_type: str = '',
+    source_ref_id: int | None = None,
+) -> CashEntry:
+    """
+    Create a CashEntry and update CashAccount.balance atomically.
+    Must be called inside an outer transaction.atomic() block.
+    """
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('CashEntry amount must be > 0')
+
+    entry = CashEntry.objects.create(
+        tenant_id=tenant_id,
+        account=account,
+        direction=direction,
+        amount=amount,
+        date=date,
+        source_ref_type=source_ref_type,
+        source_ref_id=source_ref_id,
+    )
+
+    if direction == CashEntry.Direction.IN:
+        CashAccount.objects.filter(pk=account.pk).update(
+            balance=models.F('balance') + amount,
+        )
+    else:
+        CashAccount.objects.filter(pk=account.pk).update(
+            balance=models.F('balance') - amount,
+        )
+
+    return entry
+
+
+def record_journal_from_cash_entry(
+    *,
+    tenant_id: int,
+    cash_entry: CashEntry,
+    operation_type: str,
+    operation_id: int,
+    counterpart_account_code: str,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    """
+    Auto-generate a balanced JournalEntry for a CashEntry.
+    CashAccount must have a linked_account set.
+    direction IN  → DR cash_account | CR counterpart
+    direction OUT → DR counterpart  | CR cash_account
+    """
+    cash_account = cash_entry.account
+    if not cash_account.linked_account_id:
+        raise ValueError(
+            f'CashAccount {cash_account.pk} has no linked COA account.'
+        )
+    cash_code = cash_account.linked_account.code
+    amount = cash_entry.amount
+
+    if cash_entry.direction == CashEntry.Direction.IN:
+        dr_code, cr_code = cash_code, counterpart_account_code
+    else:
+        dr_code, cr_code = counterpart_account_code, cash_code
+
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type=operation_type,
+        operation_id=operation_id,
+        lines=[
+            {
+                'account_code': dr_code,
+                'debit': amount,
+                'credit': Decimal('0'),
+                'description': description,
+            },
+            {
+                'account_code': cr_code,
+                'debit': Decimal('0'),
+                'credit': amount,
+                'description': description,
+            },
+        ],
+        description=description,
+        date=date or cash_entry.date,
+    )
+
+
+def exchange_currency(
+    *,
+    tenant_id: int,
+    from_account_id: int,
+    to_account_id: int,
+    from_amount: Decimal,
+    rate: Decimal,
+    date=None,
+    notes: str = '',
+) -> CurrencyExchange:
+    """
+    Atomically exchange from_amount from from_account into to_account at rate.
+    Updates both balances and creates a CurrencyExchange record + JournalEntry.
+    """
+    from_amount = _to_decimal(from_amount).quantize(Decimal('0.01'))
+    rate = _to_decimal(rate).quantize(Decimal('0.000001'))
+    if from_amount <= 0:
+        raise ValueError('from_amount must be > 0')
+    if rate <= 0:
+        raise ValueError('rate must be > 0')
+
+    to_amount = (from_amount * rate).quantize(Decimal('0.01'))
+
+    if date is None:
+        date = timezone.now()
+
+    with transaction.atomic():
+        from_acc = CashAccount.objects.select_for_update().get(
+            pk=from_account_id, tenant_id=tenant_id,
+        )
+        to_acc = CashAccount.objects.select_for_update().get(
+            pk=to_account_id, tenant_id=tenant_id,
+        )
+
+        if from_acc.balance < from_amount:
+            raise ValueError(
+                f'Insufficient balance in {from_acc.name}: '
+                f'have {from_acc.balance}, need {from_amount}.'
+            )
+
+        exchange = CurrencyExchange.objects.create(
+            tenant_id=tenant_id,
+            from_account=from_acc,
+            to_account=to_acc,
+            from_amount=from_amount,
+            from_currency=from_acc.currency,
+            to_amount=to_amount,
+            to_currency=to_acc.currency,
+            effective_rate=rate,
+            date=date,
+            notes=notes,
+        )
+
+        CashAccount.objects.filter(pk=from_acc.pk).update(
+            balance=models.F('balance') - from_amount,
+        )
+        CashAccount.objects.filter(pk=to_acc.pk).update(
+            balance=models.F('balance') + to_amount,
+        )
+
+        publish_event(
+            event_type='finance.currency_exchange',
+            payload={
+                'exchange_id': exchange.pk,
+                'from_amount': str(from_amount),
+                'from_currency': from_acc.currency,
+                'to_amount': str(to_amount),
+                'to_currency': to_acc.currency,
+                'rate': str(rate),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return exchange
+
+
+def refund_customer(
+    *,
+    tenant_id: int,
+    customer_id: int,
+    sale_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    fx_rate: Decimal = Decimal('1'),
+    method: str,
+    account_id: int | None = None,
+    return_ref_id: int | None = None,
+    date=None,
+) -> Refund:
+    """
+    Issue a customer refund. Invariant: Σ refunds per currency ≤ Σ sale payments per currency.
+    CASH/PLASTIK → CashEntry(OUT) + balance reduction.
+    RECEIVABLE_OFFSET → reduces Receivable.balances (cancel debt).
+    """
+    from apps.sales.models import Sale, SalePayment
+
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    currency = currency.upper()
+
+    if amount <= 0:
+        raise ValueError('Refund amount must be > 0')
+
+    with transaction.atomic():
+        sale = Sale.objects.get(pk=sale_id, tenant_id=tenant_id)
+
+        paid_total = (
+            SalePayment.objects
+            .filter(sale=sale, currency=currency, role=SalePayment.Role.INCOMING)
+            .aggregate(total=models.Sum('amount'))['total']
+        ) or Decimal('0')
+
+        already_refunded = (
+            Refund.objects
+            .filter(
+                tenant_id=tenant_id,
+                return_ref__sale_id=sale_id,
+                currency=currency,
+            )
+            .aggregate(total=models.Sum('amount'))['total']
+        ) or Decimal('0')
+
+        if already_refunded + amount > paid_total:
+            raise ValueError(
+                f'Refund {amount} {currency} exceeds paid total '
+                f'{paid_total} (already refunded: {already_refunded}).'
+            )
+
+        account = None
+        if method in (Refund.Method.CASH, Refund.Method.PLASTIK):
+            if account_id is None:
+                raise ValueError('account_id is required for cash/plastik refund.')
+            account = CashAccount.objects.select_for_update().get(
+                pk=account_id, tenant_id=tenant_id,
+            )
+            if account.balance < amount:
+                raise ValueError(
+                    f'Insufficient cash in {account.name}: '
+                    f'have {account.balance}, need {amount}.'
+                )
+            create_cash_entry(
+                tenant_id=tenant_id,
+                account=account,
+                direction=CashEntry.Direction.OUT,
+                amount=amount,
+                date=date,
+                source_ref_type='refund',
+                source_ref_id=None,
+            )
+
+        elif method == Refund.Method.RECEIVABLE_OFFSET:
+            from apps.customers.services import get_or_create_receivable
+            from apps.customers.models import Customer, ReceivableEntry
+            customer_obj = Customer.objects.get(pk=customer_id, tenant_id=tenant_id)
+            receivable = get_or_create_receivable(customer_obj, tenant_id)
+            receivable = type(receivable).objects.select_for_update().get(pk=receivable.pk)
+            balances = dict(receivable.balances)
+            current = Decimal(str(balances.get(currency, '0')))
+            balances[currency] = str(current - amount)
+            receivable.balances = balances
+            receivable.save(update_fields=['balances', 'updated_at'])
+
+            ReceivableEntry.objects.create(
+                tenant_id=tenant_id,
+                receivable=receivable,
+                date=date,
+                amount=-amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
+                source_ref=f'refund:pending',
+            )
+
+        refund = Refund.objects.create(
+            tenant_id=tenant_id,
+            customer_id=customer_id,
+            date=date,
+            amount=amount,
+            currency=currency,
+            fx_rate=fx_rate,
+            account=account,
+            method=method,
+            return_ref_id=return_ref_id,
+        )
+
+        if method != Refund.Method.RECEIVABLE_OFFSET and account and account.linked_account_id:
+            cash_entry_qs = CashEntry.objects.filter(
+                tenant_id=tenant_id,
+                account=account,
+                source_ref_type='refund',
+                direction=CashEntry.Direction.OUT,
+            ).order_by('-id').first()
+            if cash_entry_qs:
+                cash_entry_qs.source_ref_id = refund.pk
+                cash_entry_qs.save(update_fields=['source_ref_id'])
+                record_journal_from_cash_entry(
+                    tenant_id=tenant_id,
+                    cash_entry=cash_entry_qs,
+                    operation_type='return',
+                    operation_id=refund.pk,
+                    counterpart_account_code='1200',
+                    description=f'Customer refund #{refund.pk}',
+                    date=date,
+                )
+
+        publish_event(
+            event_type='finance.refund',
+            payload={
+                'refund_id': refund.pk,
+                'customer_id': customer_id,
+                'amount': str(amount),
+                'currency': currency,
+                'method': method,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return refund
+
+
+def record_owner_contribution(
+    *,
+    tenant_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    to_account_id: int,
+    date=None,
+    notes: str = '',
+) -> OwnerContribution:
+    """
+    Record equity injection by owner into a CashAccount.
+    DR CashAccount | CR Owner equity (3000).
+    """
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Contribution amount must be > 0')
+
+    with transaction.atomic():
+        account = CashAccount.objects.select_for_update().get(
+            pk=to_account_id, tenant_id=tenant_id,
+        )
+
+        contribution = OwnerContribution.objects.create(
+            tenant_id=tenant_id,
+            amount=amount,
+            currency=currency,
+            to_account=account,
+            date=date,
+            notes=notes,
+        )
+
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=date,
+            source_ref_type='owner_contribution',
+            source_ref_id=contribution.pk,
+        )
+
+        if account.linked_account_id:
+            record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=cash_entry,
+                operation_type='payment',
+                operation_id=contribution.pk,
+                counterpart_account_code='3000',
+                description=f'Owner contribution #{contribution.pk}',
+                date=date,
+            )
+
+        publish_event(
+            event_type='finance.owner_contribution',
+            payload={
+                'contribution_id': contribution.pk,
+                'amount': str(amount),
+                'currency': currency,
+                'account_id': account.pk,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return contribution

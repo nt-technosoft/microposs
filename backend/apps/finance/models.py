@@ -1,5 +1,5 @@
 """
-Finance domain — Chart of Accounts, journal entries, summaries.
+Finance domain — Chart of Accounts, journal entries, cash layer, summaries.
 """
 
 from django.db import models
@@ -250,3 +250,211 @@ class ExchangeRate(TenantModel):
             f"{self.base_currency}/{self.quote_currency} "
             f"{self.rate} ({self.rate_date})"
         )
+
+
+class CashAccount(TenantModel):
+    """
+    Operational cash register / card terminal / bank account.
+    Mono-currency. balance is a running total maintained by services.
+    """
+
+    class Kind(models.TextChoices):
+        CASH = 'cash', 'Касса наличных'
+        CARD_TERMINAL = 'card_terminal', 'Карт-терминал'
+        BANK = 'bank', 'Банковский счёт'
+
+    name = models.CharField(max_length=120)
+    currency = models.CharField(max_length=3, default='UZS')
+    balance = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        default=Decimal('0'),
+    )
+    kind = models.CharField(
+        max_length=20,
+        choices=Kind.choices,
+        default=Kind.CASH,
+    )
+    linked_account = models.ForeignKey(
+        Account,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cash_accounts',
+        help_text='COA account for bookkeeping journal lines.',
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'finance_cash_account'
+        indexes = [
+            models.Index(fields=['tenant', 'currency']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.currency})"
+
+
+class CashEntry(TenantModel):
+    """
+    Append-only ledger entry for a CashAccount.
+    Each financial operation that touches cash creates one or more entries.
+    """
+
+    class Direction(models.TextChoices):
+        IN = 'IN', 'Приход'
+        OUT = 'OUT', 'Расход'
+
+    account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='entries',
+    )
+    direction = models.CharField(max_length=3, choices=Direction.choices)
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    date = models.DateTimeField()
+    source_ref_type = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text='E.g. "sale", "expense", "customer_payment".',
+    )
+    source_ref_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='PK of the source object.',
+    )
+
+    class Meta:
+        db_table = 'finance_cash_entry'
+        indexes = [
+            models.Index(fields=['account', 'date']),
+            models.Index(fields=['tenant', 'date']),
+            models.Index(fields=['source_ref_type', 'source_ref_id']),
+        ]
+
+    def __str__(self):
+        return f"CashEntry {self.direction} {self.amount} ({self.account})"
+
+
+class CurrencyExchange(TenantModel):
+    """
+    Atomic currency exchange between two CashAccounts.
+    Both account balances are adjusted and a JournalEntry is created.
+    """
+
+    from_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='exchanges_out',
+    )
+    to_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='exchanges_in',
+    )
+    from_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    from_currency = models.CharField(max_length=3)
+    to_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    to_currency = models.CharField(max_length=3)
+    effective_rate = models.DecimalField(max_digits=14, decimal_places=6)
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'finance_currency_exchange'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return (
+            f"Exchange {self.from_amount}{self.from_currency}"
+            f"→{self.to_amount}{self.to_currency}"
+        )
+
+
+class Refund(TenantModel):
+    """
+    Customer refund record. Ties back to a SaleReturn (optional).
+    Method RECEIVABLE_OFFSET does not touch a CashAccount — it cancels debt.
+    """
+
+    class Method(models.TextChoices):
+        CASH = 'cash', 'Наличные'
+        PLASTIK = 'plastik', 'Карт-терминал'
+        RECEIVABLE_OFFSET = 'receivable_offset', 'Зачёт долга'
+
+    customer = models.ForeignKey(
+        'customers.Customer',
+        on_delete=models.PROTECT,
+        related_name='refunds',
+    )
+    date = models.DateTimeField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        default=Decimal('1'),
+    )
+    account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='refunds',
+        help_text='Null for RECEIVABLE_OFFSET method.',
+    )
+    method = models.CharField(max_length=20, choices=Method.choices)
+    return_ref = models.ForeignKey(
+        'sales.SaleReturn',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='refunds',
+    )
+
+    class Meta:
+        db_table = 'finance_refund'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+            models.Index(fields=['customer', 'date']),
+        ]
+
+    def __str__(self):
+        return f"Refund #{self.pk} {self.amount}{self.currency} ({self.method})"
+
+
+class OwnerContribution(TenantModel):
+    """
+    Owner / equity injection into a CashAccount.
+    DR CashAccount | CR Owner equity.
+    """
+
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+    to_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='contributions',
+    )
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'finance_owner_contribution'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return f"OwnerContribution {self.amount}{self.currency} → {self.to_account}"
