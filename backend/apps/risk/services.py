@@ -23,6 +23,9 @@ def create_writeoff(
     Write off inventory (damaged, expired, lost).
     Deducts lot quantity and creates RiskEvent.
     """
+    raise NotImplementedError(
+        'create_writeoff awaits PR-8 (LotStock-aware writeoff + PartnerLedger.LOSS_INCURRED).'
+    )
     from apps.inventory.models import Lot, StockMovement
     from apps.inventory.services import deduct_lot_quantity
 

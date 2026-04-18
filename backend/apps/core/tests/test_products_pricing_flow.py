@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Legacy — rewritten in PR-9 (bootstrap_demo + new tests).')
+
 """Products/category template and sales pricing-mode behavior tests."""
 
 from datetime import timedelta

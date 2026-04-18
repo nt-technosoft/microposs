@@ -102,12 +102,12 @@ def close_investor_contract(
             raise ContractCloseError('Contract is already closed.')
 
         # Check for active lots linked to this contract
-        from apps.inventory.models import Lot
+        from apps.inventory.models import Lot, LotStock
         receipt_ids = _resolve_contract_receipt_ids(contract)
 
-        active_lots = Lot.objects.filter(
-            receipt_id__in=receipt_ids,
-            is_active=True,
+        active_lots = LotStock.objects.filter(
+            lot__receipt_id__in=receipt_ids,
+            lot__is_active=True,
             quantity_remaining__gt=0,
             tenant_id=tenant_id,
         ).exists()
@@ -189,16 +189,16 @@ def update_investor_summary(
         total=models.Sum('capital_amount'),
     )['total'] or Decimal('0')
 
-    # In-stock value — contract-scoped lots
-    from apps.inventory.models import Lot
-    in_stock = Lot.objects.filter(
-        receipt_id__in=receipt_ids,
-        is_active=True,
+    # In-stock value — contract-scoped lots (aggregated across warehouses)
+    from apps.inventory.models import LotStock
+    in_stock = LotStock.objects.filter(
+        lot__receipt_id__in=receipt_ids,
+        lot__is_active=True,
         quantity_remaining__gt=0,
         tenant_id=tenant_id,
     ).aggregate(
         value=models.Sum(
-            models.F('cost_per_unit') * models.F('quantity_remaining'),
+            models.F('lot__landed_cost_per_unit') * models.F('quantity_remaining'),
         ),
     )['value'] or Decimal('0')
 

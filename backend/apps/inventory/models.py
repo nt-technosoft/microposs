@@ -205,15 +205,20 @@ class ReceiptParticipant(TenantModel):
 
 class Lot(TenantModel):
     """
-    Batch/Lot — created automatically when Receipt is confirmed.
-    One ReceiptLine = one Lot. Tracks remaining quantity and cost snapshot.
+    Batch/Lot — created automatically when a Procurement is received
+    (legacy: Receipt.confirm). Cost snapshot + immutable contract snapshot.
+    Multi-warehouse quantity tracked in LotStock.
     Physical delete is FORBIDDEN.
     """
 
+    # Legacy linkage to the old Receipt domain (kept nullable for
+    # backward compatibility until PR-9 drops it).
     receipt = models.ForeignKey(
         Receipt,
         on_delete=models.PROTECT,
         related_name='lots',
+        null=True,
+        blank=True,
     )
     receipt_line = models.OneToOneField(
         ReceiptLine,
@@ -222,48 +227,91 @@ class Lot(TenantModel):
         null=True,
         blank=True,
     )
+    # New linkage — procurement-driven lots.
+    procurement_item = models.ForeignKey(
+        'partnerships.ProcurementItem',
+        on_delete=models.PROTECT,
+        related_name='lots',
+        null=True,
+        blank=True,
+    )
     product_variant = models.ForeignKey(
         'catalog.ProductVariant',
         on_delete=models.PROTECT,
         related_name='lots',
     )
-    location = models.ForeignKey(
-        Warehouse,
-        on_delete=models.PROTECT,
-        related_name='lots',
-    )
     quantity_initial = models.PositiveIntegerField()
-    quantity_remaining = models.PositiveIntegerField()
-    cost_per_unit = models.DecimalField(
-        max_digits=12,
+    unit_purchase_price = models.DecimalField(
+        max_digits=14,
         decimal_places=2,
-        help_text='Snapshot at receipt time. NEVER changes.',
+        help_text='Supplier price at receipt time — no landed costs allocated.',
     )
+    landed_cost_per_unit = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        help_text='Unit purchase price + allocated landed expenses. Immutable.',
+    )
+    contract_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'Immutable snapshot of partner shares at receive time. '
+            'Shape: {mudaraba_ratio, loss_rule, partners: [{partner_id, role, capital_share, profit_share}]}'
+        ),
+    )
+    received_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(
         default=True,
-        help_text='False when quantity_remaining == 0.',
+        help_text='False when total quantity_remaining across warehouses == 0.',
     )
 
     class Meta:
         db_table = 'inventory_lot'
         indexes = [
-            models.Index(
-                fields=['product_variant', 'location', 'is_active'],
-                name='idx_lot_sale_lookup',
-                condition=models.Q(is_active=True),
-            ),
+            models.Index(fields=['product_variant', 'is_active']),
             models.Index(fields=['receipt']),
+            models.Index(fields=['procurement_item']),
         ]
 
     def __str__(self):
-        return (
-            f"Lot #{self.pk} "
-            f"({self.product_variant}) "
-            f"qty={self.quantity_remaining}/{self.quantity_initial}"
-        )
+        return f"Lot #{self.pk} ({self.product_variant})"
 
     def delete(self, *args, **kwargs):
         self.soft_delete()
+
+
+class LotStock(TenantModel):
+    """
+    Per-warehouse remaining quantity for a Lot.
+    Invariant: sum(LotStock.quantity_remaining for a lot) <= Lot.quantity_initial.
+    """
+
+    lot = models.ForeignKey(
+        Lot,
+        on_delete=models.PROTECT,
+        related_name='stocks',
+    )
+    warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='lot_stocks',
+    )
+    quantity_remaining = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'inventory_lot_stock'
+        indexes = [
+            models.Index(fields=['warehouse', 'quantity_remaining']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['lot', 'warehouse'],
+                name='uq_lotstock_lot_warehouse',
+            ),
+        ]
+
+    def __str__(self):
+        return f"LotStock lot={self.lot_id} wh={self.warehouse_id} qty={self.quantity_remaining}"
 
 
 class StockMovement(TenantModel):

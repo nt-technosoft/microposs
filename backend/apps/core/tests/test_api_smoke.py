@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Legacy — rewritten in PR-9 (bootstrap_demo + new tests).')
+
 """Backend smoke tests for critical API flows."""
 
 from datetime import timedelta

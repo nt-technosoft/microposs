@@ -183,19 +183,17 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         ]
 
     def get_stock_quantity(self, obj):
-        from apps.inventory.models import Lot
+        from apps.inventory.models import LotStock
         from django.db import models as db_models
-        queryset = Lot.objects.filter(
-            product_variant=obj,
-            is_active=True,
+        queryset = LotStock.objects.filter(
+            lot__product_variant=obj,
+            lot__is_active=True,
         )
-        location_id = self.context.get('location_id')
-        if isinstance(location_id, int):
-            queryset = queryset.filter(location_id=location_id)
+        warehouse_id = self.context.get('warehouse_id') or self.context.get('location_id')
+        if isinstance(warehouse_id, int):
+            queryset = queryset.filter(warehouse_id=warehouse_id)
 
-        result = queryset.aggregate(
-            total=db_models.Sum('quantity_remaining')
-        )
+        result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
         return result['total'] or 0
 
     def get_display_sku(self, obj):
@@ -249,15 +247,15 @@ class ProductListSerializer(serializers.ModelSerializer):
         return obj.variants.filter(is_active=True).count()
 
     def get_total_stock(self, obj):
-        from apps.inventory.models import Lot
+        from apps.inventory.models import LotStock
         from django.db import models as db_models
-        queryset = Lot.objects.filter(
-            product_variant__product=obj,
-            is_active=True,
+        queryset = LotStock.objects.filter(
+            lot__product_variant__product=obj,
+            lot__is_active=True,
         )
-        location_id = self.context.get('location_id')
-        if isinstance(location_id, int):
-            queryset = queryset.filter(location_id=location_id)
+        warehouse_id = self.context.get('warehouse_id') or self.context.get('location_id')
+        if isinstance(warehouse_id, int):
+            queryset = queryset.filter(warehouse_id=warehouse_id)
 
         result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
         return result['total'] or 0

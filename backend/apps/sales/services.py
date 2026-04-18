@@ -16,10 +16,6 @@ from apps.core.exceptions import (
     PricingModeViolationError,
 )
 from apps.inventory.services import (
-    get_lots_for_sale,
-    deduct_lot_quantity,
-    restore_lot_quantity,
-    get_locked_lot,
     record_sale_stock_movement,
     record_return_stock_movement,
 )
@@ -141,6 +137,12 @@ def create_sale(
     fx_rate_snapshot: Decimal | None = None,
     functional_amount_uzs: Decimal | None = None,
 ) -> Sale:
+    raise NotImplementedError(
+        'create_sale awaits PR-4 (Sale rework: SalePayment, location, profit_distribution_snapshot). '
+        'Old Lot.location / Lot.cost_per_unit path is gone.'
+    )
+    # legacy body kept below for reference until PR-4
+
     """
     Create and complete a sale.
     Each line: product_variant_id, quantity, unit_price, lot_id (optional), discount_reason_id.
@@ -342,6 +344,9 @@ def create_sale(
 
 
 def calculate_profit_distribution(lot: 'Lot', sale_line: SaleLine) -> list[dict]:
+    raise NotImplementedError(
+        'calculate_profit_distribution awaits PR-4/PR-5 (uses Lot.contract_snapshot).'
+    )
     """
     Calculate who gets what from a single sale line.
     Returns list of {entity_type, entity_id, amount}.
@@ -415,6 +420,9 @@ def process_return(
     tenant_id: int,
     notes: str = '',
 ) -> SaleReturn:
+    raise NotImplementedError(
+        'process_return awaits PR-8 (Return rework with RESTOCK/DISPOSE + PartnerLedger).'
+    )
     """
     Process a return for a completed sale.
     Each line: sale_line_id, quantity, condition (good/damaged).

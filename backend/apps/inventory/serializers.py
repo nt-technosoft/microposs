@@ -7,7 +7,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from .models import (
     Warehouse, Receipt, ReceiptLine, ReceiptParticipant,
-    Lot, StockMovement,
+    Lot, LotStock, StockMovement,
 )
 
 
@@ -149,26 +149,38 @@ class ReceiptCreateSerializer(serializers.Serializer):
 
 # === Lot ===
 
+class LotStockSerializer(serializers.ModelSerializer):
+    warehouse_name = serializers.CharField(source='warehouse.name', read_only=True)
+
+    class Meta:
+        model = LotStock
+        fields = ['id', 'warehouse', 'warehouse_name', 'quantity_remaining']
+        read_only_fields = ['id']
+
+
 class LotSerializer(serializers.ModelSerializer):
     product_variant_name = serializers.CharField(
         source='product_variant.__str__', read_only=True,
     )
-    location_name = serializers.CharField(
-        source='location.name', read_only=True,
-    )
     receipt_type = serializers.CharField(
-        source='receipt.receipt_type', read_only=True,
+        source='receipt.receipt_type', read_only=True, default=None,
     )
+    stocks = LotStockSerializer(many=True, read_only=True)
+    quantity_remaining = serializers.SerializerMethodField()
 
     class Meta:
         model = Lot
         fields = [
-            'id', 'receipt', 'product_variant', 'product_variant_name',
-            'location', 'location_name', 'receipt_type',
-            'quantity_initial', 'quantity_remaining',
-            'cost_per_unit', 'is_active', 'created_at',
+            'id', 'receipt', 'procurement_item', 'product_variant', 'product_variant_name',
+            'receipt_type', 'quantity_initial', 'quantity_remaining',
+            'unit_purchase_price', 'landed_cost_per_unit',
+            'contract_snapshot', 'received_at',
+            'is_active', 'stocks', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_quantity_remaining(self, obj):
+        return sum(s.quantity_remaining for s in obj.stocks.all())
 
 
 # === Stock Movement ===
@@ -197,15 +209,16 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
 class TransferSerializer(serializers.Serializer):
     lot_id = serializers.IntegerField()
-    to_location_id = serializers.IntegerField()
-    quantity = serializers.IntegerField(required=False, allow_null=True)
+    from_warehouse_id = serializers.IntegerField()
+    to_warehouse_id = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
 
 
 # === Stock Summary ===
 
 class StockSummarySerializer(serializers.Serializer):
-    product_variant_id = serializers.IntegerField()
-    product_name = serializers.CharField(source='product_variant__product__name')
-    location_id = serializers.IntegerField()
-    location_name = serializers.CharField(source='location__name')
+    product_variant_id = serializers.IntegerField(source='lot__product_variant_id')
+    product_name = serializers.CharField(source='lot__product_variant__product__name')
+    warehouse_id = serializers.IntegerField()
+    warehouse_name = serializers.CharField(source='warehouse__name')
     total_quantity = serializers.IntegerField()

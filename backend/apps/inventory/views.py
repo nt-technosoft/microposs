@@ -21,7 +21,7 @@ from .serializers import (
     TransferSerializer, StockSummarySerializer,
 )
 from .services import (
-    confirm_receipt, transfer_lot, get_stock_summary,
+    confirm_receipt, transfer_lot_stock, get_stock_summary,
 )
 
 
@@ -158,22 +158,22 @@ class LotViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = Lot.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('product_variant', 'location', 'receipt')
+        ).select_related('product_variant', 'receipt').prefetch_related('stocks__warehouse')
 
-        # Filter by product variant
         variant_id = self.request.query_params.get('product_variant')
         if variant_id:
             qs = qs.filter(product_variant_id=variant_id)
 
-        # Filter by location
-        location_id = self.request.query_params.get('location')
-        if location_id:
-            qs = qs.filter(location_id=location_id)
+        warehouse_id = self.request.query_params.get('warehouse')
+        if warehouse_id:
+            qs = qs.filter(
+                stocks__warehouse_id=warehouse_id,
+                stocks__quantity_remaining__gt=0,
+            ).distinct()
 
-        # Only active lots
         active_only = self.request.query_params.get('active', 'true')
         if active_only.lower() == 'true':
-            qs = qs.filter(is_active=True, quantity_remaining__gt=0)
+            qs = qs.filter(is_active=True)
 
         return qs
 
@@ -198,36 +198,34 @@ class StockView(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):
-        """Get stock summary grouped by variant and location."""
-        location_id = request.query_params.get('location')
+        """Stock summary grouped by variant + warehouse (aggregated from LotStock)."""
+        warehouse_id = request.query_params.get('warehouse')
         data = get_stock_summary(
             tenant_id=request.tenant_id,
-            location_id=location_id,
+            warehouse_id=warehouse_id,
         )
         serializer = StockSummarySerializer(data, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=['post'], url_path='transfer')
     def transfer(self, request):
-        """Transfer lot between locations."""
+        """Transfer lot stock between warehouses."""
         serializer = TransferSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        lot = Lot.objects.get(
-            pk=data['lot_id'],
-            tenant_id=request.tenant_id,
+        lot = Lot.objects.get(pk=data['lot_id'], tenant_id=request.tenant_id)
+        from_warehouse = Warehouse.objects.get(
+            pk=data['from_warehouse_id'], tenant_id=request.tenant_id,
         )
-        to_location = Warehouse.objects.get(
-            pk=data['to_location_id'],
-            tenant_id=request.tenant_id,
+        to_warehouse = Warehouse.objects.get(
+            pk=data['to_warehouse_id'], tenant_id=request.tenant_id,
         )
-
-        lot = transfer_lot(
+        stock = transfer_lot_stock(
+            tenant_id=request.tenant_id,
             lot=lot,
-            to_location=to_location,
-            quantity=data.get('quantity'),
-            tenant_id=request.tenant_id,
+            from_warehouse=from_warehouse,
+            to_warehouse=to_warehouse,
+            quantity=data['quantity'],
         )
-        output = LotSerializer(lot)
-        return Response(output.data)
+        return Response(LotSerializer(stock.lot).data)

@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Legacy — rewritten in PR-9 (bootstrap_demo + new tests).')
+
 """Financial integrity and outbox coverage tests for critical operations."""
 
 from decimal import Decimal

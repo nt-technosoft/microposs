@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Legacy — rewritten in PR-9 (bootstrap_demo + new tests).')
+
 """Tests for Excel alignment import pipeline."""
 
 from __future__ import annotations

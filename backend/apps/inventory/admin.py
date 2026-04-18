@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Warehouse, Receipt, ReceiptLine, ReceiptParticipant,
-    Lot, StockMovement,
+    Lot, LotStock, StockMovement,
 )
 
 
@@ -33,12 +33,18 @@ class ReceiptAdmin(admin.ModelAdmin):
 @admin.register(Lot)
 class LotAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'product_variant', 'location',
-        'quantity_initial', 'quantity_remaining',
-        'cost_per_unit', 'is_active',
+        'id', 'product_variant',
+        'quantity_initial',
+        'unit_purchase_price', 'landed_cost_per_unit', 'is_active',
     )
-    list_filter = ('is_active', 'location')
+    list_filter = ('is_active',)
     search_fields = ('product_variant__product__name',)
+
+
+@admin.register(LotStock)
+class LotStockAdmin(admin.ModelAdmin):
+    list_display = ('id', 'lot', 'warehouse', 'quantity_remaining')
+    list_filter = ('warehouse',)
 
 
 @admin.register(StockMovement)

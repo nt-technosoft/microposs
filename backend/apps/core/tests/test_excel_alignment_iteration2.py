@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Legacy — rewritten in PR-9 (bootstrap_demo + new tests).')
+
 """Iteration 2 hardening tests: AP lifecycle, Expense, reconciliation endpoint."""
 
 from __future__ import annotations

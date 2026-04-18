@@ -1,233 +1,104 @@
 """
-Inventory business logic — receipt confirmation, lot creation,
-stock transfer, FIFO lot selection.
+Inventory business logic — LotStock FIFO allocation, transfer.
+
+Receipt confirmation is DEPRECATED as of PR-3; lot creation is now
+the responsibility of partnerships.receive_procurement (PR-4+).
 """
 
-from decimal import Decimal
 from django.db import transaction, models
 
 from apps.core.services import publish_event
-from apps.core.exceptions import (
-    ImmutableRecordError,
-    InsufficientStockError,
-)
+from apps.core.exceptions import InsufficientStockError
 
-from .models import (
-    Receipt, ReceiptLine, ReceiptParticipant, Lot, StockMovement, Warehouse,
-)
-from .validators import validate_participant_ratios
+from .models import Lot, LotStock, StockMovement, Warehouse
 
 
-def confirm_receipt(receipt: Receipt) -> Receipt:
-    """
-    Confirm a receipt: validate, create lots, publish event.
-    After confirmation the receipt is IMMUTABLE.
-    """
-    if receipt.status == Receipt.ReceiptStatus.CONFIRMED:
-        raise ImmutableRecordError("Receipt is already confirmed")
-
-    with transaction.atomic():
-        # Lock the receipt row
-        receipt = Receipt.objects.select_for_update().get(pk=receipt.pk)
-
-        if receipt.status == Receipt.ReceiptStatus.CONFIRMED:
-            raise ImmutableRecordError("Receipt is already confirmed")
-
-        # Validate participants for MUDARABA / MUSHARAKA
-        if receipt.receipt_type in (
-            Receipt.ReceiptType.MUDARABA,
-            Receipt.ReceiptType.MUSHARAKA,
-        ):
-            participants = list(receipt.participants.all())
-            if not participants:
-                raise ValueError(
-                    f"Receipt type {receipt.receipt_type} requires participants"
-                )
-            validate_participant_ratios([
-                {
-                    'profit_ratio': str(p.profit_ratio),
-                    'capital_amount': str(p.capital_amount),
-                }
-                for p in participants
-            ])
-
-            # Auto-calculate capital_ratio
-            total_capital = sum(p.capital_amount for p in participants)
-            for p in participants:
-                p.capital_ratio = p.capital_amount / total_capital
-                p.save(update_fields=['capital_ratio', 'updated_at'])
-
-        # Create lots for each receipt line
-        lines = list(receipt.lines.select_related('product_variant').all())
-        lots_created = []
-
-        for line in lines:
-            lot = Lot.objects.create(
-                tenant_id=receipt.tenant_id,
-                receipt=receipt,
-                receipt_line=line,
-                product_variant=line.product_variant,
-                location=receipt.destination,
-                quantity_initial=line.quantity,
-                quantity_remaining=line.quantity,
-                cost_per_unit=line.cost_per_unit,
-                is_active=True,
-            )
-            lots_created.append(lot)
-
-            # Record stock movement
-            StockMovement.objects.create(
-                tenant_id=receipt.tenant_id,
-                lot=lot,
-                movement_type=StockMovement.MovementType.RECEIPT,
-                quantity=line.quantity,
-                to_location=receipt.destination,
-                reference_type='receipt',
-                reference_id=receipt.pk,
-            )
-
-        # Set status to confirmed (now immutable)
-        receipt.status = Receipt.ReceiptStatus.CONFIRMED
-        receipt.save(update_fields=['status', 'updated_at'])
-
-        total_cost = sum(
-            line.cost_per_unit * line.quantity
-            for line in lines
-        )
-        from apps.finance.services import record_receipt_journal
-
-        record_receipt_journal(
-            tenant_id=receipt.tenant_id,
-            receipt_id=receipt.pk,
-            total_cost=total_cost,
-            receipt_type=receipt.receipt_type,
-            supplier_id=receipt.supplier_id,
-            date=receipt.date,
-        )
-
-        if (
-            receipt.receipt_type == Receipt.ReceiptType.SUPPLIER_PURCHASE
-            and receipt.supplier_id
-            and isinstance(receipt.payable_terms, dict)
-            and str(receipt.payable_terms.get('type', '')).lower() == 'credit'
-        ):
-            from apps.suppliers.models import Supplier
-
-            Supplier.objects.filter(
-                pk=receipt.supplier_id,
-                tenant_id=receipt.tenant_id,
-            ).update(
-                outstanding_balance=models.F('outstanding_balance') + total_cost,
-            )
-
-            publish_event(
-                event_type='supplier.payable_accrued',
-                payload={
-                    'receipt_id': receipt.pk,
-                    'supplier_id': receipt.supplier_id,
-                    'amount': str(total_cost),
-                    'date': receipt.date.isoformat(),
-                },
-                tenant_id=receipt.tenant_id,
-            )
-
-        # Publish outbox event
-        publish_event(
-            event_type='receipt.confirmed',
-            payload={
-                'receipt_id': receipt.pk,
-                'receipt_type': receipt.receipt_type,
-                'date': receipt.date.isoformat(),
-                'lines_count': len(lines),
-                'lots_created': [lot.pk for lot in lots_created],
-            },
-            tenant_id=receipt.tenant_id,
-        )
-
-    return receipt
+def confirm_receipt(*args, **kwargs):
+    """Legacy receipt confirmation path. Removed in favor of Procurement."""
+    raise NotImplementedError(
+        'confirm_receipt removed in PR-3. '
+        'Use partnerships.receive_procurement instead.'
+    )
 
 
-def get_lots_for_sale(
+def allocate_lot(
+    *,
     product_variant_id: int,
-    location_id: int,
+    warehouse_id: int,
     quantity: int,
     tenant_id: int,
 ) -> list[dict]:
     """
-    FIFO lot selection — find lots to fulfill requested quantity.
-    Returns list of {lot, quantity} dicts.
+    FIFO lot allocation for a sale — queries LotStock at the given warehouse.
+    Returns [{'lot': Lot, 'lot_stock': LotStock, 'quantity': int}, ...].
+
+    Raises InsufficientStockError if the warehouse cannot satisfy the request.
     """
-    lots = Lot.objects.filter(
-        product_variant_id=product_variant_id,
-        location_id=location_id,
-        is_active=True,
-        quantity_remaining__gt=0,
-        tenant_id=tenant_id,
-    ).select_related('receipt').order_by('receipt__date')
+    stocks = (
+        LotStock.objects
+        .filter(
+            tenant_id=tenant_id,
+            warehouse_id=warehouse_id,
+            quantity_remaining__gt=0,
+            lot__product_variant_id=product_variant_id,
+            lot__is_active=True,
+        )
+        .select_related('lot', 'lot__receipt')
+        .order_by('lot__received_at', 'lot__id')
+    )
 
     result = []
     remaining = quantity
-
-    for lot in lots:
-        take = min(lot.quantity_remaining, remaining)
-        result.append({'lot': lot, 'quantity': take})
+    for stock in stocks:
+        take = min(stock.quantity_remaining, remaining)
+        result.append({'lot': stock.lot, 'lot_stock': stock, 'quantity': take})
         remaining -= take
         if remaining == 0:
             break
 
     if remaining > 0:
         raise InsufficientStockError(
-            f"Not enough stock for variant {product_variant_id} "
-            f"at location {location_id}: {remaining} units short"
+            f'Not enough stock for variant {product_variant_id} '
+            f'at warehouse {warehouse_id}: {remaining} units short'
         )
-
     return result
 
 
-def get_locked_lot(*, lot_id: int, tenant_id: int) -> Lot:
-    """
-    Resolve a lot with SELECT FOR UPDATE for write operations.
-    """
-    return Lot.objects.select_for_update().get(
-        pk=lot_id,
+def get_locked_lot_stock(*, lot_stock_id: int, tenant_id: int) -> LotStock:
+    return LotStock.objects.select_for_update().get(
+        pk=lot_stock_id,
         tenant_id=tenant_id,
     )
 
 
-def deduct_lot_quantity(lot: Lot, quantity: int) -> Lot:
-    """
-    Deduct quantity from a lot. Uses SELECT FOR UPDATE for safety.
-    """
+def deduct_lot_stock(lot_stock: LotStock, quantity: int) -> LotStock:
     with transaction.atomic():
-        lot = Lot.objects.select_for_update().get(pk=lot.pk)
-
-        if lot.quantity_remaining < quantity:
+        lot_stock = LotStock.objects.select_for_update().get(pk=lot_stock.pk)
+        if lot_stock.quantity_remaining < quantity:
             raise InsufficientStockError(
-                f"Lot {lot.pk} has only {lot.quantity_remaining} units, "
-                f"requested {quantity}"
+                f'LotStock {lot_stock.pk} has {lot_stock.quantity_remaining} units, '
+                f'requested {quantity}'
             )
+        lot_stock.quantity_remaining -= quantity
+        lot_stock.save(update_fields=['quantity_remaining', 'updated_at'])
 
-        lot.quantity_remaining -= quantity
-        if lot.quantity_remaining == 0:
-            lot.is_active = False
+        total_remaining = (
+            LotStock.objects
+            .filter(lot_id=lot_stock.lot_id)
+            .aggregate(total=models.Sum('quantity_remaining'))['total'] or 0
+        )
+        if total_remaining == 0:
+            Lot.objects.filter(pk=lot_stock.lot_id).update(is_active=False)
+    return lot_stock
 
-        lot.save(update_fields=[
-            'quantity_remaining', 'is_active', 'updated_at',
-        ])
 
-    return lot
-
-
-def restore_lot_quantity(lot: Lot, quantity: int) -> Lot:
-    """Restore quantity to a lot (for returns)."""
+def restore_lot_stock(lot_stock: LotStock, quantity: int) -> LotStock:
     with transaction.atomic():
-        lot = Lot.objects.select_for_update().get(pk=lot.pk)
-        lot.quantity_remaining += quantity
-        lot.is_active = True
-        lot.save(update_fields=[
-            'quantity_remaining', 'is_active', 'updated_at',
-        ])
-    return lot
+        lot_stock = LotStock.objects.select_for_update().get(pk=lot_stock.pk)
+        lot_stock.quantity_remaining += quantity
+        lot_stock.save(update_fields=['quantity_remaining', 'updated_at'])
+        Lot.objects.filter(pk=lot_stock.lot_id).update(is_active=True)
+    return lot_stock
 
 
 def record_sale_stock_movement(
@@ -268,106 +139,86 @@ def record_return_stock_movement(
     )
 
 
-def transfer_lot(
+def transfer_lot_stock(
+    *,
+    tenant_id: int,
     lot: Lot,
-    to_location: Warehouse,
-    quantity: int | None = None,
-    tenant_id: int | None = None,
-) -> Lot:
+    from_warehouse: Warehouse,
+    to_warehouse: Warehouse,
+    quantity: int,
+) -> LotStock:
     """
-    Transfer a lot (or part of it) to another location.
-    Lot ownership and participants do NOT change.
+    Move `quantity` units of `lot` from one warehouse to another.
+    Lot ownership and contract snapshot are untouched — only LotStock rows change.
     """
     with transaction.atomic():
-        lot = Lot.objects.select_for_update().get(pk=lot.pk)
-        from_location = lot.location
-        moved_lot = lot
-
-        if quantity is None or quantity == lot.quantity_remaining:
-            # Move entire lot
-            moved_quantity = lot.quantity_remaining
-            lot.location = to_location
-            lot.save(update_fields=['location', 'updated_at'])
-        else:
-            # Split: reduce original, create new lot at destination
-            if quantity > lot.quantity_remaining:
-                raise InsufficientStockError(
-                    f"Cannot transfer {quantity}, only {lot.quantity_remaining} available"
-                )
-            lot.quantity_remaining -= quantity
-            if lot.quantity_remaining == 0:
-                lot.is_active = False
-            lot.save(update_fields=[
-                'quantity_remaining', 'is_active', 'updated_at',
-            ])
-
-            # Create a derived lot at destination.
-            # `receipt_line` stays null for split lots to preserve one-to-one
-            # linkage on the original receipt-created lot.
-            moved_lot = Lot.objects.create(
-                tenant_id=lot.tenant_id,
-                receipt=lot.receipt,
-                receipt_line=None,
-                product_variant=lot.product_variant,
-                location=to_location,
-                quantity_initial=quantity,
-                quantity_remaining=quantity,
-                cost_per_unit=lot.cost_per_unit,
-                is_active=True,
+        src = LotStock.objects.select_for_update().get(
+            tenant_id=tenant_id,
+            lot=lot,
+            warehouse=from_warehouse,
+        )
+        if quantity <= 0 or quantity > src.quantity_remaining:
+            raise InsufficientStockError(
+                f'Cannot transfer {quantity}, only {src.quantity_remaining} available'
             )
-            moved_quantity = quantity
+        src.quantity_remaining -= quantity
+        src.save(update_fields=['quantity_remaining', 'updated_at'])
 
-        # Record movement
+        dst, _ = LotStock.objects.select_for_update().get_or_create(
+            tenant_id=tenant_id,
+            lot=lot,
+            warehouse=to_warehouse,
+            defaults={'quantity_remaining': 0},
+        )
+        dst.quantity_remaining += quantity
+        dst.save(update_fields=['quantity_remaining', 'updated_at'])
+
         StockMovement.objects.create(
-            tenant_id=lot.tenant_id,
-            lot=moved_lot,
+            tenant_id=tenant_id,
+            lot=lot,
             movement_type=StockMovement.MovementType.TRANSFER,
-            quantity=moved_quantity,
-            from_location=from_location,
-            to_location=to_location,
+            quantity=quantity,
+            from_location=from_warehouse,
+            to_location=to_warehouse,
             reference_type='transfer',
         )
 
         publish_event(
             event_type='lot.transfer',
             payload={
-                'lot_id': moved_lot.pk,
-                'source_lot_id': lot.pk,
-                'from_location_id': from_location.pk,
-                'to_location_id': to_location.pk,
-                'quantity': moved_quantity,
+                'lot_id': lot.pk,
+                'from_warehouse_id': from_warehouse.pk,
+                'to_warehouse_id': to_warehouse.pk,
+                'quantity': quantity,
             },
-            tenant_id=lot.tenant_id,
+            tenant_id=tenant_id,
         )
-
-    return moved_lot
+    return dst
 
 
 def get_stock_summary(
     tenant_id: int,
-    location_id: int | None = None,
+    warehouse_id: int | None = None,
 ) -> list[dict]:
     """
-    Get stock summary grouped by product variant.
-    Optionally filtered by location.
+    Stock summary grouped by product variant + warehouse,
+    aggregated from LotStock.
     """
-    from django.db.models import Sum
-
-    qs = Lot.objects.filter(
+    qs = LotStock.objects.filter(
         tenant_id=tenant_id,
-        is_active=True,
         quantity_remaining__gt=0,
+        lot__is_active=True,
     )
-    if location_id:
-        qs = qs.filter(location_id=location_id)
+    if warehouse_id:
+        qs = qs.filter(warehouse_id=warehouse_id)
 
     return list(
         qs.values(
-            'product_variant_id',
-            'product_variant__product__name',
-            'location_id',
-            'location__name',
+            'lot__product_variant_id',
+            'lot__product_variant__product__name',
+            'warehouse_id',
+            'warehouse__name',
         ).annotate(
-            total_quantity=Sum('quantity_remaining'),
-        ).order_by('product_variant__product__name')
+            total_quantity=models.Sum('quantity_remaining'),
+        ).order_by('lot__product_variant__product__name')
     )
