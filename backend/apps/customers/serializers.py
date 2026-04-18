@@ -5,10 +5,36 @@ Customers serializers.
 from decimal import Decimal
 
 from rest_framework import serializers
-from .models import Customer, CustomerPayment
+from .models import Customer, CustomerPayment, Receivable, ReceivableEntry
+
+
+class ReceivableEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReceivableEntry
+        fields = [
+            'id', 'date', 'amount', 'currency', 'fx_rate',
+            'entry_type', 'due_date', 'source_ref',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class ReceivableSerializer(serializers.ModelSerializer):
+    balance_uzs = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True,
+    )
+
+    class Meta:
+        model = Receivable
+        fields = ['id', 'customer', 'balances', 'balance_uzs']
+        read_only_fields = ['id']
 
 
 class CustomerSerializer(serializers.ModelSerializer):
+    outstanding_balance = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True,
+    )
+
     class Meta:
         model = Customer
         fields = [
@@ -27,17 +53,14 @@ class CustomerCreateSerializer(serializers.Serializer):
 
 
 class CustomerPaymentSerializer(serializers.ModelSerializer):
-    customer_name = serializers.CharField(
-        source='customer.name', read_only=True,
-    )
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
 
     class Meta:
         model = CustomerPayment
         fields = [
             'id', 'customer', 'customer_name',
-            'operation_currency', 'operation_amount',
-            'fx_rate_snapshot', 'functional_amount_uzs',
-            'amount', 'payment_method', 'date', 'notes',
+            'amount', 'currency', 'fx_rate',
+            'payment_method', 'date', 'notes',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -45,28 +68,11 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
 
 class CustomerPaymentCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(
-        max_digits=14,
-        decimal_places=2,
-        min_value=Decimal('0.01'),
+        max_digits=14, decimal_places=2, min_value=Decimal('0.01'),
+    )
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    fx_rate = serializers.DecimalField(
+        max_digits=14, decimal_places=6, required=False, default='1',
     )
     payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
-    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    operation_amount = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        required=False,
-        allow_null=True,
-    )
-    fx_rate_snapshot = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=6,
-        required=False,
-        allow_null=True,
-    )
-    functional_amount_uzs = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        required=False,
-        allow_null=True,
-    )
     notes = serializers.CharField(required=False, default='', allow_blank=True)
