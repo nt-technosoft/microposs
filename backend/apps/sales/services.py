@@ -15,10 +15,6 @@ from apps.core.exceptions import (
     InvalidUnitPriceError,
     PricingModeViolationError,
 )
-from apps.inventory.services import (
-    record_sale_stock_movement,
-    record_return_stock_movement,
-)
 from apps.finance.services import resolve_fx_rate_snapshot
 
 from .models import (
@@ -123,37 +119,50 @@ def _validate_line_pricing_policy(
 
 
 def create_sale(
+    *,
     tenant_id: int,
     pos_session_id: int,
+    location_id: int,
     sold_by_id: int,
-    payment_method: str,
     customer_id: int | None,
     lines: list[dict],
+    payments: list[dict] | None = None,
     client_request_id: str | None = None,
     notes: str = '',
-    operation_date=None,
-    operation_currency: str = 'UZS',
-    operation_amount: Decimal | None = None,
-    fx_rate_snapshot: Decimal | None = None,
-    functional_amount_uzs: Decimal | None = None,
+    date=None,
 ) -> Sale:
-    raise NotImplementedError(
-        'create_sale awaits PR-4 (Sale rework: SalePayment, location, profit_distribution_snapshot). '
-        'Old Lot.location / Lot.cost_per_unit path is gone.'
-    )
-    # legacy body kept below for reference until PR-4
+    """
+    Create a completed sale under the vacuum model.
 
+    Each line: {product_variant_id, quantity, unit_price, discount_reason_id?}.
+    FIFO allocation of LotStock at `location_id`. For every allocation slice
+    one SaleLine is created with unit_purchase_price, unit_landed_cost, and
+    profit_distribution_snapshot computed from lot.contract_snapshot.
+
+    Each payment: {amount, currency, fx_rate, method, account_id?}. Payment
+    method 'CREDIT' requires customer_id.
     """
-    Create and complete a sale.
-    Each line: product_variant_id, quantity, unit_price, lot_id (optional), discount_reason_id.
-    If lot_id is None, FIFO selection is used.
-    """
-    # Validate credit sale
-    if payment_method == 'credit' and not customer_id:
+    from apps.inventory.services import allocate_lot
+    from apps.inventory.models import LotStock, StockMovement
+    from apps.partnerships.models import PartnerLedgerEntry
+    from apps.partnerships.services import (
+        get_or_create_ledger, append_ledger_entry,
+    )
+    from apps.sales.models import SalePayment
+    from apps.catalog.models import ProductVariant
+
+    payments = payments or []
+
+    # Credit invariant
+    has_credit = any(
+        p.get('method') == SalePayment.Method.CREDIT for p in payments
+    )
+    if has_credit and not customer_id:
         raise CreditSaleRequiresCustomerError()
 
+    if date is None:
+        date = timezone.now()
     with transaction.atomic():
-        # Idempotency check
         if client_request_id:
             existing = Sale.objects.filter(
                 tenant_id=tenant_id,
@@ -162,67 +171,33 @@ def create_sale(
             if existing:
                 return existing
 
-        # Check customer debt (warning only, no blocking in MVP)
-        customer_has_debt = False
-        if customer_id:
-            from apps.customers.models import Customer
-            customer = Customer.objects.filter(
-                pk=customer_id, tenant_id=tenant_id,
-            ).first()
-            if customer and customer.outstanding_balance > 0:
-                customer_has_debt = True
-
-        # Get POS session
         session = PosSession.objects.get(
             pk=pos_session_id,
             tenant_id=tenant_id,
             status=PosSession.SessionStatus.OPEN,
         )
 
-        currency = str(operation_currency or 'UZS').upper()
-        resolved_rate = resolve_fx_rate_snapshot(
-            tenant_id=tenant_id,
-            operation_currency=currency,
-            operation_at=operation_date or timezone.now(),
-            fx_rate_snapshot=fx_rate_snapshot,
-        )
-
-        # Create sale
         sale = Sale.objects.create(
             tenant_id=tenant_id,
+            status=Sale.SaleStatus.DRAFT,
+            location_id=location_id,
+            date=date,
             pos_session=session,
-            sold_by_id=sold_by_id,
-            payment_method=payment_method,
             customer_id=customer_id,
-            customer_has_existing_debt=customer_has_debt,
-            operation_currency=currency,
-            operation_amount=operation_amount,
-            fx_rate_snapshot=resolved_rate,
-            functional_amount_uzs=functional_amount_uzs,
+            sold_by_id=sold_by_id,
             client_request_id=client_request_id,
             notes=notes,
-            status=Sale.SaleStatus.DRAFT,
         )
-
-        if operation_date is not None:
-            Sale.objects.filter(pk=sale.pk).update(
-                created_at=operation_date,
-                updated_at=operation_date,
-            )
-            sale.refresh_from_db()
 
         total_amount = Decimal('0')
         total_cogs = Decimal('0')
 
         for line_data in lines:
             variant_id = line_data['product_variant_id']
-            quantity = line_data['quantity']
+            quantity = int(line_data['quantity'])
             unit_price = Decimal(str(line_data['unit_price']))
-            lot_id = line_data.get('lot_id')
             discount_reason_id = line_data.get('discount_reason_id')
 
-            # Get base price snapshot
-            from apps.catalog.models import ProductVariant
             variant = ProductVariant.objects.get(
                 pk=variant_id, tenant_id=tenant_id,
             )
@@ -235,25 +210,37 @@ def create_sale(
                 discount_reason_id=discount_reason_id,
             )
 
-            # Resolve lots (FIFO or manual)
-            if lot_id:
-                lot = get_locked_lot(
-                    lot_id=lot_id,
-                    tenant_id=tenant_id,
-                )
-                lot_allocations = [{'lot': lot, 'quantity': quantity}]
-            else:
-                lot_allocations = get_lots_for_sale(
-                    product_variant_id=variant_id,
-                    location_id=session.location_id,
-                    quantity=quantity,
-                    tenant_id=tenant_id,
-                )
+            allocations = allocate_lot(
+                product_variant_id=variant_id,
+                warehouse_id=location_id,
+                quantity=quantity,
+                tenant_id=tenant_id,
+            )
 
-            # Create sale lines per lot allocation
-            for alloc in lot_allocations:
+            for alloc in allocations:
                 lot = alloc['lot']
-                alloc_qty = alloc['quantity']
+                lot_stock = alloc['lot_stock']
+                alloc_qty = int(alloc['quantity'])
+
+                locked_stock = LotStock.objects.select_for_update().get(
+                    pk=lot_stock.pk,
+                )
+                if locked_stock.quantity_remaining < alloc_qty:
+                    from apps.core.exceptions import InsufficientStockError
+                    raise InsufficientStockError(
+                        f'LotStock {locked_stock.pk} drained concurrently.'
+                    )
+
+                unit_landed_cost = Decimal(str(lot.landed_cost_per_unit))
+                unit_purchase = Decimal(str(lot.unit_purchase_price))
+                gross_line_profit = (unit_price - unit_landed_cost) * alloc_qty
+
+                profit_snapshot = calculate_profit_distribution(
+                    lot=lot,
+                    unit_price=unit_price,
+                    quantity=alloc_qty,
+                    unit_landed_cost=unit_landed_cost,
+                )
 
                 sale_line = SaleLine.objects.create(
                     tenant_id=tenant_id,
@@ -265,77 +252,101 @@ def create_sale(
                     base_price=base_price,
                     price_changed=price_changed,
                     discount_reason_id=resolved_discount_reason_id,
-                    cost_per_unit=lot.cost_per_unit,
+                    unit_purchase_price=unit_purchase,
+                    unit_landed_cost=unit_landed_cost,
+                    profit_distribution_snapshot=profit_snapshot,
                 )
 
-                # Deduct from lot
-                deduct_lot_quantity(lot, alloc_qty)
+                locked_stock.quantity_remaining -= alloc_qty
+                locked_stock.save(update_fields=['quantity_remaining', 'updated_at'])
 
-                # Record stock movement
-                record_sale_stock_movement(
+                total_lot_remaining = (
+                    LotStock.objects
+                    .filter(lot=lot)
+                    .aggregate(total=models.Sum('quantity_remaining'))['total']
+                    or 0
+                )
+                if total_lot_remaining == 0:
+                    type(lot).objects.filter(pk=lot.pk).update(is_active=False)
+
+                StockMovement.objects.create(
                     tenant_id=tenant_id,
                     lot=lot,
-                    quantity=alloc_qty,
-                    from_location=session.location,
-                    sale_id=sale.pk,
+                    movement_type=StockMovement.MovementType.SALE,
+                    quantity=-alloc_qty,
+                    from_location_id=location_id,
+                    reference_type='sale',
+                    reference_id=sale.pk,
                 )
 
                 total_amount += unit_price * alloc_qty
-                total_cogs += lot.cost_per_unit * alloc_qty
+                total_cogs += unit_landed_cost * alloc_qty
 
-        # Update sale totals and complete
-        sale.total_amount = total_amount
-        sale.total_cogs = total_cogs
-        if sale.operation_amount is None:
-            if currency == 'UZS':
-                sale.operation_amount = total_amount
-            else:
-                sale.operation_amount = (
-                    total_amount / sale.fx_rate_snapshot
-                ).quantize(Decimal('0.01'))
-        if sale.fx_rate_snapshot is None:
-            sale.fx_rate_snapshot = resolved_rate
-        if sale.functional_amount_uzs is None:
-            sale.functional_amount_uzs = total_amount
-        sale.status = Sale.SaleStatus.COMPLETED
-        sale.save(update_fields=[
-            'total_amount',
-            'total_cogs',
-            'operation_amount',
-            'fx_rate_snapshot',
-            'functional_amount_uzs',
-            'status',
-            'updated_at',
-        ])
+                # PartnerLedger: PROFIT_ACCRUED per partner.
+                procurement_id = None
+                if lot.procurement_item_id:
+                    procurement_id = lot.procurement_item.procurement_id
+                if procurement_id and gross_line_profit > 0:
+                    for partner_id_str, amount_str in profit_snapshot.items():
+                        try:
+                            partner_id = int(partner_id_str)
+                        except (TypeError, ValueError):
+                            continue
+                        amount = Decimal(str(amount_str))
+                        if amount <= 0:
+                            continue
+                        ledger = get_or_create_ledger(
+                            procurement_id=procurement_id,
+                            partner_id=partner_id,
+                            tenant_id=tenant_id,
+                        )
+                        append_ledger_entry(
+                            ledger=ledger,
+                            entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+                            amount=amount,
+                            currency='UZS',
+                            source_ref=f'sale_line:{sale_line.pk}',
+                            date=date,
+                        )
 
-        # Update customer balance for credit sales
-        if payment_method == 'credit' and customer_id:
-            from apps.customers.models import Customer
-            Customer.objects.filter(
-                pk=customer_id,
-            ).update(
-                outstanding_balance=models.F('outstanding_balance') + total_amount,
+        # SalePayments
+        for pay in payments:
+            amount = Decimal(str(pay['amount']))
+            currency = str(pay.get('currency', 'UZS')).upper()
+            fx_rate = resolve_fx_rate_snapshot(
+                tenant_id=tenant_id,
+                operation_currency=currency,
+                operation_at=date,
+                fx_rate_snapshot=pay.get('fx_rate'),
+            )
+            SalePayment.objects.create(
+                tenant_id=tenant_id,
+                sale=sale,
+                date=date,
+                amount=amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                method=pay['method'],
+                role=SalePayment.Role.INCOMING,
+                account_id=pay.get('account_id'),
             )
 
-        from apps.finance.services import record_sale_journal
-        record_sale_journal(
-            tenant_id=tenant_id,
-            sale_id=sale.pk,
-            total_amount=total_amount,
-            total_cogs=total_cogs,
-            payment_method=payment_method,
-            date=operation_date or sale.created_at,
-        )
+        sale.total_amount = total_amount
+        sale.total_cogs = total_cogs
+        sale.status = Sale.SaleStatus.COMPLETED
+        sale.save(update_fields=[
+            'total_amount', 'total_cogs', 'status', 'updated_at',
+        ])
 
-        # Publish event
         publish_event(
             event_type='sale.completed',
             payload={
                 'sale_id': sale.pk,
                 'total_amount': str(total_amount),
-                'payment_method': payment_method,
+                'total_cogs': str(total_cogs),
                 'lines_count': sale.lines.count(),
-                'date': (operation_date or sale.created_at).isoformat(),
+                'payments_count': len(payments),
+                'date': date.isoformat(),
             },
             tenant_id=tenant_id,
         )
@@ -343,74 +354,81 @@ def create_sale(
     return sale
 
 
-def calculate_profit_distribution(lot: 'Lot', sale_line: SaleLine) -> list[dict]:
-    raise NotImplementedError(
-        'calculate_profit_distribution awaits PR-4/PR-5 (uses Lot.contract_snapshot).'
+def calculate_profit_distribution(
+    *,
+    lot: 'Lot',
+    unit_price: Decimal,
+    quantity: int,
+    unit_landed_cost: Decimal,
+) -> dict:
+    """
+    Compute profit per partner for a single sale line slice.
+
+    Uses lot.contract_snapshot:
+      {mudaraba_ratio, loss_rule, partners: [{partner_id, role, capital_share, profit_share}]}
+
+    Contract formula (Musharaka+Mudaraba):
+      profit_investor_i = gross * capital_share_i * mudaraba_ratio
+      profit_operator   = gross * capital_share_op +
+                          gross * (1 - mudaraba_ratio) * Σ capital_share_investors
+
+    Returns {partner_id_str: Decimal_str} to be stored in SaleLine.profit_distribution_snapshot.
+    Returns {} for lots without a contract snapshot (own-funds path).
+    """
+    unit_price = Decimal(str(unit_price))
+    unit_landed_cost = Decimal(str(unit_landed_cost))
+    gross = (unit_price - unit_landed_cost) * Decimal(quantity)
+    if gross <= 0:
+        return {}
+
+    snapshot = lot.contract_snapshot or {}
+    partners = snapshot.get('partners') or []
+    if not partners:
+        return {}
+
+    mudaraba_ratio = Decimal(str(snapshot.get('mudaraba_ratio', '0')))
+    operator_entry = next(
+        (p for p in partners if p.get('role') == 'OPERATOR'), None,
     )
-    """
-    Calculate who gets what from a single sale line.
-    Returns list of {entity_type, entity_id, amount}.
-    """
-    revenue = sale_line.unit_price * sale_line.quantity
-    cogs = lot.cost_per_unit * sale_line.quantity
-    gross_profit = revenue - cogs
+    result: dict[str, str] = {}
 
-    receipt = lot.receipt
-    distributions = []
+    investor_capital_total = sum(
+        (Decimal(str(p.get('capital_share', '0')))
+         for p in partners if p.get('role') == 'INVESTOR'),
+        Decimal('0'),
+    )
 
-    if receipt.receipt_type == 'BUSINESS_OWNED':
-        distributions.append({
-            'entity_type': 'business',
-            'entity_id': receipt.tenant_id,
-            'amount': gross_profit,
-        })
-
-    elif receipt.receipt_type == 'MUDARABA':
-        for participant in receipt.participants.all():
-            amount = gross_profit * participant.profit_ratio
-            distributions.append({
-                'entity_type': participant.participant_type,
-                'entity_id': participant.entity_id,
-                'amount': amount,
-            })
-
-    elif receipt.receipt_type == 'MUSHARAKA':
-        for participant in receipt.participants.all():
-            amount = gross_profit * participant.profit_ratio
-            distributions.append({
-                'entity_type': participant.participant_type,
-                'entity_id': participant.entity_id,
-                'amount': amount,
-            })
-
-    elif receipt.receipt_type == 'CONSIGNMENT':
-        rule = receipt.consignment_rule or {}
-        if rule.get('type') == 'margin':
-            business_amount = (sale_line.unit_price - lot.cost_per_unit) * sale_line.quantity
+    for partner in partners:
+        partner_id = partner.get('partner_id')
+        if partner_id is None:
+            continue
+        capital_share = Decimal(str(partner.get('capital_share', '0')))
+        role = partner.get('role')
+        if role == 'INVESTOR':
+            share = gross * capital_share * mudaraba_ratio
+        elif role == 'OPERATOR':
+            share = (
+                gross * capital_share
+                + gross * (Decimal('1') - mudaraba_ratio) * investor_capital_total
+            )
         else:
-            commission = Decimal(str(rule.get('value', '0')))
-            business_amount = revenue * commission
-        supplier_amount = revenue - business_amount
+            share = Decimal('0')
+        share = share.quantize(Decimal('0.01'))
+        if share != 0:
+            result[str(partner_id)] = str(share)
 
-        distributions.append({
-            'entity_type': 'business',
-            'entity_id': receipt.tenant_id,
-            'amount': business_amount,
-        })
-        distributions.append({
-            'entity_type': 'supplier',
-            'entity_id': receipt.supplier_id,
-            'amount': supplier_amount,
-        })
+    # Rounding residue → operator (shariah-neutral: operator bears residue).
+    if operator_entry is not None:
+        distributed = sum(
+            (Decimal(v) for v in result.values()), Decimal('0'),
+        )
+        residue = (gross.quantize(Decimal('0.01')) - distributed)
+        if residue != 0:
+            op_id = str(operator_entry['partner_id'])
+            current = Decimal(result.get(op_id, '0'))
+            result[op_id] = str((current + residue).quantize(Decimal('0.01')))
 
-    elif receipt.receipt_type == 'SUPPLIER_PURCHASE':
-        distributions.append({
-            'entity_type': 'business',
-            'entity_id': receipt.tenant_id,
-            'amount': gross_profit,
-        })
-
-    return distributions
+    return result
 
 
 def process_return(
@@ -422,6 +440,7 @@ def process_return(
     tenant_id: int,
     notes: str = '',
     date=None,
+    refund: dict | None = None,
 ) -> Return:
     """
     Process a return for a completed sale with shariah-correct partner impact.
@@ -429,14 +448,17 @@ def process_return(
     resolution RESTOCK:
       - LotStock at sale.location += qty, reactivate Lot.
       - PROFIT_REVERSED per partner, proportional to returned qty.
-      - Monetary refund is NOT created here — caller uses finance.refund_customer.
 
     resolution DISPOSE:
       - StockDisposal record (reason=DAMAGED_RETURN).
       - Lot.quantity_initial -= qty (goods never return to stock).
       - PROFIT_REVERSED per partner (proportional to returned qty).
       - LOSS_INCURRED per partner distributed by capital_share from contract_snapshot.
-      - Monetary refund is NOT created here — caller uses finance.refund_customer.
+
+    Monetary refund:
+      If `refund` is provided — {method, currency?, fx_rate?, account_id?} — a Refund
+      is issued for the full line-level refund total via finance.refund_customer.
+      If `refund` is None, the caller is responsible for the monetary side.
 
     Invariant: Σ ReturnLine.qty per sale_line ≤ SaleLine.qty (including prior returns).
     """
@@ -591,6 +613,25 @@ def process_return(
                             date=date,
                         )
 
+        if refund and total_refund > 0:
+            from apps.finance.services import refund_customer
+            if sale.customer_id is None:
+                raise ValueError(
+                    'Cannot issue refund: sale has no customer. Remove refund kwarg or set customer.'
+                )
+            refund_customer(
+                tenant_id=tenant_id,
+                customer_id=sale.customer_id,
+                sale_id=sale.pk,
+                amount=total_refund,
+                currency=str(refund.get('currency', 'UZS')).upper(),
+                fx_rate=Decimal(str(refund.get('fx_rate', '1'))),
+                method=refund['method'],
+                account_id=refund.get('account_id'),
+                return_ref_id=return_doc.pk,
+                date=date,
+            )
+
         publish_event(
             event_type='sale.returned',
             payload={
@@ -600,6 +641,7 @@ def process_return(
                 'reason': reason,
                 'lines_count': len(return_lines),
                 'refund_amount': str(total_refund),
+                'refund_issued': bool(refund and total_refund > 0),
                 'loss_amount': str(total_loss),
             },
             tenant_id=tenant_id,

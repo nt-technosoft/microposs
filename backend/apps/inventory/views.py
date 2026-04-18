@@ -21,7 +21,7 @@ from .serializers import (
     TransferSerializer, StockSummarySerializer,
 )
 from .services import (
-    confirm_receipt, transfer_lot_stock, get_stock_summary,
+    transfer_lot_stock, get_stock_summary,
 )
 
 
@@ -136,14 +136,6 @@ class ReceiptViewSet(viewsets.ModelViewSet):
 
         output = ReceiptDetailSerializer(receipt)
         return Response(output.data, status=status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=['post'], url_path='confirm')
-    def confirm(self, request, pk=None):
-        """Confirm receipt — creates lots, makes receipt immutable."""
-        receipt = self.get_object()
-        receipt = confirm_receipt(receipt)
-        output = ReceiptDetailSerializer(receipt)
-        return Response(output.data)
 
 
 class LotViewSet(viewsets.ReadOnlyModelViewSet):

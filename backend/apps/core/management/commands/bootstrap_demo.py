@@ -5,18 +5,18 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.utils import timezone
 
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
-from apps.core.models import Business
+from apps.core.models import Business, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
-from apps.finance.models import CashFlowSummary, DailySummary
-from apps.inventory.models import Warehouse, Lot, Receipt, ReceiptLine
-from apps.inventory.services import confirm_receipt
-from apps.investors.models import Investor, InvestorContract, InvestorProfitRecord, InvestorSummary
-from apps.sales.models import PosSession, Sale
+from apps.finance.models import CashAccount
+from apps.inventory.models import Warehouse
+from apps.partnerships.models import Procurement
+from apps.partnerships.services import (
+    open_procurement, add_contribution, add_withdrawal, receive_procurement,
+)
 from apps.sales.services import create_sale, open_pos_session
 from apps.suppliers.models import Supplier
 
@@ -65,6 +65,139 @@ class Command(BaseCommand):
     @staticmethod
     def _money(value: Decimal) -> Decimal:
         return value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    def _seed_partnership_flow(
+        self,
+        *,
+        business,
+        operator,
+        investor,
+        supplier,
+        customer,
+        variant,
+        store,
+        warehouse,
+        cashier_user,
+    ):
+        """
+        Musharaka+Mudaraba demo: investor 70% / operator 30% capital,
+        mudaraba_ratio = 4/7 → profit 40/60 investor/operator.
+        All amounts in USD (fx_rate=12000 UZS/USD). Plan uses 550 USD total.
+        """
+        fx = Decimal('12000')
+        usd = 'USD'
+
+        procurement = open_procurement(
+            tenant_id=business.id,
+            procurement_type=Procurement.Type.PARTNERSHIP,
+            supplier_id=supplier.id,
+            notes='Demo partnership procurement',
+            contract={
+                'mudaraba_ratio': Decimal('0.571429'),  # 4/7
+                'planned_budget': Decimal('550'),
+                'currency': usd,
+                'partners': [
+                    {
+                        'partner_id': investor.id,
+                        'role': 'INVESTOR',
+                        'planned_capital_share': Decimal('385'),
+                        'profit_share': Decimal('0.4'),
+                    },
+                    {
+                        'partner_id': operator.id,
+                        'role': 'OPERATOR',
+                        'planned_capital_share': Decimal('165'),
+                        'profit_share': Decimal('0.6'),
+                    },
+                ],
+            },
+            items=[{
+                'product_variant_id': variant.id,
+                'quantity': Decimal('50'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': usd,
+                'fx_rate': fx,
+            }],
+            expenses=[{
+                'expense_type': 'CUSTOMS',
+                'amount': Decimal('50'),
+                'currency': usd,
+                'fx_rate': fx,
+                'notes': 'Customs demo',
+            }],
+        )
+
+        # Contributions: investor 385 USD, operator 165 USD (70/30 of 550).
+        add_contribution(
+            tenant_id=business.id,
+            procurement_id=procurement.id,
+            partner_id=investor.id,
+            amount=Decimal('385'),
+            currency=usd,
+            fx_rate=fx,
+            notes='Investor seed capital',
+        )
+        add_contribution(
+            tenant_id=business.id,
+            procurement_id=procurement.id,
+            partner_id=operator.id,
+            amount=Decimal('165'),
+            currency=usd,
+            fx_rate=fx,
+            notes='Operator seed capital',
+        )
+
+        # Drain balance to 0 (items 500 USD + customs 50 USD).
+        add_withdrawal(
+            tenant_id=business.id,
+            procurement_id=procurement.id,
+            amount=Decimal('500'),
+            currency=usd,
+            fx_rate=fx,
+            reason='Payment for items',
+        )
+        add_withdrawal(
+            tenant_id=business.id,
+            procurement_id=procurement.id,
+            amount=Decimal('50'),
+            currency=usd,
+            fx_rate=fx,
+            reason='Customs payment',
+        )
+
+        receive_procurement(
+            tenant_id=business.id,
+            procurement_id=procurement.id,
+            destination_warehouse_id=warehouse.id,
+        )
+
+        # ─── Sale: 5 units @ 20 USD (cash, UZS at 12000) ──────────────────────
+        session = open_pos_session(
+            tenant_id=business.id,
+            location_id=store.id,
+            opened_by_id=cashier_user.id,
+            opening_cash=Decimal('0'),
+        )
+        unit_price_uzs = Decimal('20') * fx  # 240 000 UZS
+        create_sale(
+            tenant_id=business.id,
+            pos_session_id=session.id,
+            location_id=warehouse.id,  # stock was received into warehouse
+            sold_by_id=cashier_user.id,
+            customer_id=customer.id,
+            lines=[{
+                'product_variant_id': variant.id,
+                'quantity': 5,
+                'unit_price': unit_price_uzs,
+            }],
+            payments=[{
+                'amount': unit_price_uzs * 5,
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'method': 'CASH',
+            }],
+            notes='Demo sale',
+        )
 
     def handle(self, *args, **options):
         tenant_name = options['tenant_name']
@@ -198,7 +331,7 @@ class Command(BaseCommand):
                 if needs_update:
                     discount_reason.save(update_fields=['is_default', 'is_active', 'updated_at'])
 
-            Supplier.objects.get_or_create(
+            supplier, _ = Supplier.objects.get_or_create(
                 tenant=business,
                 name='Demo Supplier',
                 defaults={
@@ -216,158 +349,69 @@ class Command(BaseCommand):
                 },
             )
 
-            investor_profile, _ = Investor.objects.get_or_create(
+            # ─── Partners ─────────────────────────────────────────────────────
+            operator, _ = Partner.objects.get_or_create(
                 tenant=business,
-                user=investor_user,
+                role=Partner.Role.OPERATOR,
+                display_name='Бекзод (оператор)',
+                defaults={'user': owner_user, 'is_active': True},
+            )
+            investor, _ = Partner.objects.get_or_create(
+                tenant=business,
+                role=Partner.Role.INVESTOR,
+                display_name='Устоз (инвестор)',
+                defaults={'user': investor_user, 'is_active': True},
+            )
+
+            # ─── Cash accounts ────────────────────────────────────────────────
+            kassa_som, _ = CashAccount.objects.get_or_create(
+                tenant=business,
+                name='KASSA_SOM',
                 defaults={
-                    'name': 'Demo Investor',
-                    'phone': '+998900000003',
+                    'currency': 'UZS',
+                    'kind': CashAccount.Kind.CASH,
+                    'balance': Decimal('0'),
                     'is_active': True,
                 },
             )
-            contract = InvestorContract.objects.filter(
+            CashAccount.objects.get_or_create(
                 tenant=business,
-                investor=investor_profile,
-                status=InvestorContract.ContractStatus.ACTIVE,
-            ).order_by('id').first()
-            if contract is None:
-                contract = InvestorContract.objects.create(
-                    tenant=business,
-                    investor=investor_profile,
-                    contract_type=InvestorContract.ContractType.MUDARABA,
-                    default_profit_ratio=Decimal('0.4000'),
-                    start_date=timezone.localdate(),
-                    status=InvestorContract.ContractStatus.ACTIVE,
-                    notes='Seeded investor contract',
-                )
+                name='KASSA_DOLLAR',
+                defaults={
+                    'currency': 'USD',
+                    'kind': CashAccount.Kind.CASH,
+                    'balance': Decimal('0'),
+                    'is_active': True,
+                },
+            )
+            CashAccount.objects.get_or_create(
+                tenant=business,
+                name='PLASTIK_SOM',
+                defaults={
+                    'currency': 'UZS',
+                    'kind': CashAccount.Kind.CARD_TERMINAL,
+                    'balance': Decimal('0'),
+                    'is_active': True,
+                },
+            )
 
-            receipt = Receipt.objects.filter(
+            # ─── Procurement → Sale demo (idempotent: skip if already seeded) ─
+            existing_demo = Procurement.objects.filter(
                 tenant=business,
-                notes='Demo seeded receipt',
+                procurement_type=Procurement.Type.PARTNERSHIP,
             ).first()
-            if receipt is None and variant is not None:
-                receipt = Receipt.objects.create(
-                    tenant=business,
-                    receipt_type=Receipt.ReceiptType.BUSINESS_OWNED,
-                    status=Receipt.ReceiptStatus.DRAFT,
-                    date=timezone.now(),
-                    destination=store,
-                    notes='Demo seeded receipt',
+            if existing_demo is None:
+                self._seed_partnership_flow(
+                    business=business,
+                    operator=operator,
+                    investor=investor,
+                    supplier=supplier,
+                    customer=customer,
+                    variant=variant,
+                    store=store,
+                    warehouse=warehouse,
+                    cashier_user=cashier_user,
                 )
-                ReceiptLine.objects.create(
-                    tenant=business,
-                    receipt=receipt,
-                    product_variant=variant,
-                    quantity=30,
-                    cost_per_unit=Decimal('45000.00'),
-                )
-                receipt = confirm_receipt(receipt)
-
-            lot = (
-                Lot.objects
-                .filter(tenant=business, product_variant=variant, quantity_remaining__gt=0)
-                .order_by('id')
-                .first()
-            )
-
-            session = PosSession.objects.filter(
-                tenant=business,
-                location=store,
-                status=PosSession.SessionStatus.OPEN,
-            ).order_by('-opened_at').first()
-            if session is None:
-                session = open_pos_session(
-                    tenant_id=business.id,
-                    location_id=store.id,
-                    opened_by_id=cashier_user.id,
-                    opening_cash=Decimal('500000.00'),
-                )
-
-            sale = Sale.objects.filter(
-                tenant=business,
-                notes='Demo seeded sale',
-            ).order_by('id').first()
-            if sale is None and lot is not None and variant is not None:
-                sale = create_sale(
-                    tenant_id=business.id,
-                    pos_session_id=session.id,
-                    sold_by_id=cashier_user.id,
-                    payment_method='cash',
-                    customer_id=customer.id,
-                    lines=[{
-                        'product_variant_id': variant.id,
-                        'quantity': 1,
-                        'unit_price': '65000.00',
-                        'lot_id': lot.id,
-                    }],
-                    notes='Demo seeded sale',
-                )
-
-            today = timezone.localdate()
-            sale_amount = sale.total_amount if sale else Decimal('0')
-            sale_cogs = sale.total_cogs if sale else Decimal('0')
-            gross_profit = self._money(sale_amount - sale_cogs)
-
-            DailySummary.objects.update_or_create(
-                tenant=business,
-                date=today,
-                defaults={
-                    'total_revenue': sale_amount,
-                    'total_cogs': sale_cogs,
-                    'gross_profit': gross_profit,
-                    'investor_share': self._money(gross_profit * Decimal('0.40')),
-                    'net_business_profit': self._money(gross_profit * Decimal('0.60')),
-                    'total_sales_count': 1 if sale else 0,
-                    'total_returns_count': 0,
-                    'total_writeoffs': Decimal('0.00'),
-                },
-            )
-            CashFlowSummary.objects.update_or_create(
-                tenant=business,
-                date=today,
-                defaults={
-                    'cash_in_sales': sale_amount,
-                    'cash_in_debt_payments': Decimal('0.00'),
-                    'cash_in_investor': Decimal('0.00'),
-                    'cash_out_purchases': Decimal('0.00'),
-                    'cash_out_supplier_payments': Decimal('0.00'),
-                    'cash_out_investor_payments': Decimal('0.00'),
-                    'net_cash_flow': sale_amount,
-                },
-            )
-
-            seeded_profit = InvestorProfitRecord.objects.filter(
-                tenant=business,
-                contract=contract,
-                description='Demo seeded profit record',
-            ).first()
-            if seeded_profit is None:
-                InvestorProfitRecord.objects.create(
-                    tenant=business,
-                    contract=contract,
-                    investor=investor_profile,
-                    record_type=InvestorProfitRecord.RecordType.PROFIT,
-                    amount=self._money(gross_profit * Decimal('0.40')) if sale else Decimal('0.00'),
-                    source_type='seed',
-                    source_id=0,
-                    lot=lot,
-                    description='Demo seeded profit record',
-                )
-
-            InvestorSummary.objects.update_or_create(
-                tenant=business,
-                investor=investor_profile,
-                contract=contract,
-                defaults={
-                    'total_invested': Decimal('1000000.00'),
-                    'in_stock_value': Decimal('900000.00'),
-                    'total_sold_revenue': sale_amount,
-                    'total_profit': self._money(gross_profit * Decimal('0.40')),
-                    'total_losses': Decimal('0.00'),
-                    'turnover_ratio': Decimal('1.15'),
-                    'business_owes': self._money(Decimal('1000000.00') + gross_profit * Decimal('0.40')),
-                },
-            )
 
         self.stdout.write(self.style.SUCCESS('Demo bootstrap completed.'))
         self.stdout.write('Users:')

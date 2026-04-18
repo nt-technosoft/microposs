@@ -13,14 +13,6 @@ from apps.core.exceptions import InsufficientStockError
 from .models import Lot, LotStock, StockMovement, Warehouse
 
 
-def confirm_receipt(*args, **kwargs):
-    """Legacy receipt confirmation path. Removed in favor of Procurement."""
-    raise NotImplementedError(
-        'confirm_receipt removed in PR-3. '
-        'Use partnerships.receive_procurement instead.'
-    )
-
-
 def allocate_lot(
     *,
     product_variant_id: int,
@@ -99,44 +91,6 @@ def restore_lot_stock(lot_stock: LotStock, quantity: int) -> LotStock:
         lot_stock.save(update_fields=['quantity_remaining', 'updated_at'])
         Lot.objects.filter(pk=lot_stock.lot_id).update(is_active=True)
     return lot_stock
-
-
-def record_sale_stock_movement(
-    *,
-    tenant_id: int,
-    lot: Lot,
-    quantity: int,
-    from_location: Warehouse,
-    sale_id: int,
-) -> StockMovement:
-    return StockMovement.objects.create(
-        tenant_id=tenant_id,
-        lot=lot,
-        movement_type=StockMovement.MovementType.SALE,
-        quantity=-quantity,
-        from_location=from_location,
-        reference_type='sale',
-        reference_id=sale_id,
-    )
-
-
-def record_return_stock_movement(
-    *,
-    tenant_id: int,
-    lot: Lot,
-    quantity: int,
-    to_location: Warehouse,
-    sale_return_id: int,
-) -> StockMovement:
-    return StockMovement.objects.create(
-        tenant_id=tenant_id,
-        lot=lot,
-        movement_type=StockMovement.MovementType.RETURN,
-        quantity=quantity,
-        to_location=to_location,
-        reference_type='sale_return',
-        reference_id=sale_return_id,
-    )
 
 
 def transfer_lot_stock(
