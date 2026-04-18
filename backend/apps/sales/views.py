@@ -27,8 +27,6 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-opened_at']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve'):
-            return [IsCashier()]
         return [IsCashier()]
 
     def get_queryset(self):
@@ -59,8 +57,7 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
             opened_by_id=request.user.pk,
             opening_cash=data['opening_cash'],
         )
-        output = PosSessionSerializer(session)
-        return Response(output.data, status=status.HTTP_201_CREATED)
+        return Response(PosSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='close')
     def close_session(self, request, pk=None):
@@ -74,8 +71,7 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
             closed_by_id=request.user.pk,
             actual_cash=serializer.validated_data['actual_cash'],
         )
-        output = PosSessionSerializer(session)
-        return Response(output.data)
+        return Response(PosSessionSerializer(session).data)
 
 
 class SaleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -84,30 +80,28 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-created_at']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve'):
-            return [IsCashier()]
         return [IsCashier()]
 
     def get_queryset(self):
         qs = Sale.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('customer', 'pos_session', 'sold_by')
+        ).select_related('customer', 'pos_session', 'sold_by', 'location')
 
         if self.action == 'retrieve':
             qs = qs.prefetch_related(
                 'lines__product_variant',
                 'lines__lot',
                 'lines__discount_reason',
+                'payments',
             )
 
-        # Filters
         session_id = self.request.query_params.get('session')
         if session_id:
             qs = qs.filter(pos_session_id=session_id)
 
-        payment = self.request.query_params.get('payment_method')
-        if payment:
-            qs = qs.filter(payment_method=payment)
+        location_id = self.request.query_params.get('location')
+        if location_id:
+            qs = qs.filter(location_id=location_id)
 
         sale_status = self.request.query_params.get('status')
         if sale_status:
@@ -131,23 +125,20 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
         sale = create_sale(
             tenant_id=request.tenant_id,
             pos_session_id=data['pos_session_id'],
+            location_id=data['location_id'],
             sold_by_id=request.user.pk,
-            payment_method=data['payment_method'],
             customer_id=data.get('customer_id'),
             lines=[dict(line) for line in data['lines']],
+            payments=[dict(p) for p in data.get('payments', [])],
             client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
             notes=data.get('notes', ''),
-            operation_currency=data.get('operation_currency', 'UZS'),
-            operation_amount=data.get('operation_amount'),
-            fx_rate_snapshot=data.get('fx_rate_snapshot'),
-            functional_amount_uzs=data.get('functional_amount_uzs'),
+            date=data.get('date'),
         )
 
-        output = SaleDetailSerializer(sale)
-        return Response(output.data, status=status.HTTP_201_CREATED)
+        return Response(SaleDetailSerializer(sale).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='return')
-    def process_return(self, request, pk=None):
+    def process_return_action(self, request, pk=None):
         """Process a return for a completed sale."""
         sale = self.get_object()
         serializer = SaleReturnCreateSerializer(data=request.data)
@@ -162,8 +153,7 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
             notes=data.get('notes', ''),
         )
 
-        output = SaleReturnSerializer(sale_return)
-        return Response(output.data, status=status.HTTP_201_CREATED)
+        return Response(SaleReturnSerializer(sale_return).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='returns')
     def list_returns(self, request, pk=None):
@@ -172,5 +162,4 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
         returns = SaleReturn.objects.filter(
             sale=sale,
         ).prefetch_related('lines__sale_line')
-        serializer = SaleReturnSerializer(returns, many=True)
-        return Response(serializer.data)
+        return Response(SaleReturnSerializer(returns, many=True).data)

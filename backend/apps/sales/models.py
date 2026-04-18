@@ -79,7 +79,7 @@ class PosSession(TenantModel):
 
 class Sale(ImmutableMixin, TenantModel):
     """
-    A completed sale transaction.
+    A sale transaction — multi-payment, bound to a warehouse.
     Immutable after status = completed.
     """
 
@@ -88,21 +88,17 @@ class Sale(ImmutableMixin, TenantModel):
         COMPLETED = 'completed', 'Завершена'
         RETURNED = 'returned', 'Возвращена'
 
-    class PaymentMethod(models.TextChoices):
-        CASH = 'cash', 'Наличные'
-        CARD = 'card', 'Карта'
-        CREDIT = 'credit', 'В долг'
-
     status = models.CharField(
         max_length=20,
         choices=SaleStatus.choices,
         default=SaleStatus.DRAFT,
     )
-    payment_method = models.CharField(
-        max_length=10,
-        choices=PaymentMethod.choices,
-        default=PaymentMethod.CASH,
+    location = models.ForeignKey(
+        'inventory.Warehouse',
+        on_delete=models.PROTECT,
+        related_name='sales',
     )
+    date = models.DateTimeField()
     pos_session = models.ForeignKey(
         PosSession,
         on_delete=models.PROTECT,
@@ -129,30 +125,7 @@ class Sale(ImmutableMixin, TenantModel):
         max_digits=14,
         decimal_places=2,
         default=Decimal('0'),
-        help_text='Sum of cost_per_unit * quantity for all lines.',
-    )
-    customer_has_existing_debt = models.BooleanField(
-        default=False,
-        help_text='Warning flag for UI.',
-    )
-    operation_currency = models.CharField(max_length=3, default='UZS')
-    operation_amount = models.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        null=True,
-        blank=True,
-    )
-    fx_rate_snapshot = models.DecimalField(
-        max_digits=16,
-        decimal_places=6,
-        null=True,
-        blank=True,
-    )
-    functional_amount_uzs = models.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        null=True,
-        blank=True,
+        help_text='Sum of unit_landed_cost * quantity for all lines.',
     )
     client_request_id = models.UUIDField(
         null=True,
@@ -166,6 +139,7 @@ class Sale(ImmutableMixin, TenantModel):
         indexes = [
             models.Index(fields=['tenant', 'created_at']),
             models.Index(fields=['tenant', 'pos_session']),
+            models.Index(fields=['tenant', 'location', 'date']),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -180,6 +154,52 @@ class Sale(ImmutableMixin, TenantModel):
 
     def delete(self, *args, **kwargs):
         self.soft_delete()
+
+
+class SalePayment(TenantModel):
+    """
+    Single payment tied to a Sale. A sale can have 0..N payments
+    (multi-currency, multi-method, partial — any combination).
+    """
+
+    class Method(models.TextChoices):
+        CASH = 'CASH', 'Наличные'
+        CARD = 'CARD', 'Карта'
+        TRANSFER = 'TRANSFER', 'Перевод'
+        CREDIT = 'CREDIT', 'В долг'
+
+    class Role(models.TextChoices):
+        INCOMING = 'INCOMING', 'Приход'
+        REFUND = 'REFUND', 'Возврат'
+
+    sale = models.ForeignKey(
+        Sale,
+        on_delete=models.CASCADE,
+        related_name='payments',
+    )
+    date = models.DateTimeField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        default=Decimal('1'),
+    )
+    method = models.CharField(max_length=20, choices=Method.choices)
+    role = models.CharField(
+        max_length=20,
+        choices=Role.choices,
+        default=Role.INCOMING,
+    )
+    # FK to finance.CashAccount lands in PR-7; keep as nullable int for now.
+    account_id = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'sales_sale_payment'
+        indexes = [
+            models.Index(fields=['sale']),
+            models.Index(fields=['tenant', 'date']),
+        ]
 
 
 class SaleLine(TenantModel):
@@ -227,10 +247,23 @@ class SaleLine(TenantModel):
         blank=True,
         related_name='sale_lines',
     )
-    cost_per_unit = models.DecimalField(
-        max_digits=12,
+    unit_purchase_price = models.DecimalField(
+        max_digits=14,
         decimal_places=2,
-        help_text='Snapshot from lot.cost_per_unit.',
+        help_text='Snapshot from lot.unit_purchase_price.',
+    )
+    unit_landed_cost = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        help_text='Snapshot from lot.landed_cost_per_unit.',
+    )
+    profit_distribution_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'Immutable profit allocation at sale time. '
+            'Shape: {partner_id: decimal_string, ...}'
+        ),
     )
 
     class Meta:
@@ -246,7 +279,7 @@ class SaleLine(TenantModel):
 
     @property
     def total_cogs(self):
-        return self.cost_per_unit * self.quantity
+        return self.unit_landed_cost * self.quantity
 
     @property
     def gross_profit(self):

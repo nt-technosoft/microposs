@@ -3,7 +3,7 @@ Sales serializers.
 """
 
 from rest_framework import serializers
-from .models import Sale, SaleLine, SaleReturn, SaleReturnLine, PosSession
+from .models import Sale, SaleLine, SalePayment, SaleReturn, SaleReturnLine, PosSession
 
 
 # === POS Session ===
@@ -38,6 +38,28 @@ class CloseSessionSerializer(serializers.Serializer):
     actual_cash = serializers.DecimalField(max_digits=14, decimal_places=2)
 
 
+# === SalePayment ===
+
+class SalePaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SalePayment
+        fields = [
+            'id', 'date', 'amount', 'currency', 'fx_rate',
+            'method', 'role', 'account_id',
+        ]
+        read_only_fields = ['id']
+
+
+class SalePaymentInputSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField(max_length=3, default='UZS')
+    fx_rate = serializers.DecimalField(
+        max_digits=14, decimal_places=6, required=False, default='1',
+    )
+    method = serializers.ChoiceField(choices=SalePayment.Method.choices)
+    account_id = serializers.IntegerField(required=False, allow_null=True)
+
+
 # === Sale Lines ===
 
 class SaleLineSerializer(serializers.ModelSerializer):
@@ -57,7 +79,9 @@ class SaleLineSerializer(serializers.ModelSerializer):
             'id', 'lot', 'product_variant', 'product_name',
             'quantity', 'unit_price', 'base_price',
             'price_changed', 'discount_reason',
-            'cost_per_unit', 'total', 'gross_profit',
+            'unit_purchase_price', 'unit_landed_cost',
+            'profit_distribution_snapshot',
+            'total', 'gross_profit',
         ]
         read_only_fields = ['id']
 
@@ -66,7 +90,6 @@ class SaleLineInputSerializer(serializers.Serializer):
     product_variant_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
     unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
-    lot_id = serializers.IntegerField(required=False, allow_null=True)
     discount_reason_id = serializers.IntegerField(required=False, allow_null=True)
 
 
@@ -74,14 +97,18 @@ class SaleLineInputSerializer(serializers.Serializer):
 
 class SaleListSerializer(serializers.ModelSerializer):
     lines_count = serializers.SerializerMethodField()
+    location_name = serializers.CharField(
+        source='location.name', read_only=True,
+    )
+    paid_total = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
         fields = [
-            'id', 'status', 'payment_method', 'customer',
-            'operation_currency', 'operation_amount',
-            'fx_rate_snapshot', 'functional_amount_uzs',
-            'total_amount', 'lines_count',
+            'id', 'status', 'date',
+            'location', 'location_name',
+            'customer', 'total_amount',
+            'paid_total', 'lines_count',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -89,24 +116,33 @@ class SaleListSerializer(serializers.ModelSerializer):
     def get_lines_count(self, obj):
         return obj.lines.count()
 
+    def get_paid_total(self, obj):
+        from decimal import Decimal
+        return str(sum(
+            p.amount for p in obj.payments.all()
+            if p.role == SalePayment.Role.INCOMING
+        ))
+
 
 class SaleDetailSerializer(serializers.ModelSerializer):
     lines = SaleLineSerializer(many=True, read_only=True)
+    payments = SalePaymentSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(
         source='customer.name', read_only=True, default=None,
+    )
+    location_name = serializers.CharField(
+        source='location.name', read_only=True,
     )
 
     class Meta:
         model = Sale
         fields = [
-            'id', 'status', 'payment_method',
+            'id', 'status', 'date',
+            'location', 'location_name',
             'customer', 'customer_name',
-            'operation_currency', 'operation_amount',
-            'fx_rate_snapshot', 'functional_amount_uzs',
-            'total_amount', 'total_cogs',
-            'customer_has_existing_debt',
             'pos_session', 'sold_by',
-            'lines', 'notes',
+            'total_amount', 'total_cogs',
+            'lines', 'payments', 'notes',
             'client_request_id',
             'created_at', 'updated_at',
         ]
@@ -116,28 +152,11 @@ class SaleDetailSerializer(serializers.ModelSerializer):
 class SaleCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     pos_session_id = serializers.IntegerField()
-    payment_method = serializers.ChoiceField(choices=['cash', 'card', 'credit'])
+    location_id = serializers.IntegerField()
+    date = serializers.DateTimeField(required=False)
     customer_id = serializers.IntegerField(required=False, allow_null=True)
-    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    operation_amount = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        required=False,
-        allow_null=True,
-    )
-    fx_rate_snapshot = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=6,
-        required=False,
-        allow_null=True,
-    )
-    functional_amount_uzs = serializers.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        required=False,
-        allow_null=True,
-    )
     lines = SaleLineInputSerializer(many=True)
+    payments = SalePaymentInputSerializer(many=True, required=False, default=list)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
 
 

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import PosSession, Sale, SaleLine, SaleReturn, SaleReturnLine
+from .models import PosSession, Sale, SaleLine, SalePayment, SaleReturn, SaleReturnLine
 
 
 class SaleLineInline(admin.TabularInline):
@@ -7,9 +7,16 @@ class SaleLineInline(admin.TabularInline):
     extra = 0
     readonly_fields = (
         'product_variant', 'lot', 'quantity',
-        'unit_price', 'base_price', 'cost_per_unit',
+        'unit_price', 'base_price',
+        'unit_purchase_price', 'unit_landed_cost',
         'price_changed', 'discount_reason',
     )
+
+
+class SalePaymentInline(admin.TabularInline):
+    model = SalePayment
+    extra = 0
+    readonly_fields = ('date', 'amount', 'currency', 'fx_rate', 'method', 'role')
 
 
 class SaleReturnLineInline(admin.TabularInline):
@@ -32,14 +39,14 @@ class PosSessionAdmin(admin.ModelAdmin):
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'status', 'payment_method', 'customer',
+        'id', 'status', 'date', 'location', 'customer',
         'total_amount', 'total_cogs', 'pos_session',
         'sold_by', 'created_at',
     )
-    list_filter = ('status', 'payment_method')
+    list_filter = ('status',)
     search_fields = ('notes',)
     readonly_fields = ('client_request_id', 'created_at', 'updated_at')
-    inlines = [SaleLineInline]
+    inlines = [SaleLineInline, SalePaymentInline]
 
 
 @admin.register(SaleReturn)
