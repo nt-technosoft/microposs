@@ -8,11 +8,11 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsCashier
 
-from .models import Sale, SaleLine, SaleReturn, PosSession
+from .models import Sale, SaleLine, Return, PosSession
 from .serializers import (
     PosSessionSerializer, OpenSessionSerializer, CloseSessionSerializer,
     SaleListSerializer, SaleDetailSerializer, SaleCreateSerializer,
-    SaleReturnSerializer, SaleReturnCreateSerializer,
+    ReturnSerializer, ReturnCreateSerializer,
 )
 from .services import (
     create_sale, process_return,
@@ -141,25 +141,27 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     def process_return_action(self, request, pk=None):
         """Process a return for a completed sale."""
         sale = self.get_object()
-        serializer = SaleReturnCreateSerializer(data=request.data)
+        serializer = ReturnCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        sale_return = process_return(
+        return_doc = process_return(
             sale=sale,
             return_lines=[dict(line) for line in data['lines']],
+            resolution=data['resolution'],
+            reason=data.get('reason', Return.Reason.CLIENT_REFUSE),
             processed_by_id=request.user.pk,
             tenant_id=request.tenant_id,
             notes=data.get('notes', ''),
         )
 
-        return Response(SaleReturnSerializer(sale_return).data, status=status.HTTP_201_CREATED)
+        return Response(ReturnSerializer(return_doc).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='returns')
     def list_returns(self, request, pk=None):
         """List returns for a specific sale."""
         sale = self.get_object()
-        returns = SaleReturn.objects.filter(
+        returns = Return.objects.filter(
             sale=sale,
         ).prefetch_related('lines__sale_line')
-        return Response(SaleReturnSerializer(returns, many=True).data)
+        return Response(ReturnSerializer(returns, many=True).data)

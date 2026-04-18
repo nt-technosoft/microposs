@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import PosSession, Sale, SaleLine, SalePayment, SaleReturn, SaleReturnLine
+from .models import PosSession, Sale, SaleLine, SalePayment, Return, ReturnLine
 
 
 class SaleLineInline(admin.TabularInline):
@@ -19,10 +19,10 @@ class SalePaymentInline(admin.TabularInline):
     readonly_fields = ('date', 'amount', 'currency', 'fx_rate', 'method', 'role')
 
 
-class SaleReturnLineInline(admin.TabularInline):
-    model = SaleReturnLine
+class ReturnLineInline(admin.TabularInline):
+    model = ReturnLine
     extra = 0
-    readonly_fields = ('sale_line', 'quantity', 'condition')
+    readonly_fields = ('sale_line', 'quantity')
 
 
 @admin.register(PosSession)
@@ -49,8 +49,9 @@ class SaleAdmin(admin.ModelAdmin):
     inlines = [SaleLineInline, SalePaymentInline]
 
 
-@admin.register(SaleReturn)
-class SaleReturnAdmin(admin.ModelAdmin):
-    list_display = ('id', 'sale', 'processed_by', 'created_at')
+@admin.register(Return)
+class ReturnAdmin(admin.ModelAdmin):
+    list_display = ('id', 'sale', 'resolution', 'reason', 'processed_by', 'date', 'created_at')
+    list_filter = ('resolution', 'reason')
     readonly_fields = ('created_at',)
-    inlines = [SaleReturnLineInline]
+    inlines = [ReturnLineInline]

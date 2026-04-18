@@ -91,7 +91,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     Creates/updates DailySummary and CashFlowSummary.
     """
     from apps.finance.models import DailySummary, CashFlowSummary
-    from apps.sales.models import Sale, SaleReturn
+    from apps.sales.models import Sale, Return as SaleReturn
     from apps.finance.models import Expense
 
     if date_str:

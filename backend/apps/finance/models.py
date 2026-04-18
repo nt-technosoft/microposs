@@ -380,7 +380,7 @@ class CurrencyExchange(TenantModel):
 
 class Refund(TenantModel):
     """
-    Customer refund record. Ties back to a SaleReturn (optional).
+    Customer refund record. Ties back to a sales.Return (optional).
     Method RECEIVABLE_OFFSET does not touch a CashAccount — it cancels debt.
     """
 
@@ -412,7 +412,7 @@ class Refund(TenantModel):
     )
     method = models.CharField(max_length=20, choices=Method.choices)
     return_ref = models.ForeignKey(
-        'sales.SaleReturn',
+        'sales.Return',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

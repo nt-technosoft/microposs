@@ -49,6 +49,7 @@ class RiskEventViewSet(viewsets.ReadOnlyModelViewSet):
         risk_event = create_writeoff(
             tenant_id=request.tenant_id,
             lot_id=data['lot_id'],
+            warehouse_id=data['warehouse_id'],
             quantity=data['quantity'],
             reason=data['reason'],
             responsible_user_id=request.user.pk,

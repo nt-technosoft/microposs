@@ -370,3 +370,69 @@ class StockMovement(TenantModel):
             models.Index(fields=['lot', 'movement_type']),
             models.Index(fields=['tenant', 'created_at']),
         ]
+
+
+class StockDisposal(TenantModel):
+    """
+    Disposal of inventory — damaged return (DISPOSE), writeoff, expiry.
+    Append-only operational record; loss distribution handled by PartnerLedger.
+    Stock effect: Lot.quantity_initial is decremented (LotStock unchanged since goods
+    never came back on-shelf). For pure writeoffs without a prior sale, LotStock is
+    also decremented at the chosen warehouse.
+    """
+
+    class Reason(models.TextChoices):
+        DEFECT = 'DEFECT', 'Брак'
+        EXPIRED = 'EXPIRED', 'Срок годности'
+        DAMAGED_RETURN = 'DAMAGED_RETURN', 'Возврат брака'
+        WRITEOFF = 'WRITEOFF', 'Списание'
+        OTHER = 'OTHER', 'Другое'
+
+    lot = models.ForeignKey(
+        Lot,
+        on_delete=models.PROTECT,
+        related_name='disposals',
+    )
+    warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.PROTECT,
+        related_name='disposals',
+        null=True,
+        blank=True,
+    )
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    reason = models.CharField(max_length=20, choices=Reason.choices)
+    loss_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text='quantity × landed_cost_per_unit at disposal time.',
+    )
+    return_ref = models.ForeignKey(
+        'sales.Return',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='disposals',
+    )
+    risk_event_ref = models.ForeignKey(
+        'risk.RiskEvent',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='disposals',
+    )
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'inventory_stock_disposal'
+        indexes = [
+            models.Index(fields=['lot', 'reason']),
+            models.Index(fields=['tenant', 'created_at']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('StockDisposal is append-only. Physical delete forbidden.')
+
+    def __str__(self):
+        return f"Disposal lot={self.lot_id} qty={self.quantity} reason={self.reason}"

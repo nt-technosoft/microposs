@@ -3,7 +3,7 @@ Risk business logic — risk events, inventory checks, writeoffs.
 """
 
 from decimal import Decimal
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
@@ -14,20 +14,25 @@ from .models import RiskEvent, InventoryCheck, InventoryCheckLine
 def create_writeoff(
     tenant_id: int,
     lot_id: int,
+    warehouse_id: int,
     quantity: int,
     reason: str,
     responsible_user_id: int | None = None,
     negligence: bool = False,
 ) -> RiskEvent:
     """
-    Write off inventory (damaged, expired, lost).
-    Deducts lot quantity and creates RiskEvent.
+    Write off inventory (damaged, expired, lost) — no prior sale.
+    Flow:
+      1. Decrement LotStock at the chosen warehouse (source of stock loss).
+      2. Create RiskEvent + StockDisposal(reason=WRITEOFF).
+      3. For each partner on the lot → PartnerLedgerEntry(LOSS_INCURRED, amount × capital_share).
     """
-    raise NotImplementedError(
-        'create_writeoff awaits PR-8 (LotStock-aware writeoff + PartnerLedger.LOSS_INCURRED).'
-    )
-    from apps.inventory.models import Lot, StockMovement
-    from apps.inventory.services import deduct_lot_quantity
+    from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
+    from apps.partnerships.models import PartnerLedgerEntry
+    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+
+    if quantity < 1:
+        raise ValueError('Writeoff quantity must be >= 1.')
 
     with transaction.atomic():
         lot = Lot.objects.select_for_update().get(
@@ -35,11 +40,24 @@ def create_writeoff(
             tenant_id=tenant_id,
         )
 
-        monetary_impact = lot.cost_per_unit * quantity
+        stock = LotStock.objects.select_for_update().get(
+            tenant_id=tenant_id,
+            lot=lot,
+            warehouse_id=warehouse_id,
+        )
+        if stock.quantity_remaining < quantity:
+            raise ValueError(
+                f'Insufficient stock in warehouse {warehouse_id} for lot #{lot.pk}: '
+                f'have {stock.quantity_remaining}, need {quantity}.'
+            )
 
-        # Determine if this affects investors
-        receipt = lot.receipt
-        affects_investor = receipt.receipt_type in ('MUDARABA', 'MUSHARAKA')
+        monetary_impact = (lot.landed_cost_per_unit * quantity).quantize(Decimal('0.01'))
+
+        contract_snapshot = lot.contract_snapshot or {}
+        partners_meta = contract_snapshot.get('partners', []) or []
+        affects_investor = any(
+            p.get('role') == 'INVESTOR' for p in partners_meta
+        )
 
         risk_event = RiskEvent.objects.create(
             tenant_id=tenant_id,
@@ -53,30 +71,68 @@ def create_writeoff(
             reason=reason,
         )
 
-        # Deduct from lot
-        deduct_lot_quantity(lot, quantity)
+        disposal = StockDisposal.objects.create(
+            tenant_id=tenant_id,
+            lot=lot,
+            warehouse_id=warehouse_id,
+            quantity=quantity,
+            reason=StockDisposal.Reason.WRITEOFF,
+            loss_amount=monetary_impact,
+            risk_event_ref=risk_event,
+            notes=reason,
+        )
 
-        # Record stock movement
+        stock.quantity_remaining = stock.quantity_remaining - quantity
+        stock.save(update_fields=['quantity_remaining', 'updated_at'])
+
+        Lot.objects.filter(pk=lot.pk).update(
+            quantity_initial=models.F('quantity_initial') - quantity,
+        )
+        if LotStock.objects.filter(lot=lot).aggregate(
+            total=models.Sum('quantity_remaining'),
+        )['total'] in (0, None):
+            Lot.objects.filter(pk=lot.pk).update(is_active=False)
+
         StockMovement.objects.create(
             tenant_id=tenant_id,
             lot=lot,
             movement_type=StockMovement.MovementType.WRITEOFF,
             quantity=-quantity,
-            from_location=lot.location,
+            from_location_id=warehouse_id,
             reference_type='risk_event',
             reference_id=risk_event.pk,
         )
 
-        # Record investor loss if applicable
-        if affects_investor:
-            _record_investor_loss(
-                tenant_id=tenant_id,
-                lot=lot,
-                risk_event=risk_event,
-                amount=monetary_impact,
-            )
+        # Partner loss via PartnerLedger
+        procurement_id = None
+        if lot.procurement_item_id:
+            procurement_id = lot.procurement_item.procurement_id
 
-        # Create journal entry for writeoff
+        if procurement_id and partners_meta:
+            for meta in partners_meta:
+                partner_id = meta.get('partner_id')
+                if partner_id is None:
+                    continue
+                capital_share = Decimal(str(meta.get('capital_share', '0')))
+                if capital_share <= 0:
+                    continue
+                loss_share = (monetary_impact * capital_share).quantize(Decimal('0.01'))
+                if loss_share <= 0:
+                    continue
+                ledger = get_or_create_ledger(
+                    procurement_id=procurement_id,
+                    partner_id=int(partner_id),
+                    tenant_id=tenant_id,
+                )
+                append_ledger_entry(
+                    ledger=ledger,
+                    entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
+                    amount=loss_share,
+                    currency='UZS',
+                    source_ref=f'writeoff:{risk_event.pk}',
+                )
+
+        # Journal entry (bookkeeping)
         from apps.finance.services import create_journal_entry
         create_journal_entry(
             tenant_id=tenant_id,
@@ -93,7 +149,7 @@ def create_writeoff(
                     'account_code': '1100',
                     'debit': Decimal('0'),
                     'credit': monetary_impact,
-                    'description': f'Writeoff: inventory reduction',
+                    'description': 'Writeoff: inventory reduction',
                 },
             ],
             description=f'Writeoff of {quantity} units from lot #{lot.pk}',
@@ -103,6 +159,7 @@ def create_writeoff(
             event_type='risk.writeoff',
             payload={
                 'risk_event_id': risk_event.pk,
+                'disposal_id': disposal.pk,
                 'lot_id': lot.pk,
                 'quantity': quantity,
                 'monetary_impact': str(monetary_impact),
@@ -112,53 +169,6 @@ def create_writeoff(
         )
 
     return risk_event
-
-
-def _record_investor_loss(
-    tenant_id: int,
-    lot,
-    risk_event: RiskEvent,
-    amount: Decimal,
-) -> None:
-    """Record loss for investors linked to this lot's receipt."""
-    from apps.investors.services import record_investor_profit
-    from apps.inventory.models import ReceiptParticipant
-    from apps.investors.models import InvestorContract
-
-    participants = ReceiptParticipant.objects.filter(
-        receipt=lot.receipt,
-        participant_type='investor',
-    )
-
-    for participant in participants:
-        contract = None
-        if lot.receipt.investor_contract_id:
-            contract = InvestorContract.objects.filter(
-                pk=lot.receipt.investor_contract_id,
-                status='active',
-                tenant_id=tenant_id,
-            ).first()
-
-        if contract is None:
-            contract = InvestorContract.objects.filter(
-                investor_id=participant.entity_id,
-                status='active',
-                tenant_id=tenant_id,
-            ).first()
-
-        if contract and contract.investor_id == participant.entity_id:
-            loss_amount = amount * participant.capital_ratio
-            record_investor_profit(
-                tenant_id=tenant_id,
-                contract_id=contract.pk,
-                investor_id=participant.entity_id,
-                record_type='loss',
-                amount=loss_amount,
-                source_type='risk_event',
-                source_id=risk_event.pk,
-                lot_id=lot.pk,
-                description=f'Loss from writeoff: {risk_event.reason}',
-            )
 
 
 def complete_inventory_check(

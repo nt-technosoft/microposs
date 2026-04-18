@@ -22,7 +22,7 @@ from apps.inventory.services import (
 from apps.finance.services import resolve_fx_rate_snapshot
 
 from .models import (
-    Sale, SaleLine, SaleReturn, SaleReturnLine, PosSession,
+    Sale, SaleLine, Return, ReturnLine, PosSession,
 )
 
 if TYPE_CHECKING:
@@ -416,96 +416,196 @@ def calculate_profit_distribution(lot: 'Lot', sale_line: SaleLine) -> list[dict]
 def process_return(
     sale: Sale,
     return_lines: list[dict],
+    resolution: str,
+    reason: str,
     processed_by_id: int,
     tenant_id: int,
     notes: str = '',
-) -> SaleReturn:
-    raise NotImplementedError(
-        'process_return awaits PR-8 (Return rework with RESTOCK/DISPOSE + PartnerLedger).'
-    )
+    date=None,
+) -> Return:
     """
-    Process a return for a completed sale.
-    Each line: sale_line_id, quantity, condition (good/damaged).
+    Process a return for a completed sale with shariah-correct partner impact.
+
+    resolution RESTOCK:
+      - LotStock at sale.location += qty, reactivate Lot.
+      - PROFIT_REVERSED per partner, proportional to returned qty.
+      - Monetary refund is NOT created here — caller uses finance.refund_customer.
+
+    resolution DISPOSE:
+      - StockDisposal record (reason=DAMAGED_RETURN).
+      - Lot.quantity_initial -= qty (goods never return to stock).
+      - PROFIT_REVERSED per partner (proportional to returned qty).
+      - LOSS_INCURRED per partner distributed by capital_share from contract_snapshot.
+      - Monetary refund is NOT created here — caller uses finance.refund_customer.
+
+    Invariant: Σ ReturnLine.qty per sale_line ≤ SaleLine.qty (including prior returns).
     """
+    from apps.inventory.models import Lot, LotStock, StockDisposal
+    from apps.partnerships.models import PartnerLedgerEntry
+    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+
+    if date is None:
+        date = timezone.now()
+
+    if resolution not in (Return.Resolution.RESTOCK, Return.Resolution.DISPOSE):
+        raise ValueError(f'Invalid resolution: {resolution}')
+
     with transaction.atomic():
-        sale_return = SaleReturn.objects.create(
+        return_doc = Return.objects.create(
             tenant_id=tenant_id,
             sale=sale,
             processed_by_id=processed_by_id,
+            resolution=resolution,
+            reason=reason,
+            date=date,
             notes=notes,
         )
 
-        refund_amount = Decimal('0')
-        cogs_amount = Decimal('0')
+        total_refund = Decimal('0')
+        total_loss = Decimal('0')
 
         for rl_data in return_lines:
-            sale_line = SaleLine.objects.get(
+            sale_line = SaleLine.objects.select_related('lot').get(
                 pk=rl_data['sale_line_id'],
                 sale=sale,
-            )
-
-            quantity = rl_data['quantity']
-
-            return_line = SaleReturnLine.objects.create(
                 tenant_id=tenant_id,
-                sale_return=sale_return,
-                sale_line=sale_line,
-                quantity=quantity,
-                condition=rl_data['condition'],
             )
-            _ = return_line
+            qty = int(rl_data['quantity'])
+            if qty < 1:
+                raise ValueError('Return line quantity must be >= 1.')
 
-            # Restore lot quantity
-            restore_lot_quantity(sale_line.lot, quantity)
-
-            # Record stock movement
-            record_return_stock_movement(
-                tenant_id=tenant_id,
-                lot=sale_line.lot,
-                quantity=quantity,
-                to_location=sale.pos_session.location,
-                sale_return_id=sale_return.pk,
-            )
-
-            refund_amount += sale_line.unit_price * quantity
-            cogs_amount += sale_line.cost_per_unit * quantity
-
-            # If damaged, create risk event
-            if rl_data['condition'] == 'damaged':
-                from apps.risk.models import RiskEvent
-                receipt = sale_line.lot.receipt
-                RiskEvent.objects.create(
-                    tenant_id=tenant_id,
-                    event_type=RiskEvent.EventType.RETURN,
-                    lot=sale_line.lot,
-                    quantity=quantity,
-                    monetary_impact=sale_line.cost_per_unit * quantity,
-                    affects_investor=receipt.receipt_type in ('MUDARABA', 'MUSHARAKA'),
-                    reason=f'Damaged return from sale #{sale.pk}',
+            already_returned = (
+                ReturnLine.objects
+                .filter(sale_line=sale_line)
+                .aggregate(total=models.Sum('quantity'))['total']
+            ) or 0
+            if already_returned + qty > sale_line.quantity:
+                raise ValueError(
+                    f'Return exceeds sold quantity for sale_line #{sale_line.pk}: '
+                    f'sold={sale_line.quantity}, already returned={already_returned}, '
+                    f'requested={qty}.'
                 )
 
-        from apps.finance.services import record_return_journal
-        record_return_journal(
-            tenant_id=tenant_id,
-            sale_return_id=sale_return.pk,
-            refund_amount=refund_amount,
-            cogs_amount=cogs_amount,
-            payment_method=sale.payment_method,
-            date=sale_return.created_at,
-        )
+            ReturnLine.objects.create(
+                tenant_id=tenant_id,
+                return_doc=return_doc,
+                sale_line=sale_line,
+                quantity=qty,
+            )
 
-        # Publish event
+            lot = sale_line.lot
+            qty_ratio = Decimal(qty) / Decimal(sale_line.quantity)
+            line_refund = sale_line.unit_price * qty
+            line_loss = sale_line.unit_landed_cost * qty
+            total_refund += line_refund
+
+            # Proportional PROFIT_REVERSED per partner
+            distribution = sale_line.profit_distribution_snapshot or {}
+            contract_snapshot = lot.contract_snapshot or {}
+            partners_meta = {
+                str(p.get('partner_id')): p
+                for p in contract_snapshot.get('partners', [])
+                if p.get('partner_id') is not None
+            }
+            procurement_id = None
+            if lot.procurement_item_id:
+                procurement_id = lot.procurement_item.procurement_id
+
+            if procurement_id and distribution:
+                for partner_id_str, profit_str in distribution.items():
+                    try:
+                        partner_id = int(partner_id_str)
+                    except (TypeError, ValueError):
+                        continue
+                    profit_amount = Decimal(str(profit_str))
+                    reversed_amount = (profit_amount * qty_ratio).quantize(Decimal('0.01'))
+                    if reversed_amount <= 0:
+                        continue
+                    ledger = get_or_create_ledger(
+                        procurement_id=procurement_id,
+                        partner_id=partner_id,
+                        tenant_id=tenant_id,
+                    )
+                    append_ledger_entry(
+                        ledger=ledger,
+                        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
+                        amount=reversed_amount,
+                        currency='UZS',
+                        source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                        date=date,
+                    )
+
+            if resolution == Return.Resolution.RESTOCK:
+                stock, _ = LotStock.objects.select_for_update().get_or_create(
+                    tenant_id=tenant_id,
+                    lot=lot,
+                    warehouse=sale.location,
+                    defaults={'quantity_remaining': 0},
+                )
+                stock.quantity_remaining = stock.quantity_remaining + qty
+                stock.save(update_fields=['quantity_remaining', 'updated_at'])
+
+                if not lot.is_active:
+                    Lot.objects.filter(pk=lot.pk).update(is_active=True)
+
+            else:  # DISPOSE
+                StockDisposal.objects.create(
+                    tenant_id=tenant_id,
+                    lot=lot,
+                    warehouse=sale.location,
+                    quantity=qty,
+                    reason=StockDisposal.Reason.DAMAGED_RETURN,
+                    loss_amount=line_loss,
+                    return_ref=return_doc,
+                    notes=f'Dispose from Return #{return_doc.pk}',
+                )
+                Lot.objects.filter(pk=lot.pk).update(
+                    quantity_initial=models.F('quantity_initial') - qty,
+                )
+                total_loss += line_loss
+
+                # LOSS_INCURRED per partner by capital_share
+                if procurement_id and partners_meta:
+                    for partner_id_str, meta in partners_meta.items():
+                        try:
+                            partner_id = int(partner_id_str)
+                        except (TypeError, ValueError):
+                            continue
+                        capital_share = Decimal(str(meta.get('capital_share', '0')))
+                        if capital_share <= 0:
+                            continue
+                        loss_share = (line_loss * capital_share).quantize(Decimal('0.01'))
+                        if loss_share <= 0:
+                            continue
+                        ledger = get_or_create_ledger(
+                            procurement_id=procurement_id,
+                            partner_id=partner_id,
+                            tenant_id=tenant_id,
+                        )
+                        append_ledger_entry(
+                            ledger=ledger,
+                            entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
+                            amount=loss_share,
+                            currency='UZS',
+                            source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                            date=date,
+                        )
+
         publish_event(
             event_type='sale.returned',
             payload={
                 'sale_id': sale.pk,
-                'return_id': sale_return.pk,
+                'return_id': return_doc.pk,
+                'resolution': resolution,
+                'reason': reason,
                 'lines_count': len(return_lines),
+                'refund_amount': str(total_refund),
+                'loss_amount': str(total_loss),
             },
             tenant_id=tenant_id,
         )
 
-    return sale_return
+    return return_doc
 
 
 def open_pos_session(

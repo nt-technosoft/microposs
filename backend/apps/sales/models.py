@@ -286,8 +286,21 @@ class SaleLine(TenantModel):
         return self.total - self.total_cogs
 
 
-class SaleReturn(TenantModel):
-    """Return operation linked to a specific sale."""
+class Return(TenantModel):
+    """
+    Return operation linked to a specific sale.
+    resolution RESTOCK → goods re-enter stock (LotStock += qty).
+    resolution DISPOSE → goods are disposed (StockDisposal + LOSS_INCURRED).
+    """
+
+    class Resolution(models.TextChoices):
+        RESTOCK = 'RESTOCK', 'Оприходовать обратно'
+        DISPOSE = 'DISPOSE', 'Утилизировать'
+
+    class Reason(models.TextChoices):
+        DEFECT = 'DEFECT', 'Брак'
+        CLIENT_REFUSE = 'CLIENT_REFUSE', 'Отказ клиента'
+        OTHER = 'OTHER', 'Другое'
 
     sale = models.ForeignKey(
         Sale,
@@ -298,21 +311,35 @@ class SaleReturn(TenantModel):
         'auth.User',
         on_delete=models.PROTECT,
     )
+    resolution = models.CharField(
+        max_length=10,
+        choices=Resolution.choices,
+        default=Resolution.RESTOCK,
+    )
+    reason = models.CharField(
+        max_length=20,
+        choices=Reason.choices,
+        default=Reason.CLIENT_REFUSE,
+    )
+    date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
 
     class Meta:
-        db_table = 'sales_sale_return'
+        db_table = 'sales_return'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+            models.Index(fields=['sale', 'resolution']),
+        ]
+
+    def __str__(self):
+        return f"Return #{self.pk} (sale={self.sale_id}, {self.resolution})"
 
 
-class SaleReturnLine(TenantModel):
-    """Single line in a return."""
+class ReturnLine(TenantModel):
+    """Single line in a return. No per-line condition (resolution is Return-level)."""
 
-    class ReturnCondition(models.TextChoices):
-        GOOD = 'good', 'Исправный'
-        DAMAGED = 'damaged', 'Повреждённый'
-
-    sale_return = models.ForeignKey(
-        SaleReturn,
+    return_doc = models.ForeignKey(
+        Return,
         on_delete=models.CASCADE,
         related_name='lines',
     )
@@ -324,10 +351,6 @@ class SaleReturnLine(TenantModel):
     quantity = models.PositiveIntegerField(
         validators=[MinValueValidator(1)],
     )
-    condition = models.CharField(
-        max_length=10,
-        choices=ReturnCondition.choices,
-    )
 
     class Meta:
-        db_table = 'sales_sale_return_line'
+        db_table = 'sales_return_line'

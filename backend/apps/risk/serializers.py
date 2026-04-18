@@ -21,6 +21,7 @@ class RiskEventSerializer(serializers.ModelSerializer):
 
 class WriteoffCreateSerializer(serializers.Serializer):
     lot_id = serializers.IntegerField()
+    warehouse_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
     reason = serializers.CharField()
     negligence = serializers.BooleanField(default=False)

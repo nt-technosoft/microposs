@@ -3,7 +3,7 @@ Sales serializers.
 """
 
 from rest_framework import serializers
-from .models import Sale, SaleLine, SalePayment, SaleReturn, SaleReturnLine, PosSession
+from .models import Sale, SaleLine, SalePayment, Return, ReturnLine, PosSession
 
 
 # === POS Session ===
@@ -162,28 +162,37 @@ class SaleCreateSerializer(serializers.Serializer):
 
 # === Returns ===
 
-class SaleReturnLineSerializer(serializers.ModelSerializer):
+class ReturnLineSerializer(serializers.ModelSerializer):
     class Meta:
-        model = SaleReturnLine
-        fields = ['id', 'sale_line', 'quantity', 'condition']
+        model = ReturnLine
+        fields = ['id', 'sale_line', 'quantity']
         read_only_fields = ['id']
 
 
-class SaleReturnSerializer(serializers.ModelSerializer):
-    lines = SaleReturnLineSerializer(many=True, read_only=True)
+class ReturnSerializer(serializers.ModelSerializer):
+    lines = ReturnLineSerializer(many=True, read_only=True)
 
     class Meta:
-        model = SaleReturn
-        fields = ['id', 'sale', 'processed_by', 'lines', 'notes', 'created_at']
+        model = Return
+        fields = [
+            'id', 'sale', 'processed_by',
+            'resolution', 'reason', 'date',
+            'lines', 'notes', 'created_at',
+        ]
         read_only_fields = ['id', 'created_at']
 
 
-class SaleReturnInputLineSerializer(serializers.Serializer):
+class ReturnInputLineSerializer(serializers.Serializer):
     sale_line_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
-    condition = serializers.ChoiceField(choices=['good', 'damaged'])
 
 
-class SaleReturnCreateSerializer(serializers.Serializer):
-    lines = SaleReturnInputLineSerializer(many=True)
+class ReturnCreateSerializer(serializers.Serializer):
+    resolution = serializers.ChoiceField(choices=Return.Resolution.choices)
+    reason = serializers.ChoiceField(
+        choices=Return.Reason.choices,
+        required=False,
+        default=Return.Reason.CLIENT_REFUSE,
+    )
+    lines = ReturnInputLineSerializer(many=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
