@@ -80,7 +80,7 @@ class InventoryCheck(TenantModel):
         COMPLETED = 'completed', 'Завершена'
 
     location = models.ForeignKey(
-        'inventory.Location',
+        'inventory.Warehouse',
         on_delete=models.PROTECT,
         related_name='inventory_checks',
     )

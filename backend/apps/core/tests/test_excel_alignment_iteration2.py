@@ -11,7 +11,7 @@ from rest_framework.test import APITestCase
 
 from apps.core.models import Business, ExcelImportBatch, ExcelImportRow, OutboxEvent
 from apps.finance.models import Expense, JournalEntry
-from apps.inventory.models import Location
+from apps.inventory.models import Warehouse
 from apps.suppliers.models import Supplier
 from apps.catalog.models import ProductVariant
 
@@ -38,7 +38,7 @@ class BackendHardeningIteration2Tests(APITestCase):
 
         supplier = Supplier.objects.filter(tenant=self.tenant, is_active=True).order_by('id').first()
         variant = ProductVariant.objects.filter(tenant=self.tenant, is_active=True).order_by('id').first()
-        destination = Location.objects.filter(tenant=self.tenant, is_active=True).order_by('id').first()
+        destination = Warehouse.objects.filter(tenant=self.tenant, is_active=True).order_by('id').first()
         self.assertIsNotNone(supplier)
         self.assertIsNotNone(variant)
         self.assertIsNotNone(destination)

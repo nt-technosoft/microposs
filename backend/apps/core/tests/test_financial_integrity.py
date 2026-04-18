@@ -10,7 +10,7 @@ from apps.catalog.models import ProductVariant
 from apps.core.models import OutboxEvent
 from apps.customers.models import Customer
 from apps.finance.models import JournalEntry
-from apps.inventory.models import Location, Lot
+from apps.inventory.models import Warehouse, Lot
 from apps.sales.models import PosSession, Sale
 from apps.suppliers.models import Supplier
 
@@ -39,7 +39,7 @@ class FinancialIntegrityTests(APITestCase):
 
         variant = ProductVariant.objects.filter(is_active=True).order_by('id').first()
         self.assertIsNotNone(variant)
-        location = Location.objects.filter(is_active=True).order_by('id').first()
+        location = Warehouse.objects.filter(is_active=True).order_by('id').first()
         self.assertIsNotNone(location)
         session = PosSession.objects.filter(
             status=PosSession.SessionStatus.OPEN,

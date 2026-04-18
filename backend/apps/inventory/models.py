@@ -9,24 +9,24 @@ from decimal import Decimal
 from apps.core.models import TenantModel, ImmutableMixin
 
 
-class Location(TenantModel):
-    """Warehouse or point of sale."""
+class Warehouse(TenantModel):
+    """Storage facility or retail point."""
 
-    class LocationType(models.TextChoices):
-        WAREHOUSE = 'warehouse', 'Склад'
-        STORE = 'store', 'Точка продаж'
+    class WarehouseKind(models.TextChoices):
+        STORAGE = 'STORAGE', 'Склад'
+        SHOP = 'SHOP', 'Магазин'
 
     name = models.CharField(max_length=255)
-    location_type = models.CharField(
+    kind = models.CharField(
         max_length=20,
-        choices=LocationType.choices,
-        default=LocationType.STORE,
+        choices=WarehouseKind.choices,
+        default=WarehouseKind.SHOP,
     )
     address = models.TextField(blank=True, default='')
     is_active = models.BooleanField(default=True)
 
     class Meta:
-        db_table = 'inventory_location'
+        db_table = 'inventory_warehouse'
 
     def __str__(self):
         return self.name
@@ -60,7 +60,7 @@ class Receipt(ImmutableMixin, TenantModel):
     )
     date = models.DateTimeField()
     destination = models.ForeignKey(
-        Location,
+        Warehouse,
         on_delete=models.PROTECT,
         related_name='receipts',
     )
@@ -228,7 +228,7 @@ class Lot(TenantModel):
         related_name='lots',
     )
     location = models.ForeignKey(
-        Location,
+        Warehouse,
         on_delete=models.PROTECT,
         related_name='lots',
     )
@@ -290,14 +290,14 @@ class StockMovement(TenantModel):
         help_text='Positive = in, Negative = out.',
     )
     from_location = models.ForeignKey(
-        Location,
+        Warehouse,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name='movements_from',
     )
     to_location = models.ForeignKey(
-        Location,
+        Warehouse,
         on_delete=models.PROTECT,
         null=True,
         blank=True,

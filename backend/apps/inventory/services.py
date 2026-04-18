@@ -13,7 +13,7 @@ from apps.core.exceptions import (
 )
 
 from .models import (
-    Receipt, ReceiptLine, ReceiptParticipant, Lot, StockMovement, Location,
+    Receipt, ReceiptLine, ReceiptParticipant, Lot, StockMovement, Warehouse,
 )
 from .validators import validate_participant_ratios
 
@@ -235,7 +235,7 @@ def record_sale_stock_movement(
     tenant_id: int,
     lot: Lot,
     quantity: int,
-    from_location: Location,
+    from_location: Warehouse,
     sale_id: int,
 ) -> StockMovement:
     return StockMovement.objects.create(
@@ -254,7 +254,7 @@ def record_return_stock_movement(
     tenant_id: int,
     lot: Lot,
     quantity: int,
-    to_location: Location,
+    to_location: Warehouse,
     sale_return_id: int,
 ) -> StockMovement:
     return StockMovement.objects.create(
@@ -270,7 +270,7 @@ def record_return_stock_movement(
 
 def transfer_lot(
     lot: Lot,
-    to_location: Location,
+    to_location: Warehouse,
     quantity: int | None = None,
     tenant_id: int | None = None,
 ) -> Lot:

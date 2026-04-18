@@ -309,7 +309,7 @@ class ProductCreateSerializer(serializers.Serializer):
         max_digits=12, decimal_places=2, required=False, allow_null=True,
     )
     pricing_mode = serializers.ChoiceField(
-        choices=['ASK_EACH_SALE', 'DEFAULT_EDITABLE', 'FIXED_LOCKED'],
+        choices=['ALWAYS_ASK', 'EDITABLE', 'FIXED'],
         required=False,
     )
     description = serializers.CharField(required=False, default='', allow_blank=True)

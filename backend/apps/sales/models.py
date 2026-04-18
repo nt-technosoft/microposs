@@ -20,7 +20,7 @@ class PosSession(TenantModel):
         CLOSED = 'closed', 'Закрыта'
 
     location = models.ForeignKey(
-        'inventory.Location',
+        'inventory.Warehouse',
         on_delete=models.PROTECT,
         related_name='pos_sessions',
     )

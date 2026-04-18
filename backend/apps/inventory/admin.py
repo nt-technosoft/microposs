@@ -1,14 +1,14 @@
 from django.contrib import admin
 from .models import (
-    Location, Receipt, ReceiptLine, ReceiptParticipant,
+    Warehouse, Receipt, ReceiptLine, ReceiptParticipant,
     Lot, StockMovement,
 )
 
 
-@admin.register(Location)
-class LocationAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'location_type', 'is_active')
-    list_filter = ('location_type', 'is_active')
+@admin.register(Warehouse)
+class WarehouseAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'kind', 'is_active')
+    list_filter = ('kind', 'is_active')
 
 
 class ReceiptLineInline(admin.TabularInline):

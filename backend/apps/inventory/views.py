@@ -11,11 +11,11 @@ from apps.core.exceptions import DuplicateRequestError
 from decimal import Decimal
 
 from .models import (
-    Location, Receipt, ReceiptLine, ReceiptParticipant,
+    Warehouse, Receipt, ReceiptLine, ReceiptParticipant,
     Lot, StockMovement,
 )
 from .serializers import (
-    LocationSerializer,
+    WarehouseSerializer,
     ReceiptListSerializer, ReceiptDetailSerializer, ReceiptCreateSerializer,
     LotSerializer, StockMovementSerializer,
     TransferSerializer, StockSummarySerializer,
@@ -25,8 +25,8 @@ from .services import (
 )
 
 
-class LocationViewSet(viewsets.ModelViewSet):
-    serializer_class = LocationSerializer
+class WarehouseViewSet(viewsets.ModelViewSet):
+    serializer_class = WarehouseSerializer
     search_fields = ['name']
     ordering = ['name']
 
@@ -36,7 +36,7 @@ class LocationViewSet(viewsets.ModelViewSet):
         return [IsOwner()]
 
     def get_queryset(self):
-        return Location.objects.filter(tenant_id=self.request.tenant_id)
+        return Warehouse.objects.filter(tenant_id=self.request.tenant_id)
 
     def perform_create(self, serializer):
         serializer.save(tenant_id=self.request.tenant_id)
@@ -218,7 +218,7 @@ class StockView(viewsets.ViewSet):
             pk=data['lot_id'],
             tenant_id=request.tenant_id,
         )
-        to_location = Location.objects.get(
+        to_location = Warehouse.objects.get(
             pk=data['to_location_id'],
             tenant_id=request.tenant_id,
         )

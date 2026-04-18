@@ -97,6 +97,37 @@ class Business(BaseModel):
         return self.name
 
 
+class Partner(TenantModel):
+    """
+    Abstract business partner — supertype for investors and operators.
+    Participates in InvestmentContract for Procurement-level partnerships.
+    """
+
+    class Role(models.TextChoices):
+        INVESTOR = 'INVESTOR', 'Инвестор'
+        OPERATOR = 'OPERATOR', 'Оператор'
+
+    role = models.CharField(max_length=20, choices=Role.choices)
+    display_name = models.CharField(max_length=255)
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='partner_profiles',
+        null=True,
+        blank=True,
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'core_partner'
+        indexes = [
+            models.Index(fields=['tenant', 'role', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.display_name} ({self.role})"
+
+
 class OutboxEvent(BaseModel):
     """
     Outbox pattern — stores domain events for async processing.

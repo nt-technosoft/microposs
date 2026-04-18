@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.catalog.models import ProductVariant
 from apps.customers.models import Customer
-from apps.inventory.models import Location, Lot
+from apps.inventory.models import Warehouse, Lot
 from apps.sales.models import PosSession
 
 
@@ -70,7 +70,7 @@ class ApiSmokeTests(APITestCase):
         product_response = self.client.post('/api/v1/catalog/products/', {
             'name': f'Smoke Product {timezone.now().timestamp()}',
             'base_price': '71000.00',
-            'pricing_mode': 'DEFAULT_EDITABLE',
+            'pricing_mode': 'EDITABLE',
             'description': 'Created by smoke test',
             'characteristics': [],
             'variants': [],
@@ -80,7 +80,7 @@ class ApiSmokeTests(APITestCase):
         variant = ProductVariant.objects.filter(is_active=True).order_by('-id').first()
         self.assertIsNotNone(variant)
 
-        destination = Location.objects.filter(is_active=True).order_by('id').first()
+        destination = Warehouse.objects.filter(is_active=True).order_by('id').first()
         self.assertIsNotNone(destination)
 
         receipt_response = self.client.post('/api/v1/inventory/receipts/', {

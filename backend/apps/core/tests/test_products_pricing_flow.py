@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 
 from apps.catalog.models import Product, ProductVariant
 from apps.customers.models import Customer
-from apps.inventory.models import Location, Lot
+from apps.inventory.models import Warehouse, Lot
 from apps.sales.models import PosSession, SaleLine
 
 
@@ -32,7 +32,7 @@ class ProductsPricingFlowTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
     def create_receipt_and_lot(self, variant_id: int) -> Lot:
-        destination = Location.objects.filter(is_active=True).order_by('id').first()
+        destination = Warehouse.objects.filter(is_active=True).order_by('id').first()
         self.assertIsNotNone(destination)
 
         receipt_response = self.client.post('/api/v1/inventory/receipts/', {
@@ -105,7 +105,7 @@ class ProductsPricingFlowTests(APITestCase):
         self.auth_owner()
         variant = self.create_product(
             name=f'Fixed Product {timezone.now().timestamp()}',
-            pricing_mode='FIXED_LOCKED',
+            pricing_mode='FIXED',
             base_price='65000.00',
         )
         lot = self.create_receipt_and_lot(variant.id)
@@ -122,7 +122,7 @@ class ProductsPricingFlowTests(APITestCase):
         self.auth_owner()
         variant = self.create_product(
             name=f'Ask Product {timezone.now().timestamp()}',
-            pricing_mode='ASK_EACH_SALE',
+            pricing_mode='ALWAYS_ASK',
             base_price='0.00',
         )
         lot = self.create_receipt_and_lot(variant.id)
@@ -139,7 +139,7 @@ class ProductsPricingFlowTests(APITestCase):
         self.auth_owner()
         variant = self.create_product(
             name=f'Editable Product {timezone.now().timestamp()}',
-            pricing_mode='DEFAULT_EDITABLE',
+            pricing_mode='EDITABLE',
             base_price='70000.00',
         )
         lot = self.create_receipt_and_lot(variant.id)
@@ -163,7 +163,7 @@ class ProductsPricingFlowTests(APITestCase):
 
         category_response = self.client.post('/api/v1/catalog/categories/', {
             'name': f'Category Tpl {timezone.now().timestamp()}',
-            'default_pricing_mode': 'ASK_EACH_SALE',
+            'default_pricing_mode': 'ALWAYS_ASK',
             'sort_order': 1,
         }, format='json')
         self.assertEqual(category_response.status_code, status.HTTP_201_CREATED)
@@ -190,7 +190,7 @@ class ProductsPricingFlowTests(APITestCase):
         self.assertEqual(product_response.status_code, status.HTTP_201_CREATED)
 
         created_product = Product.objects.get(pk=product_response.data['id'])
-        self.assertEqual(created_product.pricing_mode, 'ASK_EACH_SALE')
+        self.assertEqual(created_product.pricing_mode, 'ALWAYS_ASK')
         self.assertTrue(created_product.characteristics.filter(name='Материал', value='Кожа').exists())
 
         update_template_response = self.client.put(

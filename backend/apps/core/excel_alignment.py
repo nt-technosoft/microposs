@@ -25,7 +25,7 @@ from apps.customers.models import Customer
 from apps.customers.services import record_customer_payment
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.services import create_journal_entry, record_expense
-from apps.inventory.models import Location, Lot, Receipt, ReceiptLine
+from apps.inventory.models import Warehouse, Lot, Receipt, ReceiptLine
 from apps.inventory.services import confirm_receipt, transfer_lot
 from apps.sales.models import PosSession, Sale
 from apps.sales.services import create_sale, open_pos_session
@@ -295,8 +295,8 @@ class ExcelAlignmentImporter:
             notes=notes,
             status=ExcelImportBatch.Status.RUNNING,
         )
-        store = self._resolve_location(tenant.id, 'DOKON', location_type=Location.LocationType.STORE)
-        wh = self._resolve_location(tenant.id, 'ASOSIY', location_type=Location.LocationType.WAREHOUSE)
+        store = self._resolve_location(tenant.id, 'DOKON', location_type=Warehouse.WarehouseKind.SHOP)
+        wh = self._resolve_location(tenant.id, 'ASOSIY', location_type=Warehouse.WarehouseKind.STORAGE)
         self.ctx = ImportContext(
             tenant=tenant,
             batch=batch,
@@ -445,15 +445,15 @@ class ExcelAlignmentImporter:
                     stats['suppliers'] += int(created)
 
                 if location_name:
-                    _, created = Location.objects.get_or_create(
+                    _, created = Warehouse.objects.get_or_create(
                         tenant=self.ctx.tenant,
                         name=location_name,
                         defaults={
                             'is_active': True,
-                            'location_type': (
-                                Location.LocationType.STORE
+                            'kind': (
+                                Warehouse.WarehouseKind.SHOP
                                 if _is_store_name(location_name)
-                                else Location.LocationType.WAREHOUSE
+                                else Warehouse.WarehouseKind.STORAGE
                             ),
                         },
                     )
@@ -1067,9 +1067,9 @@ class ExcelAlignmentImporter:
         name: str,
         *,
         location_type: str | None = None,
-    ) -> Location:
+    ) -> Warehouse:
         clean = str(name or '').strip() or 'DEFAULT'
-        location = Location.objects.filter(
+        location = Warehouse.objects.filter(
             tenant_id=tenant_id,
             name__iexact=clean,
         ).first()
@@ -1077,9 +1077,9 @@ class ExcelAlignmentImporter:
             return location
         inferred_type = (
             location_type
-            or (Location.LocationType.STORE if _is_store_name(clean) else Location.LocationType.WAREHOUSE)
+            or (Warehouse.WarehouseKind.SHOP if _is_store_name(clean) else Warehouse.WarehouseKind.STORAGE)
         )
-        return Location.objects.create(
+        return Warehouse.objects.create(
             tenant_id=tenant_id,
             name=clean,
             location_type=inferred_type,
@@ -1120,7 +1120,7 @@ class ExcelAlignmentImporter:
                 name=product_name,
                 category_id=category.id,
                 base_price=str(base_price.quantize(Decimal('0.01'))),
-                pricing_mode='DEFAULT_EDITABLE',
+                pricing_mode='EDITABLE',
                 description='Imported from Excel alignment',
                 variant_data=None,
             )
@@ -1144,7 +1144,7 @@ class ExcelAlignmentImporter:
             tenant=self.ctx.tenant,
             name='Imported',
             defaults={
-                'default_pricing_mode': 'DEFAULT_EDITABLE',
+                'default_pricing_mode': 'EDITABLE',
                 'sort_order': 999,
             },
         )

@@ -47,7 +47,7 @@ def create_product_with_variants(
             category = Category.objects.get(pk=category_id, tenant_id=tenant_id)
 
         resolved_pricing_mode = pricing_mode or (
-            category.default_pricing_mode if category else 'DEFAULT_EDITABLE'
+            category.default_pricing_mode if category else 'EDITABLE'
         )
 
         product = Product.objects.create(

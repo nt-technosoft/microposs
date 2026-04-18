@@ -6,17 +6,17 @@ from decimal import Decimal
 
 from rest_framework import serializers
 from .models import (
-    Location, Receipt, ReceiptLine, ReceiptParticipant,
+    Warehouse, Receipt, ReceiptLine, ReceiptParticipant,
     Lot, StockMovement,
 )
 
 
-# === Location ===
+# === Warehouse ===
 
-class LocationSerializer(serializers.ModelSerializer):
+class WarehouseSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Location
-        fields = ['id', 'name', 'location_type', 'address', 'is_active']
+        model = Warehouse
+        fields = ['id', 'name', 'kind', 'address', 'is_active']
         read_only_fields = ['id']
 
 

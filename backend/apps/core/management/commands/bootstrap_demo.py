@@ -13,7 +13,7 @@ from apps.core.models import Business
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import CashFlowSummary, DailySummary
-from apps.inventory.models import Location, Lot, Receipt, ReceiptLine
+from apps.inventory.models import Warehouse, Lot, Receipt, ReceiptLine
 from apps.inventory.services import confirm_receipt
 from apps.investors.models import Investor, InvestorContract, InvestorProfitRecord, InvestorSummary
 from apps.sales.models import PosSession, Sale
@@ -121,20 +121,20 @@ class Command(BaseCommand):
 
             setup_chart_of_accounts(business.id)
 
-            store, _ = Location.objects.get_or_create(
+            store, _ = Warehouse.objects.get_or_create(
                 tenant=business,
                 name='Main Store',
                 defaults={
-                    'location_type': Location.LocationType.STORE,
+                    'kind': Warehouse.WarehouseKind.SHOP,
                     'address': 'Demo storefront',
                     'is_active': True,
                 },
             )
-            warehouse, _ = Location.objects.get_or_create(
+            warehouse, _ = Warehouse.objects.get_or_create(
                 tenant=business,
                 name='Main Warehouse',
                 defaults={
-                    'location_type': Location.LocationType.WAREHOUSE,
+                    'kind': Warehouse.WarehouseKind.STORAGE,
                     'address': 'Demo warehouse',
                     'is_active': True,
                 },
@@ -158,7 +158,7 @@ class Command(BaseCommand):
                     name='Demo Product',
                     category_id=category.id,
                     base_price='65000.00',
-                    pricing_mode='DEFAULT_EDITABLE',
+                    pricing_mode='EDITABLE',
                     description='Seeded product for smoke tests',
                     variant_data=None,
                 )
@@ -169,7 +169,7 @@ class Command(BaseCommand):
                     name='Demo Product (Auto Variant)',
                     category_id=category.id,
                     base_price='65000.00',
-                    pricing_mode='DEFAULT_EDITABLE',
+                    pricing_mode='EDITABLE',
                     description='Auto-created fallback product',
                     variant_data=None,
                 ).variants.filter(is_active=True).first()

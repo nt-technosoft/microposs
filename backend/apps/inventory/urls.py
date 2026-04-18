@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    LocationViewSet,
+    WarehouseViewSet,
     ReceiptViewSet,
     LotViewSet,
     StockMovementViewSet,
@@ -12,7 +12,7 @@ from .views import (
 )
 
 router = DefaultRouter()
-router.register('locations', LocationViewSet, basename='location')
+router.register('warehouses', WarehouseViewSet, basename='warehouse')
 router.register('receipts', ReceiptViewSet, basename='receipt')
 router.register('lots', LotViewSet, basename='lot')
 router.register('movements', StockMovementViewSet, basename='movement')

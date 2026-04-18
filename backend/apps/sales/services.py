@@ -107,14 +107,14 @@ def _validate_line_pricing_policy(
     """
     _validate_unit_price(unit_price)
 
-    if pricing_mode == 'FIXED_LOCKED' and unit_price != base_price:
+    if pricing_mode == 'FIXED' and unit_price != base_price:
         raise PricingModeViolationError(
             detail='Fixed price product cannot be sold with a different price.'
         )
 
-    if pricing_mode == 'ASK_EACH_SALE' and unit_price <= 0:
+    if pricing_mode == 'ALWAYS_ASK' and unit_price <= 0:
         raise InvalidUnitPriceError(
-            detail='Price must be provided for ASK_EACH_SALE products.'
+            detail='Price must be provided for ALWAYS_ASK products.'
         )
 
     price_changed = unit_price != base_price

@@ -20,11 +20,11 @@ class Category(TenantModel):
     default_pricing_mode = models.CharField(
         max_length=20,
         choices=[
-            ('ASK_EACH_SALE', 'Всегда спрашивать'),
-            ('DEFAULT_EDITABLE', 'По умолчанию, можно менять'),
-            ('FIXED_LOCKED', 'Фиксированная'),
+            ('ALWAYS_ASK', 'Всегда спрашивать'),
+            ('EDITABLE', 'По умолчанию, можно менять'),
+            ('FIXED', 'Фиксированная'),
         ],
-        default='DEFAULT_EDITABLE',
+        default='EDITABLE',
     )
     sort_order = models.IntegerField(default=0)
 
@@ -141,11 +141,11 @@ class Product(TenantModel):
     pricing_mode = models.CharField(
         max_length=20,
         choices=[
-            ('ASK_EACH_SALE', 'Всегда спрашивать'),
-            ('DEFAULT_EDITABLE', 'По умолчанию, можно менять'),
-            ('FIXED_LOCKED', 'Фиксированная'),
+            ('ALWAYS_ASK', 'Всегда спрашивать'),
+            ('EDITABLE', 'По умолчанию, можно менять'),
+            ('FIXED', 'Фиксированная'),
         ],
-        default='DEFAULT_EDITABLE',
+        default='EDITABLE',
     )
     has_variants = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
