@@ -102,6 +102,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/modules/reports/views/ReportsDashboard.vue'),
     meta: { roles: ['owner'] },
   },
+  {
+    path: '/reports/reconciliation',
+    name: 'reports-reconciliation',
+    component: () => import('@/modules/reports/views/ReconciliationView.vue'),
+    meta: { roles: ['owner'] },
+  },
 
   // More section
   {
@@ -120,7 +126,7 @@ const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/modules/more/views/SettingsView.vue'),
-    meta: { roles: ['owner'] },
+    meta: { roles: ['owner', 'cashier', 'warehouse', 'investor'] },
   },
 
   // Investor cabinet

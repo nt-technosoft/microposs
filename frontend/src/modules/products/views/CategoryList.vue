@@ -1,15 +1,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ArrowLeft, Plus, FolderTree, AlertCircle } from 'lucide-vue-next'
+import { ArrowLeft, Plus, FolderTree, AlertCircle, Pencil } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
-import { fetchCategories } from '@/api/catalog'
 import api from '@/api/client'
-import type { Category } from '@/types/models'
+import {
+  applyCategorySettings,
+  createCategory,
+  fetchCategories,
+  fetchCategory,
+  replaceCategoryAttributes,
+  replaceCategoryCharacteristics,
+  updateCategory,
+} from '@/api/catalog'
+import type {
+  Attribute,
+  Category,
+  CategoryAttributeTemplate,
+  CategoryCharacteristicTemplate,
+} from '@/types/models'
 import { PricingMode } from '@/types/enums'
 import { useToast } from '@/composables/useToast'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 
 type CategoryRecord = Category & {
@@ -22,21 +36,59 @@ interface CategoryNode {
   level: number
 }
 
+interface TemplateAttributeRow {
+  key: number
+  attribute: number | null
+  is_variant_generating: boolean
+}
+
+interface TemplateCharacteristicRow {
+  key: number
+  name: string
+  default_value: string
+  sort_order: number
+}
+
 const router = useRouter()
 const toast = useToast()
 
 const categories = ref<CategoryRecord[]>([])
+const attributes = ref<Attribute[]>([])
 const isLoading = ref(true)
 const errorMessage = ref('')
 
-const createSheetOpen = ref(false)
-const createName = ref('')
-const createParent = ref<number | null>(null)
-const isCreating = ref(false)
+const formSheetOpen = ref(false)
+const editingCategoryId = ref<number | null>(null)
+const isSaving = ref(false)
+const formName = ref('')
+const formParent = ref<number | null>(null)
+const formPricingMode = ref<PricingMode>(PricingMode.DEFAULT_EDITABLE)
+const applyToExisting = ref(false)
+const applyPricingMode = ref(true)
+const applyCharacteristics = ref(true)
+const templateAttributes = ref<TemplateAttributeRow[]>([])
+const templateCharacteristics = ref<TemplateCharacteristicRow[]>([])
+let rowKey = 1
+
+const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
+  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
+  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать' },
+  { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
+]
+
+const applyModeOptions = [
+  { value: false, label: 'Только новые товары' },
+  { value: true, label: 'Применить ко всем товарам категории' },
+]
+
+const boolOptions = [
+  { value: true, label: 'Да' },
+  { value: false, label: 'Нет' },
+]
 
 function getParentId(category: CategoryRecord): number | null {
   if (typeof category.parent === 'number') return category.parent
-  if ('parent_id' in category && typeof category.parent_id === 'number') return category.parent_id
+  if (typeof category.parent_id === 'number') return category.parent_id
   return null
 }
 
@@ -56,7 +108,7 @@ const orderedCategories = computed<CategoryNode[]>(() => {
 
   const result: CategoryNode[] = []
 
-  function walk(parentId: number | null, level: number) {
+  function walk(parentId: number | null, level: number): void {
     const children = byParent.get(parentId) ?? []
     for (const child of children) {
       result.push({ item: child, level })
@@ -68,10 +120,18 @@ const orderedCategories = computed<CategoryNode[]>(() => {
   return result
 })
 
-const parentOptions = computed(() =>
-  categories.value.map((category) => ({
-    id: category.id,
-    name: category.name,
+const parentSelectOptions = computed(() => ([
+  { value: null, label: 'Без родителя' },
+  ...categories.value.map((category) => ({
+    value: category.id,
+    label: category.name,
+  })),
+]))
+
+const attributeOptions = computed(() =>
+  attributes.value.map((attribute) => ({
+    value: attribute.id,
+    label: attribute.name,
   })),
 )
 
@@ -88,35 +148,156 @@ async function loadCategories(): Promise<void> {
   }
 }
 
-function openCreateSheet(): void {
-  createName.value = ''
-  createParent.value = null
-  createSheetOpen.value = true
-}
-
-async function createCategory(): Promise<void> {
-  if (!createName.value.trim()) return
-
-  isCreating.value = true
+async function loadAttributes(): Promise<void> {
   try {
-    await api.post('/api/v1/catalog/categories/', {
-      name: createName.value.trim(),
-      parent: createParent.value,
-      default_pricing_mode: PricingMode.DEFAULT_EDITABLE,
-      sort_order: categories.value.length + 1,
-    })
-    toast.success('Категория создана')
-    createSheetOpen.value = false
-    await loadCategories()
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Не удалось создать категорию'
-    toast.error(message)
-  } finally {
-    isCreating.value = false
+    const { data } = await api.get<Attribute[] | { results?: Attribute[] }>('/api/v1/catalog/attributes/')
+    attributes.value = Array.isArray(data) ? data : (Array.isArray(data.results) ? data.results : [])
+  } catch {
+    attributes.value = []
   }
 }
 
-onMounted(loadCategories)
+function resetForm(): void {
+  editingCategoryId.value = null
+  formName.value = ''
+  formParent.value = null
+  formPricingMode.value = PricingMode.DEFAULT_EDITABLE
+  applyToExisting.value = false
+  applyPricingMode.value = true
+  applyCharacteristics.value = true
+  templateAttributes.value = []
+  templateCharacteristics.value = []
+}
+
+function addTemplateAttribute(): void {
+  templateAttributes.value = [
+    ...templateAttributes.value,
+    {
+      key: rowKey++,
+      attribute: null,
+      is_variant_generating: true,
+    },
+  ]
+}
+
+function removeTemplateAttribute(key: number): void {
+  templateAttributes.value = templateAttributes.value.filter((row) => row.key !== key)
+}
+
+function addTemplateCharacteristic(): void {
+  templateCharacteristics.value = [
+    ...templateCharacteristics.value,
+    {
+      key: rowKey++,
+      name: '',
+      default_value: '',
+      sort_order: templateCharacteristics.value.length,
+    },
+  ]
+}
+
+function removeTemplateCharacteristic(key: number): void {
+  templateCharacteristics.value = templateCharacteristics.value.filter((row) => row.key !== key)
+}
+
+function openCreateSheet(): void {
+  resetForm()
+  formSheetOpen.value = true
+}
+
+async function openEditSheet(categoryId: number): Promise<void> {
+  resetForm()
+  formSheetOpen.value = true
+  editingCategoryId.value = categoryId
+  try {
+    const detail = await fetchCategory(categoryId)
+    formName.value = detail.name
+    formParent.value = typeof detail.parent === 'number' ? detail.parent : (detail.parent_id ?? null)
+    formPricingMode.value = detail.default_pricing_mode
+
+    const detailAttributes: CategoryAttributeTemplate[] = Array.isArray(detail.template_attributes)
+      ? detail.template_attributes
+      : []
+    templateAttributes.value = detailAttributes.map((item) => ({
+      key: rowKey++,
+      attribute: item.attribute_id,
+      is_variant_generating: item.is_variant_generating,
+    }))
+
+    const detailCharacteristics: CategoryCharacteristicTemplate[] = Array.isArray(detail.template_characteristics)
+      ? detail.template_characteristics
+      : []
+    templateCharacteristics.value = detailCharacteristics.map((item) => ({
+      key: rowKey++,
+      name: item.name,
+      default_value: item.default_value ?? '',
+      sort_order: item.sort_order ?? 0,
+    }))
+  } catch (error: unknown) {
+    toast.error(error instanceof Error ? error.message : 'Не удалось открыть категорию')
+    formSheetOpen.value = false
+  }
+}
+
+async function saveCategory(): Promise<void> {
+  if (!formName.value.trim()) {
+    toast.error('Укажите название категории')
+    return
+  }
+
+  isSaving.value = true
+  try {
+    const payload = {
+      name: formName.value.trim(),
+      parent: formParent.value,
+      default_pricing_mode: formPricingMode.value,
+      sort_order: 0,
+    }
+
+    let categoryId = editingCategoryId.value
+    if (categoryId === null) {
+      const created = await createCategory(payload)
+      categoryId = created.id
+    } else {
+      await updateCategory(categoryId, payload)
+    }
+
+    const attributePayload = templateAttributes.value
+      .filter((row) => typeof row.attribute === 'number')
+      .map((row) => ({
+        attribute: row.attribute as number,
+        is_variant_generating: row.is_variant_generating,
+      }))
+    await replaceCategoryAttributes(categoryId, attributePayload)
+
+    const characteristicPayload = templateCharacteristics.value
+      .map((row, index) => ({
+        name: row.name.trim(),
+        default_value: row.default_value.trim(),
+        sort_order: index,
+      }))
+      .filter((row) => row.name.length > 0)
+    await replaceCategoryCharacteristics(categoryId, characteristicPayload)
+
+    await applyCategorySettings(categoryId, {
+      apply_to_existing: applyToExisting.value,
+      apply_pricing_mode: applyPricingMode.value,
+      apply_characteristics: applyCharacteristics.value,
+    })
+
+    toast.success(editingCategoryId.value ? 'Категория обновлена' : 'Категория создана')
+    formSheetOpen.value = false
+    await loadCategories()
+  } catch (error: unknown) {
+    toast.error(error instanceof Error ? error.message : 'Не удалось сохранить категорию')
+  } finally {
+    isSaving.value = false
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadCategories(), loadAttributes()])
+})
 </script>
 
 <template>
@@ -164,10 +345,16 @@ onMounted(loadCategories)
           :key="node.item.id"
           class="category-row"
           :style="{ paddingLeft: `calc(var(--space-3) + ${node.level} * 16px)` }"
+          @click="openEditSheet(node.item.id)"
         >
           <div class="category-main">
-            <span class="category-name">{{ node.item.name }}</span>
-            <span class="category-count">{{ node.item.products_count ?? 0 }} товаров</span>
+            <div class="category-info">
+              <span class="category-name">{{ node.item.name }}</span>
+              <span class="category-meta">
+                {{ node.item.products_count ?? 0 }} товаров · {{ node.item.default_pricing_mode }}
+              </span>
+            </div>
+            <Pencil :size="16" :stroke-width="2" class="edit-icon" />
           </div>
         </article>
       </div>
@@ -177,27 +364,97 @@ onMounted(loadCategories)
       <Plus :size="24" :stroke-width="2.2" />
     </button>
 
-    <AppBottomSheet :open="createSheetOpen" title="Новая категория" @close="createSheetOpen = false">
-      <form class="create-form" @submit.prevent="createCategory">
-        <BaseInput v-model="createName" label="Название *" placeholder="Например: Обувь" />
+    <AppBottomSheet
+      :open="formSheetOpen"
+      :title="editingCategoryId ? 'Редактирование категории' : 'Новая категория'"
+      @close="formSheetOpen = false"
+    >
+      <form class="create-form" @submit.prevent="saveCategory">
+        <BaseInput v-model="formName" label="Название *" placeholder="Например: Обувь" />
 
-        <label class="field-label" for="parent-select">Родительская категория</label>
-        <select id="parent-select" v-model="createParent" class="select-field">
-          <option :value="null">Без родителя</option>
-          <option v-for="option in parentOptions" :key="option.id" :value="option.id">
-            {{ option.name }}
-          </option>
-        </select>
+        <label class="field-label">Родительская категория</label>
+        <BaseSelect
+          v-model="formParent"
+          :options="parentSelectOptions"
+          title="Родительская категория"
+          placeholder="Без родителя"
+        />
+
+        <label class="field-label">Ценовой режим категории</label>
+        <BaseSelect
+          v-model="formPricingMode"
+          :options="pricingModeOptions"
+          title="Ценовой режим"
+          placeholder="Выберите режим"
+        />
+
+        <div class="template-block">
+          <div class="template-header">
+            <span class="field-label">Шаблонные атрибуты</span>
+            <button class="tiny-action" type="button" @click="addTemplateAttribute">+ Атрибут</button>
+          </div>
+          <div v-if="templateAttributes.length === 0" class="template-empty">Атрибуты не заданы</div>
+          <div v-for="row in templateAttributes" :key="row.key" class="template-row">
+            <BaseSelect
+              v-model="row.attribute"
+              :options="attributeOptions"
+              title="Атрибут"
+              placeholder="Выберите атрибут"
+            />
+            <BaseSelect
+              v-model="row.is_variant_generating"
+              :options="boolOptions"
+              title="Генерировать SKU"
+              placeholder="Генерировать SKU"
+            />
+            <button class="tiny-remove" type="button" @click="removeTemplateAttribute(row.key)">Удалить</button>
+          </div>
+        </div>
+
+        <div class="template-block">
+          <div class="template-header">
+            <span class="field-label">Шаблонные характеристики</span>
+            <button class="tiny-action" type="button" @click="addTemplateCharacteristic">+ Характеристика</button>
+          </div>
+          <div v-if="templateCharacteristics.length === 0" class="template-empty">Характеристики не заданы</div>
+          <div v-for="row in templateCharacteristics" :key="row.key" class="template-row">
+            <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
+            <BaseInput v-model="row.default_value" label="Значение" placeholder="Кожа" />
+            <button class="tiny-remove" type="button" @click="removeTemplateCharacteristic(row.key)">Удалить</button>
+          </div>
+        </div>
+
+        <label class="field-label">Применение изменений</label>
+        <BaseSelect
+          v-model="applyToExisting"
+          :options="applyModeOptions"
+          title="Применение изменений"
+          placeholder="Выберите режим"
+        />
+        <div v-if="applyToExisting" class="apply-block">
+          <BaseSelect
+            v-model="applyPricingMode"
+            :options="boolOptions"
+            title="Применить pricing mode"
+            placeholder="Применить pricing mode"
+          />
+          <BaseSelect
+            v-model="applyCharacteristics"
+            :options="boolOptions"
+            title="Применить характеристики"
+            placeholder="Применить характеристики"
+          />
+        </div>
 
         <BaseButton
           type="submit"
           variant="primary"
           size="lg"
           :full-width="true"
-          :loading="isCreating"
-          :disabled="isCreating || !createName.trim()"
+          :loading="isSaving"
+          :disabled="isSaving || !formName.trim()"
         >
-          Создать категорию
+          {{ editingCategoryId ? 'Сохранить' : 'Создать категорию' }}
         </BaseButton>
       </form>
     </AppBottomSheet>
@@ -270,14 +527,23 @@ onMounted(loadCategories)
   align-items: center;
 }
 
+.category-info {
+  display: grid;
+  gap: 2px;
+}
+
 .category-name {
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
 }
 
-.category-count {
-  font-size: var(--text-xs);
+.category-meta {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.edit-icon {
   color: var(--color-text-secondary);
 }
 
@@ -308,14 +574,45 @@ onMounted(loadCategories)
   font-weight: var(--font-medium);
 }
 
-.select-field {
-  width: 100%;
-  min-height: 44px;
+.template-block {
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.template-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.template-empty {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.template-row {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.tiny-action,
+.tiny-remove {
+  min-height: 32px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-default);
   background: var(--color-bg-elevated);
-  padding: 0 var(--space-3);
   color: var(--color-text-primary);
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.apply-block {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .error-banner {
@@ -356,17 +653,6 @@ onMounted(loadCategories)
   );
   background-size: 200% 100%;
   animation: shimmer 1.1s linear infinite;
-}
-
-.empty-illustration {
-  width: 72px;
-  height: 72px;
-  border-radius: var(--radius-full);
-  background: var(--color-brand-50);
-  color: var(--color-brand-500);
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 @keyframes shimmer {

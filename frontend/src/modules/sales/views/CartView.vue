@@ -130,6 +130,9 @@ function cancelClear(): void {
               <span class="cart-item__unit-price">
                 {{ formatPrice(item.unit_price) }} / шт.
               </span>
+              <span v-if="item.price_changed" class="cart-item__price-change">
+                База: {{ formatPrice(item.base_price) }}
+              </span>
             </div>
             <button
               class="cart-item__remove"
@@ -435,6 +438,13 @@ function cancelClear(): void {
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
   font-family: var(--font-mono);
+}
+
+.cart-item__price-change {
+  font-size: 10px;
+  color: var(--color-warning);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .cart-item__remove {

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Package, Plus, ChevronRight } from 'lucide-vue-next'
+import { Package, Plus, ChevronRight, FolderTree } from 'lucide-vue-next'
 import { fetchProducts, fetchCategories } from '@/api/catalog'
 import type { Product, Category } from '@/types/models'
 import BaseSearch from '@/components/base/BaseSearch.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 
@@ -26,6 +27,14 @@ const PAGE_SIZE = 20
 // --- Computed ---
 const isEmpty = computed(() => !isLoading.value && products.value.length === 0)
 
+const categoryOptions = computed(() => ([
+  { value: '' as const, label: 'Все категории' },
+  ...categories.value.map((category) => ({
+    value: category.id,
+    label: category.name,
+  })),
+]))
+
 function getCategoryName(product: Product): string | null {
   if (product.category && typeof product.category === 'object' && 'name' in product.category) {
     return product.category.name
@@ -38,6 +47,16 @@ function getVariantCount(product: Product): number {
   if (Array.isArray(product.variants)) return product.variants.length
   const fallback = (product as Product & { variants_count?: number }).variants_count
   return Number.isFinite(fallback) ? Number(fallback) : 0
+}
+
+function getDisplaySku(product: Product): string {
+  const explicitSku = (product as Product & { display_sku?: string }).display_sku
+  if (explicitSku && explicitSku.trim()) return explicitSku
+  if (Array.isArray(product.variants) && product.variants.length > 0) {
+    const fromVariant = product.variants[0].display_sku || product.variants[0].sku
+    if (fromVariant && fromVariant.trim()) return fromVariant
+  }
+  return `P-${product.id}`
 }
 
 function stockBadgeVariant(stock: number): 'error' | 'warning' | null {
@@ -134,6 +153,10 @@ function navigateToCreate(): void {
   router.push({ name: 'product-create' })
 }
 
+function navigateToCategories(): void {
+  router.push({ name: 'categories' })
+}
+
 onMounted(async () => {
   await Promise.all([loadCategories(), loadProducts(true)])
 })
@@ -144,14 +167,23 @@ onMounted(async () => {
     <!-- Header -->
     <header class="page-header">
       <h1 class="page-title">Товары</h1>
-      <button
-        class="header-add-btn"
-        aria-label="Добавить товар"
-        @click="navigateToCreate"
-      >
-        <Plus :size="20" :stroke-width="2" />
-        <span class="header-add-label">Добавить</span>
-      </button>
+      <div class="header-actions">
+        <button
+          class="header-icon-btn"
+          aria-label="Управление категориями"
+          @click="navigateToCategories"
+        >
+          <FolderTree :size="18" :stroke-width="2" />
+        </button>
+        <button
+          class="header-add-btn"
+          aria-label="Добавить товар"
+          @click="navigateToCreate"
+        >
+          <Plus :size="20" :stroke-width="2" />
+          <span class="header-add-label">Добавить</span>
+        </button>
+      </div>
     </header>
 
     <!-- Filters -->
@@ -162,21 +194,14 @@ onMounted(async () => {
         :debounce="300"
         @search="onSearch"
       />
-      <select
+      <BaseSelect
         v-model="selectedCategory"
         class="category-select"
-        aria-label="Фильтр по категории"
-        @change="onCategoryChange"
-      >
-        <option value="">Все категории</option>
-        <option
-          v-for="cat in categories"
-          :key="cat.id"
-          :value="cat.id"
-        >
-          {{ cat.name }}
-        </option>
-      </select>
+        :options="categoryOptions"
+        title="Фильтр по категории"
+        placeholder="Все категории"
+        @update:model-value="onCategoryChange"
+      />
     </div>
 
     <!-- Error -->
@@ -263,6 +288,7 @@ onMounted(async () => {
               {{ stockBadgeLabel(productStock(product)) }}
             </BaseBadge>
           </div>
+          <div class="product-sku">SKU: {{ getDisplaySku(product) }}</div>
         </div>
 
         <!-- Chevron -->
@@ -337,12 +363,31 @@ onMounted(async () => {
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
+  white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
 
 .header-add-btn:hover {
   background: var(--color-brand-600);
+}
+
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.header-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .header-add-btn:active {
@@ -379,28 +424,26 @@ onMounted(async () => {
 }
 
 .category-select {
+  min-width: 160px;
+}
+
+.category-select :deep(.select-trigger) {
   height: 44px;
   padding: 0 var(--space-4);
   background: var(--color-bg-secondary);
   border: 1.5px solid transparent;
   border-radius: var(--radius-full);
-  font-size: var(--text-base);
+  font-size: max(16px, var(--text-base));
+  line-height: 1.25;
   color: var(--color-text-primary);
   cursor: pointer;
   outline: none;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out);
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239C948A' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right var(--space-4) center;
-  padding-right: var(--space-8);
-  min-width: 160px;
 }
 
-.category-select:focus {
+.category-select :deep(.select-trigger):focus-visible {
   border-color: var(--color-border-focus);
   box-shadow: 0 0 0 3px var(--color-brand-100);
 }
@@ -517,6 +560,13 @@ onMounted(async () => {
   gap: var(--space-2);
   flex-wrap: wrap;
   margin-top: var(--space-1);
+}
+
+.product-sku {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
 }
 
 .product-price {

@@ -30,6 +30,10 @@ interface ReceiptListItem {
   created_at: string
   lines_count: number
   total_amount: string
+  operation_currency?: string
+  operation_amount?: string | null
+  fx_rate_snapshot?: string | null
+  functional_amount_uzs?: string | null
 }
 
 const FILTER_CHIPS: FilterChip[] = [
@@ -129,6 +133,24 @@ function linesLabel(countRaw: number): string {
   return `${count} позиций`
 }
 
+function operationTrace(receipt: ReceiptListItem): string {
+  const currency = (receipt.operation_currency || 'UZS').toUpperCase()
+  const opAmount = Number.parseFloat(receipt.operation_amount || '')
+  const fxRate = Number.parseFloat(receipt.fx_rate_snapshot || '')
+  const functional = Number.parseFloat(receipt.functional_amount_uzs || '')
+
+  if (currency === 'UZS' || !Number.isFinite(opAmount)) {
+    return ''
+  }
+
+  const opStr = formatPrice(opAmount, currency)
+  const fnStr = Number.isFinite(functional) ? formatPrice(functional) : ''
+  if (Number.isFinite(fxRate) && fnStr) {
+    return `${opStr} • курс ${fxRate.toFixed(2)} • ${fnStr}`
+  }
+  return fnStr ? `${opStr} • ${fnStr}` : opStr
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 function goToDetail(id: number): void {
@@ -223,6 +245,7 @@ function onFilterChange(value: StatusFilter): void {
               <span class="card-lines">{{ linesLabel(receipt.lines_count) }}</span>
               <div class="card-right">
                 <span class="card-total tabular-nums">{{ totalCost(receipt.total_amount) }}</span>
+                <span v-if="operationTrace(receipt)" class="card-trace">{{ operationTrace(receipt) }}</span>
                 <span
                   class="badge-status"
                   :class="getStatusMeta(receipt.status).colorClass"
@@ -279,6 +302,7 @@ function onFilterChange(value: StatusFilter): void {
   color: var(--color-text-inverse);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
+  white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out),
               transform var(--duration-fast) var(--ease-out);
 }
@@ -408,14 +432,23 @@ function onFilterChange(value: StatusFilter): void {
 
 .card-right {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
 }
 
 .card-total {
   font-size: var(--text-base);
   font-weight: var(--font-bold);
   color: var(--color-text-primary);
+}
+
+.card-trace {
+  max-width: 220px;
+  text-align: right;
+  font-size: var(--text-2xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--leading-snug);
 }
 
 /* ── Type badges ────────────────────────────────────────────────────────── */

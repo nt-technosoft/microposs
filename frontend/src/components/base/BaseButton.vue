@@ -50,6 +50,7 @@ withDefaults(defineProps<Props>(), {
     transform var(--duration-fast) var(--ease-out);
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  min-width: 0;
 }
 
 .btn:active:not(:disabled) {
@@ -134,5 +135,14 @@ withDefaults(defineProps<Props>(), {
 
 .btn-content.invisible {
   visibility: hidden;
+}
+
+.btn-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+  line-height: 1.1;
 }
 </style>

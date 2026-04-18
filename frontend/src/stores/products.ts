@@ -10,6 +10,7 @@ import {
   fetchCategories as apiFetchCategories,
   fetchDiscountReasons as apiFetchDiscountReasons,
 } from '../api/catalog'
+import { useSessionStore } from './session'
 
 const PAGE_SIZE = 20
 
@@ -62,10 +63,13 @@ export const useProductsStore = defineStore('products', {
       this.isLoading = true
 
       try {
+        const sessionStore = useSessionStore()
+        const locationId = sessionStore.currentSession?.location?.id
         const response = await apiFetchProducts({
           category: this.selectedCategory ?? undefined,
           search: this.searchQuery || undefined,
           is_active: true,
+          location_id: locationId,
           page: this.page,
           page_size: PAGE_SIZE,
         })

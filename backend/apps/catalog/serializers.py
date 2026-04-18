@@ -4,7 +4,7 @@ Catalog serializers — DRF serializers for all catalog models.
 
 from rest_framework import serializers
 from .models import (
-    Category, Attribute, AttributeValue, CategoryAttribute,
+    Category, Attribute, AttributeValue, CategoryAttribute, CategoryCharacteristicTemplate,
     Product, ProductVariant, VariantAttributeValue,
     ProductCharacteristic, DiscountReason,
 )
@@ -30,9 +30,14 @@ class CategorySerializer(serializers.ModelSerializer):
 class CategoryDetailSerializer(CategorySerializer):
     children = CategorySerializer(many=True, read_only=True)
     template_attributes = serializers.SerializerMethodField()
+    template_characteristics = serializers.SerializerMethodField()
 
     class Meta(CategorySerializer.Meta):
-        fields = CategorySerializer.Meta.fields + ['children', 'template_attributes']
+        fields = CategorySerializer.Meta.fields + [
+            'children',
+            'template_attributes',
+            'template_characteristics',
+        ]
 
     def get_template_attributes(self, obj):
         cas = obj.template_attributes.select_related('attribute').all()
@@ -46,15 +51,30 @@ class CategoryDetailSerializer(CategorySerializer):
             for ca in cas
         ]
 
+    def get_template_characteristics(self, obj):
+        templates = obj.template_characteristics.all()
+        return [
+            {
+                'id': tpl.id,
+                'name': tpl.name,
+                'default_value': tpl.default_value,
+                'sort_order': tpl.sort_order,
+            }
+            for tpl in templates
+        ]
+
 
 class CategoryCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ['name', 'parent', 'default_pricing_mode', 'sort_order']
+        fields = ['id', 'name', 'parent', 'default_pricing_mode', 'sort_order']
+        read_only_fields = ['id']
 
 
 class ApplyCategorySettingsSerializer(serializers.Serializer):
     apply_to_existing = serializers.BooleanField(default=False)
+    apply_pricing_mode = serializers.BooleanField(default=True)
+    apply_characteristics = serializers.BooleanField(default=True)
 
 
 # === Attributes ===
@@ -108,6 +128,19 @@ class CategoryAttributeSerializer(serializers.ModelSerializer):
         model = CategoryAttribute
         fields = ['id', 'category', 'attribute', 'is_variant_generating']
         read_only_fields = ['id']
+        extra_kwargs = {
+            'category': {'required': False},
+        }
+
+
+class CategoryCharacteristicTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CategoryCharacteristicTemplate
+        fields = ['id', 'category', 'name', 'default_value', 'sort_order']
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'category': {'required': False},
+        }
 
 
 # === Product Variants ===
@@ -123,11 +156,16 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         max_digits=12, decimal_places=2, read_only=True,
     )
     stock_quantity = serializers.SerializerMethodField()
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    category_id = serializers.IntegerField(source='product.category_id', read_only=True)
+    category_name = serializers.CharField(source='product.category.name', read_only=True, default=None)
+    display_sku = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductVariant
         fields = [
-            'id', 'product', 'sku', 'price', 'effective_price',
+            'id', 'product', 'product_name', 'category_id', 'category_name',
+            'sku', 'display_sku', 'price', 'effective_price',
             'is_active', 'attribute_values', 'stock_quantity',
         ]
         read_only_fields = ['id', 'effective_price']
@@ -147,13 +185,22 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     def get_stock_quantity(self, obj):
         from apps.inventory.models import Lot
         from django.db import models as db_models
-        result = Lot.objects.filter(
+        queryset = Lot.objects.filter(
             product_variant=obj,
             is_active=True,
-        ).aggregate(
+        )
+        location_id = self.context.get('location_id')
+        if isinstance(location_id, int):
+            queryset = queryset.filter(location_id=location_id)
+
+        result = queryset.aggregate(
             total=db_models.Sum('quantity_remaining')
         )
         return result['total'] or 0
+
+    def get_display_sku(self, obj):
+        sku = (obj.sku or '').strip()
+        return sku or f'VAR-{obj.id}'
 
 
 class ProductVariantCreateSerializer(serializers.Serializer):
@@ -185,13 +232,15 @@ class ProductListSerializer(serializers.ModelSerializer):
     )
     variants_count = serializers.SerializerMethodField()
     total_stock = serializers.SerializerMethodField()
+    display_sku = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'category', 'category_name',
             'base_price', 'pricing_mode', 'has_variants',
-            'is_active', 'variants_count', 'total_stock',
+            'is_active', 'photo_url', 'display_sku', 'variants_count', 'total_stock',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -202,11 +251,30 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_total_stock(self, obj):
         from apps.inventory.models import Lot
         from django.db import models as db_models
-        result = Lot.objects.filter(
+        queryset = Lot.objects.filter(
             product_variant__product=obj,
             is_active=True,
-        ).aggregate(total=db_models.Sum('quantity_remaining'))
+        )
+        location_id = self.context.get('location_id')
+        if isinstance(location_id, int):
+            queryset = queryset.filter(location_id=location_id)
+
+        result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
         return result['total'] or 0
+
+    def get_display_sku(self, obj):
+        variant = obj.variants.filter(is_active=True).order_by('id').first()
+        if not variant:
+            return ''
+        sku = (variant.sku or '').strip()
+        return sku or f'VAR-{variant.id}'
+
+    def get_photo_url(self, obj):
+        request = self.context.get('request')
+        if not obj.photo:
+            return None
+        url = obj.photo.url
+        return request.build_absolute_uri(url) if request is not None else url
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):
@@ -215,15 +283,23 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     )
     variants = ProductVariantSerializer(many=True, read_only=True)
     characteristics = ProductCharacteristicSerializer(many=True, read_only=True)
+    photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'category', 'category_name', 'description',
             'base_price', 'pricing_mode', 'has_variants', 'is_active',
-            'variants', 'characteristics', 'created_at', 'updated_at',
+            'photo_url', 'variants', 'characteristics', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_photo_url(self, obj):
+        request = self.context.get('request')
+        if not obj.photo:
+            return None
+        url = obj.photo.url
+        return request.build_absolute_uri(url) if request is not None else url
 
 
 class ProductCreateSerializer(serializers.Serializer):
@@ -234,9 +310,10 @@ class ProductCreateSerializer(serializers.Serializer):
     )
     pricing_mode = serializers.ChoiceField(
         choices=['ASK_EACH_SALE', 'DEFAULT_EDITABLE', 'FIXED_LOCKED'],
-        default='DEFAULT_EDITABLE',
+        required=False,
     )
     description = serializers.CharField(required=False, default='', allow_blank=True)
+    photo = serializers.ImageField(required=False, allow_null=True)
     variants = ProductVariantCreateSerializer(many=True, required=False)
     characteristics = ProductCharacteristicSerializer(many=True, required=False)
 

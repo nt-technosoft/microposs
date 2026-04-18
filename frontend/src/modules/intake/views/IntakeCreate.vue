@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowLeft, Plus, Trash2, Check, Search,
@@ -9,14 +9,17 @@ import {
 import { useToast } from '@/composables/useToast'
 import { useIdempotency } from '@/composables/useIdempotency'
 import { formatPrice } from '@/utils/currency'
+import { toRussianLocationLabel } from '@/utils/russianLabels'
 import { ReceiptType } from '@/types/enums'
-import type { Location, Supplier, ProductVariant } from '@/types/models'
+import type { Location, Supplier, ProductVariant, Category } from '@/types/models'
 import type { Investor } from '@/api/investors'
+import { useAuthStore } from '@/stores/auth'
 import { fetchLocations } from '@/api/inventory'
 import { fetchSuppliers } from '@/api/suppliers'
 import { fetchInvestors } from '@/api/investors'
-import { fetchVariants } from '@/api/catalog'
+import { fetchCategories, fetchVariantsPaginated } from '@/api/catalog'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import api from '@/api/client'
 
 // ── Router & composables ────────────────────────────────────────────────────
@@ -24,6 +27,7 @@ import api from '@/api/client'
 const router = useRouter()
 const toast = useToast()
 const { generateRequestId } = useIdempotency()
+const auth = useAuthStore()
 
 // ── Receipt type config ──────────────────────────────────────────────────────
 
@@ -66,6 +70,14 @@ const TYPE_CARDS: TypeCard[] = [
     icon: Package,
   },
 ]
+
+const OWNER_FINANCING_TYPES = new Set<ReceiptType>([
+  ReceiptType.BUSINESS_OWNED,
+  ReceiptType.MUDARABA,
+  ReceiptType.MUSHARAKA,
+  ReceiptType.SUPPLIER_PURCHASE,
+  ReceiptType.CONSIGNMENT,
+])
 
 // ── Form state ───────────────────────────────────────────────────────────────
 
@@ -180,16 +192,17 @@ const grandTotal = computed<number>(() => {
 
 const variantSheetOpen = ref(false)
 const variantSearch = ref('')
-const variantSearchResults = ref<ProductVariant[]>([])
+const variantSearchCategory = ref<number | null>(null)
+const variantCategories = ref<Category[]>([])
+const allVariants = ref<ProductVariant[]>([])
 const variantSearchLoading = ref(false)
 const activeLineId = ref<string | null>(null)
 
-let variantSearchTimeout: ReturnType<typeof setTimeout> | null = null
-
-function openVariantPicker(lineId: string): void {
+async function openVariantPicker(lineId: string): Promise<void> {
   activeLineId.value = lineId
   variantSearch.value = ''
-  variantSearchResults.value = []
+  variantSearchCategory.value = null
+  await ensureVariantPickerLoaded()
   variantSheetOpen.value = true
 }
 
@@ -198,31 +211,65 @@ function closeVariantPicker(): void {
   activeLineId.value = null
 }
 
-async function searchVariants(query: string): Promise<void> {
-  if (variantSearchTimeout) clearTimeout(variantSearchTimeout)
+async function ensureVariantPickerLoaded(): Promise<void> {
+  if (allVariants.value.length > 0) return
 
-  variantSearchTimeout = setTimeout(async () => {
-    if (!query.trim()) {
-      variantSearchResults.value = []
-      return
-    }
-    variantSearchLoading.value = true
-    try {
-      const results = await fetchVariants({ active: true })
-      variantSearchResults.value = results.filter((v) => {
-        const nameMatch = v.attribute_values.some((a) =>
-          a.value.toLowerCase().includes(query.toLowerCase()),
-        )
-        const skuMatch = v.sku.toLowerCase().includes(query.toLowerCase())
-        return nameMatch || skuMatch
-      })
-    } catch {
-      toast.error('Ошибка поиска товаров')
-    } finally {
-      variantSearchLoading.value = false
-    }
-  }, 300)
+  variantSearchLoading.value = true
+  try {
+    const [categories] = await Promise.all([
+      fetchCategories(),
+      loadAllVariants(),
+    ])
+    variantCategories.value = categories
+  } catch {
+    toast.error('Ошибка загрузки каталога товаров')
+  } finally {
+    variantSearchLoading.value = false
+  }
 }
+
+async function loadAllVariants(): Promise<void> {
+  const loaded: ProductVariant[] = []
+  let page = 1
+  while (true) {
+    const response = await fetchVariantsPaginated({
+      active: true,
+      page,
+      page_size: 100,
+    })
+    loaded.push(...response.results)
+    if (!response.next) break
+    page += 1
+  }
+
+  allVariants.value = loaded.sort((a, b) => {
+    const aName = (a.product_name ?? '').toLowerCase()
+    const bName = (b.product_name ?? '').toLowerCase()
+    if (aName !== bName) return aName.localeCompare(bName, 'ru')
+    return (a.display_sku ?? a.sku ?? '').localeCompare((b.display_sku ?? b.sku ?? ''), 'ru')
+  })
+}
+
+const filteredVariants = computed<ProductVariant[]>(() => {
+  const query = variantSearch.value.trim().toLowerCase()
+
+  return allVariants.value.filter((variant) => {
+    if (variantSearchCategory.value !== null && variant.category_id !== variantSearchCategory.value) {
+      return false
+    }
+
+    if (!query) return true
+
+    const searchable = [
+      variant.product_name ?? '',
+      variant.display_sku ?? '',
+      variant.sku ?? '',
+      ...variant.attribute_values.map((item) => `${item.attribute_name} ${item.value}`),
+    ].join(' ').toLowerCase()
+
+    return searchable.includes(query)
+  })
+})
 
 function selectVariant(variant: ProductVariant): void {
   if (!activeLineId.value) return
@@ -239,7 +286,11 @@ function selectVariant(variant: ProductVariant): void {
 
 function variantLabel(variant: ProductVariant): string {
   const attrs = variant.attribute_values.map((a) => a.value).join(', ')
-  return attrs || `SKU: ${variant.sku}`
+  return attrs || variantDisplaySku(variant)
+}
+
+function variantDisplaySku(variant: ProductVariant): string {
+  return variant.display_sku || variant.sku || `VAR-${variant.id}`
 }
 
 // ── Computed helpers ─────────────────────────────────────────────────────────
@@ -254,6 +305,94 @@ const needsParticipants = computed<boolean>(() =>
   selectedType.value === ReceiptType.MUSHARAKA,
 )
 
+const isOwnerRole = computed(() => auth.role === 'owner')
+
+const availableTypeCards = computed<TypeCard[]>(() => {
+  if (isOwnerRole.value) return TYPE_CARDS
+  // Warehouse workflow stays on operational intake without investor/supplier contracts.
+  return TYPE_CARDS.filter((card) => card.type === ReceiptType.BUSINESS_OWNED)
+})
+
+watch(
+  availableTypeCards,
+  (cards) => {
+    const allowed = new Set(cards.map((card) => card.type))
+    if (!allowed.has(selectedType.value)) {
+      selectedType.value = cards[0]?.type ?? ReceiptType.BUSINESS_OWNED
+    }
+  },
+  { immediate: true },
+)
+
+function isValidLocationName(name: string | null | undefined): name is string {
+  if (!name) return false
+  const normalized = name.trim().toLowerCase()
+  return normalized !== '' && normalized !== 'none' && normalized !== 'null' && normalized !== 'undefined'
+}
+
+const locationOptions = computed(() => {
+  const options: Array<{ value: number; label: string }> = []
+  const seenLabels = new Set<string>()
+
+  for (const location of locations.value) {
+    if (location.is_active === false) continue
+    if (!isValidLocationName(location.name)) continue
+
+    const label = toRussianLocationLabel(location.name).trim()
+    if (!label) continue
+
+    const dedupeKey = label.toLocaleLowerCase('ru')
+    if (seenLabels.has(dedupeKey)) continue
+
+    seenLabels.add(dedupeKey)
+    options.push({
+      value: location.id,
+      label,
+    })
+  }
+
+  return options
+})
+
+watch(
+  locationOptions,
+  (options) => {
+    if (options.length === 0) {
+      selectedLocationId.value = null
+      return
+    }
+
+    const current = selectedLocationId.value
+    const stillExists = current !== null && options.some((option) => option.value === current)
+    if (!stillExists) {
+      selectedLocationId.value = options[0].value
+    }
+  },
+  { immediate: true },
+)
+
+const supplierOptions = computed(() =>
+  suppliers.value.map((supplier) => ({
+    value: supplier.id,
+    label: supplier.name,
+  })),
+)
+
+const investorOptions = computed(() =>
+  investors.value.map((investor) => ({
+    value: investor.id,
+    label: investor.name,
+  })),
+)
+
+function toNumberOrNull(value: string | number | boolean | null): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'boolean') return null
+  if (value === null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 // ── Validation ───────────────────────────────────────────────────────────────
 
 interface ValidationResult {
@@ -262,6 +401,10 @@ interface ValidationResult {
 }
 
 function validate(): ValidationResult {
+  if (!isOwnerRole.value && OWNER_FINANCING_TYPES.has(selectedType.value) && selectedType.value !== ReceiptType.BUSINESS_OWNED) {
+    return { valid: false, message: 'Для текущей роли доступен только приход «Свои деньги»' }
+  }
+
   if (!selectedLocationId.value) {
     return { valid: false, message: 'Выберите склад' }
   }
@@ -394,17 +537,21 @@ async function confirmReceipt(): Promise<void> {
 onMounted(async () => {
   isLoadingRefs.value = true
   try {
-    const [locs, sups, invs] = await Promise.all([
-      fetchLocations(),
-      fetchSuppliers().then((r) => r.results),
-      fetchInvestors().then((r) => r.results),
-    ])
+    const locs = await fetchLocations()
     locations.value = locs
-    suppliers.value = sups
-    investors.value = invs
 
-    if (locs.length === 1) {
-      selectedLocationId.value = locs[0].id
+    if (isOwnerRole.value) {
+      try {
+        suppliers.value = await fetchSuppliers().then((r) => r.results)
+      } catch {
+        toast.error('Не удалось загрузить список поставщиков')
+      }
+
+      try {
+        investors.value = await fetchInvestors().then((r) => r.results)
+      } catch {
+        toast.error('Не удалось загрузить список инвесторов')
+      }
     }
   } catch {
     toast.error('Ошибка загрузки справочных данных')
@@ -432,7 +579,7 @@ onMounted(async () => {
         <h2 class="section-title">Тип финансирования</h2>
         <div class="type-grid">
           <button
-            v-for="card in TYPE_CARDS"
+            v-for="card in availableTypeCards"
             :key="card.type"
             class="type-card"
             :class="{ selected: selectedType === card.type }"
@@ -456,30 +603,24 @@ onMounted(async () => {
 
         <div class="field-group">
           <label class="field-label">Склад <span class="required">*</span></label>
-          <select
+          <BaseSelect
             v-model="selectedLocationId"
-            class="select-field"
+            :options="locationOptions"
+            title="Выбор склада"
+            placeholder="Выберите склад"
             :disabled="isLoadingRefs"
-          >
-            <option :value="null" disabled>Выберите склад</option>
-            <option v-for="loc in locations" :key="loc.id" :value="loc.id">
-              {{ loc.name }}
-            </option>
-          </select>
+          />
         </div>
 
         <div v-if="needsSupplier" class="field-group">
           <label class="field-label">Поставщик <span class="required">*</span></label>
-          <select
+          <BaseSelect
             v-model="selectedSupplierId"
-            class="select-field"
+            :options="supplierOptions"
+            title="Выбор поставщика"
+            placeholder="Выберите поставщика"
             :disabled="isLoadingRefs"
-          >
-            <option :value="null" disabled>Выберите поставщика</option>
-            <option v-for="sup in suppliers" :key="sup.id" :value="sup.id">
-              {{ sup.name }}
-            </option>
-          </select>
+          />
         </div>
       </section>
 
@@ -515,16 +656,13 @@ onMounted(async () => {
 
           <div class="field-group">
             <label class="field-label">Инвестор</label>
-            <select
-              :value="participant.entity_id"
-              class="select-field"
-              @change="(e) => updateParticipant(participant.id, 'entity_id', Number((e.target as HTMLSelectElement).value) || null)"
-            >
-              <option :value="null" disabled>Выберите инвестора</option>
-              <option v-for="inv in investors" :key="inv.id" :value="inv.id">
-                {{ inv.name }}
-              </option>
-            </select>
+            <BaseSelect
+              :model-value="participant.entity_id"
+              :options="investorOptions"
+              title="Выбор инвестора"
+              placeholder="Выберите инвестора"
+              @update:model-value="(value) => updateParticipant(participant.id, 'entity_id', toNumberOrNull(value))"
+            />
           </div>
 
           <div class="field-row">
@@ -615,7 +753,7 @@ onMounted(async () => {
             </button>
           </div>
 
-          <div v-if="line.variant" class="line-sku">SKU: {{ line.variant.sku }}</div>
+          <div v-if="line.variant" class="line-sku">SKU: {{ variantDisplaySku(line.variant) }}</div>
 
           <div class="field-row">
             <div class="field-group flex-1">
@@ -710,34 +848,51 @@ onMounted(async () => {
             class="search-input"
             placeholder="Поиск по названию или SKU…"
             autofocus
-            @input="searchVariants(variantSearch)"
           />
         </div>
       </div>
 
+      <div class="variant-filter-row">
+        <button
+          class="variant-filter-chip"
+          :class="{ 'variant-filter-chip--active': variantSearchCategory === null }"
+          type="button"
+          @click="variantSearchCategory = null"
+        >
+          Все
+        </button>
+        <button
+          v-for="category in variantCategories"
+          :key="category.id"
+          class="variant-filter-chip"
+          :class="{ 'variant-filter-chip--active': variantSearchCategory === category.id }"
+          type="button"
+          @click="variantSearchCategory = category.id"
+        >
+          {{ category.name }}
+        </button>
+      </div>
+
       <div v-if="variantSearchLoading" class="sheet-loading">
         <div class="sheet-spinner" />
-        <span>Поиск…</span>
+        <span>Загрузка каталога…</span>
       </div>
 
-      <div v-else-if="variantSearch && variantSearchResults.length === 0" class="sheet-empty">
+      <div v-else-if="filteredVariants.length === 0" class="sheet-empty">
         Товары не найдены
-      </div>
-
-      <div v-else-if="!variantSearch" class="sheet-hint">
-        Начните вводить название товара или SKU
       </div>
 
       <div v-else class="variant-results">
         <button
-          v-for="variant in variantSearchResults"
+          v-for="variant in filteredVariants"
           :key="variant.id"
           class="variant-result-item"
           @click="selectVariant(variant)"
         >
           <div class="variant-result-info">
-            <span class="variant-result-name">{{ variantLabel(variant) }}</span>
-            <span class="variant-result-sku">SKU: {{ variant.sku }}</span>
+            <span class="variant-result-name">{{ variant.product_name || variantLabel(variant) }}</span>
+            <span class="variant-result-attrs">{{ variantLabel(variant) }}</span>
+            <span class="variant-result-sku">SKU: {{ variantDisplaySku(variant) }}</span>
           </div>
           <span v-if="variant.price" class="variant-result-price tabular-nums">
             {{ formatPrice(variant.price) }}
@@ -938,13 +1093,12 @@ onMounted(async () => {
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: var(--color-bg-elevated);
-  font-size: var(--text-base);
+  font-size: max(16px, var(--text-base));
+  line-height: 1.25;
   color: var(--color-text-primary);
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B635A' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right var(--space-4) center;
-  padding-right: var(--space-10);
+  -webkit-appearance: menulist;
+  appearance: auto;
+  padding-right: var(--space-4);
   transition: border-color var(--duration-fast) var(--ease-out),
               box-shadow var(--duration-fast) var(--ease-out);
   outline: none;
@@ -1029,6 +1183,7 @@ onMounted(async () => {
   color: var(--color-brand-600);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
+  white-space: nowrap;
   border: 1px solid var(--color-brand-200);
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -1332,6 +1487,39 @@ onMounted(async () => {
   margin-bottom: var(--space-4);
 }
 
+.variant-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.variant-filter-chip {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.variant-filter-chip--active {
+  border-color: var(--color-brand-500);
+  background: var(--color-brand-50);
+  color: var(--color-brand-600);
+}
+
 .variant-search-field {
   position: relative;
 }
@@ -1440,6 +1628,14 @@ onMounted(async () => {
   font-size: var(--text-xs);
   color: var(--color-text-tertiary);
   font-family: var(--font-mono);
+}
+
+.variant-result-attrs {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .variant-result-price {

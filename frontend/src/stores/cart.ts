@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { CartItem } from '@/types/models'
+import { PricingMode } from '@/types/enums'
 
 export const useCartStore = defineStore('cart', () => {
   const items = ref<CartItem[]>(loadFromStorage())
@@ -74,7 +75,26 @@ export const useCartStore = defineStore('cart', () => {
     const stored = localStorage.getItem('microposs_cart')
     if (stored) {
       try {
-        return JSON.parse(stored)
+        const parsed = JSON.parse(stored) as Partial<CartItem>[]
+        if (!Array.isArray(parsed)) return []
+        return parsed
+          .filter((item): item is Partial<CartItem> & { product_variant: CartItem['product_variant']; product_name: string } => (
+            item !== null
+            && typeof item === 'object'
+            && item.product_variant !== undefined
+            && typeof item.product_name === 'string'
+          ))
+          .map((item) => ({
+            product_variant: item.product_variant,
+            product_name: item.product_name,
+            pricing_mode: item.pricing_mode ?? PricingMode.DEFAULT_EDITABLE,
+            lot_id: item.lot_id ?? null,
+            quantity: Number.isFinite(item.quantity) ? Number(item.quantity) : 1,
+            unit_price: String(item.unit_price ?? '0'),
+            base_price: String(item.base_price ?? item.unit_price ?? '0'),
+            price_changed: Boolean(item.price_changed),
+            discount_reason_id: item.discount_reason_id ?? null,
+          }))
       } catch {
         return []
       }

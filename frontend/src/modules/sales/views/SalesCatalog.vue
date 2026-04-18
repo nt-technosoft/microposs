@@ -5,7 +5,9 @@ import { ShoppingCart, Package } from 'lucide-vue-next'
 import { fetchProductVariants } from '@/api/catalog'
 import { useProductsStore } from '@/stores/products'
 import { useCartStore } from '@/stores/cart'
+import { useSessionStore } from '@/stores/session'
 import type { Product, ProductVariant } from '@/types/models'
+import { PricingMode } from '@/types/enums'
 import BaseSearch from '@/components/base/BaseSearch.vue'
 import CategoryChips from '@/components/forms/CategoryChips.vue'
 import ProductCard from '@/components/data/ProductCard.vue'
@@ -15,6 +17,7 @@ import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 const router = useRouter()
 const productsStore = useProductsStore()
 const cartStore = useCartStore()
+const sessionStore = useSessionStore()
 
 const searchQuery = ref('')
 
@@ -62,8 +65,13 @@ function triggerFlash(productId: number) {
   }, 1400)
 }
 
-async function onAddToCart(product: Product) {
-  if (product.has_variants) {
+async function onAddToCart(product: Product | null | undefined) {
+  if (!product || typeof product.id !== 'number') {
+    return
+  }
+
+  const supportsQuickAdd = !product.has_variants && product.pricing_mode === PricingMode.FIXED_LOCKED
+  if (!supportsQuickAdd) {
     router.push({ name: 'product-detail', params: { id: product.id } })
     return
   }
@@ -72,8 +80,11 @@ async function onAddToCart(product: Product) {
   let variant: ProductVariant | null = localVariants[0] ?? null
   if (!variant) {
     try {
-      const loadedVariants = await fetchProductVariants(product.id)
-      variant = loadedVariants[0] ?? null
+      const locationId = sessionStore.currentSession?.location?.id
+      const loadedVariants = await fetchProductVariants(product.id, {
+        location_id: locationId,
+      })
+      variant = Array.isArray(loadedVariants) ? (loadedVariants[0] ?? null) : null
     } catch {
       variant = null
     }
@@ -84,15 +95,22 @@ async function onAddToCart(product: Product) {
     return
   }
 
+  if ((variant.stock_quantity ?? 0) <= 0) {
+    router.push({ name: 'product-detail', params: { id: product.id } })
+    return
+  }
+
   const price = product.base_price ?? variant.effective_price ?? variant.price ?? '0'
 
   cartStore.addItem({
     product_variant: variant,
     product_name: product.name,
+    pricing_mode: product.pricing_mode,
     lot_id: null,
     quantity: 1,
     unit_price: price,
     base_price: price,
+    price_changed: false,
     discount_reason_id: null,
   })
 

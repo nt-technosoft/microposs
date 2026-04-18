@@ -27,3 +27,6 @@ django-environ>=0.11
 
 # UUID fields
 shortuuid>=1.0
+
+# Excel ingestion
+openpyxl>=3.1

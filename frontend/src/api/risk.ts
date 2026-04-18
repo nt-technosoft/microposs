@@ -4,7 +4,7 @@
 
 import api from './client'
 import type { RiskEvent } from '../types/models'
-import type { PaginatedResponse } from './catalog'
+import { toPaginated, type PaginatedResponse } from './catalog'
 
 export interface WriteoffPayload {
   lot_id: number
@@ -55,27 +55,27 @@ interface FetchInventoryChecksParams {
 }
 
 export async function fetchRiskEvents(params?: FetchRiskEventsParams): Promise<PaginatedResponse<RiskEvent>> {
-  const { data } = await api.get<PaginatedResponse<RiskEvent>>('/api/v1/risk/events/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<RiskEvent> | RiskEvent[]>('/api/v1/risk/events/', { params })
+  return toPaginated<RiskEvent>(data)
 }
 
 export async function createWriteoff(payload: WriteoffPayload): Promise<RiskEvent> {
-  const { data } = await api.post<RiskEvent>('/api/v1/risk/writeoffs/', payload)
+  const { data } = await api.post<RiskEvent>('/api/v1/risk/events/writeoff/', payload)
   return data
 }
 
 export async function fetchInventoryChecks(
   params?: FetchInventoryChecksParams,
 ): Promise<PaginatedResponse<InventoryCheck>> {
-  const { data } = await api.get<PaginatedResponse<InventoryCheck>>(
-    '/api/v1/risk/inventory-checks/',
+  const { data } = await api.get<PaginatedResponse<InventoryCheck> | InventoryCheck[]>(
+    '/api/v1/risk/checks/',
     { params },
   )
-  return data
+  return toPaginated<InventoryCheck>(data)
 }
 
 export async function createInventoryCheck(payload: InventoryCheckCreatePayload): Promise<InventoryCheck> {
-  const { data } = await api.post<InventoryCheck>('/api/v1/risk/inventory-checks/', payload)
+  const { data } = await api.post<InventoryCheck>('/api/v1/risk/checks/', payload)
   return data
 }
 
@@ -84,7 +84,7 @@ export async function completeInventoryCheck(
   payload: InventoryCheckCompletePayload,
 ): Promise<InventoryCheck> {
   const { data } = await api.post<InventoryCheck>(
-    `/api/v1/risk/inventory-checks/${checkId}/complete/`,
+    `/api/v1/risk/checks/${checkId}/complete/`,
     payload,
   )
   return data

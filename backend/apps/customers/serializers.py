@@ -35,6 +35,8 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
         model = CustomerPayment
         fields = [
             'id', 'customer', 'customer_name',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'amount', 'payment_method', 'date', 'notes',
             'created_at',
         ]
@@ -48,4 +50,23 @@ class CustomerPaymentCreateSerializer(serializers.Serializer):
         min_value=Decimal('0.01'),
     )
     payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
+    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    operation_amount = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    fx_rate_snapshot = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
+    functional_amount_uzs = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
     notes = serializers.CharField(required=False, default='', allow_blank=True)

@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { TrendingUp, TrendingDown, ShoppingCart, RotateCcw, ArrowDownCircle, ArrowUpCircle, ChevronDown } from 'lucide-vue-next'
-import { fetchDailySummaries, fetchCashFlow, type DailySummary, type CashFlowItem } from '@/api/finance'
+import { fetchDailySummaries, fetchCashFlow, fetchTrialBalance, type DailySummary, type CashFlowItem } from '@/api/finance'
 import { fetchDebtSummary, type DebtSummaryItem } from '@/api/customers'
+import { fetchPayablesSummary, type PayablesSummaryItem } from '@/api/suppliers'
+import { fetchStockSummary, type StockSummaryItem } from '@/api/inventory'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-type Period = 'today' | 'week' | 'month'
+type Period = 'today' | 'week' | 'month' | 'all' | 'custom'
 
 interface PeriodOption {
   value: Period
@@ -18,21 +21,28 @@ interface PeriodOption {
 // ── Composables ─────────────────────────────────────────────────────────────
 
 const toast = useToast()
+const router = useRouter()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 const period = ref<Period>('today')
 const periodMenuOpen = ref(false)
+const customDateFrom = ref('')
+const customDateTo = ref('')
 
 const summaries = ref<DailySummary[]>([])
 const cashFlow = ref<CashFlowItem[]>([])
 const debtItems = ref<DebtSummaryItem[]>([])
+const payablesItems = ref<PayablesSummaryItem[]>([])
+const stockItems = ref<StockSummaryItem[]>([])
+const trialBalance = ref<Array<{ code: string; balance: string }>>([])
 
 const loadingSummary = ref(false)
 const loadingCashFlow = ref(false)
 const loadingDebt = ref(false)
 const errorSummary = ref<string | null>(null)
 const errorCashFlow = ref<string | null>(null)
+const loadingParity = ref(false)
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -40,6 +50,8 @@ const PERIOD_OPTIONS: PeriodOption[] = [
   { value: 'today', label: 'Сегодня' },
   { value: 'week', label: 'Неделя' },
   { value: 'month', label: 'Месяц' },
+  { value: 'all', label: 'Весь период' },
+  { value: 'custom', label: 'Диапазон' },
 ]
 
 // ── Date range helpers ───────────────────────────────────────────────────────
@@ -48,7 +60,7 @@ function toIsoDate(date: Date): string {
   return date.toISOString().split('T')[0]
 }
 
-function getDateRange(p: Period): { date_from: string; date_to: string } {
+function getDateRange(p: Period): { date_from?: string; date_to?: string } {
   const today = new Date()
   const to = toIsoDate(today)
 
@@ -61,20 +73,39 @@ function getDateRange(p: Period): { date_from: string; date_to: string } {
     return { date_from: toIsoDate(from), date_to: to }
   }
   const from = new Date(today)
-  from.setDate(1)
-  return { date_from: toIsoDate(from), date_to: to }
+  if (p === 'month') {
+    from.setDate(1)
+    return { date_from: toIsoDate(from), date_to: to }
+  }
+  if (p === 'all') {
+    return {}
+  }
+
+  const fromRaw = customDateFrom.value
+  const toRaw = customDateTo.value
+  if (!fromRaw && !toRaw) {
+    return {}
+  }
+  if (fromRaw && toRaw && fromRaw > toRaw) {
+    return { date_from: toRaw, date_to: fromRaw }
+  }
+  return {
+    date_from: fromRaw || undefined,
+    date_to: toRaw || undefined,
+  }
 }
 
 // ── Aggregated metrics ───────────────────────────────────────────────────────
 
 const metrics = computed(() => {
-  const zero = { revenue: 0, profit: 0, cogs: 0, sales: 0, returns: 0 }
+  const zero = { revenue: 0, profit: 0, cogs: 0, salesCount: 0, salesDays: 0, returns: 0 }
 
   return summaries.value.reduce((acc, s) => ({
     revenue: acc.revenue + parseFloat(s.net_sales),
     profit: acc.profit + parseFloat(s.gross_profit),
     cogs: acc.cogs + parseFloat(s.total_cogs),
-    sales: acc.sales + 1,                         // summaries are per-day; approximation
+    salesCount: acc.salesCount + Number(s.total_sales || 0),
+    salesDays: acc.salesDays + (Number(s.total_sales || 0) > 0 ? 1 : 0),
     returns: acc.returns + parseFloat(s.total_returns),
   }), zero)
 })
@@ -97,6 +128,23 @@ const totalDebt = computed(() =>
   debtItems.value.reduce((sum, d) => sum + parseFloat(d.outstanding_balance), 0),
 )
 
+const totalPayables = computed(() =>
+  payablesItems.value.reduce((sum, p) => sum + parseFloat(p.outstanding_balance), 0),
+)
+
+const inventoryTotals = computed(() => {
+  return stockItems.value.reduce((acc, item) => ({
+    qty: acc.qty + Number(item.total_quantity || 0),
+    value: acc.value + parseFloat(item.total_value || '0'),
+  }), { qty: 0, value: 0 })
+})
+
+const cashBalance = computed(() => {
+  return trialBalance.value
+    .filter((line) => ['1000', '1010'].includes(line.code))
+    .reduce((sum, line) => sum + parseFloat(line.balance || '0'), 0)
+})
+
 const topDebtors = computed(() =>
   [...debtItems.value]
     .sort((a, b) => parseFloat(b.outstanding_balance) - parseFloat(a.outstanding_balance))
@@ -106,6 +154,7 @@ const topDebtors = computed(() =>
 const selectedPeriodLabel = computed(
   () => PERIOD_OPTIONS.find((o) => o.value === period.value)?.label ?? '',
 )
+const periodLabelLower = computed(() => selectedPeriodLabel.value.toLowerCase())
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -147,13 +196,52 @@ async function loadDebt(): Promise<void> {
   }
 }
 
+async function loadParity(): Promise<void> {
+  loadingParity.value = true
+  try {
+    const [payables, stock, trial] = await Promise.all([
+      fetchPayablesSummary(),
+      fetchStockSummary(),
+      fetchTrialBalance(),
+    ])
+    payablesItems.value = payables
+    stockItems.value = stock
+    trialBalance.value = trial.map((line) => ({
+      code: String(line.account_code || (line as unknown as { code?: string }).code || ''),
+      balance: String(line.balance ?? '0'),
+    }))
+  } catch {
+    // Non-critical for dashboard rendering.
+    payablesItems.value = []
+    stockItems.value = []
+    trialBalance.value = []
+  } finally {
+    loadingParity.value = false
+  }
+}
+
 async function loadAll(): Promise<void> {
-  await Promise.all([loadSummary(), loadCashFlow(), loadDebt()])
+  await Promise.all([loadSummary(), loadCashFlow(), loadDebt(), loadParity()])
 }
 
 async function onPeriodSelect(p: Period): Promise<void> {
   period.value = p
   periodMenuOpen.value = false
+  if (p === 'custom') {
+    if (!customDateFrom.value || !customDateTo.value) {
+      const today = new Date()
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1)
+      customDateFrom.value = toIsoDate(firstDay)
+      customDateTo.value = toIsoDate(today)
+    }
+  }
+  await Promise.all([loadSummary(), loadCashFlow()])
+}
+
+async function applyCustomRange(): Promise<void> {
+  if (period.value !== 'custom') {
+    return
+  }
   await Promise.all([loadSummary(), loadCashFlow()])
 }
 
@@ -165,6 +253,10 @@ function signClass(value: number): string {
   if (value > 0) return 'positive'
   if (value < 0) return 'negative'
   return ''
+}
+
+function openReconciliation(): void {
+  router.push({ name: 'reports-reconciliation' })
 }
 </script>
 
@@ -205,6 +297,22 @@ function signClass(value: number): string {
       </div>
     </header>
 
+    <section v-if="period === 'custom'" class="custom-range">
+      <div class="custom-range-fields">
+        <label class="custom-range-label">
+          <span>С</span>
+          <input v-model="customDateFrom" class="custom-range-input" type="date" />
+        </label>
+        <label class="custom-range-label">
+          <span>По</span>
+          <input v-model="customDateTo" class="custom-range-input" type="date" />
+        </label>
+      </div>
+      <button class="custom-range-apply" type="button" @click="applyCustomRange">
+        Применить
+      </button>
+    </section>
+
     <div class="content">
 
       <!-- ── Loading skeletons ──────────────────────────────── -->
@@ -236,7 +344,7 @@ function signClass(value: number): string {
           </span>
           <div class="stat-sub">
             <TrendingUp :size="14" :stroke-width="2" />
-            <span>за {{ selectedPeriodLabel.toLowerCase() }}</span>
+            <span>за {{ periodLabelLower }}</span>
           </div>
         </div>
 
@@ -265,7 +373,7 @@ function signClass(value: number): string {
             <div class="stat-accent stat-accent--info" />
             <span class="stat-label">Дней с продажами</span>
             <span class="stat-value tabular-nums">
-              {{ summaries.length }} дн.
+              {{ metrics.salesDays }} дн.
             </span>
           </div>
 
@@ -278,6 +386,41 @@ function signClass(value: number): string {
             </span>
           </div>
         </div>
+
+        <!-- ── Операционные сводки ───────────────────────────── -->
+        <section class="section">
+          <div class="section-head">
+            <h2 class="section-title">Операционные срезы</h2>
+            <button class="link-btn" type="button" @click="openReconciliation">
+              Сверка Excel
+            </button>
+          </div>
+
+          <div class="grid-2">
+            <div class="stat-card stat-card--sm">
+              <span class="stat-label">Касса и банк</span>
+              <span class="stat-value tabular-nums">{{ formatPrice(cashBalance) }}</span>
+            </div>
+            <div class="stat-card stat-card--sm">
+              <span class="stat-label">Склад (шт.)</span>
+              <span class="stat-value tabular-nums">{{ inventoryTotals.qty }}</span>
+            </div>
+            <div class="stat-card stat-card--sm">
+              <span class="stat-label">Дебиторка (AR)</span>
+              <span class="stat-value tabular-nums">{{ formatPrice(totalDebt) }}</span>
+            </div>
+            <div class="stat-card stat-card--sm">
+              <span class="stat-label">Кредиторка (AP)</span>
+              <span class="stat-value tabular-nums">{{ formatPrice(totalPayables) }}</span>
+            </div>
+          </div>
+
+          <p v-if="loadingParity" class="section-note">Обновляю операционные метрики...</p>
+          <p v-else class="section-note">
+            Стоимость остатков на складе:
+            <strong class="tabular-nums">{{ formatPrice(inventoryTotals.value) }}</strong>
+          </p>
+        </section>
 
         <!-- ── Cash flow section ───────────────────────────── -->
         <section class="section">
@@ -474,6 +617,53 @@ function signClass(value: number): string {
   color: var(--color-brand-600);
 }
 
+/* ── Custom range ─────────────────────────────────────────────────────────── */
+
+.custom-range {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-primary);
+}
+
+.custom-range-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  flex: 1;
+}
+
+.custom-range-label {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.custom-range-input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-2);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.custom-range-apply {
+  min-height: 38px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-brand-300);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
 /* ── Content ─────────────────────────────────────────────────────────────── */
 
 .content {
@@ -571,6 +761,24 @@ function signClass(value: number): string {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.link-btn {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-brand-600);
+}
+
+.section-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* ── Cash flow card ──────────────────────────────────────────────────────── */
@@ -851,6 +1059,18 @@ function signClass(value: number): string {
 .dropdown-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+@media (max-width: 640px) {
+  .custom-range {
+    padding: var(--space-3) var(--space-4);
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .custom-range-apply {
+    width: 100%;
+  }
 }
 
 /* ── Reduced motion ──────────────────────────────────────────────────────── */

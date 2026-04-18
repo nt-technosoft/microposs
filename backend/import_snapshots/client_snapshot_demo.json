@@ -1,0 +1,753 @@
+{
+  "sheets": {
+    "MALUMOTLAR": [
+      {
+        "TRADE CREDITOR": "LOCAL",
+        "MIJOZLAR": "USTOZ",
+        "MAHSULOTLAR": "32 PCS",
+        "VALYUTA": "USD",
+        "PAYMENT METHOD": "KASSA DOLLAR",
+        "OMBOR": "ASOSIY"
+      },
+      {
+        "TRADE CREDITOR": "CHINA",
+        "MIJOZLAR": "ABDUL AZIZ",
+        "MAHSULOTLAR": "2 talik 50x80",
+        "VALYUTA": "SOM",
+        "PAYMENT METHOD": "KASSA SOM",
+        "OMBOR": "DOKON"
+      },
+      {
+        "MIJOZLAR": "CUSTOMER",
+        "MAHSULOTLAR": "2 talik 60x90",
+        "PAYMENT METHOD": "PLASTIK SOM"
+      },
+      {
+        "TRADE CREDITOR": "LOCAL",
+        "MAHSULOTLAR": "80x160",
+        "MIJOZLAR": "BEKZOD AKA"
+      },
+      {
+        "MIJOZLAR": "IN HOUSE",
+        "MAHSULOTLAR": "Atirgul 60x60"
+      },
+      {
+        "TRADE CREDITOR": "CHINA",
+        "MAHSULOTLAR": "Gul 50x80"
+      },
+      {
+        "TRADE CREDITOR": "BEKZOD AKA",
+        "MAHSULOTLAR": "Welcome 60x90"
+      },
+      {
+        "MAHSULOTLAR": "120x180"
+      }
+    ],
+    "SOTIB OLISH": [
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "32 PCS",
+        "SONI": "100",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "33.50",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "Atirgul 60x60",
+        "SONI": "450",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "1.20",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "Gul 50x80",
+        "SONI": "360",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "1.33",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "Welcome 60x90",
+        "SONI": "360",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "1.80",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "80x160",
+        "SONI": "500",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "4.27",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "120x180",
+        "SONI": "250",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "7.25",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "2 talik 50x80",
+        "SONI": "600",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "3.94",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-26",
+        "ISM": "CHINA",
+        "SHARTNOMA RAQAMI": "1",
+        "MAHSULOT": "2 talik 60x90",
+        "SONI": "400",
+        "TO'LOV MUDDATI": "NAQD",
+        "MAHSULOT NARXI": "5.31",
+        "KURS": "12,150",
+        "PUL BIRLIGI": "USD",
+        "POSTED": "✅"
+      }
+    ],
+    "STOCK TRANSFER": [
+      {
+        "SANA": "4-Apr-26",
+        "MAHSULOT": "2 talik 60x90",
+        "SONI": "80",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "4-Apr-26",
+        "MAHSULOT": "Gul 50x80",
+        "SONI": "120",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "4-Apr-26",
+        "MAHSULOT": "Welcome 60x90",
+        "SONI": "120",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-26",
+        "MAHSULOT": "2 talik 60x90",
+        "SONI": "20",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-26",
+        "MAHSULOT": "Atirgul 60x60",
+        "SONI": "150",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-26",
+        "MAHSULOT": "2 talik 50x80",
+        "SONI": "100",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "9-Apr-26",
+        "MAHSULOT": "2 talik 60x90",
+        "SONI": "20",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "11-Apr-26",
+        "MAHSULOT": "2 talik 60x90",
+        "SONI": "60",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-26",
+        "MAHSULOT": "120x180",
+        "SONI": "30",
+        "KIRIM": "DOKON",
+        "CHIQIM": "ASOSIY",
+        "POSTED": "✅"
+      }
+    ],
+    "SOTUV": [
+      {
+        "SOTUV SANASI": "4-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 50x80",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "90,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "4-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Gul 50x80",
+        "JAMI DONA": "4",
+        "SOTUV NARXI": "30,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "120x180",
+        "JAMI DONA": "6",
+        "SOTUV NARXI": "150,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Gul 50x80",
+        "JAMI DONA": "5",
+        "SOTUV NARXI": "30,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 50x80",
+        "JAMI DONA": "3",
+        "SOTUV NARXI": "90,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Welcome 60x90",
+        "JAMI DONA": "3",
+        "SOTUV NARXI": "35,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Atirgul 60x60",
+        "JAMI DONA": "8",
+        "SOTUV NARXI": "25,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "5-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 60x90",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "120,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 60x90",
+        "JAMI DONA": "4",
+        "SOTUV NARXI": "120,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Welcome 60x90",
+        "JAMI DONA": "13",
+        "SOTUV NARXI": "35,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Gul 50x80",
+        "JAMI DONA": "3",
+        "SOTUV NARXI": "30,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 50x80",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "90,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "120x180",
+        "JAMI DONA": "3",
+        "SOTUV NARXI": "150,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "80x160",
+        "JAMI DONA": "2",
+        "SOTUV NARXI": "85,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Atirgul 60x60",
+        "JAMI DONA": "2",
+        "SOTUV NARXI": "25,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "CUSTOMER",
+        "MAHSULOT": "120x180",
+        "JAMI DONA": "100",
+        "SOTUV NARXI": "130,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "ASOSIY",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "CUSTOMER",
+        "MAHSULOT": "2 talik 60x90",
+        "JAMI DONA": "120",
+        "SOTUV NARXI": "106,667",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "ASOSIY",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "7-Apr-26",
+        "MIJOZ": "CUSTOMER",
+        "MAHSULOT": "32 PCS",
+        "JAMI DONA": "6",
+        "SOTUV NARXI": "48",
+        "VALYUTA": "USD",
+        "KURS": "12,245",
+        "OMBOR": "ASOSIY",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "8-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 50x80",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "90,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "8-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Atirgul 60x60",
+        "JAMI DONA": "4",
+        "SOTUV NARXI": "25,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "8-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "2 talik 60x90",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "120,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "8-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "80x160",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "85,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "8-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Gul 50x80",
+        "JAMI DONA": "4",
+        "SOTUV NARXI": "30,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "9-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Gul 50x80",
+        "JAMI DONA": "4",
+        "SOTUV NARXI": "30,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,220",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "9-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "Welcome 60x90",
+        "JAMI DONA": "3",
+        "SOTUV NARXI": "35,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,220",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      },
+      {
+        "SOTUV SANASI": "9-Apr-26",
+        "MIJOZ": "IN HOUSE",
+        "MAHSULOT": "120x180",
+        "JAMI DONA": "1",
+        "SOTUV NARXI": "150,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,220",
+        "OMBOR": "DOKON",
+        "TO'LOV MUDDATI": "NAQD"
+      }
+    ],
+    "TUSHUM": [
+      {
+        "SANA": "10-Mar-2026",
+        "MIJOZ": "USTOZ",
+        "TUSHUM TURI": "CAPITAL",
+        "MIQDOR": "11,279.3",
+        "VALYUTA": "USD",
+        "KURS": "12,100",
+        "TO'LOV TURI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "10-Mar-2026",
+        "MIJOZ": "BEKZOD AKA",
+        "TUSHUM TURI": "CAPITAL",
+        "MIQDOR": "4,347.7",
+        "VALYUTA": "USD",
+        "KURS": "12,100",
+        "TO'LOV TURI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "4-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "210,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "5-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "1,745,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "1,785,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-2026",
+        "MIJOZ": "CUSTOMER",
+        "TUSHUM TURI": "SOTUV",
+        "TUSHUM TA'RIFI": "Samarqandlik klent",
+        "MIQDOR": "25,800,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,245",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "7-Apr-2026",
+        "MIJOZ": "CUSTOMER",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "288",
+        "VALYUTA": "USD",
+        "KURS": "12,245",
+        "TO'LOV TURI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "8-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "605,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,220",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "9-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "645,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,220",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "10-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "660,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "11-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "2,410,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "11-Apr-2026",
+        "MIJOZ": "CUSTOMER",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "48",
+        "VALYUTA": "USD",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-2026",
+        "MIJOZ": "IN HOUSE",
+        "TUSHUM TURI": "SOTUV",
+        "MIQDOR": "1,800,000",
+        "VALYUTA": "SOM",
+        "KURS": "12,200",
+        "TO'LOV TURI": "KASSA SOM",
+        "POSTED": "✅"
+      }
+    ],
+    "XARAJAT": [
+      {
+        "SANA": "10-Mar-2026",
+        "CREDITOR": "CHINA",
+        "TO'LOV TURI": "SOTIB OLISH",
+        "TO'LOV TA'RIFI": "KOVRIK UCHUN",
+        "MIQDOR": "7,294",
+        "VALYUTA": "USD",
+        "KURS": "12,100",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "10-Mar-2026",
+        "CREDITOR": "CHINA",
+        "TO'LOV TURI": "SOTIB OLISH",
+        "TO'LOV TA'RIFI": "NABOR UCHUN",
+        "MIQDOR": "4,351.0",
+        "VALYUTA": "USD",
+        "KURS": "12,100",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "3-Apr-2026",
+        "CREDITOR": "CHINA",
+        "TO'LOV TURI": "SOTIB OLISH",
+        "TO'LOV TA'RIFI": "Rastamojka",
+        "MIQDOR": "3,982.0",
+        "VALYUTA": "USD",
+        "KURS": "12,150",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-2026",
+        "CREDITOR": "USTOZ",
+        "TO'LOV TURI": "DIVIDEND",
+        "TO'LOV TA'RIFI": "FOYDADAN DIVIDEND",
+        "MIQDOR": "477.3",
+        "VALYUTA": "USD",
+        "KURS": "12,160",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-2026",
+        "CREDITOR": "USTOZ",
+        "TO'LOV TURI": "CAPITAL",
+        "TO'LOV TA'RIFI": "CAPITALGA KIRITGAN PULLARIDAN YECHILDI",
+        "MIQDOR": "1,393.4",
+        "VALYUTA": "USD",
+        "KURS": "12,160",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-2026",
+        "CREDITOR": "BEKZOD AKA",
+        "TO'LOV TURI": "DIVIDEND",
+        "TO'LOV TA'RIFI": "FOYDADAN DIVIDEND",
+        "MIQDOR": "715.9",
+        "VALYUTA": "USD",
+        "KURS": "12,160",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "12-Apr-2026",
+        "CREDITOR": "BEKZOD AKA",
+        "TO'LOV TURI": "CAPITAL",
+        "TO'LOV TA'RIFI": "CAPITALGA KIRITGAN PULLARIDAN YECHILDI",
+        "MIQDOR": "665.4",
+        "VALYUTA": "USD",
+        "KURS": "12,160",
+        "QAYERDAN TO'LOV QILINDI": "KASSA DOLLAR",
+        "POSTED": "✅"
+      }
+    ],
+    "PUL AYRIBOSHLASH": [
+      {
+        "SANA": "6-Apr-26",
+        "KIRIM": "KASSA DOLLAR",
+        "KIRIM MIQDORI": "160.35",
+        "CHIQIM": "KASSA SOM",
+        "CHIQIM MIQDORI": "1,955,000",
+        "VALYUTA (CHIQUVCHI)": "SOM",
+        "KURS": "12,192",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "8-Apr-26",
+        "KIRIM": "KASSA DOLLAR",
+        "KIRIM MIQDORI": "2,252.75",
+        "CHIQIM": "KASSA SOM",
+        "CHIQIM MIQDORI": "27,585,000",
+        "VALYUTA (CHIQUVCHI)": "SOM",
+        "KURS": "12,245",
+        "POSTED": "✅"
+      },
+      {
+        "SANA": "13-Apr-26",
+        "KIRIM": "KASSA DOLLAR",
+        "KIRIM MIQDORI": "502.9",
+        "CHIQIM": "KASSA SOM",
+        "CHIQIM MIQDORI": "6,120,000",
+        "VALYUTA (CHIQUVCHI)": "SOM",
+        "KURS": "12,169",
+        "POSTED": "✅"
+      }
+    ]
+  },
+  "opening_balances": {},
+  "expected": {}
+}

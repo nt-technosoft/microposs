@@ -32,7 +32,15 @@ def _dispatch_event(event):
     handlers = {
         'sale.completed': _handle_sale_completed,
         'receipt.confirmed': _handle_receipt_confirmed,
-        'risk_event.created': _handle_risk_event,
+        'risk.writeoff': _handle_risk_event,
+        'risk_event.created': _handle_risk_event,  # legacy alias
+        'customer.payment': _handle_financial_operation,
+        'supplier.payment': _handle_financial_operation,
+        'expense.recorded': _handle_financial_operation,
+        'pos_session.opened': _handle_session_event,
+        'pos_session.closed': _handle_session_event,
+        'lot.transfer': _handle_lot_transfer,
+        'lot.transferred': _handle_lot_transfer,  # legacy alias
         'investor.contract_closed': _handle_contract_closed,
     }
     handler = handlers.get(event.event_type)
@@ -56,6 +64,19 @@ def _handle_risk_event(payload, tenant_id):
     aggregate_daily_pnl.delay(tenant_id, payload.get('date'))
 
 
+def _handle_financial_operation(payload, tenant_id):
+    aggregate_daily_pnl.delay(tenant_id, payload.get('date'))
+
+
+def _handle_session_event(payload, tenant_id):
+    aggregate_daily_pnl.delay(tenant_id, payload.get('opened_at') or payload.get('closed_at'))
+
+
+def _handle_lot_transfer(payload, tenant_id):
+    # Transfer affects stock placement only; no P&L aggregation required.
+    _ = payload, tenant_id
+
+
 def _handle_contract_closed(payload, tenant_id):
     contract_id = payload.get('contract_id')
     if contract_id:
@@ -71,14 +92,16 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     """
     from apps.finance.models import DailySummary, CashFlowSummary
     from apps.sales.models import Sale, SaleReturn
+    from apps.finance.models import Expense
 
     if date_str:
         target_date = datetime.fromisoformat(date_str).date()
     else:
-        target_date = timezone.now().date()
+        target_date = timezone.localdate()
 
-    day_start = datetime.combine(target_date, datetime.min.time())
-    day_end = datetime.combine(target_date, datetime.max.time())
+    tz = timezone.get_current_timezone()
+    day_start = timezone.make_aware(datetime.combine(target_date, datetime.min.time()), tz)
+    day_end = timezone.make_aware(datetime.combine(target_date, datetime.max.time()), tz)
 
     # Sales aggregation
     sales = Sale.objects.filter(
@@ -113,6 +136,11 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         total=Sum('monetary_impact'),
     )['total'] or Decimal('0')
 
+    operational_expenses = Expense.objects.filter(
+        tenant_id=tenant_id,
+        occurred_at__range=(day_start, day_end),
+    ).aggregate(total=Sum('functional_amount_uzs'))['total'] or Decimal('0')
+
     gross_profit = total_revenue - total_cogs
 
     # Investor share (from profit records for the day)
@@ -125,7 +153,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         total=Sum('amount'),
     )['total'] or Decimal('0')
 
-    net_business_profit = gross_profit - investor_share - writeoffs
+    net_business_profit = gross_profit - investor_share - writeoffs - operational_expenses
 
     DailySummary.objects.update_or_create(
         tenant_id=tenant_id,
@@ -159,7 +187,12 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         date__range=(day_start, day_end),
     ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
-    net_cash = cash_sales + debt_payments - supplier_payments
+    expense_outflows = Expense.objects.filter(
+        tenant_id=tenant_id,
+        occurred_at__range=(day_start, day_end),
+    ).aggregate(total=Sum('functional_amount_uzs'))['total'] or Decimal('0')
+
+    net_cash = cash_sales + debt_payments - supplier_payments - expense_outflows
 
     CashFlowSummary.objects.update_or_create(
         tenant_id=tenant_id,
@@ -170,6 +203,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             'cash_in_investor': Decimal('0'),
             'cash_out_purchases': Decimal('0'),
             'cash_out_supplier_payments': supplier_payments,
+            'cash_out_expenses': expense_outflows,
             'cash_out_investor_payments': Decimal('0'),
             'net_cash_flow': net_cash,
         },
@@ -181,14 +215,14 @@ def aggregate_investor_summary_for_sale(sale_id):
     """
     Update InvestorSummary after a sale involving investor lots.
     """
-    from apps.sales.models import Sale, SaleLine
-    from apps.inventory.models import ReceiptParticipant
+    from apps.sales.models import Sale
     from apps.investors.models import InvestorContract
     from apps.investors.services import update_investor_summary
     from apps.sales.services import calculate_profit_distribution
     from apps.investors.services import record_investor_profit
 
     sale = Sale.objects.get(pk=sale_id)
+    touched_contract_ids: set[int] = set()
 
     for line in sale.lines.select_related('lot__receipt'):
         lot = line.lot
@@ -202,14 +236,23 @@ def aggregate_investor_summary_for_sale(sale_id):
 
         for dist in distributions:
             if dist['entity_type'] == 'investor':
-                # Find active contract for this investor
-                contract = InvestorContract.objects.filter(
-                    investor_id=dist['entity_id'],
-                    status='active',
-                    tenant_id=sale.tenant_id,
-                ).first()
+                # Prefer explicit contract linked to receipt; fallback for legacy data.
+                contract = None
+                if receipt.investor_contract_id:
+                    contract = InvestorContract.objects.filter(
+                        pk=receipt.investor_contract_id,
+                        status='active',
+                        tenant_id=sale.tenant_id,
+                    ).first()
 
-                if contract:
+                if contract is None:
+                    contract = InvestorContract.objects.filter(
+                        investor_id=dist['entity_id'],
+                        status='active',
+                        tenant_id=sale.tenant_id,
+                    ).first()
+
+                if contract and contract.investor_id == dist['entity_id']:
                     record_investor_profit(
                         tenant_id=sale.tenant_id,
                         contract_id=contract.pk,
@@ -221,10 +264,13 @@ def aggregate_investor_summary_for_sale(sale_id):
                         lot_id=lot.pk,
                         description=f'Profit from sale #{sale.pk}',
                     )
-                    update_investor_summary(
-                        tenant_id=sale.tenant_id,
-                        contract_id=contract.pk,
-                    )
+                    touched_contract_ids.add(contract.pk)
+
+    for contract_id in touched_contract_ids:
+        update_investor_summary(
+            tenant_id=sale.tenant_id,
+            contract_id=contract_id,
+        )
 
 
 @shared_task

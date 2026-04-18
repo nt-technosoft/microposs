@@ -14,6 +14,36 @@ from .models import (
 )
 
 
+def _resolve_contract_receipt_ids(contract: InvestorContract) -> list[int]:
+    """
+    Resolve receipt IDs tied to a contract.
+
+    Primary source is Receipt.investor_contract.
+    Fallback keeps legacy compatibility for historic receipts without explicit
+    contract link.
+    """
+    from apps.inventory.models import Receipt, ReceiptParticipant
+
+    direct_ids = list(
+        Receipt.objects.filter(
+            tenant_id=contract.tenant_id,
+            investor_contract_id=contract.pk,
+        ).values_list('id', flat=True)
+    )
+    if direct_ids:
+        return direct_ids
+
+    return list(
+        ReceiptParticipant.objects.filter(
+            tenant_id=contract.tenant_id,
+            receipt__tenant_id=contract.tenant_id,
+            receipt__investor_contract__isnull=True,
+            participant_type='investor',
+            entity_id=contract.investor_id,
+        ).values_list('receipt_id', flat=True)
+    )
+
+
 def record_investor_profit(
     tenant_id: int,
     contract_id: int,
@@ -71,16 +101,12 @@ def close_investor_contract(
         if contract.status == 'closed':
             raise ContractCloseError('Contract is already closed.')
 
-        # Check for active lots linked to receipts with this contract's participants
-        from apps.inventory.models import Lot, ReceiptParticipant
-        participant_receipts = ReceiptParticipant.objects.filter(
-            entity_id=contract.investor_id,
-            participant_type='investor',
-            tenant_id=tenant_id,
-        ).values_list('receipt_id', flat=True)
+        # Check for active lots linked to this contract
+        from apps.inventory.models import Lot
+        receipt_ids = _resolve_contract_receipt_ids(contract)
 
         active_lots = Lot.objects.filter(
-            receipt_id__in=participant_receipts,
+            receipt_id__in=receipt_ids,
             is_active=True,
             quantity_remaining__gt=0,
             tenant_id=tenant_id,
@@ -150,10 +176,12 @@ def update_investor_summary(
         pk=contract_id,
         tenant_id=tenant_id,
     )
+    receipt_ids = _resolve_contract_receipt_ids(contract)
 
-    # Total invested — sum of capital_amounts from receipt participants
+    # Total invested — contract-scoped participant capital
     from apps.inventory.models import ReceiptParticipant
     total_invested = ReceiptParticipant.objects.filter(
+        receipt_id__in=receipt_ids,
         entity_id=contract.investor_id,
         participant_type='investor',
         tenant_id=tenant_id,
@@ -161,16 +189,10 @@ def update_investor_summary(
         total=models.Sum('capital_amount'),
     )['total'] or Decimal('0')
 
-    # In-stock value
+    # In-stock value — contract-scoped lots
     from apps.inventory.models import Lot
-    participant_receipts = ReceiptParticipant.objects.filter(
-        entity_id=contract.investor_id,
-        participant_type='investor',
-        tenant_id=tenant_id,
-    ).values_list('receipt_id', flat=True)
-
     in_stock = Lot.objects.filter(
-        receipt_id__in=participant_receipts,
+        receipt_id__in=receipt_ids,
         is_active=True,
         quantity_remaining__gt=0,
         tenant_id=tenant_id,
@@ -191,9 +213,14 @@ def update_investor_summary(
         record_type='loss',
     ).aggregate(total=models.Sum('amount'))['total'] or Decimal('0')
 
-    total_sold = records.filter(
-        record_type='profit',
-    ).aggregate(total=models.Sum('amount'))['total'] or Decimal('0')
+    # Sold revenue linked to this contract's lots
+    from apps.sales.models import SaleLine
+    total_sold = SaleLine.objects.filter(
+        tenant_id=tenant_id,
+        lot__receipt_id__in=receipt_ids,
+    ).aggregate(
+        total=models.Sum(models.F('unit_price') * models.F('quantity')),
+    )['total'] or Decimal('0')
 
     # Turnover ratio
     turnover = (total_sold / total_invested * 100) if total_invested > 0 else Decimal('0')

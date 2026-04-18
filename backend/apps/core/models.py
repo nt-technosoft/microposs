@@ -124,3 +124,126 @@ class OutboxEvent(BaseModel):
     def mark_processed(self):
         self.processed_at = timezone.now()
         self.save(update_fields=['processed_at', 'updated_at'])
+
+
+class ExcelImportBatch(TenantModel):
+    """
+    Import batch metadata for Excel/Sheets alignment pipeline.
+    """
+
+    class Mode(models.TextChoices):
+        DRY_RUN = 'dry-run', 'Dry run'
+        LOAD_MASTER = 'load-master', 'Load master'
+        LOAD_TRANSACTIONS = 'load-transactions', 'Load transactions'
+        RECONCILE = 'reconcile', 'Reconcile'
+
+    class Status(models.TextChoices):
+        RUNNING = 'running', 'Running'
+        COMPLETED = 'completed', 'Completed'
+        FAILED = 'failed', 'Failed'
+
+    source_kind = models.CharField(max_length=50, default='json')
+    source_ref = models.CharField(max_length=500, blank=True, default='')
+    mode = models.CharField(max_length=40, choices=Mode.choices)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RUNNING,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    totals = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'core_excel_import_batch'
+        indexes = [
+            models.Index(fields=['tenant', 'mode', 'status']),
+            models.Index(fields=['tenant', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"ExcelImportBatch #{self.pk} ({self.mode})"
+
+
+class ExcelImportRow(TenantModel):
+    """
+    Staging row with parse/apply status and source traceability.
+    """
+
+    class Status(models.TextChoices):
+        STAGED = 'staged', 'Staged'
+        PARSED = 'parsed', 'Parsed'
+        APPLIED = 'applied', 'Applied'
+        FAILED = 'failed', 'Failed'
+        SKIPPED = 'skipped', 'Skipped'
+
+    class FailureCategory(models.TextChoices):
+        PARSE = 'parse', 'Parse'
+        MAPPING = 'mapping', 'Mapping'
+        DOMAIN = 'domain', 'Domain'
+        OTHER = 'other', 'Other'
+
+    batch = models.ForeignKey(
+        ExcelImportBatch,
+        on_delete=models.CASCADE,
+        related_name='rows',
+    )
+    source_sheet = models.CharField(max_length=100, db_index=True)
+    source_row_id = models.CharField(max_length=64)
+    row_fingerprint = models.CharField(max_length=64, db_index=True)
+    raw_payload = models.JSONField()
+    normalized_payload = models.JSONField(null=True, blank=True)
+    parse_errors = models.JSONField(default=list, blank=True)
+    failure_category = models.CharField(
+        max_length=20,
+        choices=FailureCategory.choices,
+        blank=True,
+        default='',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.STAGED,
+        db_index=True,
+    )
+    target_model = models.CharField(max_length=120, blank=True, default='')
+    target_id = models.IntegerField(null=True, blank=True)
+
+    # Canonical operation money trace for audit/reconciliation.
+    operation_currency = models.CharField(max_length=3, default='UZS')
+    operation_amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fx_rate_snapshot = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    functional_amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Functional amount in UZS.',
+    )
+
+    class Meta:
+        db_table = 'core_excel_import_row'
+        unique_together = [('batch', 'source_sheet', 'source_row_id')]
+        indexes = [
+            models.Index(fields=['tenant', 'source_sheet', 'row_fingerprint']),
+            models.Index(fields=['batch', 'status']),
+            models.Index(fields=['tenant', 'status', 'created_at']),
+        ]
+
+    def __str__(self):
+        return (
+            f"ExcelImportRow #{self.pk} "
+            f"{self.source_sheet}:{self.source_row_id} "
+            f"({self.status})"
+        )

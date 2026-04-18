@@ -3,6 +3,7 @@
  */
 
 import api from './client'
+import { toList, type PaginatedResponse } from './catalog'
 
 export interface ProductPerformanceItem {
   product_variant_id: number
@@ -26,6 +27,16 @@ export interface AgingReportItem {
   total_outstanding: string
 }
 
+export interface ReconciliationSummary {
+  batch_id: number
+  batch_mode: string
+  finished_at: string
+  computed: Record<string, unknown>
+  expected: Record<string, unknown>
+  deltas: Record<string, unknown>
+  gap_summary: Record<string, number>
+}
+
 interface FetchProductPerformanceParams {
   date_from?: string
   date_to?: string
@@ -42,14 +53,22 @@ interface FetchAgingReportsParams {
 export async function fetchProductPerformance(
   params?: FetchProductPerformanceParams,
 ): Promise<ProductPerformanceItem[]> {
-  const { data } = await api.get<ProductPerformanceItem[]>(
+  const { data } = await api.get<PaginatedResponse<ProductPerformanceItem> | ProductPerformanceItem[]>(
     '/api/v1/analytics/product-performance/',
     { params },
   )
-  return data
+  return toList<ProductPerformanceItem>(data)
 }
 
 export async function fetchAgingReports(params?: FetchAgingReportsParams): Promise<AgingReportItem[]> {
-  const { data } = await api.get<AgingReportItem[]>('/api/v1/analytics/aging-reports/', { params })
+  const { data } = await api.get<PaginatedResponse<AgingReportItem> | AgingReportItem[]>(
+    '/api/v1/analytics/aging-reports/',
+    { params },
+  )
+  return toList<AgingReportItem>(data)
+}
+
+export async function fetchLatestReconciliation(): Promise<ReconciliationSummary> {
+  const { data } = await api.get<ReconciliationSummary>('/api/v1/core/excel/reconciliation/latest/')
   return data
 }

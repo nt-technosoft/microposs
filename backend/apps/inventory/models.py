@@ -88,6 +88,25 @@ class Receipt(ImmutableMixin, TenantModel):
         blank=True,
         help_text='For CONSIGNMENT: {type: margin|commission, value: decimal}',
     )
+    operation_currency = models.CharField(max_length=3, default='UZS')
+    operation_amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fx_rate_snapshot = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    functional_amount_uzs = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     notes = models.TextField(blank=True, default='')
     client_request_id = models.UUIDField(
         null=True,
@@ -200,6 +219,8 @@ class Lot(TenantModel):
         ReceiptLine,
         on_delete=models.PROTECT,
         related_name='lot',
+        null=True,
+        blank=True,
     )
     product_variant = models.ForeignKey(
         'catalog.ProductVariant',

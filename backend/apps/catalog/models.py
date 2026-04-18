@@ -96,6 +96,24 @@ class CategoryAttribute(TenantModel):
         unique_together = [('category', 'attribute')]
 
 
+class CategoryCharacteristicTemplate(TenantModel):
+    """Template: default characteristics for products in category."""
+
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name='template_characteristics',
+    )
+    name = models.CharField(max_length=100)
+    default_value = models.CharField(max_length=500, blank=True, default='')
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'catalog_category_characteristic_template'
+        ordering = ['sort_order', 'id']
+        unique_together = [('category', 'name')]
+
+
 class Product(TenantModel):
     """Product — a logical item with one or more variants."""
 
@@ -108,6 +126,11 @@ class Product(TenantModel):
         related_name='products',
     )
     description = models.TextField(blank=True, default='')
+    photo = models.FileField(
+        upload_to='products/%Y/%m/',
+        null=True,
+        blank=True,
+    )
     base_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,

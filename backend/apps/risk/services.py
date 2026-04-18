@@ -120,6 +120,7 @@ def _record_investor_loss(
     """Record loss for investors linked to this lot's receipt."""
     from apps.investors.services import record_investor_profit
     from apps.inventory.models import ReceiptParticipant
+    from apps.investors.models import InvestorContract
 
     participants = ReceiptParticipant.objects.filter(
         receipt=lot.receipt,
@@ -127,14 +128,22 @@ def _record_investor_loss(
     )
 
     for participant in participants:
-        from apps.investors.models import InvestorContract
-        contract = InvestorContract.objects.filter(
-            investor_id=participant.entity_id,
-            status='active',
-            tenant_id=tenant_id,
-        ).first()
+        contract = None
+        if lot.receipt.investor_contract_id:
+            contract = InvestorContract.objects.filter(
+                pk=lot.receipt.investor_contract_id,
+                status='active',
+                tenant_id=tenant_id,
+            ).first()
 
-        if contract:
+        if contract is None:
+            contract = InvestorContract.objects.filter(
+                investor_id=participant.entity_id,
+                status='active',
+                tenant_id=tenant_id,
+            ).first()
+
+        if contract and contract.investor_id == participant.entity_id:
             loss_amount = amount * participant.capital_ratio
             record_investor_profit(
                 tenant_id=tenant_id,

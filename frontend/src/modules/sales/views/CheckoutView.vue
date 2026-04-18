@@ -108,6 +108,7 @@ async function confirmSale(): Promise<void> {
     quantity: item.quantity,
     unit_price: parseFloat(item.unit_price),
     ...(item.lot_id !== null ? { lot_id: item.lot_id } : {}),
+    ...(item.discount_reason_id !== null ? { discount_reason_id: item.discount_reason_id } : {}),
   }))
 
   try {
@@ -258,7 +259,12 @@ function goToHistory(): void {
               :key="`${item.product_variant.id}-${index}`"
               class="order-line"
             >
-              <span class="order-line__name">{{ item.product_name }}</span>
+              <div class="order-line__name-wrap">
+                <span class="order-line__name">{{ item.product_name }}</span>
+                <span v-if="item.price_changed" class="order-line__price-change">
+                  Цена изменена
+                </span>
+              </div>
               <span class="order-line__qty">× {{ item.quantity }}</span>
               <PriceDisplay
                 :amount="parseFloat(item.unit_price) * item.quantity"
@@ -643,6 +649,21 @@ function goToHistory(): void {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.order-line__name-wrap {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.order-line__price-change {
+  font-size: 10px;
+  font-weight: var(--font-medium);
+  color: var(--color-warning);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .order-line__qty {

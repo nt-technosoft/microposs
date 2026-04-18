@@ -4,7 +4,7 @@
 
 import api from './client'
 import type { PosSession, Sale } from '../types/models'
-import type { PaginatedResponse } from './catalog'
+import { toPaginated, type PaginatedResponse } from './catalog'
 
 export interface SaleLineInput {
   product_variant_id: number
@@ -65,8 +65,8 @@ interface FetchSalesParams {
 }
 
 export async function fetchSessions(params?: FetchSessionsParams): Promise<PaginatedResponse<PosSession>> {
-  const { data } = await api.get<PaginatedResponse<PosSession>>('/api/v1/sales/sessions/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<PosSession> | PosSession[]>('/api/v1/sales/sessions/', { params })
+  return toPaginated<PosSession>(data)
 }
 
 export async function openSession(payload: OpenSessionPayload): Promise<PosSession> {
@@ -80,8 +80,8 @@ export async function closeSession(sessionId: number, payload: CloseSessionPaylo
 }
 
 export async function fetchSales(params?: FetchSalesParams): Promise<PaginatedResponse<Sale>> {
-  const { data } = await api.get<PaginatedResponse<Sale>>('/api/v1/sales/sales/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<Sale> | Sale[]>('/api/v1/sales/sales/', { params })
+  return toPaginated<Sale>(data)
 }
 
 export async function fetchSale(id: number): Promise<Sale> {

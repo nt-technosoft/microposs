@@ -79,6 +79,8 @@ class SaleListSerializer(serializers.ModelSerializer):
         model = Sale
         fields = [
             'id', 'status', 'payment_method', 'customer',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'total_amount', 'lines_count',
             'created_at',
         ]
@@ -99,6 +101,8 @@ class SaleDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'status', 'payment_method',
             'customer', 'customer_name',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'total_amount', 'total_cogs',
             'customer_has_existing_debt',
             'pos_session', 'sold_by',
@@ -114,6 +118,25 @@ class SaleCreateSerializer(serializers.Serializer):
     pos_session_id = serializers.IntegerField()
     payment_method = serializers.ChoiceField(choices=['cash', 'card', 'credit'])
     customer_id = serializers.IntegerField(required=False, allow_null=True)
+    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    operation_amount = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    fx_rate_snapshot = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
+    functional_amount_uzs = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
     lines = SaleLineInputSerializer(many=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
 

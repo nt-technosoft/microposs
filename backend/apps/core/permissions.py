@@ -154,6 +154,18 @@ class IsCashier(BasePermission):
         )
 
 
+class IsCashierOrWarehouse(BasePermission):
+    """Read access for sales/intake shared reference data."""
+
+    def has_permission(self, request, view):
+        ensure_request_tenant(request)
+        role = resolve_user_role(request.user)
+        return (
+            request.user.is_authenticated
+            and role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE)
+        )
+
+
 class IsWarehouse(BasePermission):
     """Inventory management access."""
 

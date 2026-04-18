@@ -12,8 +12,8 @@ const auth = useAuthStore()
 
 const localeOptions = [
   { value: 'ru', label: 'Русский' },
-  { value: 'uz', label: 'O‘zbekcha' },
-  { value: 'en', label: 'English' },
+  { value: 'uz', label: 'Узбекский' },
+  { value: 'en', label: 'Английский' },
 ] as const
 
 const isDark = computed(() => ui.theme === 'dark')
@@ -77,8 +77,8 @@ function handleLogout(): void {
         <h2 class="section-title">Режимы работы</h2>
         <div class="setting-row">
           <div class="setting-meta">
-            <div class="setting-name">Simple Seller Mode</div>
-            <div class="setting-desc">Оставляет только Sales-поток и скрывает остальные разделы</div>
+            <div class="setting-name">Режим кассира</div>
+            <div class="setting-desc">Оставляет только продажи и скрывает остальные разделы</div>
           </div>
           <label class="switch">
             <input

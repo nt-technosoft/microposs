@@ -135,6 +135,25 @@ class Sale(ImmutableMixin, TenantModel):
         default=False,
         help_text='Warning flag for UI.',
     )
+    operation_currency = models.CharField(max_length=3, default='UZS')
+    operation_amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fx_rate_snapshot = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    functional_amount_uzs = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     client_request_id = models.UUIDField(
         null=True,
         blank=True,

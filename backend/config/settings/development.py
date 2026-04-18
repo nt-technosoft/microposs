@@ -9,3 +9,7 @@ INSTALLED_APPS += ['debug_toolbar']  # noqa: F405
 MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')  # noqa: F405
 
 INTERNAL_IPS = ['127.0.0.1']
+
+# Dev stability: do not keep persistent DB connections between requests.
+DATABASES['default']['CONN_MAX_AGE'] = 0  # noqa: F405
+DATABASES['default']['CONN_HEALTH_CHECKS'] = True  # noqa: F405

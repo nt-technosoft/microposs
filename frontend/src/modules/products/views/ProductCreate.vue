@@ -1,33 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Plus, X, Tag, Layers, AlertCircle } from 'lucide-vue-next'
+import { ArrowLeft, Plus, X, Upload, Image as ImageIcon } from 'lucide-vue-next'
 import api from '@/api/client'
-import { fetchCategories } from '@/api/catalog'
-import type { Category, Attribute } from '@/types/models'
+import {
+  createProduct,
+  fetchCategories,
+  fetchCategory,
+  uploadProductPhoto,
+} from '@/api/catalog'
+import type { Attribute, Category } from '@/types/models'
 import { PricingMode } from '@/types/enums'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useToast } from '@/composables/useToast'
 
-const router = useRouter()
-const toast = useToast()
-
-// --- State ---
-const categories = ref<Category[]>([])
-const attributes = ref<Attribute[]>([])
-const isSubmitting = ref(false)
-const isGeneratingVariants = ref(false)
-const errorMessage = ref('')
-
-// Form fields
-const productName = ref('')
-const selectedCategory = ref<number | ''>('')
-const pricingMode = ref<PricingMode>(PricingMode.FIXED_LOCKED)
-const basePrice = ref('')
-const hasVariants = ref(false)
-
-// Variants: each attribute with chosen values
 interface SelectedAttribute {
   attributeId: number
   attributeName: string
@@ -35,70 +23,97 @@ interface SelectedAttribute {
   customInput: string
 }
 
+interface CharacteristicRow {
+  key: number
+  name: string
+  value: string
+}
+
+const router = useRouter()
+const toast = useToast()
+
+const categories = ref<Category[]>([])
+const attributes = ref<Attribute[]>([])
+const isSubmitting = ref(false)
+const isGeneratingVariants = ref(false)
+const errorMessage = ref('')
+
+const productName = ref('')
+const description = ref('')
+const selectedCategory = ref<number | null>(null)
+const pricingMode = ref<PricingMode>(PricingMode.DEFAULT_EDITABLE)
+const basePrice = ref('')
+const hasVariants = ref(false)
 const selectedAttributes = ref<SelectedAttribute[]>([])
+const characteristics = ref<CharacteristicRow[]>([])
+const photoFile = ref<File | null>(null)
+const photoPreview = ref<string | null>(null)
+const touchedPricingMode = ref(false)
+let rowKey = 1
 
-// Validation errors
 const errors = ref<Record<string, string>>({})
-
-// --- Computed ---
-const availableAttributes = computed(() =>
-  attributes.value.filter(
-    (attr) => !selectedAttributes.value.some((sa) => sa.attributeId === attr.id)
-  )
-)
-
-const canGenerateVariants = computed(() =>
-  selectedAttributes.value.length > 0 &&
-  selectedAttributes.value.every((sa) => sa.selectedValues.length > 0)
-)
 
 const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
   { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
-  { value: PricingMode.DEFAULT_EDITABLE, label: 'Гибкая' },
-  { value: PricingMode.ASK_EACH_SALE, label: 'Спрашивать' },
+  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
+  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать на продаже' },
 ]
 
-// --- Validation ---
-function validate(): boolean {
-  const newErrors: Record<string, string> = {}
+const categoryOptions = computed(() => ([
+  { value: null, label: 'Без категории' },
+  ...categories.value.map((category) => ({
+    value: category.id,
+    label: category.name,
+  })),
+]))
 
-  if (!productName.value.trim()) {
-    newErrors.name = 'Введите название товара'
-  } else if (productName.value.trim().length < 2) {
-    newErrors.name = 'Название должно быть не менее 2 символов'
+const availableAttributes = computed(() =>
+  attributes.value.filter(
+    (attr) => !selectedAttributes.value.some((sa) => sa.attributeId === attr.id),
+  ),
+)
+
+const canGenerateVariants = computed(() =>
+  selectedAttributes.value.length > 0
+  && selectedAttributes.value.every((sa) => sa.selectedValues.length > 0),
+)
+
+function normalizeAttributesPayload(data: unknown): Attribute[] {
+  if (Array.isArray(data)) return data as Attribute[]
+  if (data && typeof data === 'object' && Array.isArray((data as { results?: unknown }).results)) {
+    return (data as { results: Attribute[] }).results
   }
-
-  if (pricingMode.value !== PricingMode.ASK_EACH_SALE) {
-    if (!basePrice.value) {
-      newErrors.price = 'Введите базовую цену'
-    } else if (parseFloat(basePrice.value) < 0) {
-      newErrors.price = 'Цена не может быть отрицательной'
-    }
-  }
-
-  errors.value = { ...newErrors }
-  return Object.keys(newErrors).length === 0
+  return []
 }
 
-// --- Data loading ---
-async function loadCategories(): Promise<void> {
+async function loadBootstrapData(): Promise<void> {
   try {
-    categories.value = await fetchCategories()
+    const [categoryData, attributesResponse] = await Promise.all([
+      fetchCategories(),
+      api.get('/api/v1/catalog/attributes/'),
+    ])
+    categories.value = categoryData
+    attributes.value = normalizeAttributesPayload(attributesResponse.data)
   } catch {
-    // Non-critical — category stays empty
+    errorMessage.value = 'Не удалось загрузить справочники для формы'
   }
 }
 
-async function loadAttributes(): Promise<void> {
-  try {
-    const { data } = await api.get<Attribute[]>('/api/v1/catalog/attributes/')
-    attributes.value = [...data]
-  } catch {
-    // Non-critical
-  }
+function addCharacteristic(): void {
+  characteristics.value = [
+    ...characteristics.value,
+    {
+      key: rowKey++,
+      name: '',
+      value: '',
+    },
+  ]
 }
 
-// --- Attribute management ---
+function removeCharacteristic(key: number): void {
+  characteristics.value = characteristics.value.filter((row) => row.key !== key)
+}
+
 function addAttribute(attr: Attribute): void {
   selectedAttributes.value = [
     ...selectedAttributes.value,
@@ -112,19 +127,17 @@ function addAttribute(attr: Attribute): void {
 }
 
 function removeAttribute(attrId: number): void {
-  selectedAttributes.value = selectedAttributes.value.filter(
-    (sa) => sa.attributeId !== attrId
-  )
+  selectedAttributes.value = selectedAttributes.value.filter((sa) => sa.attributeId !== attrId)
 }
 
 function toggleValue(attrId: number, value: string): void {
   selectedAttributes.value = selectedAttributes.value.map((sa) => {
     if (sa.attributeId !== attrId) return sa
-    const already = sa.selectedValues.includes(value)
+    const exists = sa.selectedValues.includes(value)
     return {
       ...sa,
-      selectedValues: already
-        ? sa.selectedValues.filter((v) => v !== value)
+      selectedValues: exists
+        ? sa.selectedValues.filter((item) => item !== value)
         : [...sa.selectedValues, value],
     }
   })
@@ -133,16 +146,22 @@ function toggleValue(attrId: number, value: string): void {
 function addCustomValue(attrId: number): void {
   selectedAttributes.value = selectedAttributes.value.map((sa) => {
     if (sa.attributeId !== attrId) return sa
-    const trimmed = sa.customInput.trim()
-    if (!trimmed || sa.selectedValues.includes(trimmed)) {
+    const value = sa.customInput.trim()
+    if (!value || sa.selectedValues.includes(value)) {
       return { ...sa, customInput: '' }
     }
     return {
       ...sa,
-      selectedValues: [...sa.selectedValues, trimmed],
+      selectedValues: [...sa.selectedValues, value],
       customInput: '',
     }
   })
+}
+
+function updateCustomInput(attrId: number, value: string): void {
+  selectedAttributes.value = selectedAttributes.value.map((sa) =>
+    sa.attributeId === attrId ? { ...sa, customInput: value } : sa,
+  )
 }
 
 function onCustomInputKeydown(event: KeyboardEvent, attrId: number): void {
@@ -152,173 +171,221 @@ function onCustomInputKeydown(event: KeyboardEvent, attrId: number): void {
   }
 }
 
-function updateCustomInput(attrId: number, value: string): void {
-  selectedAttributes.value = selectedAttributes.value.map((sa) =>
-    sa.attributeId === attrId ? { ...sa, customInput: value } : sa
-  )
-}
-
 function getAttributeValues(attrId: number) {
-  return attributes.value.find((a) => a.id === attrId)?.values ?? []
+  return attributes.value.find((item) => item.id === attrId)?.values ?? []
 }
 
-// --- Submit ---
+function onPhotoChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  photoFile.value = file
+  if (photoPreview.value) {
+    URL.revokeObjectURL(photoPreview.value)
+    photoPreview.value = null
+  }
+  if (file) {
+    photoPreview.value = URL.createObjectURL(file)
+  }
+}
+
+function clearPhoto(): void {
+  photoFile.value = null
+  if (photoPreview.value) {
+    URL.revokeObjectURL(photoPreview.value)
+    photoPreview.value = null
+  }
+}
+
+function validate(): boolean {
+  const nextErrors: Record<string, string> = {}
+  if (!productName.value.trim()) {
+    nextErrors.name = 'Введите название товара'
+  }
+  if (pricingMode.value !== PricingMode.ASK_EACH_SALE) {
+    const parsed = Number.parseFloat(basePrice.value)
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      nextErrors.price = 'Проверьте базовую цену'
+    }
+  }
+  errors.value = nextErrors
+  return Object.keys(nextErrors).length === 0
+}
+
+watch(selectedCategory, async (categoryId) => {
+  if (categoryId === null) return
+  try {
+    const category = await fetchCategory(categoryId)
+    if (!touchedPricingMode.value) {
+      pricingMode.value = category.default_pricing_mode
+    }
+    const templateChars = Array.isArray(category.template_characteristics)
+      ? category.template_characteristics
+      : []
+    if (templateChars.length > 0) {
+      characteristics.value = templateChars.map((item, index) => ({
+        key: rowKey++ + index,
+        name: item.name,
+        value: item.default_value ?? '',
+      }))
+    }
+  } catch {
+    // keep manual values when template load fails
+  }
+})
+
 async function handleSubmit(): Promise<void> {
   if (!validate()) return
 
   isSubmitting.value = true
   errorMessage.value = ''
-
   try {
-    const payload = {
+    const createdProduct = await createProduct({
       name: productName.value.trim(),
-      category_id: selectedCategory.value !== '' ? Number(selectedCategory.value) : null,
+      category_id: selectedCategory.value,
       pricing_mode: pricingMode.value,
-      base_price: basePrice.value || null,
-      has_variants: hasVariants.value,
-    }
+      base_price: pricingMode.value === PricingMode.ASK_EACH_SALE ? null : basePrice.value,
+      description: description.value.trim(),
+      characteristics: characteristics.value
+        .map((row) => ({
+          name: row.name.trim(),
+          value: row.value.trim(),
+        }))
+        .filter((row) => row.name.length > 0),
+    })
 
-    const { data: createdProduct } = await api.post<{ id: number }>(
-      '/api/v1/catalog/products/',
-      payload
-    )
+    if (photoFile.value) {
+      await uploadProductPhoto(createdProduct.id, photoFile.value)
+    }
 
     if (hasVariants.value && canGenerateVariants.value) {
       isGeneratingVariants.value = true
       try {
-        const genPayload = {
+        await api.post(`/api/v1/catalog/products/${createdProduct.id}/generate-variants/`, {
           attributes: selectedAttributes.value.map((sa) => ({
             attribute_id: sa.attributeId,
             values: sa.selectedValues,
           })),
-        }
-        const { data } = await api.post<{ variants_created: number }>(
-          `/api/v1/catalog/products/${createdProduct.id}/generate-variants/`,
-          genPayload
-        )
-        toast.success(`Товар создан, сгенерировано ${data.variants_created} вариантов`)
-      } catch {
-        toast.warning('Товар создан, но варианты не удалось сгенерировать')
+        })
       } finally {
         isGeneratingVariants.value = false
       }
-    } else {
-      toast.success('Товар успешно создан')
     }
 
+    toast.success('Товар успешно создан')
     router.push({ name: 'products' })
   } catch (error: unknown) {
-    const axiosError = error as { response?: { data?: { detail?: string; name?: string[] } } }
-    const detail =
-      axiosError.response?.data?.detail ??
-      axiosError.response?.data?.name?.[0] ??
-      'Не удалось создать товар. Попробуйте ещё раз.'
-    errorMessage.value = detail
+    const apiError = error as { response?: { data?: { detail?: string } } }
+    errorMessage.value = apiError.response?.data?.detail ?? 'Не удалось создать товар'
   } finally {
     isSubmitting.value = false
   }
 }
 
-onMounted(() => {
-  Promise.all([loadCategories(), loadAttributes()])
+onMounted(async () => {
+  await loadBootstrapData()
+  addCharacteristic()
 })
 </script>
 
 <template>
   <div class="create-page">
-    <!-- Header -->
     <header class="page-header">
-      <button
-        class="back-btn"
-        type="button"
-        aria-label="Назад"
-        @click="router.back()"
-      >
+      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
         <ArrowLeft :size="20" :stroke-width="1.75" />
       </button>
       <h1 class="page-title">Новый товар</h1>
       <div class="header-spacer" aria-hidden="true" />
     </header>
 
-    <form class="form-content" novalidate @submit.prevent="handleSubmit">
-      <!-- Error banner -->
+    <form class="form-content" @submit.prevent="handleSubmit">
       <div v-if="errorMessage" class="error-banner" role="alert">
-        <AlertCircle :size="16" :stroke-width="1.75" aria-hidden="true" />
         {{ errorMessage }}
       </div>
 
-      <!-- Section: Basic info -->
       <section class="form-section">
-        <div class="section-label">
-          <Tag :size="14" :stroke-width="1.75" aria-hidden="true" />
-          Основная информация
+        <BaseInput
+          v-model="productName"
+          label="Название *"
+          placeholder="Введите название товара"
+          :error="errors.name"
+        />
+
+        <div class="input-group">
+          <label class="input-label">Категория</label>
+          <BaseSelect
+            v-model="selectedCategory"
+            :options="categoryOptions"
+            title="Выбор категории"
+            placeholder="Без категории"
+          />
         </div>
 
-        <div class="form-fields">
-          <BaseInput
-            v-model="productName"
-            label="Название товара *"
-            placeholder="Например: Nike Air Max 90"
-            :error="errors.name"
+        <div class="input-group">
+          <label class="input-label">Тип цены</label>
+          <BaseSelect
+            v-model="pricingMode"
+            :options="pricingModeOptions"
+            title="Тип цены"
+            placeholder="Выберите режим"
+            @update:model-value="touchedPricingMode = true"
           />
+        </div>
 
-          <div class="input-group">
-            <label class="input-label" for="category-select">Категория</label>
-            <select
-              id="category-select"
-              v-model="selectedCategory"
-              class="styled-select"
-            >
-              <option value="">Без категории</option>
-              <option
-                v-for="cat in categories"
-                :key="cat.id"
-                :value="cat.id"
-              >
-                {{ cat.name }}
-              </option>
-            </select>
-          </div>
+        <BaseInput
+          v-if="pricingMode !== PricingMode.ASK_EACH_SALE"
+          v-model="basePrice"
+          label="Базовая цена *"
+          type="number"
+          placeholder="0"
+          :error="errors.price"
+        />
 
-          <!-- Pricing mode chips -->
-          <div class="input-group">
-            <span class="input-label" id="pricing-mode-label">Тип цены</span>
-            <div class="chip-group" role="group" aria-labelledby="pricing-mode-label">
-              <button
-                v-for="option in pricingModeOptions"
-                :key="option.value"
-                type="button"
-                class="chip"
-                :class="{ 'chip--active': pricingMode === option.value }"
-                @click="pricingMode = option.value"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </div>
+        <div class="input-group">
+          <label class="input-label">Описание</label>
+          <textarea
+            v-model="description"
+            class="description-field"
+            rows="3"
+            placeholder="Описание товара"
+          />
+        </div>
 
-          <div v-if="pricingMode !== PricingMode.ASK_EACH_SALE" class="price-field">
-            <BaseInput
-              v-model="basePrice"
-              label="Базовая цена *"
-              placeholder="0"
-              type="number"
-              :error="errors.price"
-            />
-            <div v-if="basePrice" class="price-hint">
-              {{ parseFloat(basePrice).toLocaleString('ru-RU') }} сум
-            </div>
+        <div class="photo-block">
+          <label class="input-label">Фото товара</label>
+          <div class="photo-preview">
+            <img v-if="photoPreview" :src="photoPreview" alt="Предпросмотр фото">
+            <ImageIcon v-else :size="32" :stroke-width="1.5" />
           </div>
+          <label class="photo-upload">
+            <Upload :size="16" :stroke-width="2" />
+            <span>Загрузить фото</span>
+            <input type="file" accept="image/*" class="hidden-file" @change="onPhotoChange">
+          </label>
+          <button v-if="photoFile" type="button" class="remove-photo" @click="clearPhoto">
+            Удалить фото
+          </button>
         </div>
       </section>
 
-      <!-- Section: Variants -->
       <section class="form-section">
-        <div class="section-label">
-          <Layers :size="14" :stroke-width="1.75" aria-hidden="true" />
-          Варианты товара
+        <div class="section-title-row">
+          <span class="section-title">Характеристики</span>
+          <button type="button" class="tiny-btn" @click="addCharacteristic">
+            <Plus :size="14" :stroke-width="2" />
+            Добавить
+          </button>
         </div>
 
+        <div v-for="row in characteristics" :key="row.key" class="characteristic-row">
+          <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
+          <BaseInput v-model="row.value" label="Значение" placeholder="Кожа" />
+          <button type="button" class="remove-btn" @click="removeCharacteristic(row.key)">
+            <X :size="16" :stroke-width="2" />
+          </button>
+        </div>
+      </section>
+
+      <section class="form-section">
         <div class="toggle-row">
           <div class="toggle-text">
             <span class="toggle-title">Есть варианты</span>
@@ -328,130 +395,74 @@ onMounted(() => {
             type="button"
             class="toggle-switch"
             :class="{ 'toggle-switch--on': hasVariants }"
-            role="switch"
-            :aria-checked="hasVariants"
-            aria-label="Включить варианты"
             @click="hasVariants = !hasVariants"
           >
             <span class="toggle-knob" />
           </button>
         </div>
 
-        <!-- Variants configuration -->
-        <Transition name="variants-expand">
-          <div v-if="hasVariants" class="variants-config">
-            <!-- Selected attributes -->
-            <div
-              v-for="sa in selectedAttributes"
-              :key="sa.attributeId"
-              class="attribute-block"
-            >
-              <div class="attribute-header">
-                <span class="attribute-name">{{ sa.attributeName }}</span>
-                <button
-                  type="button"
-                  class="attribute-remove"
-                  :aria-label="`Удалить атрибут ${sa.attributeName}`"
-                  @click="removeAttribute(sa.attributeId)"
-                >
-                  <X :size="16" :stroke-width="2" />
-                </button>
-              </div>
-
-              <!-- Preset values from API -->
-              <div v-if="getAttributeValues(sa.attributeId).length" class="value-chips">
-                <button
-                  v-for="av in getAttributeValues(sa.attributeId)"
-                  :key="av.id"
-                  type="button"
-                  class="value-chip"
-                  :class="{ 'value-chip--selected': sa.selectedValues.includes(av.value) }"
-                  @click="toggleValue(sa.attributeId, av.value)"
-                >
-                  {{ av.value }}
-                </button>
-              </div>
-
-              <!-- Custom value input -->
-              <div class="custom-value-row">
-                <input
-                  :value="sa.customInput"
-                  type="text"
-                  class="custom-value-input"
-                  placeholder="Добавить значение..."
-                  @input="updateCustomInput(sa.attributeId, ($event.target as HTMLInputElement).value)"
-                  @keydown="onCustomInputKeydown($event, sa.attributeId)"
-                />
-                <button
-                  type="button"
-                  class="custom-value-add"
-                  :disabled="!sa.customInput.trim()"
-                  aria-label="Добавить значение"
-                  @click="addCustomValue(sa.attributeId)"
-                >
-                  <Plus :size="16" :stroke-width="2" />
-                </button>
-              </div>
-
-              <!-- Selected values summary -->
-              <div v-if="sa.selectedValues.length > 0" class="selected-summary">
-                <span
-                  v-for="val in sa.selectedValues"
-                  :key="val"
-                  class="selected-value-tag"
-                >
-                  {{ val }}
-                  <button
-                    type="button"
-                    class="remove-value"
-                    :aria-label="`Удалить значение ${val}`"
-                    @click="toggleValue(sa.attributeId, val)"
-                  >
-                    <X :size="12" :stroke-width="2.5" />
-                  </button>
-                </span>
-              </div>
+        <div v-if="hasVariants" class="variants-config">
+          <div
+            v-for="sa in selectedAttributes"
+            :key="sa.attributeId"
+            class="attribute-block"
+          >
+            <div class="attribute-header">
+              <span class="attribute-name">{{ sa.attributeName }}</span>
+              <button type="button" class="remove-btn" @click="removeAttribute(sa.attributeId)">
+                <X :size="14" :stroke-width="2" />
+              </button>
             </div>
 
-            <!-- Add attribute -->
-            <div v-if="availableAttributes.length > 0" class="add-attribute-wrap">
-              <span class="add-attribute-label">Добавить атрибут:</span>
-              <div class="add-attribute-chips">
-                <button
-                  v-for="attr in availableAttributes"
-                  :key="attr.id"
-                  type="button"
-                  class="add-attr-chip"
-                  @click="addAttribute(attr)"
-                >
-                  <Plus :size="14" :stroke-width="2" aria-hidden="true" />
-                  {{ attr.name }}
-                </button>
-              </div>
+            <div class="value-chips">
+              <button
+                v-for="value in getAttributeValues(sa.attributeId)"
+                :key="value.id"
+                type="button"
+                class="value-chip"
+                :class="{ 'value-chip--selected': sa.selectedValues.includes(value.value) }"
+                @click="toggleValue(sa.attributeId, value.value)"
+              >
+                {{ value.value }}
+              </button>
             </div>
 
-            <div v-if="selectedAttributes.length === 0" class="variants-empty">
-              Добавьте хотя бы один атрибут (Размер, Цвет и т. д.)
+            <div class="custom-value-row">
+              <input
+                :value="sa.customInput"
+                type="text"
+                class="custom-input"
+                placeholder="Свое значение"
+                @input="updateCustomInput(sa.attributeId, ($event.target as HTMLInputElement).value)"
+                @keydown="onCustomInputKeydown($event, sa.attributeId)"
+              >
+              <button type="button" class="tiny-btn" @click="addCustomValue(sa.attributeId)">
+                Добавить
+              </button>
             </div>
           </div>
-        </Transition>
+
+          <div class="add-attributes">
+            <button
+              v-for="attr in availableAttributes"
+              :key="attr.id"
+              type="button"
+              class="tiny-btn"
+              @click="addAttribute(attr)"
+            >
+              <Plus :size="12" :stroke-width="2" />
+              {{ attr.name }}
+            </button>
+          </div>
+        </div>
       </section>
 
-      <!-- Footer actions -->
-      <div class="form-footer">
-        <BaseButton
-          type="button"
-          variant="secondary"
-          @click="router.back()"
-        >
+      <div class="footer-actions">
+        <BaseButton type="button" variant="secondary" :full-width="true" @click="router.back()">
           Отмена
         </BaseButton>
-        <BaseButton
-          type="submit"
-          variant="primary"
-          :loading="isSubmitting || isGeneratingVariants"
-        >
-          {{ hasVariants && canGenerateVariants ? 'Создать с вариантами' : 'Создать товар' }}
+        <BaseButton type="submit" variant="primary" :full-width="true" :loading="isSubmitting || isGeneratingVariants">
+          Создать товар
         </BaseButton>
       </div>
     </form>
@@ -465,7 +476,6 @@ onMounted(() => {
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
 }
 
-/* Header */
 .page-header {
   position: sticky;
   top: 0;
@@ -479,255 +489,224 @@ onMounted(() => {
   height: var(--header-height);
 }
 
-.back-btn {
+.back-btn,
+.header-spacer {
   width: 40px;
   height: 40px;
-  display: flex;
+}
+
+.back-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
   color: var(--color-text-secondary);
-  transition: background var(--duration-fast) var(--ease-out);
-  -webkit-tap-highlight-color: transparent;
-  flex-shrink: 0;
-}
-
-.back-btn:hover {
-  background: var(--color-bg-secondary);
-}
-
-.back-btn:active {
-  transform: scale(0.92);
 }
 
 .page-title {
   flex: 1;
+  text-align: center;
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
-  text-align: center;
 }
 
-.header-spacer {
-  width: 40px;
-  flex-shrink: 0;
-}
-
-/* Form */
 .form-content {
-  padding: var(--space-5);
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--space-4);
-  max-width: 600px;
-  margin: 0 auto;
+  padding: var(--space-4);
 }
 
-/* Error */
+.form-section {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+
 .error-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
   background: var(--color-error-bg);
   color: var(--color-error);
-  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
 }
 
-/* Section */
-.form-section {
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.section-label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
-
-.form-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-/* Native select */
 .input-group {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--space-1);
 }
 
 .input-label {
   font-size: var(--text-sm);
-  font-weight: var(--font-medium);
   color: var(--color-text-secondary);
 }
 
-.styled-select {
-  height: 48px;
-  padding: 0 var(--space-10) 0 var(--space-4);
+.description-field {
+  width: 100%;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
+  min-height: 88px;
+  padding: var(--space-3);
   background: var(--color-bg-elevated);
-  font-size: var(--text-base);
-  color: var(--color-text-primary);
-  outline: none;
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239C948A' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right var(--space-4) center;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.styled-select:focus {
-  border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 2px var(--color-brand-100);
-}
-
-/* Pricing chips */
-.chip-group {
-  display: flex;
+.photo-block {
+  display: grid;
   gap: var(--space-2);
-  flex-wrap: wrap;
 }
 
-.chip {
-  height: 36px;
-  padding: 0 var(--space-4);
-  border: 1.5px solid var(--color-border-default);
-  border-radius: var(--radius-full);
-  font-size: var(--text-sm);
-  font-weight: var(--font-medium);
-  color: var(--color-text-secondary);
-  background: var(--color-bg-elevated);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.chip:hover {
-  border-color: var(--color-brand-300);
-  color: var(--color-brand-500);
-}
-
-.chip--active {
-  background: var(--color-brand-50);
-  border-color: var(--color-brand-500);
-  color: var(--color-brand-600);
-  font-weight: var(--font-semibold);
-}
-
-/* Price field */
-.price-field {
+.photo-preview {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border-default);
+  background: var(--color-bg-secondary);
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.price-hint {
-  font-size: var(--text-xs);
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-tertiary);
-  padding-left: var(--space-1);
+  overflow: hidden;
 }
 
-/* Toggle */
+.photo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-upload {
+  min-height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.remove-photo {
+  width: fit-content;
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  padding: 0 var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.characteristic-row {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.remove-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tiny-btn {
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
 .toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  min-height: 48px;
+  gap: var(--space-3);
 }
 
 .toggle-text {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 2px;
 }
 
 .toggle-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-medium);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
   color: var(--color-text-primary);
 }
 
 .toggle-desc {
   font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
 }
 
 .toggle-switch {
-  width: 52px;
-  height: 30px;
-  min-width: 52px;
+  width: 48px;
+  height: 28px;
   border-radius: var(--radius-full);
-  background: var(--color-bg-sunken);
-  border: 2px solid var(--color-border-default);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-default);
   position: relative;
-  cursor: pointer;
-  transition:
-    background var(--duration-normal) var(--ease-out),
-    border-color var(--duration-normal) var(--ease-out);
-  flex-shrink: 0;
+  padding: 2px;
 }
 
 .toggle-switch--on {
-  background: var(--color-brand-500);
-  border-color: var(--color-brand-500);
+  background: var(--color-brand-100);
+  border-color: var(--color-brand-300);
 }
 
 .toggle-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-full);
-  background: var(--color-bg-elevated);
-  box-shadow: var(--shadow-sm);
-  transition: transform var(--duration-normal) var(--ease-spring);
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  transition: transform var(--duration-fast) var(--ease-out);
 }
 
 .toggle-switch--on .toggle-knob {
-  transform: translateX(22px);
+  transform: translateX(20px);
 }
 
-/* Variants config */
 .variants-config {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: var(--space-3);
 }
 
 .attribute-block {
-  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
 }
 
 .attribute-header {
@@ -738,28 +717,9 @@ onMounted(() => {
 
 .attribute-name {
   font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
+  font-weight: var(--font-medium);
 }
 
-.attribute-remove {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-full);
-  color: var(--color-text-tertiary);
-  transition: background var(--duration-fast) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.attribute-remove:hover {
-  background: var(--color-error-bg);
-  color: var(--color-error);
-}
-
-/* Value chips */
 .value-chips {
   display: flex;
   flex-wrap: wrap;
@@ -767,207 +727,42 @@ onMounted(() => {
 }
 
 .value-chip {
-  height: 32px;
-  padding: 0 var(--space-3);
-  border: 1.5px solid var(--color-border-default);
+  min-height: 30px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-full);
-  font-size: var(--text-sm);
+  border: 1px solid var(--color-border-default);
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
-  background: var(--color-bg-elevated);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-.value-chip:hover {
-  border-color: var(--color-brand-300);
 }
 
 .value-chip--selected {
-  background: var(--color-brand-50);
   border-color: var(--color-brand-500);
+  background: var(--color-brand-50);
   color: var(--color-brand-600);
-  font-weight: var(--font-medium);
 }
 
-/* Custom value input */
 .custom-value-row {
   display: flex;
   gap: var(--space-2);
-  align-items: center;
 }
 
-.custom-value-input {
+.custom-input {
   flex: 1;
-  height: 40px;
-  padding: 0 var(--space-3);
+  min-height: 34px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-  font-size: var(--text-sm);
-  color: var(--color-text-primary);
-  outline: none;
-  transition: border-color var(--duration-fast) var(--ease-out);
+  padding: 0 var(--space-2);
 }
 
-.custom-value-input::placeholder {
-  color: var(--color-text-tertiary);
-}
-
-.custom-value-input:focus {
-  border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 2px var(--color-brand-100);
-}
-
-.custom-value-add {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  border-radius: var(--radius-md);
-  background: var(--color-brand-500);
-  color: var(--color-text-inverse);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--duration-fast) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.custom-value-add:hover:not(:disabled) {
-  background: var(--color-brand-600);
-}
-
-.custom-value-add:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* Selected values */
-.selected-summary {
+.add-attributes {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-.selected-value-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 4px 0 var(--space-3);
-  background: var(--color-brand-100);
-  color: var(--color-brand-700);
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-weight: var(--font-medium);
-}
-
-.remove-value {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-full);
-  color: var(--color-brand-600);
-  flex-shrink: 0;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.remove-value:hover {
-  background: var(--color-brand-200);
-}
-
-/* Add attribute */
-.add-attribute-wrap {
-  display: flex;
-  flex-direction: column;
+.footer-actions {
+  display: grid;
   gap: var(--space-2);
-}
-
-.add-attribute-label {
-  font-size: var(--text-xs);
-  font-weight: var(--font-medium);
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.add-attribute-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.add-attr-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 36px;
-  padding: 0 var(--space-3);
-  border: 1.5px dashed var(--color-brand-300);
-  border-radius: var(--radius-full);
-  font-size: var(--text-sm);
-  color: var(--color-brand-500);
-  background: var(--color-brand-50);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-
-.add-attr-chip:hover {
-  background: var(--color-brand-100);
-  border-style: solid;
-}
-
-/* Empty variants state */
-.variants-empty {
-  padding: var(--space-4);
-  text-align: center;
-  font-size: var(--text-sm);
-  color: var(--color-text-tertiary);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-}
-
-/* Transition */
-.variants-expand-enter-active,
-.variants-expand-leave-active {
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.variants-expand-enter-from,
-.variants-expand-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
-
-/* Footer */
-.form-footer {
-  display: flex;
-  gap: var(--space-3);
-  justify-content: flex-end;
-  padding-top: var(--space-2);
-}
-
-@media (max-width: 480px) {
-  .form-footer {
-    flex-direction: column-reverse;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toggle-knob,
-  .toggle-switch,
-  .variants-expand-enter-active,
-  .variants-expand-leave-active {
-    transition: none;
-    animation: none;
-  }
+  margin-top: var(--space-2);
 }
 </style>

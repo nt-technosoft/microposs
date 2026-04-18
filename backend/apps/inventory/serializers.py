@@ -81,6 +81,8 @@ class ReceiptListSerializer(serializers.ModelSerializer):
             'id', 'receipt_type', 'status', 'date',
             'destination', 'destination_name',
             'supplier', 'lines_count', 'total_amount',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'notes', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -111,6 +113,8 @@ class ReceiptDetailSerializer(serializers.ModelSerializer):
             'destination', 'destination_name',
             'supplier', 'investor_contract',
             'payable_terms', 'consignment_rule',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'lines', 'participants', 'lots',
             'notes', 'client_request_id',
             'created_at', 'updated_at',

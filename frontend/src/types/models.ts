@@ -16,12 +16,39 @@ export interface BaseModel {
   updated_at: string
 }
 
+export interface CurrencyTrace {
+  operation_currency: string
+  operation_amount: string | null
+  fx_rate_snapshot: string | null
+  functional_amount_uzs: string | null
+}
+
 // === Catalog ===
 
 export interface Category extends BaseModel {
   name: string
-  parent_id: number | null
+  parent?: number | null
+  parent_id?: number | null
   default_pricing_mode: PricingMode
+  sort_order: number
+  products_count?: number
+  template_attributes?: CategoryAttributeTemplate[]
+  template_characteristics?: CategoryCharacteristicTemplate[]
+}
+
+export interface CategoryAttributeTemplate {
+  id: number
+  category?: number
+  attribute_id: number
+  attribute_name?: string
+  is_variant_generating: boolean
+}
+
+export interface CategoryCharacteristicTemplate {
+  id: number
+  category?: number
+  name: string
+  default_value: string
   sort_order: number
 }
 
@@ -39,7 +66,11 @@ export interface Attribute extends BaseModel {
 export interface ProductVariant extends BaseModel {
   product?: number
   product_id?: number
+  product_name?: string
+  category_id?: number | null
+  category_name?: string | null
   sku: string
+  display_sku?: string
   price: string | null
   effective_price: string
   is_active: boolean
@@ -50,20 +81,33 @@ export interface ProductVariant extends BaseModel {
   stock_quantity?: number
 }
 
+export interface ProductCharacteristic {
+  id?: number
+  name: string
+  value: string
+}
+
 export interface Product extends BaseModel {
   name: string
   category: Category | null
+  category_name?: string | null
   description: string
+  photo_url?: string | null
   base_price: string | null
   pricing_mode: PricingMode
   has_variants: boolean
   is_active: boolean
+  display_sku?: string
+  variants_count?: number
+  total_stock?: number
   variants: ProductVariant[]
+  characteristics?: ProductCharacteristic[]
 }
 
 export interface DiscountReason extends BaseModel {
   name: string
   is_default: boolean
+  is_active?: boolean
 }
 
 // === Inventory ===
@@ -105,6 +149,10 @@ export interface Receipt extends BaseModel {
   date: string
   destination: Location
   supplier_id: number | null
+  operation_currency?: string
+  operation_amount?: string | null
+  fx_rate_snapshot?: string | null
+  functional_amount_uzs?: string | null
   lines: ReceiptLine[]
   participants: ReceiptParticipant[]
   notes: string
@@ -115,10 +163,12 @@ export interface Receipt extends BaseModel {
 export interface CartItem {
   product_variant: ProductVariant
   product_name: string
+  pricing_mode: PricingMode
   lot_id: number | null
   quantity: number
   unit_price: string
   base_price: string
+  price_changed?: boolean
   discount_reason_id: number | null
 }
 
@@ -137,6 +187,10 @@ export interface Sale extends BaseModel {
   status: SaleStatus
   payment_method: PaymentMethod
   customer_id: number | null
+  operation_currency?: string
+  operation_amount?: string | null
+  fx_rate_snapshot?: string | null
+  functional_amount_uzs?: string | null
   total_amount: string
   total_cogs: string
   lines: SaleLine[]

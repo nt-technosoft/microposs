@@ -1,26 +1,113 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, AlertCircle } from 'lucide-vue-next'
-import { fetchProduct } from '@/api/catalog'
+import { ArrowLeft, Plus, X, Upload, Image as ImageIcon } from 'lucide-vue-next'
 import api from '@/api/client'
+import {
+  deleteProductPhoto,
+  fetchCategories,
+  fetchProduct,
+  updateProduct,
+  uploadProductPhoto,
+} from '@/api/catalog'
+import type { Category, Product } from '@/types/models'
+import { PricingMode } from '@/types/enums'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { useToast } from '@/composables/useToast'
+
+interface CharacteristicRow {
+  key: number
+  name: string
+  value: string
+}
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 
+const product = ref<Product | null>(null)
+const categories = ref<Category[]>([])
 const isLoading = ref(true)
 const isSaving = ref(false)
 const errorMessage = ref('')
 
 const name = ref('')
+const description = ref('')
+const selectedCategory = ref<number | null>(null)
+const pricingMode = ref<PricingMode>(PricingMode.DEFAULT_EDITABLE)
 const basePrice = ref('')
 const isActive = ref(true)
+const characteristics = ref<CharacteristicRow[]>([])
+const photoPreview = ref<string | null>(null)
+const photoFile = ref<File | null>(null)
+let rowKey = 1
 
-async function loadProduct(): Promise<void> {
+const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
+  { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
+  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
+  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать на продаже' },
+]
+
+const categoryOptions = computed(() => ([
+  { value: null, label: 'Без категории' },
+  ...categories.value.map((category) => ({
+    value: category.id,
+    label: category.name,
+  })),
+]))
+
+const showBasePrice = computed(() => pricingMode.value !== PricingMode.ASK_EACH_SALE)
+
+function parseCategoryId(rawCategory: unknown): number | null {
+  if (typeof rawCategory === 'number' && Number.isFinite(rawCategory)) return rawCategory
+  if (rawCategory && typeof rawCategory === 'object' && 'id' in rawCategory) {
+    const id = Number((rawCategory as { id?: unknown }).id)
+    return Number.isFinite(id) ? id : null
+  }
+  return null
+}
+
+function addCharacteristic(nameValue = '', valueValue = ''): void {
+  characteristics.value = [
+    ...characteristics.value,
+    {
+      key: rowKey++,
+      name: nameValue,
+      value: valueValue,
+    },
+  ]
+}
+
+function removeCharacteristic(key: number): void {
+  characteristics.value = characteristics.value.filter((row) => row.key !== key)
+}
+
+function onPhotoChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  photoFile.value = file
+  if (photoPreview.value && photoPreview.value.startsWith('blob:')) {
+    URL.revokeObjectURL(photoPreview.value)
+  }
+  photoPreview.value = file ? URL.createObjectURL(file) : (product.value?.photo_url ?? null)
+}
+
+async function removePhoto(): Promise<void> {
+  const id = Number(route.params.id)
+  if (!Number.isFinite(id)) return
+  try {
+    await deleteProductPhoto(id)
+    photoFile.value = null
+    photoPreview.value = null
+    toast.success('Фото удалено')
+  } catch {
+    toast.error('Не удалось удалить фото')
+  }
+}
+
+async function loadData(): Promise<void> {
   const id = Number(route.params.id)
   if (!Number.isFinite(id)) {
     errorMessage.value = 'Некорректный ID товара'
@@ -30,12 +117,30 @@ async function loadProduct(): Promise<void> {
 
   isLoading.value = true
   errorMessage.value = ''
-
   try {
-    const product = await fetchProduct(id)
-    name.value = product.name || ''
-    basePrice.value = product.base_price || ''
-    isActive.value = Boolean(product.is_active)
+    const [loadedProduct, loadedCategories] = await Promise.all([
+      fetchProduct(id),
+      fetchCategories(),
+    ])
+
+    product.value = loadedProduct
+    categories.value = loadedCategories
+    name.value = loadedProduct.name
+    description.value = loadedProduct.description ?? ''
+    selectedCategory.value = parseCategoryId(loadedProduct.category)
+    pricingMode.value = loadedProduct.pricing_mode
+    basePrice.value = loadedProduct.base_price ?? ''
+    isActive.value = Boolean(loadedProduct.is_active)
+    photoPreview.value = loadedProduct.photo_url ?? null
+
+    characteristics.value = (loadedProduct.characteristics ?? []).map((row: { name: string; value: string }, index: number) => ({
+      key: rowKey++ + index,
+      name: row.name,
+      value: row.value,
+    }))
+    if (characteristics.value.length === 0) {
+      addCharacteristic()
+    }
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить товар'
   } finally {
@@ -43,24 +148,49 @@ async function loadProduct(): Promise<void> {
   }
 }
 
-async function saveProduct(): Promise<void> {
+function validate(): boolean {
   if (!name.value.trim()) {
     errorMessage.value = 'Введите название товара'
-    return
+    return false
   }
+  if (showBasePrice.value) {
+    const parsed = Number.parseFloat(basePrice.value)
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      errorMessage.value = 'Проверьте базовую цену'
+      return false
+    }
+  }
+  return true
+}
 
+async function saveProduct(): Promise<void> {
+  if (!validate()) return
   const id = Number(route.params.id)
   if (!Number.isFinite(id)) return
 
   isSaving.value = true
   errorMessage.value = ''
-
   try {
-    await api.patch(`/api/v1/catalog/products/${id}/`, {
+    await updateProduct(id, {
       name: name.value.trim(),
-      base_price: basePrice.value ? Number(basePrice.value) : null,
+      description: description.value.trim(),
+      category: selectedCategory.value,
+      pricing_mode: pricingMode.value,
+      base_price: showBasePrice.value ? basePrice.value : null,
       is_active: isActive.value,
     })
+    const payload = characteristics.value
+      .map((item) => ({
+        name: item.name.trim(),
+        value: item.value.trim(),
+      }))
+      .filter((item) => item.name.length > 0)
+    await apiPatchCharacteristics(id, payload)
+
+    if (photoFile.value) {
+      await uploadProductPhoto(id, photoFile.value)
+    }
+
     toast.success('Товар сохранён')
     router.push({ name: 'products' })
   } catch (error: unknown) {
@@ -70,7 +200,16 @@ async function saveProduct(): Promise<void> {
   }
 }
 
-onMounted(loadProduct)
+async function apiPatchCharacteristics(
+  id: number,
+  payload: Array<{ name: string; value: string }>,
+): Promise<void> {
+  await api.patch(`/api/v1/catalog/products/${id}/`, {
+    characteristics: payload,
+  })
+}
+
+onMounted(loadData)
 </script>
 
 <template>
@@ -91,22 +230,84 @@ onMounted(loadProduct)
 
     <form v-else class="form" @submit.prevent="saveProduct">
       <div v-if="errorMessage" class="error-banner" role="alert">
-        <AlertCircle :size="16" :stroke-width="1.75" />
         <span>{{ errorMessage }}</span>
       </div>
 
       <BaseInput v-model="name" label="Название товара *" placeholder="Введите название" />
 
+      <div class="field-group">
+        <label class="input-label">Описание</label>
+        <textarea
+          v-model="description"
+          class="textarea-field"
+          rows="3"
+          placeholder="Описание товара"
+        />
+      </div>
+
+      <div class="field-group">
+        <label class="input-label">Категория</label>
+        <BaseSelect
+          v-model="selectedCategory"
+          :options="categoryOptions"
+          title="Выбор категории"
+          placeholder="Без категории"
+        />
+      </div>
+
+      <div class="field-group">
+        <label class="input-label">Тип цены</label>
+        <BaseSelect
+          v-model="pricingMode"
+          :options="pricingModeOptions"
+          title="Выбор типа цены"
+          placeholder="Тип цены"
+        />
+      </div>
+
       <BaseInput
+        v-if="showBasePrice"
         v-model="basePrice"
         label="Базовая цена"
         type="number"
         placeholder="0"
       />
 
+      <div class="photo-block">
+        <label class="input-label">Фото товара</label>
+        <div class="photo-preview">
+          <img v-if="photoPreview" :src="photoPreview" alt="Фото товара">
+          <ImageIcon v-else :size="32" :stroke-width="1.5" />
+        </div>
+        <label class="photo-upload">
+          <Upload :size="16" :stroke-width="2" />
+          <span>Загрузить новое фото</span>
+          <input type="file" accept="image/*" class="hidden-file" @change="onPhotoChange">
+        </label>
+        <button v-if="photoPreview" type="button" class="remove-photo" @click="removePhoto">
+          Удалить фото
+        </button>
+      </div>
+
+      <div class="section-title-row">
+        <span class="input-label">Характеристики</span>
+        <button type="button" class="tiny-btn" @click="addCharacteristic()">
+          <Plus :size="14" :stroke-width="2" />
+          Добавить
+        </button>
+      </div>
+
+      <div v-for="row in characteristics" :key="row.key" class="characteristic-row">
+        <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
+        <BaseInput v-model="row.value" label="Значение" placeholder="Кожа" />
+        <button type="button" class="tiny-remove" @click="removeCharacteristic(row.key)">
+          <X :size="14" :stroke-width="2" />
+        </button>
+      </div>
+
       <label class="toggle-row">
         <span class="toggle-label">Товар активен</span>
-        <input v-model="isActive" class="toggle-input" type="checkbox" />
+        <input v-model="isActive" class="toggle-input" type="checkbox">
       </label>
 
       <BaseButton
@@ -165,9 +366,32 @@ onMounted(loadProduct)
 
 .form {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+.field-group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.input-label {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.textarea-field {
+  width: 100%;
+  min-height: 88px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base);
+  line-height: 1.4;
 }
 
 .error-banner {
@@ -205,6 +429,79 @@ onMounted(loadProduct)
   accent-color: var(--color-brand-500);
 }
 
+.photo-block {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.photo-preview {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border-default);
+  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+}
+
+.photo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-upload {
+  min-height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.remove-photo {
+  width: fit-content;
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  padding: 0 var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tiny-btn,
+.tiny-remove {
+  min-height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.characteristic-row {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .loading-wrap {
   display: grid;
   gap: var(--space-3);
@@ -228,7 +525,7 @@ onMounted(loadProduct)
 }
 
 .skeleton-line-lg {
-  height: 60px;
+  height: 88px;
 }
 
 @keyframes shimmer {

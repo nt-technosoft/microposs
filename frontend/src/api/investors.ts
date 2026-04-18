@@ -4,7 +4,7 @@
 
 import api from './client'
 import type { InvestorContract, InvestorSummary } from '../types/models'
-import type { PaginatedResponse } from './catalog'
+import { toList, toPaginated, type PaginatedResponse } from './catalog'
 
 export interface Investor {
   id: number
@@ -52,23 +52,29 @@ interface FetchProfitRecordsParams {
 }
 
 export async function fetchInvestors(params?: FetchInvestorsParams): Promise<PaginatedResponse<Investor>> {
-  const { data } = await api.get<PaginatedResponse<Investor>>('/api/v1/investors/investors/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<Investor> | Investor[]>('/api/v1/investors/investors/', { params })
+  return toPaginated<Investor>(data)
 }
 
 export async function fetchContracts(params?: FetchContractsParams): Promise<PaginatedResponse<InvestorContract>> {
-  const { data } = await api.get<PaginatedResponse<InvestorContract>>('/api/v1/investors/contracts/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<InvestorContract> | InvestorContract[]>('/api/v1/investors/contracts/', { params })
+  return toPaginated<InvestorContract>(data)
 }
 
 export async function fetchSummaries(params?: { investor?: number }): Promise<ContractSummary[]> {
-  const { data } = await api.get<ContractSummary[]>('/api/v1/investors/summaries/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<ContractSummary> | ContractSummary[]>(
+    '/api/v1/investors/summaries/',
+    { params },
+  )
+  return toList<ContractSummary>(data)
 }
 
 export async function fetchProfitRecords(params?: FetchProfitRecordsParams): Promise<PaginatedResponse<ProfitRecord>> {
-  const { data } = await api.get<PaginatedResponse<ProfitRecord>>('/api/v1/investors/profit-records/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<ProfitRecord> | ProfitRecord[]>(
+    '/api/v1/investors/profit-records/',
+    { params },
+  )
+  return toPaginated<ProfitRecord>(data)
 }
 
 export async function closeContract(contractId: number): Promise<InvestorContract> {

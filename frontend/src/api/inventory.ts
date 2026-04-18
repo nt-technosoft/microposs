@@ -4,7 +4,7 @@
 
 import api from './client'
 import type { Location, Lot } from '../types/models'
-import type { PaginatedResponse } from './catalog'
+import { toList, toPaginated, type PaginatedResponse } from './catalog'
 
 export interface StockSummaryItem {
   product_variant_id: number
@@ -23,13 +23,13 @@ interface FetchLotsParams {
 }
 
 export async function fetchLocations(): Promise<Location[]> {
-  const { data } = await api.get<Location[]>('/api/v1/inventory/locations/')
-  return data
+  const { data } = await api.get<PaginatedResponse<Location> | Location[]>('/api/v1/inventory/locations/')
+  return toList<Location>(data)
 }
 
 export async function fetchLots(params?: FetchLotsParams): Promise<PaginatedResponse<Lot>> {
-  const { data } = await api.get<PaginatedResponse<Lot>>('/api/v1/inventory/lots/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<Lot> | Lot[]>('/api/v1/inventory/lots/', { params })
+  return toPaginated<Lot>(data)
 }
 
 export async function fetchStockSummary(locationId?: number): Promise<StockSummaryItem[]> {

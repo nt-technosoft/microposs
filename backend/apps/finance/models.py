@@ -136,6 +136,40 @@ class JournalLine(TenantModel):
         return f"CR {self.account.code} {self.credit}"
 
 
+class Expense(TenantModel):
+    """First-class non-supplier expense operation."""
+
+    class PaymentMethod(models.TextChoices):
+        CASH = 'cash', 'Наличные'
+        BANK = 'bank', 'Банковский перевод'
+
+    title = models.CharField(max_length=255)
+    category = models.CharField(max_length=120, blank=True, default='')
+    payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices)
+    source_account_code = models.CharField(max_length=20, default='1000')
+    operation_currency = models.CharField(max_length=3, default='UZS')
+    operation_amount = models.DecimalField(max_digits=16, decimal_places=2)
+    fx_rate_snapshot = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    functional_amount_uzs = models.DecimalField(max_digits=16, decimal_places=2)
+    occurred_at = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'finance_expense'
+        indexes = [
+            models.Index(fields=['tenant', 'occurred_at']),
+            models.Index(fields=['tenant', 'operation_currency']),
+        ]
+
+    def __str__(self):
+        return f"Expense #{self.pk}: {self.title}"
+
+
 class DailySummary(TenantModel):
     """Pre-aggregated daily P&L summary. Built by Celery tasks."""
 
@@ -166,9 +200,53 @@ class CashFlowSummary(TenantModel):
     cash_in_investor = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_purchases = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_supplier_payments = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    cash_out_expenses = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_investor_payments = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     net_cash_flow = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
 
     class Meta:
         db_table = 'finance_cash_flow_summary'
         unique_together = [('tenant', 'date')]
+
+
+class ExchangeRate(TenantModel):
+    """
+    Historical FX rate snapshot (base -> quote) for a specific date.
+    Keeps immutable-by-date operational trace for financial operations.
+    """
+
+    class Source(models.TextChoices):
+        CBU = 'CBU', 'Central Bank of Uzbekistan'
+        MANUAL = 'MANUAL', 'Manual override'
+
+    base_currency = models.CharField(max_length=3, default='USD')
+    quote_currency = models.CharField(max_length=3, default='UZS')
+    rate_date = models.DateField()
+    rate = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        validators=[MinValueValidator(Decimal('0.000001'))],
+    )
+    source = models.CharField(
+        max_length=12,
+        choices=Source.choices,
+        default=Source.CBU,
+    )
+    is_manual = models.BooleanField(default=False)
+    fetched_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, default='')
+    raw_payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'finance_exchange_rate'
+        unique_together = [('tenant', 'base_currency', 'quote_currency', 'rate_date')]
+        indexes = [
+            models.Index(fields=['tenant', 'base_currency', 'quote_currency', 'rate_date']),
+            models.Index(fields=['tenant', 'rate_date']),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.base_currency}/{self.quote_currency} "
+            f"{self.rate} ({self.rate_date})"
+        )

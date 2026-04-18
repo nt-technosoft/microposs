@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import (
-    Category, Attribute, AttributeValue, CategoryAttribute,
+    Category, Attribute, AttributeValue, CategoryAttribute, CategoryCharacteristicTemplate,
     Product, ProductVariant, VariantAttributeValue,
     ProductCharacteristic, DiscountReason,
 )
@@ -11,12 +11,17 @@ class CategoryAttributeInline(admin.TabularInline):
     extra = 0
 
 
+class CategoryCharacteristicTemplateInline(admin.TabularInline):
+    model = CategoryCharacteristicTemplate
+    extra = 0
+
+
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'parent', 'default_pricing_mode', 'sort_order')
     list_filter = ('default_pricing_mode',)
     search_fields = ('name',)
-    inlines = [CategoryAttributeInline]
+    inlines = [CategoryAttributeInline, CategoryCharacteristicTemplateInline]
 
 
 class AttributeValueInline(admin.TabularInline):

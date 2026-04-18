@@ -64,6 +64,10 @@ class SupplierViewSet(viewsets.ModelViewSet):
             supplier_id=supplier.pk,
             amount=data['amount'],
             payment_method=data['payment_method'],
+            operation_currency=data.get('operation_currency', 'UZS'),
+            operation_amount=data.get('operation_amount'),
+            fx_rate_snapshot=data.get('fx_rate_snapshot'),
+            functional_amount_uzs=data.get('functional_amount_uzs'),
             notes=data.get('notes', ''),
         )
         output = SupplierPaymentSerializer(payment)

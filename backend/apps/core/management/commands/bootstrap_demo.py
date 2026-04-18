@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from apps.catalog.models import Category, Product
+from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
 from apps.core.models import Business
 from apps.customers.models import Customer
@@ -32,6 +32,7 @@ class Command(BaseCommand):
         parser.add_argument('--admin-password', default='Admin123!')
         parser.add_argument('--owner-password', default='Owner123!')
         parser.add_argument('--cashier-password', default='Cashier123!')
+        parser.add_argument('--warehouse-password', default='Warehouse123!')
         parser.add_argument('--investor-password', default='Investor123!')
 
     def _upsert_user(
@@ -92,6 +93,12 @@ class Command(BaseCommand):
                 email='cashier@local.dev',
                 password=options['cashier_password'],
                 groups=[role_groups['cashier']],
+            )
+            warehouse_user = self._upsert_user(
+                username='warehouse',
+                email='warehouse@local.dev',
+                password=options['warehouse_password'],
+                groups=[role_groups['warehouse']],
             )
             investor_user = self._upsert_user(
                 username='investor',
@@ -166,6 +173,30 @@ class Command(BaseCommand):
                     description='Auto-created fallback product',
                     variant_data=None,
                 ).variants.filter(is_active=True).first()
+
+            discount_reason = (
+                DiscountReason.objects
+                .filter(tenant=business, name='Торг')
+                .order_by('id')
+                .first()
+            )
+            if discount_reason is None:
+                DiscountReason.objects.create(
+                    tenant=business,
+                    name='Торг',
+                    is_default=True,
+                    is_active=True,
+                )
+            else:
+                needs_update = False
+                if not discount_reason.is_default:
+                    discount_reason.is_default = True
+                    needs_update = True
+                if not discount_reason.is_active:
+                    discount_reason.is_active = True
+                    needs_update = True
+                if needs_update:
+                    discount_reason.save(update_fields=['is_default', 'is_active', 'updated_at'])
 
             Supplier.objects.get_or_create(
                 tenant=business,
@@ -343,5 +374,6 @@ class Command(BaseCommand):
         self.stdout.write(f"  admin / {options['admin_password']} (superuser)")
         self.stdout.write(f"  owner / {options['owner_password']} (owner role)")
         self.stdout.write(f"  cashier / {options['cashier_password']} (cashier role)")
+        self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse role)")
         self.stdout.write(f"  investor / {options['investor_password']} (investor role)")
         self.stdout.write(f'Tenant: {tenant_name}')

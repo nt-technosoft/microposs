@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Account, JournalEntry, JournalLine, DailySummary, CashFlowSummary
+from .models import (
+    Account,
+    JournalEntry,
+    JournalLine,
+    DailySummary,
+    CashFlowSummary,
+    ExchangeRate,
+)
 
 
 class JournalLineInline(admin.TabularInline):
@@ -43,3 +50,26 @@ class CashFlowSummaryAdmin(admin.ModelAdmin):
         'cash_out_purchases', 'net_cash_flow',
     )
     list_filter = ('date',)
+
+
+@admin.register(ExchangeRate)
+class ExchangeRateAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'tenant',
+        'base_currency',
+        'quote_currency',
+        'rate_date',
+        'rate',
+        'source',
+        'is_manual',
+        'created_at',
+    )
+    list_filter = (
+        'base_currency',
+        'quote_currency',
+        'source',
+        'is_manual',
+        'rate_date',
+    )
+    search_fields = ('base_currency', 'quote_currency', 'notes')

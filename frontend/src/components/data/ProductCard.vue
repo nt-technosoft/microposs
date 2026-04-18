@@ -30,7 +30,19 @@ const effectivePrice = computed((): string => {
   return '0'
 })
 
-const hasImage = computed(() => false) // Images not yet in Product model
+const hasImage = computed(() =>
+  Boolean(props.product.photo_url && props.product.photo_url.trim().length > 0),
+)
+
+const totalStock = computed(() => {
+  if (Number.isFinite(props.product.total_stock)) {
+    return Number(props.product.total_stock)
+  }
+  if (productVariants.value.length > 0) {
+    return productVariants.value.reduce((sum, variant) => sum + (variant.stock_quantity ?? 0), 0)
+  }
+  return 0
+})
 
 function onCardClick() {
   emit('view-detail', props.product)
@@ -66,7 +78,7 @@ function onActionClick(event: MouseEvent) {
     <!-- Product image -->
     <div class="product-image">
       <template v-if="hasImage">
-        <!-- future: <img :src="product.image_url" :alt="product.name" loading="lazy" /> -->
+        <img :src="product.photo_url!" :alt="product.name" loading="lazy">
       </template>
       <template v-else>
         <div class="product-image-placeholder">
@@ -81,6 +93,15 @@ function onActionClick(event: MouseEvent) {
 
       <div class="product-price">
         <PriceDisplay :amount="effectivePrice" size="md" />
+      </div>
+
+      <div class="product-meta">
+        <span class="meta-pill" :class="{ 'meta-pill--warning': totalStock <= 0 }">
+          {{ totalStock > 0 ? `${totalStock} шт` : 'Нет в наличии' }}
+        </span>
+        <span v-if="product.has_variants" class="meta-pill">
+          Вариативный
+        </span>
       </div>
     </div>
 
@@ -202,6 +223,32 @@ function onActionClick(event: MouseEvent) {
 
 .product-price :deep(.price) {
   color: var(--color-brand-500);
+}
+
+.product-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.meta-pill {
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: var(--font-medium);
+  display: inline-flex;
+  align-items: center;
+}
+
+.meta-pill--warning {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 /* Action button */

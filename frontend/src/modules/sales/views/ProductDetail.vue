@@ -1,27 +1,37 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Package, ShoppingCart, Check } from 'lucide-vue-next'
-import { fetchProduct, fetchProductVariants } from '@/api/catalog'
+import { ArrowLeft, Package, ShoppingCart, Check, ListTree } from 'lucide-vue-next'
+import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
 import { useCartStore } from '@/stores/cart'
+import { useSessionStore } from '@/stores/session'
 import type { Product, ProductVariant } from '@/types/models'
+import { PricingMode } from '@/types/enums'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
 import PriceDisplay from '@/components/data/PriceDisplay.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
+import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 
 // ===== Route + store =====
 const route = useRoute()
 const router = useRouter()
 const cartStore = useCartStore()
+const sessionStore = useSessionStore()
 
 // ===== State =====
 const product = ref<Product | null>(null)
 const variants = ref<ProductVariant[]>([])
+const discountReasonOptions = ref<Array<{ value: number; label: string }>>([])
 const isLoading = ref(true)
 const loadError = ref<string | null>(null)
 
 // User's selection: attribute_name → chosen value string
 const selectedAttributes = ref<Record<string, string>>({})
 const quantity = ref(1)
+const unitPriceInput = ref('0')
+const selectedDiscountReasonId = ref<number | null>(null)
+const variantSheetOpen = ref(false)
 const isAdded = ref(false)
 let addedTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -67,6 +77,10 @@ const matchedVariant = computed((): ProductVariant | null => {
   )
 })
 
+const activeVariants = computed(() =>
+  variants.value.filter((variant) => variant.is_active),
+)
+
 /** Is a given attribute value selectable (leads to ≥1 active variant)? */
 function isValueAvailable(attrName: string, value: string): boolean {
   // Build hypothetical selection with this value applied
@@ -96,11 +110,32 @@ function selectAttribute(attrName: string, value: string) {
 // ===== Effective price & stock =====
 
 const effectivePrice = computed((): string => {
-  if (matchedVariant.value) return matchedVariant.value.effective_price
+  if (matchedVariant.value?.effective_price) return matchedVariant.value.effective_price
   if (product.value?.base_price) return product.value.base_price
-  if (variants.value.length > 0) return variants.value[0].effective_price
+  if (variants.value.length > 0 && variants.value[0]?.effective_price) return variants.value[0].effective_price
   return '0'
 })
+
+const pricingMode = computed(() => product.value?.pricing_mode ?? PricingMode.DEFAULT_EDITABLE)
+const isPriceEditable = computed(() => pricingMode.value !== PricingMode.FIXED_LOCKED)
+const askEachSale = computed(() => pricingMode.value === PricingMode.ASK_EACH_SALE)
+
+const lineBasePrice = computed(() => {
+  const parsed = Number.parseFloat(effectivePrice.value)
+  return Number.isFinite(parsed) ? parsed : 0
+})
+
+const lineUnitPrice = computed(() => {
+  if (!isPriceEditable.value) return lineBasePrice.value
+  const parsed = Number.parseFloat(unitPriceInput.value)
+  return Number.isFinite(parsed) ? parsed : 0
+})
+
+const priceChanged = computed(() => (
+  lineUnitPrice.value.toFixed(2) !== lineBasePrice.value.toFixed(2)
+))
+
+const lineTotal = computed(() => lineUnitPrice.value * quantity.value)
 
 const stockQuantity = computed((): number | null => {
   if (matchedVariant.value?.stock_quantity !== undefined) {
@@ -113,6 +148,13 @@ const canAddToCart = computed((): boolean => {
   if (!product.value) return false
   if (product.value.has_variants && !matchedVariant.value) return false
   if (stockQuantity.value !== null && stockQuantity.value <= 0) return false
+  if (lineUnitPrice.value <= 0) return false
+  if (askEachSale.value && !unitPriceInput.value.trim()) return false
+  if (
+    priceChanged.value
+    && discountReasonOptions.value.length > 0
+    && selectedDiscountReasonId.value === null
+  ) return false
   return true
 })
 
@@ -132,6 +174,45 @@ const addButtonLabel = computed((): string => {
   return 'Выберите вариант'
 })
 
+function formatStock(stock: number | undefined): string {
+  if (!Number.isFinite(stock)) return '0 шт'
+  if ((stock ?? 0) <= 0) return 'Нет в наличии'
+  return `${stock} шт`
+}
+
+function openVariantSheet(): void {
+  if (!product.value?.has_variants) return
+  variantSheetOpen.value = true
+}
+
+function chooseVariantFromList(variant: ProductVariant): void {
+  const nextSelection: Record<string, string> = {}
+  variant.attribute_values.forEach((entry) => {
+    nextSelection[entry.attribute_name] = entry.value
+  })
+  selectedAttributes.value = nextSelection
+  variantSheetOpen.value = false
+}
+
+watch([matchedVariant, lineBasePrice, isPriceEditable], ([variant, basePrice, editable]) => {
+  if (!variant) return
+  if (!editable) {
+    unitPriceInput.value = basePrice.toFixed(2)
+    return
+  }
+  unitPriceInput.value = basePrice.toFixed(2)
+}, { immediate: true })
+
+watch(priceChanged, (changed) => {
+  if (!changed) {
+    selectedDiscountReasonId.value = null
+    return
+  }
+  if (selectedDiscountReasonId.value !== null) return
+  const defaultReason = discountReasonOptions.value[0] ?? null
+  selectedDiscountReasonId.value = defaultReason?.value ?? null
+})
+
 // ===== Add to cart =====
 
 function addToCart() {
@@ -142,16 +223,16 @@ function addToCart() {
 
   if (!variant) return
 
-  const price = effectivePrice.value
-
   cartStore.addItem({
     product_variant: variant,
     product_name: product.value.name,
+    pricing_mode: pricingMode.value,
     lot_id: null,
     quantity: quantity.value,
-    unit_price: price,
-    base_price: price,
-    discount_reason_id: null,
+    unit_price: lineUnitPrice.value.toFixed(2),
+    base_price: lineBasePrice.value.toFixed(2),
+    price_changed: priceChanged.value,
+    discount_reason_id: priceChanged.value ? selectedDiscountReasonId.value : null,
   })
 
   isAdded.value = true
@@ -181,13 +262,24 @@ async function loadProduct() {
   loadError.value = null
 
   try {
-    const [productData, variantsData] = await Promise.all([
+    const locationId = sessionStore.currentSession?.location?.id
+    const [productData, variantsData, discountReasons] = await Promise.all([
       fetchProduct(id),
-      fetchProductVariants(id),
+      fetchProductVariants(id, {
+        location_id: locationId,
+      }),
+      fetchDiscountReasons(),
     ])
 
     product.value = productData
     variants.value = variantsData
+    discountReasonOptions.value = discountReasons
+      .filter((reason) => reason.is_active !== false)
+      .sort((left, right) => Number(right.is_default) - Number(left.is_default))
+      .map((reason) => ({
+        value: reason.id,
+        label: reason.name,
+      }))
 
     // Pre-select first available value for each attribute
     if (productData.has_variants) {
@@ -256,7 +348,14 @@ onMounted(() => {
         <!-- Product image / hero area -->
         <div class="product-hero">
           <div class="product-hero-inner">
-            <Package :size="56" :stroke-width="1" class="hero-icon" />
+            <img
+              v-if="product.photo_url"
+              :src="product.photo_url"
+              :alt="product.name"
+              class="hero-photo"
+              loading="lazy"
+            >
+            <Package v-else :size="56" :stroke-width="1" class="hero-icon" />
           </div>
         </div>
 
@@ -314,6 +413,15 @@ onMounted(() => {
                 </button>
               </div>
             </div>
+
+            <button
+              type="button"
+              class="variants-list-btn"
+              @click="openVariantSheet"
+            >
+              <ListTree :size="16" :stroke-width="2" />
+              Список вариантов
+            </button>
           </div>
         </template>
 
@@ -321,7 +429,38 @@ onMounted(() => {
         <div class="price-stock-section">
           <div class="price-row">
             <span class="price-label">Цена</span>
-            <PriceDisplay :amount="effectivePrice" size="lg" />
+            <PriceDisplay :amount="lineBasePrice.toFixed(2)" size="lg" />
+          </div>
+
+          <div class="mode-row">
+            <span class="price-label">Режим</span>
+            <span class="mode-badge">
+              {{
+                pricingMode === PricingMode.FIXED_LOCKED
+                  ? 'Фиксированная'
+                  : pricingMode === PricingMode.ASK_EACH_SALE
+                    ? 'Спрашивать'
+                    : 'Редактируемая'
+              }}
+            </span>
+          </div>
+
+          <div v-if="isPriceEditable" class="price-input-wrap">
+            <BaseInput
+              v-model="unitPriceInput"
+              type="number"
+              label="Цена продажи"
+              placeholder="0"
+            />
+          </div>
+
+          <div v-if="priceChanged" class="discount-reason-wrap">
+            <BaseSelect
+              v-model="selectedDiscountReasonId"
+              :options="discountReasonOptions"
+              title="Причина скидки"
+              placeholder="Выберите причину"
+            />
           </div>
 
           <div v-if="stockQuantity !== null" class="stock-row">
@@ -330,7 +469,7 @@ onMounted(() => {
               class="stock-value"
               :class="{ 'stock-value--empty': stockQuantity <= 0 }"
             >
-              {{ stockQuantity > 0 ? `${stockQuantity} шт` : 'Нет в наличии' }}
+              {{ formatStock(stockQuantity) }}
             </span>
           </div>
         </div>
@@ -368,7 +507,7 @@ onMounted(() => {
                 </span>
                 <span v-else key="price">
                   {{ addButtonLabel }}&nbsp;—&nbsp;<PriceDisplay
-                    :amount="(parseFloat(effectivePrice) * quantity).toFixed(2)"
+                    :amount="lineTotal.toFixed(2)"
                     size="md"
                     class="btn-price"
                   />
@@ -380,6 +519,37 @@ onMounted(() => {
 
       </div>
     </template>
+
+    <AppBottomSheet
+      :open="variantSheetOpen"
+      title="Варианты товара"
+      @close="variantSheetOpen = false"
+    >
+      <div class="variant-sheet-list">
+        <button
+          v-for="variant in activeVariants"
+          :key="variant.id"
+          class="variant-sheet-item"
+          :class="{ 'variant-sheet-item--active': matchedVariant?.id === variant.id }"
+          type="button"
+          @click="chooseVariantFromList(variant)"
+        >
+          <div class="variant-sheet-main">
+            <span class="variant-sheet-name">
+              {{
+                variant.attribute_values.length > 0
+                  ? variant.attribute_values.map((entry) => `${entry.attribute_name}: ${entry.value}`).join(' · ')
+                  : `SKU ${variant.display_sku || variant.sku || variant.id}`
+              }}
+            </span>
+            <span class="variant-sheet-stock">
+              {{ formatStock(variant.stock_quantity) }}
+            </span>
+          </div>
+          <PriceDisplay :amount="variant.effective_price" size="sm" />
+        </button>
+      </div>
+    </AppBottomSheet>
 
   </div>
 </template>
@@ -562,6 +732,12 @@ onMounted(() => {
   color: var(--color-brand-200);
 }
 
+.hero-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 /* ===== Info section ===== */
 .product-info-section {
   padding: var(--space-5) var(--space-4) var(--space-4);
@@ -687,6 +863,21 @@ onMounted(() => {
   text-decoration: line-through;
 }
 
+.variants-list-btn {
+  width: 100%;
+  min-height: 42px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
 /* ===== Price + stock ===== */
 .price-stock-section {
   margin: 0 var(--space-4);
@@ -706,6 +897,12 @@ onMounted(() => {
   justify-content: space-between;
 }
 
+.mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .price-label,
 .stock-label {
   font-size: var(--text-sm);
@@ -715,6 +912,29 @@ onMounted(() => {
 
 .price-row :deep(.price) {
   color: var(--color-brand-500);
+}
+
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+}
+
+.price-input-wrap {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.discount-reason-wrap {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .stock-value {
@@ -806,6 +1026,48 @@ onMounted(() => {
   color: inherit;
   font-size: inherit;
   font-weight: inherit;
+}
+
+.variant-sheet-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.variant-sheet-item {
+  width: 100%;
+  min-height: 54px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.variant-sheet-item--active {
+  border-color: var(--color-brand-300);
+  background: var(--color-brand-50);
+}
+
+.variant-sheet-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.variant-sheet-name {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  white-space: normal;
+}
+
+.variant-sheet-stock {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
 }
 
 /* ===== Button icon/text transitions ===== */

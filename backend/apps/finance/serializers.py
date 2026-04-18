@@ -2,8 +2,18 @@
 Finance serializers.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
-from .models import Account, JournalEntry, JournalLine, DailySummary, CashFlowSummary
+from .models import (
+    Account,
+    JournalEntry,
+    JournalLine,
+    Expense,
+    DailySummary,
+    CashFlowSummary,
+    ExchangeRate,
+)
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -63,6 +73,58 @@ class JournalEntryDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class ExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = [
+            'id',
+            'title',
+            'category',
+            'payment_method',
+            'source_account_code',
+            'operation_currency',
+            'operation_amount',
+            'fx_rate_snapshot',
+            'functional_amount_uzs',
+            'occurred_at',
+            'notes',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class ExpenseCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255)
+    category = serializers.CharField(max_length=120, required=False, allow_blank=True, default='')
+    payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
+    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    operation_amount = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        min_value=Decimal('0.01'),
+    )
+    fx_rate_snapshot = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
+    functional_amount_uzs = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    occurred_at = serializers.DateTimeField()
+    source_account_code = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        default='',
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
 class DailySummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = DailySummary
@@ -82,7 +144,7 @@ class CashFlowSummarySerializer(serializers.ModelSerializer):
         fields = [
             'id', 'date',
             'cash_in_sales', 'cash_in_debt_payments', 'cash_in_investor',
-            'cash_out_purchases', 'cash_out_supplier_payments',
+            'cash_out_purchases', 'cash_out_supplier_payments', 'cash_out_expenses',
             'cash_out_investor_payments',
             'net_cash_flow',
         ]
@@ -95,3 +157,60 @@ class TrialBalanceSerializer(serializers.Serializer):
     name = serializers.CharField()
     account_type = serializers.CharField()
     balance = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class ExchangeRateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExchangeRate
+        fields = [
+            'id',
+            'base_currency',
+            'quote_currency',
+            'rate_date',
+            'rate',
+            'source',
+            'is_manual',
+            'fetched_at',
+            'notes',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'source',
+            'is_manual',
+            'fetched_at',
+            'created_at',
+            'updated_at',
+        ]
+
+
+class ExchangeRateManualCreateSerializer(serializers.Serializer):
+    base_currency = serializers.CharField(max_length=3, default='USD')
+    quote_currency = serializers.CharField(max_length=3, default='UZS')
+    rate_date = serializers.DateField()
+    rate = serializers.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        min_value=Decimal('0.000001'),
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_base_currency(self, value):
+        return value.upper()
+
+    def validate_quote_currency(self, value):
+        return value.upper()
+
+
+class ExchangeRateRefreshSerializer(serializers.Serializer):
+    base_currency = serializers.CharField(max_length=3, default='USD')
+    quote_currency = serializers.CharField(max_length=3, default='UZS')
+    rate_date = serializers.DateField(required=False)
+    overwrite_manual = serializers.BooleanField(required=False, default=False)
+
+    def validate_base_currency(self, value):
+        return value.upper()
+
+    def validate_quote_currency(self, value):
+        return value.upper()

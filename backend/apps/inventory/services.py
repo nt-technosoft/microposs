@@ -4,8 +4,7 @@ stock transfer, FIFO lot selection.
 """
 
 from decimal import Decimal
-from django.db import transaction
-from django.utils import timezone
+from django.db import transaction, models
 
 from apps.core.services import publish_event
 from apps.core.exceptions import (
@@ -91,6 +90,47 @@ def confirm_receipt(receipt: Receipt) -> Receipt:
         receipt.status = Receipt.ReceiptStatus.CONFIRMED
         receipt.save(update_fields=['status', 'updated_at'])
 
+        total_cost = sum(
+            line.cost_per_unit * line.quantity
+            for line in lines
+        )
+        from apps.finance.services import record_receipt_journal
+
+        record_receipt_journal(
+            tenant_id=receipt.tenant_id,
+            receipt_id=receipt.pk,
+            total_cost=total_cost,
+            receipt_type=receipt.receipt_type,
+            supplier_id=receipt.supplier_id,
+            date=receipt.date,
+        )
+
+        if (
+            receipt.receipt_type == Receipt.ReceiptType.SUPPLIER_PURCHASE
+            and receipt.supplier_id
+            and isinstance(receipt.payable_terms, dict)
+            and str(receipt.payable_terms.get('type', '')).lower() == 'credit'
+        ):
+            from apps.suppliers.models import Supplier
+
+            Supplier.objects.filter(
+                pk=receipt.supplier_id,
+                tenant_id=receipt.tenant_id,
+            ).update(
+                outstanding_balance=models.F('outstanding_balance') + total_cost,
+            )
+
+            publish_event(
+                event_type='supplier.payable_accrued',
+                payload={
+                    'receipt_id': receipt.pk,
+                    'supplier_id': receipt.supplier_id,
+                    'amount': str(total_cost),
+                    'date': receipt.date.isoformat(),
+                },
+                tenant_id=receipt.tenant_id,
+            )
+
         # Publish outbox event
         publish_event(
             event_type='receipt.confirmed',
@@ -144,6 +184,16 @@ def get_lots_for_sale(
     return result
 
 
+def get_locked_lot(*, lot_id: int, tenant_id: int) -> Lot:
+    """
+    Resolve a lot with SELECT FOR UPDATE for write operations.
+    """
+    return Lot.objects.select_for_update().get(
+        pk=lot_id,
+        tenant_id=tenant_id,
+    )
+
+
 def deduct_lot_quantity(lot: Lot, quantity: int) -> Lot:
     """
     Deduct quantity from a lot. Uses SELECT FOR UPDATE for safety.
@@ -180,6 +230,44 @@ def restore_lot_quantity(lot: Lot, quantity: int) -> Lot:
     return lot
 
 
+def record_sale_stock_movement(
+    *,
+    tenant_id: int,
+    lot: Lot,
+    quantity: int,
+    from_location: Location,
+    sale_id: int,
+) -> StockMovement:
+    return StockMovement.objects.create(
+        tenant_id=tenant_id,
+        lot=lot,
+        movement_type=StockMovement.MovementType.SALE,
+        quantity=-quantity,
+        from_location=from_location,
+        reference_type='sale',
+        reference_id=sale_id,
+    )
+
+
+def record_return_stock_movement(
+    *,
+    tenant_id: int,
+    lot: Lot,
+    quantity: int,
+    to_location: Location,
+    sale_return_id: int,
+) -> StockMovement:
+    return StockMovement.objects.create(
+        tenant_id=tenant_id,
+        lot=lot,
+        movement_type=StockMovement.MovementType.RETURN,
+        quantity=quantity,
+        to_location=to_location,
+        reference_type='sale_return',
+        reference_id=sale_return_id,
+    )
+
+
 def transfer_lot(
     lot: Lot,
     to_location: Location,
@@ -193,12 +281,13 @@ def transfer_lot(
     with transaction.atomic():
         lot = Lot.objects.select_for_update().get(pk=lot.pk)
         from_location = lot.location
+        moved_lot = lot
 
         if quantity is None or quantity == lot.quantity_remaining:
             # Move entire lot
+            moved_quantity = lot.quantity_remaining
             lot.location = to_location
             lot.save(update_fields=['location', 'updated_at'])
-            moved_quantity = lot.quantity_remaining
         else:
             # Split: reduce original, create new lot at destination
             if quantity > lot.quantity_remaining:
@@ -212,11 +301,13 @@ def transfer_lot(
                 'quantity_remaining', 'is_active', 'updated_at',
             ])
 
-            # Create new lot at destination
-            Lot.objects.create(
+            # Create a derived lot at destination.
+            # `receipt_line` stays null for split lots to preserve one-to-one
+            # linkage on the original receipt-created lot.
+            moved_lot = Lot.objects.create(
                 tenant_id=lot.tenant_id,
                 receipt=lot.receipt,
-                receipt_line=lot.receipt_line,
+                receipt_line=None,
                 product_variant=lot.product_variant,
                 location=to_location,
                 quantity_initial=quantity,
@@ -229,7 +320,7 @@ def transfer_lot(
         # Record movement
         StockMovement.objects.create(
             tenant_id=lot.tenant_id,
-            lot=lot,
+            lot=moved_lot,
             movement_type=StockMovement.MovementType.TRANSFER,
             quantity=moved_quantity,
             from_location=from_location,
@@ -237,7 +328,19 @@ def transfer_lot(
             reference_type='transfer',
         )
 
-    return lot
+        publish_event(
+            event_type='lot.transfer',
+            payload={
+                'lot_id': moved_lot.pk,
+                'source_lot_id': lot.pk,
+                'from_location_id': from_location.pk,
+                'to_location_id': to_location.pk,
+                'quantity': moved_quantity,
+            },
+            tenant_id=lot.tenant_id,
+        )
+
+    return moved_lot
 
 
 def get_stock_summary(

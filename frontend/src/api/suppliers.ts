@@ -4,7 +4,7 @@
 
 import api from './client'
 import type { Supplier } from '../types/models'
-import type { PaginatedResponse } from './catalog'
+import { toPaginated, type PaginatedResponse } from './catalog'
 
 export interface SupplierCreatePayload {
   name: string
@@ -22,6 +22,10 @@ export interface SupplierPaymentPayload {
 export interface SupplierPayment {
   id: number
   supplier_id: number
+  operation_currency?: string
+  operation_amount?: string | null
+  fx_rate_snapshot?: string | null
+  functional_amount_uzs?: string | null
   amount: string
   payment_method: 'cash' | 'bank'
   notes: string
@@ -43,8 +47,8 @@ interface FetchSuppliersParams {
 }
 
 export async function fetchSuppliers(params?: FetchSuppliersParams): Promise<PaginatedResponse<Supplier>> {
-  const { data } = await api.get<PaginatedResponse<Supplier>>('/api/v1/suppliers/suppliers/', { params })
-  return data
+  const { data } = await api.get<PaginatedResponse<Supplier> | Supplier[]>('/api/v1/suppliers/suppliers/', { params })
+  return toPaginated<Supplier>(data)
 }
 
 export async function fetchSupplier(id: number): Promise<Supplier> {

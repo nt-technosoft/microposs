@@ -6,6 +6,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '@/api/client'
 import { UserRole } from '@/types/enums'
+import { useSessionStore } from './session'
 
 interface User {
   id: number
@@ -83,6 +84,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    const sessionStore = useSessionStore()
+    sessionStore.clearSession()
     user.value = null
     token.value = null
     userLoaded.value = false

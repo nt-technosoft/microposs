@@ -164,6 +164,24 @@ function isReturned(sale: Sale): boolean {
   return sale.status === SaleStatus.RETURNED
 }
 
+function operationTrace(sale: Sale): string {
+  const currency = (sale.operation_currency || 'UZS').toUpperCase()
+  const opAmount = Number.parseFloat(sale.operation_amount || '')
+  const fxRate = Number.parseFloat(sale.fx_rate_snapshot || '')
+  const functional = Number.parseFloat(sale.functional_amount_uzs || '')
+
+  if (currency === 'UZS' || !Number.isFinite(opAmount)) {
+    return ''
+  }
+
+  const opStr = formatPrice(opAmount, currency)
+  const fnStr = Number.isFinite(functional) ? formatPrice(functional) : ''
+  if (Number.isFinite(fxRate) && fnStr) {
+    return `${opStr} • курс ${fxRate.toFixed(2)} • ${fnStr}`
+  }
+  return fnStr ? `${opStr} • ${fnStr}` : opStr
+}
+
 // ── Sale detail ─────────────────────────────────────────────────────────────
 
 async function openDetail(sale: Sale): Promise<void> {
@@ -273,6 +291,7 @@ function handleReturnPlaceholder(): void {
 
             <div class="sale-right">
               <span class="sale-amount tabular-nums">{{ formatPrice(sale.total_amount) }}</span>
+              <span v-if="operationTrace(sale)" class="sale-trace">{{ operationTrace(sale) }}</span>
               <span
                 class="badge"
                 :class="`badge-${sale.payment_method}`"
@@ -351,6 +370,9 @@ function handleReturnPlaceholder(): void {
           <span class="total-label">Итого</span>
           <span class="total-amount tabular-nums">{{ formatPrice(selectedSale.total_amount) }}</span>
         </div>
+        <p v-if="operationTrace(selectedSale)" class="detail-trace">
+          {{ operationTrace(selectedSale) }}
+        </p>
 
         <!-- Return button -->
         <button
@@ -569,6 +591,14 @@ function handleReturnPlaceholder(): void {
   color: var(--color-text-primary);
 }
 
+.sale-trace {
+  max-width: 200px;
+  text-align: right;
+  font-size: var(--text-2xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--leading-snug);
+}
+
 /* ── Badges ─────────────────────────────────────────────────────────────── */
 
 .badge {
@@ -778,7 +808,7 @@ function handleReturnPlaceholder(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-2);
 }
 
 .total-label {
@@ -791,6 +821,12 @@ function handleReturnPlaceholder(): void {
   font-size: var(--text-xl);
   font-weight: var(--font-bold);
   color: var(--color-text-primary);
+}
+
+.detail-trace {
+  margin-bottom: var(--space-6);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 
 .btn-return {

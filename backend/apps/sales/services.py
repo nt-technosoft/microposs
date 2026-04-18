@@ -5,19 +5,125 @@ Sales business logic — sale creation, profit distribution, returns.
 from decimal import Decimal
 from django.db import models, transaction
 from django.utils import timezone
+from typing import TYPE_CHECKING
 
 from apps.core.services import publish_event
 from apps.core.exceptions import (
     CreditSaleRequiresCustomerError,
-    InsufficientStockError,
-    DuplicateRequestError,
+    DiscountReasonRequiredError,
+    InvalidDiscountReasonError,
+    InvalidUnitPriceError,
+    PricingModeViolationError,
 )
-from apps.inventory.services import get_lots_for_sale, deduct_lot_quantity, restore_lot_quantity
-from apps.inventory.models import Lot, StockMovement
+from apps.inventory.services import (
+    get_lots_for_sale,
+    deduct_lot_quantity,
+    restore_lot_quantity,
+    get_locked_lot,
+    record_sale_stock_movement,
+    record_return_stock_movement,
+)
+from apps.finance.services import resolve_fx_rate_snapshot
 
 from .models import (
     Sale, SaleLine, SaleReturn, SaleReturnLine, PosSession,
 )
+
+if TYPE_CHECKING:
+    from apps.inventory.models import Lot
+
+
+def _validate_unit_price(unit_price: Decimal) -> None:
+    if unit_price <= 0:
+        raise InvalidUnitPriceError()
+
+
+def _resolve_discount_reason_id(
+    *,
+    tenant_id: int,
+    discount_reason_id: int | None,
+    price_changed: bool,
+) -> int | None:
+    """Resolve and validate discount reason when price changed."""
+    if not price_changed:
+        return None
+
+    from apps.catalog.models import DiscountReason
+
+    if discount_reason_id is not None:
+        exists = DiscountReason.objects.filter(
+            tenant_id=tenant_id,
+            pk=discount_reason_id,
+            is_active=True,
+        ).exists()
+        if not exists:
+            raise InvalidDiscountReasonError()
+        return int(discount_reason_id)
+
+    default_reason = (
+        DiscountReason.objects
+        .filter(tenant_id=tenant_id, is_active=True, is_default=True)
+        .order_by('id')
+        .first()
+    )
+    if default_reason is None:
+        default_reason = (
+            DiscountReason.objects
+            .filter(tenant_id=tenant_id, name='Торг')
+            .order_by('id')
+            .first()
+        )
+        if default_reason is None:
+            default_reason = DiscountReason.objects.create(
+                tenant_id=tenant_id,
+                name='Торг',
+                is_default=True,
+                is_active=True,
+            )
+        elif not default_reason.is_active or not default_reason.is_default:
+            default_reason.is_active = True
+            default_reason.is_default = True
+            default_reason.save(update_fields=['is_active', 'is_default', 'updated_at'])
+
+    if default_reason is None:
+        raise DiscountReasonRequiredError()
+
+    return int(default_reason.id)
+
+
+def _validate_line_pricing_policy(
+    *,
+    tenant_id: int,
+    pricing_mode: str,
+    unit_price: Decimal,
+    base_price: Decimal,
+    discount_reason_id: int | None,
+) -> tuple[bool, int | None]:
+    """
+    Enforce pricing mode policy for sales.
+
+    Returns:
+      (price_changed, resolved_discount_reason_id)
+    """
+    _validate_unit_price(unit_price)
+
+    if pricing_mode == 'FIXED_LOCKED' and unit_price != base_price:
+        raise PricingModeViolationError(
+            detail='Fixed price product cannot be sold with a different price.'
+        )
+
+    if pricing_mode == 'ASK_EACH_SALE' and unit_price <= 0:
+        raise InvalidUnitPriceError(
+            detail='Price must be provided for ASK_EACH_SALE products.'
+        )
+
+    price_changed = unit_price != base_price
+    resolved_discount_reason_id = _resolve_discount_reason_id(
+        tenant_id=tenant_id,
+        discount_reason_id=discount_reason_id,
+        price_changed=price_changed,
+    )
+    return price_changed, resolved_discount_reason_id
 
 
 def create_sale(
@@ -29,6 +135,11 @@ def create_sale(
     lines: list[dict],
     client_request_id: str | None = None,
     notes: str = '',
+    operation_date=None,
+    operation_currency: str = 'UZS',
+    operation_amount: Decimal | None = None,
+    fx_rate_snapshot: Decimal | None = None,
+    functional_amount_uzs: Decimal | None = None,
 ) -> Sale:
     """
     Create and complete a sale.
@@ -66,6 +177,14 @@ def create_sale(
             status=PosSession.SessionStatus.OPEN,
         )
 
+        currency = str(operation_currency or 'UZS').upper()
+        resolved_rate = resolve_fx_rate_snapshot(
+            tenant_id=tenant_id,
+            operation_currency=currency,
+            operation_at=operation_date or timezone.now(),
+            fx_rate_snapshot=fx_rate_snapshot,
+        )
+
         # Create sale
         sale = Sale.objects.create(
             tenant_id=tenant_id,
@@ -74,10 +193,21 @@ def create_sale(
             payment_method=payment_method,
             customer_id=customer_id,
             customer_has_existing_debt=customer_has_debt,
+            operation_currency=currency,
+            operation_amount=operation_amount,
+            fx_rate_snapshot=resolved_rate,
+            functional_amount_uzs=functional_amount_uzs,
             client_request_id=client_request_id,
             notes=notes,
             status=Sale.SaleStatus.DRAFT,
         )
+
+        if operation_date is not None:
+            Sale.objects.filter(pk=sale.pk).update(
+                created_at=operation_date,
+                updated_at=operation_date,
+            )
+            sale.refresh_from_db()
 
         total_amount = Decimal('0')
         total_cogs = Decimal('0')
@@ -95,11 +225,19 @@ def create_sale(
                 pk=variant_id, tenant_id=tenant_id,
             )
             base_price = variant.effective_price or Decimal('0')
+            price_changed, resolved_discount_reason_id = _validate_line_pricing_policy(
+                tenant_id=tenant_id,
+                pricing_mode=variant.product.pricing_mode,
+                unit_price=unit_price,
+                base_price=base_price,
+                discount_reason_id=discount_reason_id,
+            )
 
             # Resolve lots (FIFO or manual)
             if lot_id:
-                lot = Lot.objects.select_for_update().get(
-                    pk=lot_id, tenant_id=tenant_id,
+                lot = get_locked_lot(
+                    lot_id=lot_id,
+                    tenant_id=tenant_id,
                 )
                 lot_allocations = [{'lot': lot, 'quantity': quantity}]
             else:
@@ -123,8 +261,8 @@ def create_sale(
                     quantity=alloc_qty,
                     unit_price=unit_price,
                     base_price=base_price,
-                    price_changed=(unit_price != base_price),
-                    discount_reason_id=discount_reason_id if unit_price != base_price else None,
+                    price_changed=price_changed,
+                    discount_reason_id=resolved_discount_reason_id,
                     cost_per_unit=lot.cost_per_unit,
                 )
 
@@ -132,14 +270,12 @@ def create_sale(
                 deduct_lot_quantity(lot, alloc_qty)
 
                 # Record stock movement
-                StockMovement.objects.create(
+                record_sale_stock_movement(
                     tenant_id=tenant_id,
                     lot=lot,
-                    movement_type=StockMovement.MovementType.SALE,
-                    quantity=-alloc_qty,
+                    quantity=alloc_qty,
                     from_location=session.location,
-                    reference_type='sale',
-                    reference_id=sale.pk,
+                    sale_id=sale.pk,
                 )
 
                 total_amount += unit_price * alloc_qty
@@ -148,9 +284,26 @@ def create_sale(
         # Update sale totals and complete
         sale.total_amount = total_amount
         sale.total_cogs = total_cogs
+        if sale.operation_amount is None:
+            if currency == 'UZS':
+                sale.operation_amount = total_amount
+            else:
+                sale.operation_amount = (
+                    total_amount / sale.fx_rate_snapshot
+                ).quantize(Decimal('0.01'))
+        if sale.fx_rate_snapshot is None:
+            sale.fx_rate_snapshot = resolved_rate
+        if sale.functional_amount_uzs is None:
+            sale.functional_amount_uzs = total_amount
         sale.status = Sale.SaleStatus.COMPLETED
         sale.save(update_fields=[
-            'total_amount', 'total_cogs', 'status', 'updated_at',
+            'total_amount',
+            'total_cogs',
+            'operation_amount',
+            'fx_rate_snapshot',
+            'functional_amount_uzs',
+            'status',
+            'updated_at',
         ])
 
         # Update customer balance for credit sales
@@ -162,6 +315,16 @@ def create_sale(
                 outstanding_balance=models.F('outstanding_balance') + total_amount,
             )
 
+        from apps.finance.services import record_sale_journal
+        record_sale_journal(
+            tenant_id=tenant_id,
+            sale_id=sale.pk,
+            total_amount=total_amount,
+            total_cogs=total_cogs,
+            payment_method=payment_method,
+            date=operation_date or sale.created_at,
+        )
+
         # Publish event
         publish_event(
             event_type='sale.completed',
@@ -170,7 +333,7 @@ def create_sale(
                 'total_amount': str(total_amount),
                 'payment_method': payment_method,
                 'lines_count': sale.lines.count(),
-                'date': sale.created_at.isoformat(),
+                'date': (operation_date or sale.created_at).isoformat(),
             },
             tenant_id=tenant_id,
         )
@@ -178,7 +341,7 @@ def create_sale(
     return sale
 
 
-def calculate_profit_distribution(lot: Lot, sale_line: SaleLine) -> list[dict]:
+def calculate_profit_distribution(lot: 'Lot', sale_line: SaleLine) -> list[dict]:
     """
     Calculate who gets what from a single sale line.
     Returns list of {entity_type, entity_id, amount}.
@@ -264,33 +427,40 @@ def process_return(
             notes=notes,
         )
 
+        refund_amount = Decimal('0')
+        cogs_amount = Decimal('0')
+
         for rl_data in return_lines:
             sale_line = SaleLine.objects.get(
                 pk=rl_data['sale_line_id'],
                 sale=sale,
             )
 
+            quantity = rl_data['quantity']
+
             return_line = SaleReturnLine.objects.create(
                 tenant_id=tenant_id,
                 sale_return=sale_return,
                 sale_line=sale_line,
-                quantity=rl_data['quantity'],
+                quantity=quantity,
                 condition=rl_data['condition'],
             )
+            _ = return_line
 
             # Restore lot quantity
-            restore_lot_quantity(sale_line.lot, rl_data['quantity'])
+            restore_lot_quantity(sale_line.lot, quantity)
 
             # Record stock movement
-            StockMovement.objects.create(
+            record_return_stock_movement(
                 tenant_id=tenant_id,
                 lot=sale_line.lot,
-                movement_type=StockMovement.MovementType.RETURN,
-                quantity=rl_data['quantity'],
+                quantity=quantity,
                 to_location=sale.pos_session.location,
-                reference_type='sale_return',
-                reference_id=sale_return.pk,
+                sale_return_id=sale_return.pk,
             )
+
+            refund_amount += sale_line.unit_price * quantity
+            cogs_amount += sale_line.cost_per_unit * quantity
 
             # If damaged, create risk event
             if rl_data['condition'] == 'damaged':
@@ -300,11 +470,21 @@ def process_return(
                     tenant_id=tenant_id,
                     event_type=RiskEvent.EventType.RETURN,
                     lot=sale_line.lot,
-                    quantity=rl_data['quantity'],
-                    monetary_impact=sale_line.cost_per_unit * rl_data['quantity'],
+                    quantity=quantity,
+                    monetary_impact=sale_line.cost_per_unit * quantity,
                     affects_investor=receipt.receipt_type in ('MUDARABA', 'MUSHARAKA'),
                     reason=f'Damaged return from sale #{sale.pk}',
                 )
+
+        from apps.finance.services import record_return_journal
+        record_return_journal(
+            tenant_id=tenant_id,
+            sale_return_id=sale_return.pk,
+            refund_amount=refund_amount,
+            cogs_amount=cogs_amount,
+            payment_method=sale.payment_method,
+            date=sale_return.created_at,
+        )
 
         # Publish event
         publish_event(
@@ -327,13 +507,25 @@ def open_pos_session(
     opening_cash: Decimal = Decimal('0'),
 ) -> PosSession:
     """Open a new POS session (shift)."""
-    return PosSession.objects.create(
+    session = PosSession.objects.create(
         tenant_id=tenant_id,
         location_id=location_id,
         opened_by_id=opened_by_id,
         opening_cash=opening_cash,
         status=PosSession.SessionStatus.OPEN,
     )
+    publish_event(
+        event_type='pos_session.opened',
+        payload={
+            'session_id': session.pk,
+            'location_id': location_id,
+            'opened_by_id': opened_by_id,
+            'opening_cash': str(opening_cash),
+            'opened_at': session.opened_at.isoformat(),
+        },
+        tenant_id=tenant_id,
+    )
+    return session
 
 
 def close_pos_session(
@@ -376,7 +568,21 @@ def close_pos_session(
                 quantity=0,
                 monetary_impact=abs(session.cash_difference),
                 responsible_user_id=closed_by_id,
-                reason=f'Cash mismatch at session close: expected {expected_cash}, actual {actual_cash}',
+                    reason=f'Cash mismatch at session close: expected {expected_cash}, actual {actual_cash}',
             )
+
+        publish_event(
+            event_type='pos_session.closed',
+            payload={
+                'session_id': session.pk,
+                'location_id': session.location_id,
+                'closed_by_id': closed_by_id,
+                'expected_cash': str(expected_cash),
+                'actual_cash': str(actual_cash),
+                'cash_difference': str(session.cash_difference),
+                'closed_at': session.closed_at.isoformat() if session.closed_at else None,
+            },
+            tenant_id=session.tenant_id,
+        )
 
     return session

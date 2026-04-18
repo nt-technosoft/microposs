@@ -2,13 +2,284 @@
 Finance business logic — journal entries, daily summaries.
 """
 
+import json
 from decimal import Decimal
+from datetime import date, datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 from django.db import transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
 
-from .models import Account, JournalEntry, JournalLine
+from .models import Account, Expense, ExchangeRate, JournalEntry, JournalLine
+
+
+_CBU_RATE_URL_TEMPLATE = 'https://cbu.uz/ru/arkhiv-kursov-valyut/json/{currency}/{rate_date}/'
+
+
+def _to_decimal(value: str | int | float | Decimal) -> Decimal:
+    return Decimal(str(value))
+
+
+def _parse_cbu_date(raw: str | None, fallback: date) -> date:
+    if not raw:
+        return fallback
+    text = str(raw).strip()
+    for fmt in ('%d.%m.%Y', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return fallback
+
+
+def _parse_cbu_rate_payload(
+    payload: object,
+    *,
+    base_currency: str,
+    target_date: date,
+) -> tuple[Decimal, date, dict]:
+    rows: list[dict] = []
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+    elif isinstance(payload, dict):
+        rows = [payload]
+
+    if not rows:
+        raise ValueError(f'CBU returned empty payload for {base_currency} on {target_date}')
+
+    row = rows[0]
+    rate_raw = _to_decimal(str(row.get('Rate', '0')).replace(',', '.'))
+    nominal_raw = _to_decimal(str(row.get('Nominal', '1')).replace(',', '.'))
+    if nominal_raw <= 0:
+        nominal_raw = Decimal('1')
+
+    # Canonical storage: quote for 1 unit of base currency.
+    per_unit_rate = (rate_raw / nominal_raw).quantize(Decimal('0.000001'))
+    if per_unit_rate <= 0:
+        raise ValueError(f'CBU returned invalid rate for {base_currency} on {target_date}')
+
+    effective_date = _parse_cbu_date(str(row.get('Date', '') or ''), target_date)
+    return per_unit_rate, effective_date, row
+
+
+def fetch_official_cbu_rate(base_currency: str, rate_date: date) -> tuple[Decimal, date, dict]:
+    """
+    Fetch official FX rate from CBU JSON endpoint.
+    Returns (rate_per_1_unit, effective_date, raw_payload_row).
+    """
+    currency = str(base_currency or 'USD').upper()
+    target_date = rate_date.isoformat()
+    url = _CBU_RATE_URL_TEMPLATE.format(currency=currency, rate_date=target_date)
+    req = Request(
+        url,
+        headers={
+            'Accept': 'application/json',
+            'User-Agent': 'MicroPOS/1.0 (+https://microposs.local)',
+        },
+    )
+    try:
+        with urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode('utf-8'))
+    except HTTPError as exc:
+        raise ValueError(
+            f'CBU request failed for {currency} on {rate_date}: HTTP {exc.code}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            f'CBU request failed for {currency} on {rate_date}: {exc.reason}'
+        ) from exc
+
+    return _parse_cbu_rate_payload(payload, base_currency=currency, target_date=rate_date)
+
+
+def upsert_exchange_rate(
+    *,
+    tenant_id: int,
+    base_currency: str,
+    quote_currency: str,
+    rate_date: date,
+    rate: Decimal,
+    source: str,
+    is_manual: bool,
+    notes: str = '',
+    raw_payload: dict | None = None,
+    overwrite_manual: bool = False,
+) -> tuple[ExchangeRate, bool]:
+    """
+    Create or update rate for (tenant, base, quote, date).
+    If existing row is manual and overwrite_manual=False, automatic refresh keeps manual value.
+    """
+    base = str(base_currency or 'USD').upper()
+    quote = str(quote_currency or 'UZS').upper()
+    normalized_rate = _to_decimal(rate).quantize(Decimal('0.000001'))
+    if normalized_rate <= 0:
+        raise ValueError('FX rate must be > 0')
+
+    with transaction.atomic():
+        existing = (
+            ExchangeRate.objects
+            .select_for_update()
+            .filter(
+                tenant_id=tenant_id,
+                base_currency=base,
+                quote_currency=quote,
+                rate_date=rate_date,
+            )
+            .first()
+        )
+
+        if existing is not None:
+            if existing.is_manual and source != ExchangeRate.Source.MANUAL and not overwrite_manual:
+                return existing, False
+
+            existing.rate = normalized_rate
+            existing.source = source
+            existing.is_manual = is_manual
+            existing.notes = notes
+            existing.raw_payload = raw_payload or {}
+            existing.fetched_at = timezone.now()
+            existing.save(update_fields=[
+                'rate',
+                'source',
+                'is_manual',
+                'notes',
+                'raw_payload',
+                'fetched_at',
+                'updated_at',
+            ])
+            return existing, False
+
+        created = ExchangeRate.objects.create(
+            tenant_id=tenant_id,
+            base_currency=base,
+            quote_currency=quote,
+            rate_date=rate_date,
+            rate=normalized_rate,
+            source=source,
+            is_manual=is_manual,
+            notes=notes,
+            raw_payload=raw_payload or {},
+            fetched_at=timezone.now(),
+        )
+        return created, True
+
+
+def sync_official_exchange_rate(
+    *,
+    tenant_id: int,
+    base_currency: str = 'USD',
+    quote_currency: str = 'UZS',
+    rate_date: date | None = None,
+    overwrite_manual: bool = False,
+) -> tuple[ExchangeRate, bool]:
+    """
+    Pull official rate from CBU and save to tenant history table.
+    """
+    quote = str(quote_currency or 'UZS').upper()
+    if quote != 'UZS':
+        raise ValueError('Only UZS quote currency is supported for official CBU sync')
+
+    target_date = rate_date or timezone.localdate()
+    rate, effective_date, raw = fetch_official_cbu_rate(
+        base_currency=str(base_currency or 'USD').upper(),
+        rate_date=target_date,
+    )
+    return upsert_exchange_rate(
+        tenant_id=tenant_id,
+        base_currency=str(base_currency or 'USD').upper(),
+        quote_currency=quote,
+        rate_date=effective_date,
+        rate=rate,
+        source=ExchangeRate.Source.CBU,
+        is_manual=False,
+        notes='Official CBU sync',
+        raw_payload=raw,
+        overwrite_manual=overwrite_manual,
+    )
+
+
+def get_fx_rate_for_date(
+    *,
+    tenant_id: int,
+    base_currency: str,
+    quote_currency: str = 'UZS',
+    rate_date: date | None = None,
+) -> ExchangeRate | None:
+    """
+    Get nearest historical rate up to requested date.
+    """
+    base = str(base_currency or 'USD').upper()
+    quote = str(quote_currency or 'UZS').upper()
+    target_date = rate_date or timezone.localdate()
+    return (
+        ExchangeRate.objects
+        .filter(
+            tenant_id=tenant_id,
+            base_currency=base,
+            quote_currency=quote,
+            rate_date__lte=target_date,
+        )
+        .order_by('-rate_date', '-is_manual', '-updated_at')
+        .first()
+    )
+
+
+def resolve_fx_rate_snapshot(
+    *,
+    tenant_id: int,
+    operation_currency: str,
+    operation_at: datetime | date | None = None,
+    fx_rate_snapshot: Decimal | None = None,
+) -> Decimal:
+    """
+    Resolve immutable FX snapshot for operation datetime/date.
+    """
+    currency = str(operation_currency or 'UZS').upper()
+    if currency == 'UZS':
+        return Decimal('1')
+
+    if fx_rate_snapshot is not None:
+        provided = _to_decimal(fx_rate_snapshot).quantize(Decimal('0.000001'))
+        if provided <= 0:
+            raise ValueError('fx_rate_snapshot must be > 0')
+        return provided
+
+    if isinstance(operation_at, datetime):
+        target_date = operation_at.date()
+    elif isinstance(operation_at, date):
+        target_date = operation_at
+    else:
+        target_date = timezone.localdate()
+
+    rate_row = get_fx_rate_for_date(
+        tenant_id=tenant_id,
+        base_currency=currency,
+        quote_currency='UZS',
+        rate_date=target_date,
+    )
+    if rate_row is None:
+        raise ValueError(
+            f'FX rate for {currency}/UZS is missing on {target_date}. '
+            f'Add manual rate or run official sync first.'
+        )
+    return _to_decimal(rate_row.rate).quantize(Decimal('0.000001'))
+
+
+def to_functional_amount_uzs(
+    *,
+    operation_amount: Decimal,
+    operation_currency: str,
+    fx_rate_snapshot: Decimal,
+) -> Decimal:
+    amount = _to_decimal(operation_amount).quantize(Decimal('0.01'))
+    currency = str(operation_currency or 'UZS').upper()
+    if currency == 'UZS':
+        return amount
+    rate = _to_decimal(fx_rate_snapshot).quantize(Decimal('0.000001'))
+    return (amount * rate).quantize(Decimal('0.01'))
 
 
 def get_account(tenant_id: int, code: str) -> Account:
@@ -331,6 +602,101 @@ def record_supplier_payment_journal(
         description=f'Supplier payment #{payment_id}',
         date=date,
     )
+
+
+def record_expense(
+    *,
+    tenant_id: int,
+    title: str,
+    operation_amount: Decimal,
+    payment_method: str,
+    occurred_at,
+    category: str = '',
+    notes: str = '',
+    operation_currency: str = 'UZS',
+    fx_rate_snapshot: Decimal | None = None,
+    functional_amount_uzs: Decimal | None = None,
+    source_account_code: str | None = None,
+) -> Expense:
+    """Record non-supplier expense as a first-class domain operation."""
+    amount = Decimal(str(operation_amount)).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('operation_amount must be > 0')
+
+    currency = str(operation_currency or 'UZS').upper()
+    rate = resolve_fx_rate_snapshot(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=occurred_at,
+        fx_rate_snapshot=fx_rate_snapshot,
+    )
+
+    if functional_amount_uzs is None:
+        functional = to_functional_amount_uzs(
+            operation_amount=amount,
+            operation_currency=currency,
+            fx_rate_snapshot=rate,
+        )
+    else:
+        functional = Decimal(str(functional_amount_uzs)).quantize(Decimal('0.01'))
+
+    if source_account_code:
+        cash_account_code = source_account_code
+    elif payment_method == 'bank':
+        cash_account_code = '1010'
+    else:
+        cash_account_code = '1000'
+
+    with transaction.atomic():
+        expense = Expense.objects.create(
+            tenant_id=tenant_id,
+            title=title,
+            category=category,
+            payment_method=payment_method,
+            source_account_code=cash_account_code,
+            operation_currency=currency,
+            operation_amount=amount,
+            fx_rate_snapshot=rate,
+            functional_amount_uzs=functional,
+            occurred_at=occurred_at,
+            notes=notes,
+        )
+
+        create_journal_entry(
+            tenant_id=tenant_id,
+            operation_type='payment',
+            operation_id=expense.pk,
+            lines=[
+                {
+                    'account_code': '5300',
+                    'debit': functional,
+                    'credit': Decimal('0'),
+                    'description': f'Expense #{expense.pk}: {title}',
+                },
+                {
+                    'account_code': cash_account_code,
+                    'debit': Decimal('0'),
+                    'credit': functional,
+                    'description': f'Expense #{expense.pk} source',
+                },
+            ],
+            description=f'Expense #{expense.pk}: {title}',
+            date=occurred_at,
+        )
+
+        publish_event(
+            event_type='expense.recorded',
+            payload={
+                'expense_id': expense.pk,
+                'amount_uzs': str(functional),
+                'currency': currency,
+                'operation_amount': str(amount),
+                'date': occurred_at.isoformat(),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return expense
 
 
 def get_account_balance(tenant_id: int, account_code: str) -> Decimal:

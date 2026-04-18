@@ -49,3 +49,7 @@ frontend/.env.*
 
 # Logs
 *.log
+
+# E2E artifacts
+test-results/
+playwright-report/

@@ -137,6 +137,10 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
             lines=[dict(line) for line in data['lines']],
             client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
             notes=data.get('notes', ''),
+            operation_currency=data.get('operation_currency', 'UZS'),
+            operation_amount=data.get('operation_amount'),
+            fx_rate_snapshot=data.get('fx_rate_snapshot'),
+            functional_amount_uzs=data.get('functional_amount_uzs'),
         )
 
         output = SaleDetailSerializer(sale)

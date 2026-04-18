@@ -1,80 +1,111 @@
 # MicroPOS — Implementation Status
 
-**Snapshot date:** 2026-04-13  
+**Snapshot date:** 2026-04-15  
 **Branch:** `codex/bootstrap`  
-**Source of truth:** codebase + `AGENTS.md` + this status file
+**Hardening track:** Architecture Hardening Program
+
+## Current Pass: Products/Categories/Pricing/Sales Cart
+
+| Scope | Status | Notes |
+|---|---|---|
+| Product photo | `Implemented` | Added product photo field + upload/remove API contract + frontend create/edit support |
+| Category templates | `Partial` | Added UI/API for template attributes/characteristics and apply-settings; requires final UX polishing |
+| Product create/edit flow | `Partial` | Unified around pricing mode + description + characteristics + photo; variant UX improved, deep variant editor still pending |
+| Sales pricing-mode flow | `Partial` | Backend now enforces pricing policy + discount reason rules; frontend applies price-mode behavior in ProductDetail |
+| Discount reason propagation | `Implemented` | Cart/checkout now sends `discount_reason_id`; backend resolves default `Торг` when price changed |
+| Location-aware variant stock | `Implemented` | Added location-aware stock context in product/variant serializers and sales screens |
+
+## Gate Progress
+
+| Gate | Status | Notes |
+|---|---|---|
+| Gate A (backend invariants + finance/outbox) | `Done` | Added financial/outbox integrity tests and service hardening for contract-scoped investor logic |
+| Gate B (role matrix API) | `Done` | Added role-matrix tests for `owner/cashier/warehouse/investor`; aligned permissions |
+| Gate C (frontend build/type + contract alignment) | `Done` | Frontend build green after pagination-safe adapters and session/cart flow fixes |
+| Gate D (full regression + final compliance report) | `In progress` | Compliance matrix added; full negative regression expansion remains |
 
 ## Module Matrix
 
 | Area | Scope | Status | Notes |
 |---|---|---|---|
-| Auth | JWT login/refresh | `Implemented` | Token endpoints work; local demo users provisioned. |
-| Sales | Catalog, cart, checkout, history | `Partial` | Core flow работает; требуется полноформатный UI smoke + сессионный UX polishing. |
-| Products | list/create/edit/categories | `Implemented` | API + views рабочие; create/edit/list verified. |
-| Intake | list/create/detail/confirm | `Implemented` | Create+confirm smoke passed, lot creation verified. |
-| Reports | Dashboard + date filters + debt/cash blocks | `Implemented` | Frontend contract aligned with backend finance payloads. |
-| More | Customers/Suppliers/Settings | `Implemented` | CRUD/pay flows доступны, состояния empty/error/loading есть. |
-| Investors | Dashboard + contract detail | `Implemented` | Investor-only data endpoints return seeded data. |
-| Routing | Main routes + simple seller restrictions | `Implemented` | Frontend role-guard closed via `/api/v1/auth/me` + route `meta.roles` checks. |
-| Backend schema | Domain migrations | `Implemented` | Initial migrations generated for all business apps. |
-| Demo data | Seed/bootstrap | `Implemented` | Added idempotent `bootstrap_demo` command. |
-| Backend quality gate | warnings + smoke tests | `Implemented` | Decimal/pagination warnings removed, smoke tests added and passing. |
+| Auth | JWT + role context | `Implemented` | `auth/me` used as runtime role source |
+| Sales | Catalog/cart/checkout/history | `Partial` | Runtime guard fixes merged; full e2e scenario pack still pending |
+| Products | list/create/edit/categories | `Implemented` | Role/access and API contracts aligned |
+| Intake | list/create/detail/confirm | `Partial` | Role-safe financing flow fixed for warehouse; participant validation polish remains |
+| Reports | dashboard/read models | `Implemented` | Build/type passes and endpoints aligned |
+| More | Customers/Suppliers/Settings | `Implemented` | Core flows available, permissions aligned |
+| Investors | cabinet + contracts | `Partial` | Contract-scoped aggregation fixed; broader owner-side workflows pending |
+| Role model | backend + frontend guards | `Implemented` | See `docs/role-matrix.md` |
+| Compliance docs | invariant evidence | `Implemented` | See `docs/compliance-matrix.md` |
 
-## Closed In Current Iteration
+## Completed In This Iteration
 
-1. Resolved backend access blockers for current auth model:
-   - role fallback via Django groups + owner/superuser detection,
-   - tenant fallback via owner business / investor profile / header / single-tenant dev fallback.
-2. Added deterministic local bootstrap command:
-   - creates users, role groups, tenant, baseline product/intake/sale, finance summary, investor summary.
-3. Aligned frontend finance API adapter to backend contracts:
-   - pagination-safe parsing,
-   - mapping `daily-summaries` and `cash-flow`,
-   - corrected trial-balance endpoint path.
-4. Fixed broken cart navigation target:
-   - removed dead `/sessions` route jump.
-5. Closed frontend auth/role gap:
-   - added backend endpoint `GET /api/v1/auth/me`,
-   - implemented `fetchUser/ensureUserLoaded` in auth store,
-   - enabled strict route guard based on `meta.roles`,
-   - tightened bottom-nav fallback for unknown role.
-6. Added startup source artifacts into repository:
-   - `docs/source-inputs/MicroPOS_Claude_Code_Playbook.md`,
-   - `docs/source-inputs/MicroPOS_BRD_v2.docx`,
-   - `docs/source-inputs/README.md`.
-7. Closed low-priority backend warning backlog:
-   - converted Decimal serializer bounds to `Decimal(...)`,
-   - fixed unordered pagination by adding default ordering for:
-     `LocationViewSet`, `ProductVariantViewSet`, `ConsignmentAgreementViewSet`.
-8. Added automated backend smoke tests:
-   - `apps.core.tests.test_api_smoke` (auth context, read endpoints, critical write flow).
+1. Backend invariants hardening:
+   - sale/receipt/return/payment/writeoff financial journaling verified by tests,
+   - outbox coverage expanded to key operation events,
+   - investor aggregation and contract-close checks moved to contract-scoped logic.
+2. Role model hardening:
+   - introduced warehouse demo user (`bootstrap_demo`),
+   - aligned read/write permissions with role matrix,
+   - added API positive/negative role tests.
+3. Frontend contract alignment:
+   - pagination-safe adapters for catalog/inventory/sales/investors/risk/analytics/customers/suppliers,
+   - fixed risk API path mismatches,
+   - centralized POS session preloading in router for sales roles,
+   - fixed cart visibility guard on cart/checkout paths,
+   - added defensive guard for add-to-cart event payload.
+4. Products + Intake UX hardening (post-review):
+   - replaced native selects with sheet-based `BaseSelect` across product/intake screens to remove broken popup anchoring,
+   - improved intake item picker: full variant browse by default + category chips + search by name/SKU/attributes,
+   - standardized SKU fallback (`display_sku`) backend/frontend so empty SKU no longer blocks operations,
+   - expanded product edit form to include category, pricing mode, and description (not only name/price/active),
+   - surfaced SKU in product list and intake lines for operator visibility,
+   - fixed `warehouse` intake bootstrap by splitting reference loading (locations no longer blocked by 403 on suppliers/investors),
+   - limited warehouse financing types in intake form to allowed operational flow (`Свои деньги`).
+5. Role-support UX update:
+   - opened `/settings` route for `investor`,
+   - added settings entry action in investor cabinet header for language/theme/logout access.
+6. Dev auth stability hardening:
+   - incident root cause confirmed: PostgreSQL connection exhaustion (`too many clients already`) caused `500` on `/api/v1/auth/token/`,
+   - `development` settings now force non-persistent DB connections (`CONN_MAX_AGE=0`) with health checks enabled,
+   - operational rule fixed: run exactly one backend `runserver` process in local dev.
 
-## Smoke Result (Local)
+## Excel Alignment (Iteration 1)
 
-**Infra:** `redis + backend + frontend` started successfully.
+| Scope | Status | Notes |
+|---|---|---|
+| Canonical source model docs | `Implemented` | Added source model, sheet mapping, reconciliation spec, and gap backlog docs |
+| Staging import layer | `Implemented` | Added `ExcelImportBatch` + `ExcelImportRow` with row fingerprint, parse status, and money trace fields |
+| Import pipeline command | `Implemented` | Added `excel_align_import` with modes: `dry-run`, `load-master`, `load-transactions`, `reconcile` |
+| Primary events import | `Implemented` | Pipeline processes `MALUMOTLAR`, `SOTIB OLISH`, `STOCK TRANSFER`, `SOTUV`, `TUSHUM`, `XARAJAT`, `PUL AYRIBOSHLASH` |
+| Reconciliation baseline | `Implemented` | Reconcile mode computes DB-based cash, stock, AR/AP, revenue, COGS, gross profit + expected deltas |
+| Source of truth parity | `Partial` | Core operational logic covered; advanced report parity and optimizer backlog fixed in `docs/excel-gap-backlog.md` |
 
-### Route smoke (frontend)
-- `/sales` -> `200`
-- `/products` -> `200`
-- `/intake` -> `200`
-- `/reports` -> `200`
-- `/customers` -> `200`
-- `/suppliers` -> `200`
-- `/settings` -> `200`
-- `/investor` -> `200`
+## Excel Alignment (Iteration 2)
 
-### API smoke (authenticated)
-- Owner: products/categories/receipts/sessions/sales/customers/suppliers/reports -> `200` + non-empty counts.
-- Investor: summaries/profit-records -> `200` + non-empty counts.
+| Scope | Status | Notes |
+|---|---|---|
+| Sandbox pilot runbook | `Implemented` | Added `excel_align_pilot` command (`dry-run -> load-master -> load-transactions(slice) -> reconcile`) |
+| Gap-log categorization | `Implemented` | `ExcelImportRow.failure_category` now classifies failed rows (`parse/mapping/domain/other`) |
+| AP lifecycle hardening | `Implemented` | Supplier credit accrual moved into `inventory.confirm_receipt` domain flow + outbox event `supplier.payable_accrued` |
+| Expense first-class domain | `Implemented` | Added `finance.Expense` model/service/API and journal/outbox integration |
+| Timestamp parity | `Implemented` | Expense, sale, receipt, customer/supplier payment flows preserve operation datetime in financial side-effects |
+| Multi-currency trace in read models | `Implemented` | Added `operation_currency/operation_amount/fx_rate_snapshot/functional_amount_uzs` to receipt/sale/payment reads |
+| Reconciliation owner endpoint | `Implemented` | Added `/api/v1/core/excel/reconciliation/latest/` with `computed/expected/deltas + gap_summary` |
+| Frontend parity widgets | `Implemented` | Reports dashboard now shows KASSA/OMBOR/AR/AP operational cards + link to reconciliation view |
+| Frontend FX/source visibility | `Implemented` | Added source+functional trace badges in Intake list and Sales history |
+| Import posted-flag normalization | `Implemented` | Fixed Excel `POSTED=None` handling in importer (`None` treated as blank/posted by default), removed false transaction skips |
+| FX history + official sync | `Implemented` | Added `finance.ExchangeRate`, owner API (`fx-rates` manual/refresh/latest), CBU sync command, and service-level snapshot resolver |
 
-### Critical writes
-- `POST /api/v1/catalog/products/` -> `201`
-- `POST /api/v1/inventory/receipts/` -> `201`
-- `POST /api/v1/inventory/receipts/{id}/confirm/` -> `200`
-- `POST /api/v1/sales/sales/` -> `201`
+## Evidence (Automated)
 
-## Remaining Work (Next Priority)
+- `backend/apps/core/tests/test_api_smoke.py`
+- `backend/apps/core/tests/test_financial_integrity.py`
+- `backend/apps/core/tests/test_role_matrix.py`
+- Frontend gate: `npm run build` (green)
 
-1. Full route-level UI smoke in browser session (manual checklist + screenshots).
-2. Add frontend automated smoke (Playwright/Cypress) for auth + route guards + critical flow.
-3. Keep backend API smoke in CI and expand with negative scenarios (validation, permissions, empty/error states).
+## Remaining Work
+
+1. Expand invariant negatives (`delete` forbiddance, immutable update attempts, non-receipt stock injection).
+2. Full manual/e2e role smoke for all critical screens and mobile overlap scenarios.
+3. Finalize Gate D with consolidated regression + sign-off report.

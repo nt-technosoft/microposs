@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 from apps.core.exceptions import DuplicateRequestError
+from decimal import Decimal
 
 from .models import (
     Location, Receipt, ReceiptLine, ReceiptParticipant,
@@ -26,9 +27,13 @@ from .services import (
 
 class LocationViewSet(viewsets.ModelViewSet):
     serializer_class = LocationSerializer
-    permission_classes = [IsOwner]
     search_fields = ['name']
     ordering = ['name']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsWarehouse()]
+        return [IsOwner()]
 
     def get_queryset(self):
         return Location.objects.filter(tenant_id=self.request.tenant_id)
@@ -45,9 +50,7 @@ class ReceiptViewSet(viewsets.ModelViewSet):
     ordering = ['-date']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve'):
-            return [IsWarehouse()]
-        return [IsOwner()]
+        return [IsWarehouse()]
 
     def get_queryset(self):
         qs = Receipt.objects.filter(
@@ -87,6 +90,10 @@ class ReceiptViewSet(viewsets.ModelViewSet):
                 return Response(output.data, status=status.HTTP_200_OK)
 
         # Create receipt
+        total_operation_amount = sum(
+            Decimal(str(line_data['cost_per_unit'])) * int(line_data['quantity'])
+            for line_data in data['lines']
+        )
         receipt = Receipt.objects.create(
             tenant_id=request.tenant_id,
             receipt_type=data['receipt_type'],
@@ -96,6 +103,10 @@ class ReceiptViewSet(viewsets.ModelViewSet):
             investor_contract_id=data.get('investor_contract_id'),
             payable_terms=data.get('payable_terms'),
             consignment_rule=data.get('consignment_rule'),
+            operation_currency='UZS',
+            operation_amount=total_operation_amount,
+            fx_rate_snapshot=Decimal('1'),
+            functional_amount_uzs=total_operation_amount,
             notes=data.get('notes', ''),
             client_request_id=client_request_id,
             status=Receipt.ReceiptStatus.DRAFT,

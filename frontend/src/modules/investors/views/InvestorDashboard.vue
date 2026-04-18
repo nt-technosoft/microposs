@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Wallet, Landmark, TrendingUp, ChevronRight, RefreshCcw } from 'lucide-vue-next'
+import { Wallet, Landmark, TrendingUp, ChevronRight, RefreshCcw, Settings } from 'lucide-vue-next'
 import api from '@/api/client'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -123,9 +123,19 @@ onMounted(loadDashboard)
   <div class="dashboard-page">
     <header class="page-header">
       <h1 class="page-title">Кабинет инвестора</h1>
-      <button class="refresh-btn" type="button" aria-label="Обновить" @click="loadDashboard">
-        <RefreshCcw :size="16" :stroke-width="1.75" />
-      </button>
+      <div class="header-actions">
+        <button
+          class="refresh-btn"
+          type="button"
+          aria-label="Настройки"
+          @click="router.push({ name: 'settings' })"
+        >
+          <Settings :size="16" :stroke-width="1.75" />
+        </button>
+        <button class="refresh-btn" type="button" aria-label="Обновить" @click="loadDashboard">
+          <RefreshCcw :size="16" :stroke-width="1.75" />
+        </button>
+      </div>
     </header>
 
     <main class="content">
@@ -224,6 +234,12 @@ onMounted(loadDashboard)
   padding: 0 var(--space-4);
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-primary);
+}
+
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .page-title {

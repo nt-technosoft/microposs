@@ -38,3 +38,27 @@ class CreditSaleRequiresCustomerError(APIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = 'Credit sales require a customer.'
     default_code = 'customer_required'
+
+
+class PricingModeViolationError(APIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'Sale line does not match product pricing mode.'
+    default_code = 'pricing_mode_violation'
+
+
+class InvalidUnitPriceError(APIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'Unit price must be a positive number.'
+    default_code = 'invalid_unit_price'
+
+
+class DiscountReasonRequiredError(APIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'Discount reason is required when sale price differs from base price.'
+    default_code = 'discount_reason_required'
+
+
+class InvalidDiscountReasonError(APIException):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'Discount reason is invalid or inactive.'
+    default_code = 'discount_reason_invalid'
