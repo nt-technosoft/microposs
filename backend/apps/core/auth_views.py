@@ -28,7 +28,7 @@ class CurrentUserView(APIView):
         return Response({
             'id': request.user.id,
             'username': request.user.username,
-            'role': resolve_user_role(request.user),
+            'role': resolve_user_role(request.user, tenant_id),
             'active_tenant_id': tenant_id,
             'tenant_name': tenant_name or '',
         })

@@ -9,6 +9,7 @@ from apps.catalog.services import create_product_with_variants
 from apps.core.models import Business, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
+from apps.finance.models import CashAccount, Account
 from apps.inventory.models import Warehouse
 from apps.partnerships.models import Procurement
 from apps.partnerships.services import (
@@ -28,6 +29,20 @@ def build_tenant():
         owner=owner, name='Test Tenant', currency='UZS', is_active=True,
     )
     setup_chart_of_accounts(business.id)
+    cash_account = CashAccount.objects.create(
+        tenant=business,
+        name='Main Cash',
+        currency='UZS',
+        kind=CashAccount.Kind.CASH,
+        linked_account=Account.objects.get(tenant=business, code='1000'),
+    )
+    card_account = CashAccount.objects.create(
+        tenant=business,
+        name='Main Card',
+        currency='UZS',
+        kind=CashAccount.Kind.CARD_TERMINAL,
+        linked_account=Account.objects.get(tenant=business, code='1010'),
+    )
 
     operator = Partner.objects.create(
         tenant=business, role=Partner.Role.OPERATOR,
@@ -67,6 +82,7 @@ def build_tenant():
         'store': store, 'storage': storage,
         'supplier': supplier, 'customer': customer,
         'product': product, 'variant': variant,
+        'cash_account': cash_account, 'card_account': card_account,
     }
 
 

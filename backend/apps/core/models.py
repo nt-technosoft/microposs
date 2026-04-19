@@ -49,7 +49,7 @@ class TenantModel(BaseModel):
         abstract = True
 
 
-IMMUTABLE_STATUSES = frozenset({'confirmed', 'completed', 'closed'})
+IMMUTABLE_STATUSES = frozenset({'confirmed', 'completed', 'closed', 'received'})
 
 
 class ImmutableMixin:
@@ -61,7 +61,8 @@ class ImmutableMixin:
     def save(self, *args, **kwargs):
         if self.pk:
             original = self.__class__.objects.get(pk=self.pk)
-            if original.status in IMMUTABLE_STATUSES:
+            original_status = str(getattr(original, 'status', '')).strip().lower()
+            if original_status in IMMUTABLE_STATUSES:
                 raise ImmutableRecordError(
                     f"Cannot modify {self.__class__.__name__} "
                     f"in status '{original.status}'"
@@ -69,11 +70,13 @@ class ImmutableMixin:
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if hasattr(self, 'status') and self.status in IMMUTABLE_STATUSES:
-            raise ImmutableRecordError(
-                f"Cannot delete {self.__class__.__name__} "
-                f"in status '{self.status}'"
-            )
+        if hasattr(self, 'status'):
+            current_status = str(getattr(self, 'status', '')).strip().lower()
+            if current_status in IMMUTABLE_STATUSES:
+                raise ImmutableRecordError(
+                    f"Cannot delete {self.__class__.__name__} "
+                    f"in status '{self.status}'"
+                )
         self.soft_delete()
 
 
@@ -137,6 +140,9 @@ class OutboxEvent(BaseModel):
     event_type = models.CharField(max_length=100, db_index=True)
     payload = models.JSONField()
     processed_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+    attempts = models.PositiveIntegerField(default=0)
     tenant_id = models.IntegerField(db_index=True)
 
     class Meta:
@@ -154,7 +160,15 @@ class OutboxEvent(BaseModel):
 
     def mark_processed(self):
         self.processed_at = timezone.now()
-        self.save(update_fields=['processed_at', 'updated_at'])
+        self.failed_at = None
+        self.last_error = ''
+        self.save(update_fields=['processed_at', 'failed_at', 'last_error', 'updated_at'])
+
+    def mark_failed(self, error_message: str):
+        self.failed_at = timezone.now()
+        self.last_error = error_message[:2000]
+        self.attempts = self.attempts + 1
+        self.save(update_fields=['failed_at', 'last_error', 'attempts', 'updated_at'])
 
 
 class ExcelImportBatch(TenantModel):

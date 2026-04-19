@@ -124,7 +124,7 @@ class ReceiptDetailSerializer(serializers.ModelSerializer):
     def get_lots(self, obj):
         if obj.status != Receipt.ReceiptStatus.CONFIRMED:
             return []
-        lots = obj.lots.select_related('product_variant', 'location').all()
+        lots = obj.lots.select_related('product_variant', 'receipt').prefetch_related('stocks__warehouse').all()
         return LotSerializer(lots, many=True).data
 
 

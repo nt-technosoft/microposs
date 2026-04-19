@@ -25,15 +25,39 @@ def _coerce_tenant_id(raw_value) -> int | None:
     return tenant_id if tenant_id > 0 else None
 
 
+def _user_has_tenant_access(user, tenant_id: int | None) -> bool:
+    if tenant_id is None or not getattr(user, 'is_authenticated', False):
+        return False
+
+    if user.is_superuser or user.is_staff:
+        return True
+
+    if hasattr(user, 'owned_businesses') and user.owned_businesses.filter(id=tenant_id, is_active=True).exists():
+        return True
+
+    from apps.core.models import Partner
+
+    return Partner.objects.filter(
+        user_id=user.id,
+        tenant_id=tenant_id,
+        is_active=True,
+    ).exists()
+
+
 def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
     if not getattr(user, 'is_authenticated', False):
         return _coerce_tenant_id(header_tenant_id)
 
-    tenant_id = _coerce_tenant_id(getattr(user, 'active_tenant_id', None))
-    if tenant_id is None:
-        tenant_id = _coerce_tenant_id(header_tenant_id)
+    explicit_candidates = [
+        _coerce_tenant_id(getattr(user, 'active_tenant_id', None)),
+        _coerce_tenant_id(header_tenant_id),
+    ]
+    for candidate in explicit_candidates:
+        if _user_has_tenant_access(user, candidate):
+            return candidate
 
-    if tenant_id is None and hasattr(user, 'owned_businesses'):
+    tenant_id = None
+    if hasattr(user, 'owned_businesses'):
         owned_business_id = (
             user.owned_businesses
             .filter(is_active=True)
@@ -44,16 +68,16 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
         tenant_id = _coerce_tenant_id(owned_business_id)
 
     if tenant_id is None:
-        from apps.investors.models import Investor
+        from apps.core.models import Partner
 
-        investor_tenant_id = (
-            Investor.objects
+        partner_tenant_id = (
+            Partner.objects
             .filter(user_id=user.id, is_active=True)
             .order_by('id')
             .values_list('tenant_id', flat=True)
             .first()
         )
-        tenant_id = _coerce_tenant_id(investor_tenant_id)
+        tenant_id = _coerce_tenant_id(partner_tenant_id)
 
     if tenant_id is None and (user.is_superuser or user.is_staff):
         from apps.core.models import Business
@@ -113,21 +137,6 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
         if normalized in KNOWN_ROLES:
             return normalized
 
-    group_names = {
-        name.strip().lower()
-        for name in user.groups.values_list('name', flat=True)
-        if isinstance(name, str)
-    }
-    for role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE, ROLE_INVESTOR):
-        if role in group_names:
-            return role
-
-    if user.is_superuser or user.is_staff:
-        return ROLE_OWNER
-
-    if hasattr(user, 'owned_businesses') and user.owned_businesses.exists():
-        return ROLE_OWNER
-
     from apps.core.models import Partner
 
     partner_query = Partner.objects.filter(user_id=user.id, is_active=True)
@@ -143,6 +152,21 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
     if partner_role == Partner.Role.INVESTOR:
         return ROLE_INVESTOR
     if partner_role == Partner.Role.OPERATOR:
+        return ROLE_OWNER
+
+    group_names = {
+        name.strip().lower()
+        for name in user.groups.values_list('name', flat=True)
+        if isinstance(name, str)
+    }
+    for role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE, ROLE_INVESTOR):
+        if role in group_names:
+            return role
+
+    if user.is_superuser or user.is_staff:
+        return ROLE_OWNER
+
+    if hasattr(user, 'owned_businesses') and user.owned_businesses.exists():
         return ROLE_OWNER
 
     return None

@@ -62,7 +62,7 @@ class ReceiptViewSet(viewsets.ModelViewSet):
                 'lines__product_variant',
                 'participants',
                 'lots__product_variant',
-                'lots__location',
+                'lots__stocks__warehouse',
             )
         return qs
 

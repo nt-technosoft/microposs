@@ -153,7 +153,7 @@ class Sale(ImmutableMixin, TenantModel):
         return f"Sale #{self.pk} ({self.status})"
 
     def delete(self, *args, **kwargs):
-        self.soft_delete()
+        raise ValueError('Physical delete forbidden for Sale.')
 
 
 class SalePayment(TenantModel):

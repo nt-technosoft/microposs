@@ -2,12 +2,16 @@
 Celery tasks for background aggregation.
 """
 
+import logging
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from celery import shared_task
-from django.db.models import Sum, F
+from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task
@@ -18,12 +22,26 @@ def process_outbox_events():
     """
     from apps.core.models import OutboxEvent
 
-    events = OutboxEvent.objects.filter(
-        processed_at__isnull=True,
-    ).order_by('created_at')[:100]
+    with transaction.atomic():
+        events = list(
+            OutboxEvent.objects
+            .select_for_update(skip_locked=True)
+            .filter(processed_at__isnull=True)
+            .order_by('created_at')[:100]
+        )
 
     for event in events:
-        _dispatch_event(event)
+        try:
+            handled = _dispatch_event(event)
+        except Exception as exc:
+            logger.exception('Failed processing outbox event %s', event.pk)
+            event.mark_failed(str(exc))
+            continue
+
+        if not handled:
+            event.mark_failed(f'Unhandled event type: {event.event_type}')
+            continue
+
         event.mark_processed()
 
 
@@ -31,29 +49,47 @@ def _dispatch_event(event):
     """Route event to the correct aggregation task."""
     handlers = {
         'sale.completed': _handle_sale_completed,
+        'sale.returned': _handle_financial_operation,
         'receipt.confirmed': _handle_receipt_confirmed,
         'risk.writeoff': _handle_risk_event,
-        'risk_event.created': _handle_risk_event,  # legacy alias
+        'risk_event.created': _handle_risk_event,
+        'risk.inventory_check_completed': _handle_noop_retired,
+        'customer.debt_accrued': _handle_financial_operation,
         'customer.payment': _handle_financial_operation,
         'supplier.payment': _handle_financial_operation,
         'expense.recorded': _handle_financial_operation,
         'pos_session.opened': _handle_session_event,
         'pos_session.closed': _handle_session_event,
         'lot.transfer': _handle_lot_transfer,
-        'lot.transferred': _handle_lot_transfer,  # legacy alias
+        'lot.transferred': _handle_lot_transfer,
         'investor.contract_closed': _handle_contract_closed,
+        'procurement.opened': _handle_noop_retired,
+        'procurement.contribution_added': _handle_noop_retired,
+        'procurement.withdrawal_added': _handle_noop_retired,
+        'procurement.received': _handle_noop_retired,
+        'partnership.dividend_paid': _handle_noop_retired,
+        'finance.currency_exchange': _handle_noop_retired,
+        'finance.refund': _handle_financial_operation,
+        'finance.owner_contribution': _handle_noop_retired,
     }
     handler = handlers.get(event.event_type)
-    if handler:
-        handler(event.payload, event.tenant_id)
+    if handler is None:
+        return False
+    handler(event.payload, event.tenant_id)
+    return True
 
 
 def _handle_sale_completed(payload, tenant_id):
     date_str = payload.get('date')
     aggregate_daily_pnl.delay(tenant_id, date_str)
-    sale_id = payload.get('sale_id')
-    if sale_id:
-        aggregate_investor_summary_for_sale.delay(sale_id)
+
+
+def _handle_noop_retired(payload, tenant_id):
+    logger.info(
+        'Retired analytics handler skipped for tenant=%s payload=%s',
+        tenant_id,
+        payload,
+    )
 
 
 def _handle_receipt_confirmed(payload, tenant_id):
@@ -143,15 +179,13 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
     gross_profit = total_revenue - total_cogs
 
-    # Investor share (from profit records for the day)
-    from apps.investors.models import InvestorProfitRecord
-    investor_share = InvestorProfitRecord.objects.filter(
+    # Investor share is currently derived from partner ledger accruals.
+    from apps.partnerships.models import PartnerLedgerEntry
+    investor_share = PartnerLedgerEntry.objects.filter(
         tenant_id=tenant_id,
-        record_type='profit',
-        created_at__range=(day_start, day_end),
-    ).aggregate(
-        total=Sum('amount'),
-    )['total'] or Decimal('0')
+        entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+        date__range=(day_start, day_end),
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
     net_business_profit = gross_profit - investor_share - writeoffs - operational_expenses
 
@@ -171,9 +205,13 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     )
 
     # Cash flow summary
-    cash_sales = sales.filter(
-        payment_method='cash',
-    ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+    from apps.sales.models import SalePayment
+    cash_sales = SalePayment.objects.filter(
+        tenant_id=tenant_id,
+        role=SalePayment.Role.INCOMING,
+        method=SalePayment.Method.CASH,
+        date__range=(day_start, day_end),
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
     from apps.customers.models import CustomerPayment
     debt_payments = CustomerPayment.objects.filter(
@@ -213,64 +251,12 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 @shared_task
 def aggregate_investor_summary_for_sale(sale_id):
     """
-    Update InvestorSummary after a sale involving investor lots.
+    Retired under vacuum model.
+
+    Investor-facing aggregates are now derived from PartnerLedgerEntry and
+    procurement-ledger bridge views instead of legacy InvestorSummary writes.
     """
-    from apps.sales.models import Sale
-    from apps.investors.models import InvestorContract
-    from apps.investors.services import update_investor_summary
-    from apps.sales.services import calculate_profit_distribution
-    from apps.investors.services import record_investor_profit
-
-    sale = Sale.objects.get(pk=sale_id)
-    touched_contract_ids: set[int] = set()
-
-    for line in sale.lines.select_related('lot__receipt'):
-        lot = line.lot
-        receipt = lot.receipt
-
-        if receipt.receipt_type not in ('MUDARABA', 'MUSHARAKA'):
-            continue
-
-        # Calculate profit distribution for this line
-        distributions = calculate_profit_distribution(lot, line)
-
-        for dist in distributions:
-            if dist['entity_type'] == 'investor':
-                # Prefer explicit contract linked to receipt; fallback for legacy data.
-                contract = None
-                if receipt.investor_contract_id:
-                    contract = InvestorContract.objects.filter(
-                        pk=receipt.investor_contract_id,
-                        status='active',
-                        tenant_id=sale.tenant_id,
-                    ).first()
-
-                if contract is None:
-                    contract = InvestorContract.objects.filter(
-                        investor_id=dist['entity_id'],
-                        status='active',
-                        tenant_id=sale.tenant_id,
-                    ).first()
-
-                if contract and contract.investor_id == dist['entity_id']:
-                    record_investor_profit(
-                        tenant_id=sale.tenant_id,
-                        contract_id=contract.pk,
-                        investor_id=dist['entity_id'],
-                        record_type='profit',
-                        amount=dist['amount'],
-                        source_type='sale_line',
-                        source_id=line.pk,
-                        lot_id=lot.pk,
-                        description=f'Profit from sale #{sale.pk}',
-                    )
-                    touched_contract_ids.add(contract.pk)
-
-    for contract_id in touched_contract_ids:
-        update_investor_summary(
-            tenant_id=sale.tenant_id,
-            contract_id=contract_id,
-        )
+    logger.info('aggregate_investor_summary_for_sale retired for sale_id=%s', sale_id)
 
 
 @shared_task
@@ -286,10 +272,11 @@ def compute_aging_reports(tenant_id):
     now = timezone.now()
 
     # Customer aging (A/R)
-    customers = Customer.objects.filter(
-        tenant_id=tenant_id,
-        outstanding_balance__gt=0,
-    )
+    customers = [
+        customer
+        for customer in Customer.objects.filter(tenant_id=tenant_id)
+        if customer.outstanding_balance > 0
+    ]
 
     for customer in customers:
         # Simple aging: all current balance in 0-30 bucket for MVP
@@ -334,7 +321,7 @@ def compute_aging_reports(tenant_id):
         tenant_id=tenant_id,
         report_type='customer',
     ).exclude(
-        entity_id__in=customers.values_list('pk', flat=True),
+        entity_id__in=[customer.pk for customer in customers],
     ).delete()
 
     AgingReport.objects.filter(

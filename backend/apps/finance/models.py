@@ -97,7 +97,7 @@ class JournalEntry(ImmutableMixin, TenantModel):
         return f"JE #{self.pk} ({self.operation_type})"
 
     def delete(self, *args, **kwargs):
-        self.soft_delete()
+        raise ValueError('Physical delete forbidden for JournalEntry.')
 
 
 class JournalLine(TenantModel):

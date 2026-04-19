@@ -31,6 +31,7 @@ class ReturnsShariahTests(TestCase):
                 'currency': 'UZS',
                 'fx_rate': Decimal('1'),
                 'method': SalePayment.Method.CASH,
+                'account_id': ctx['cash_account'].id,
             }],
         )
 
@@ -89,6 +90,7 @@ class ReturnsShariahTests(TestCase):
                 'currency': 'UZS',
                 'fx_rate': Decimal('1'),
                 'method': SalePayment.Method.CASH,
+                'account_id': ctx['cash_account'].id,
             }],
         )
 

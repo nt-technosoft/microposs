@@ -277,7 +277,7 @@ class Lot(TenantModel):
         return f"Lot #{self.pk} ({self.product_variant})"
 
     def delete(self, *args, **kwargs):
-        self.soft_delete()
+        raise ValueError('Physical delete forbidden for Lot.')
 
 
 class LotStock(TenantModel):

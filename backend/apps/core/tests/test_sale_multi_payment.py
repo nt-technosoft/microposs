@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
+from apps.finance.models import CashEntry, JournalEntry
 from apps.partnerships.models import PartnerLedgerEntry
 from apps.sales.models import Sale, SalePayment
 from apps.sales.services import create_sale
@@ -32,12 +33,14 @@ class SaleMultiPaymentTests(TestCase):
                     'currency': 'UZS',
                     'fx_rate': Decimal('1'),
                     'method': SalePayment.Method.CASH,
+                    'account_id': ctx['cash_account'].id,
                 },
                 {
                     'amount': Decimal('600000.00'),
                     'currency': 'UZS',
                     'fx_rate': Decimal('1'),
                     'method': SalePayment.Method.CARD,
+                    'account_id': ctx['card_account'].id,
                 },
             ],
             notes='PR-9c multi-payment test',
@@ -60,6 +63,11 @@ class SaleMultiPaymentTests(TestCase):
             SalePayment.Method.CASH,
             SalePayment.Method.CARD,
         })
+
+        cash_entries = list(CashEntry.objects.filter(source_ref_type='sale_payment').order_by('id'))
+        journals = list(JournalEntry.objects.filter(operation_type='sale'))
+        self.assertEqual(len(cash_entries), 2)
+        self.assertEqual(len(journals), 2)
 
         paid_total = sum(payment.amount for payment in payments)
         self.assertEqual(paid_total, sale.total_amount)

@@ -142,6 +142,13 @@ def create_sale(
     Each payment: {amount, currency, fx_rate, method, account_id?}. Payment
     method 'CREDIT' requires customer_id.
     """
+    from apps.customers.services import accrue_debt
+    from apps.finance.models import CashAccount, CashEntry
+    from apps.finance.services import (
+        create_cash_entry,
+        record_journal_from_cash_entry,
+        record_sale_journal,
+    )
     from apps.inventory.services import allocate_lot
     from apps.inventory.models import LotStock, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
@@ -310,6 +317,8 @@ def create_sale(
                         )
 
         # SalePayments
+        credit_amount = Decimal('0')
+        journal_methods: set[str] = set()
         for pay in payments:
             amount = Decimal(str(pay['amount']))
             currency = str(pay.get('currency', 'UZS')).upper()
@@ -319,7 +328,7 @@ def create_sale(
                 operation_at=date,
                 fx_rate_snapshot=pay.get('fx_rate'),
             )
-            SalePayment.objects.create(
+            payment = SalePayment.objects.create(
                 tenant_id=tenant_id,
                 sale=sale,
                 date=date,
@@ -330,6 +339,54 @@ def create_sale(
                 role=SalePayment.Role.INCOMING,
                 account_id=pay.get('account_id'),
             )
+            journal_methods.add(payment.method)
+
+            if payment.method == SalePayment.Method.CREDIT:
+                credit_amount += amount
+                continue
+
+            if payment.account_id is None:
+                continue
+
+            account = CashAccount.objects.select_for_update().filter(
+                pk=payment.account_id,
+                tenant_id=tenant_id,
+            ).first()
+            if account is None:
+                continue
+
+            cash_entry = create_cash_entry(
+                tenant_id=tenant_id,
+                account=account,
+                direction=CashEntry.Direction.IN,
+                amount=amount,
+                date=date,
+                source_ref_type='sale_payment',
+                source_ref_id=payment.pk,
+            )
+
+            if account.linked_account_id:
+                counterpart_account = '4000'
+                record_journal_from_cash_entry(
+                    tenant_id=tenant_id,
+                    cash_entry=cash_entry,
+                    operation_type='sale',
+                    operation_id=sale.pk,
+                    counterpart_account_code=counterpart_account,
+                    description=f'Sale payment #{payment.pk}',
+                    date=date,
+                )
+
+        if credit_amount > 0 and customer_id is not None:
+            accrue_debt(
+                tenant_id=tenant_id,
+                customer_id=customer_id,
+                amount=credit_amount,
+                currency='UZS',
+                fx_rate=Decimal('1'),
+                source_ref=f'sale:{sale.pk}',
+                date=date,
+            )
 
         sale.total_amount = total_amount
         sale.total_cogs = total_cogs
@@ -337,6 +394,25 @@ def create_sale(
         sale.save(update_fields=[
             'total_amount', 'total_cogs', 'status', 'updated_at',
         ])
+
+        if not payments:
+            record_sale_journal(
+                tenant_id=tenant_id,
+                sale_id=sale.pk,
+                total_amount=total_amount,
+                total_cogs=total_cogs,
+                payment_method='credit',
+                date=date,
+            )
+        elif journal_methods == {SalePayment.Method.CREDIT}:
+            record_sale_journal(
+                tenant_id=tenant_id,
+                sale_id=sale.pk,
+                total_amount=total_amount,
+                total_cogs=total_cogs,
+                payment_method='credit',
+                date=date,
+            )
 
         publish_event(
             event_type='sale.completed',

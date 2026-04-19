@@ -547,9 +547,10 @@ def record_debt_payment_journal(
     Record journal entry for a customer debt payment.
     DR Cash | CR Receivables
     """
+    cash_account_code = '1000' if payment_type == 'cash' else '1010'
     lines = [
         {
-            'account_code': '1000',
+            'account_code': cash_account_code,
             'debit': amount,
             'credit': Decimal('0'),
             'description': f'Debt payment #{payment_id}',

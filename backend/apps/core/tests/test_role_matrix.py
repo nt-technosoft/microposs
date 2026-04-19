@@ -86,8 +86,8 @@ class RoleMatrixApiTests(APITestCase):
         self.auth('investor', 'Investor123!')
 
         allowed = [
-            '/api/v1/investors/summaries/',
-            '/api/v1/investors/profit-records/',
+            '/api/v1/investors/dashboard/',
+            '/api/v1/investors/procurements/',
         ]
         denied = [
             '/api/v1/sales/sales/',

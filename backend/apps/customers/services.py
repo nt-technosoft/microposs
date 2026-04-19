@@ -7,6 +7,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
+from apps.finance.models import CashAccount, CashEntry
+from apps.finance.services import create_cash_entry, record_journal_from_cash_entry
 
 from .models import Customer, CustomerPayment, Receivable, ReceivableEntry
 
@@ -88,6 +90,7 @@ def record_customer_payment(
     fx_rate: Decimal = Decimal('1'),
     notes: str = '',
     payment_date=None,
+    account_id: int | None = None,
 ) -> CustomerPayment:
     """
     Record a customer debt repayment.
@@ -118,6 +121,24 @@ def record_customer_payment(
             notes=notes,
         )
 
+        account = None
+        cash_entry = None
+        if account_id is not None:
+            account = CashAccount.objects.select_for_update().filter(
+                pk=account_id,
+                tenant_id=tenant_id,
+            ).first()
+            if account is not None:
+                cash_entry = create_cash_entry(
+                    tenant_id=tenant_id,
+                    account=account,
+                    direction=CashEntry.Direction.IN,
+                    amount=amount,
+                    date=payment_date,
+                    source_ref_type='customer_payment',
+                    source_ref_id=payment.pk,
+                )
+
         ReceivableEntry.objects.create(
             tenant_id=tenant_id,
             receivable=receivable,
@@ -145,6 +166,17 @@ def record_customer_payment(
             payment_type=payment_method,
             date=payment.date,
         )
+
+        if cash_entry is not None and account is not None and account.linked_account_id:
+            record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=cash_entry,
+                operation_type='debt_payment',
+                operation_id=payment.pk,
+                counterpart_account_code='1200',
+                description=f'Customer payment #{payment.pk}',
+                date=payment.date,
+            )
 
         publish_event(
             event_type='customer.payment',

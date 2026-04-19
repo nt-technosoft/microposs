@@ -1,8 +1,48 @@
 # MicroPOS — Implementation Status
 
-**Snapshot date:** 2026-04-15  
-**Branch:** `codex/bootstrap`  
-**Hardening track:** Architecture Hardening Program
+**Snapshot date:** 2026-04-19  
+**Branch:** `vacuum-rework`  
+**Hardening track:** Vacuum backend + clean-slate frontend restart
+
+## Current Reality
+
+- Frontend has been intentionally reset and rebuilt from a fresh scaffold.
+- Backend Phase D audit follow-up is in progress.
+- Docs in this file are a legacy snapshot and should be interpreted through the current vacuum-model/backend cleanup context, not the old `codex/bootstrap` pass.
+
+## Current Pass: Phase D backend cleanup + frontend clean-slate bootstrap
+
+| Scope | Status | Notes |
+|---|---|---|
+| Frontend scaffold | `Implemented` | New Vue/Vite foundation, canonical P0 routes, base stores, UI primitives, placeholder screens, green build/test |
+| Analytics/outbox crashers | `Implemented` | Legacy analytics task paths retired/hardened; outbox consumer now safer against duplicate processing and silent drops |
+| Sale credit receivable accrual | `Implemented` | Credit sale now accrues receivable and is covered by regression test |
+| Sale cash/journal wiring | `Implemented` | Cash-linked sale paths now create cash entries and accounting side effects in current tested flows |
+| Tenant/role hardening | `Partial` | Tenant selection and tenant-first role resolution improved; broader multi-tenant regression expansion still pending |
+| Immutability/delete hardening | `Partial` | Core finalized-record protections improved; broader regression coverage still pending |
+| Legacy docs alignment | `In progress` | Role matrix/compliance/frontend architecture are being brought to current vacuum state |
+
+## Gate Progress
+
+| Gate | Status | Notes |
+|---|---|---|
+| Gate A (backend invariants + finance/outbox) | `In progress` | Major crashers and key financial defects reduced; more cleanup remains |
+| Gate B (role matrix API) | `In progress` | Investor route matrix updated to current bridge routes; broader role policy cleanup remains |
+| Gate C (frontend build/type + contract alignment) | `Done` | New clean-slate scaffold builds and tests green |
+| Gate D (full regression + final compliance report) | `In progress` | Audit follow-up still actively landing |
+
+## Evidence (Current)
+
+- `backend/apps/core/tests/test_sale_multi_payment.py`
+- `backend/apps/core/tests/test_sale_credit_integrity.py`
+- `backend/apps/core/tests/test_returns_shariah.py`
+- `backend/apps/core/tests/test_role_matrix.py`
+- `backend/apps/core/tests/test_finance_bridge_api.py`
+- `backend/apps/core/tests/test_investor_bridge_api.py`
+- `backend/apps/core/tests/test_partnerships_api.py`
+- Frontend gate: `frontend npm test` and `frontend npm run build` (green)
+
+## Legacy Snapshot Below
 
 ## Current Pass: Products/Categories/Pricing/Sales Cart
 

@@ -1,5 +1,32 @@
 # MicroPOS — Frontend Architecture
 
+> Legacy note: much of the detailed structure below reflects the pre-wipe frontend and is no longer the implementation source of truth. For the current restart baseline, use `docs/ux/05-frontend-restart-bootstrap.md`, `docs/ux/15-route-screen-matrix.md`, `docs/ux/18-foundation-keep-delete-plan.md`, `docs/ux/19-frontend-cleanup-execution.md`, and the actual scaffold under `frontend/src/`.
+
+## Current canonical restart baseline
+
+- Stack now starts from Vue 3 + Vite + TypeScript + Pinia + Vue Router.
+- Current HTTP layer is a typed `fetch` client, not Axios.
+- Canonical route language is `/procurements/*`, not `/intake/*`.
+- Canonical investor cabinet routes are `/investor`, `/investor/procurements`, `/investor/procurements/:id`.
+- Current scaffold foundation exists in:
+  - `frontend/src/main.ts`
+  - `frontend/src/App.vue`
+  - `frontend/src/router/index.ts`
+  - `frontend/src/router/routes.ts`
+  - `frontend/src/stores/auth.ts`
+  - `frontend/src/stores/session.ts`
+  - `frontend/src/stores/ui.ts`
+  - `frontend/src/api/client.ts`
+- This file should be treated as historical architecture context until it is fully rewritten.
+
+## Immediate rewrite priority
+
+1. Preserve only concepts still aligned with vacuum-model and current UX docs.
+2. Do not reuse old route/module naming that contradicts `docs/ux/*`.
+3. Treat old `intake`, `contracts`, and legacy shared component descriptions as non-authoritative unless they match the new scaffold and route matrix.
+
+## Historical snapshot
+
 ## Tech Stack
 
 ```
