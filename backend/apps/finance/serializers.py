@@ -13,6 +13,11 @@ from .models import (
     DailySummary,
     CashFlowSummary,
     ExchangeRate,
+    CashAccount,
+    CashEntry,
+    CurrencyExchange,
+    Refund,
+    OwnerContribution,
 )
 
 
@@ -214,3 +219,80 @@ class ExchangeRateRefreshSerializer(serializers.Serializer):
 
     def validate_quote_currency(self, value):
         return value.upper()
+
+
+class CashAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CashAccount
+        fields = ['id', 'name', 'currency', 'balance', 'kind', 'linked_account', 'is_active']
+        read_only_fields = ['id', 'balance']
+
+
+class CashAccountCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120)
+    currency = serializers.CharField(max_length=3, default='UZS')
+    kind = serializers.ChoiceField(choices=CashAccount.Kind.choices, required=False, default=CashAccount.Kind.CASH)
+    linked_account_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class CashEntrySerializer(serializers.ModelSerializer):
+    account_name = serializers.CharField(source='account.name', read_only=True)
+
+    class Meta:
+        model = CashEntry
+        fields = ['id', 'account', 'account_name', 'direction', 'amount', 'date', 'source_ref_type', 'source_ref_id']
+        read_only_fields = ['id']
+
+
+class CurrencyExchangeSerializer(serializers.ModelSerializer):
+    from_account_name = serializers.CharField(source='from_account.name', read_only=True)
+    to_account_name = serializers.CharField(source='to_account.name', read_only=True)
+
+    class Meta:
+        model = CurrencyExchange
+        fields = [
+            'id', 'from_account', 'from_account_name', 'to_account', 'to_account_name',
+            'from_amount', 'from_currency', 'to_amount', 'to_currency',
+            'effective_rate', 'date', 'notes',
+        ]
+        read_only_fields = ['id']
+
+
+class CurrencyExchangeCreateSerializer(serializers.Serializer):
+    from_account_id = serializers.IntegerField()
+    to_account_id = serializers.IntegerField()
+    from_amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
+    rate = serializers.DecimalField(max_digits=14, decimal_places=6, min_value=Decimal('0.000001'))
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class RefundSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Refund
+        fields = ['id', 'customer', 'date', 'amount', 'currency', 'fx_rate', 'account', 'method', 'return_ref']
+        read_only_fields = ['id']
+
+
+class RefundCreateSerializer(serializers.Serializer):
+    customer_id = serializers.IntegerField()
+    sale_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    method = serializers.ChoiceField(choices=Refund.Method.choices)
+    account_id = serializers.IntegerField(required=False, allow_null=True)
+    return_ref_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class OwnerContributionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OwnerContribution
+        fields = ['id', 'amount', 'currency', 'to_account', 'date', 'notes']
+        read_only_fields = ['id']
+
+
+class OwnerContributionCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    to_account_id = serializers.IntegerField()
+    notes = serializers.CharField(required=False, allow_blank=True, default='')

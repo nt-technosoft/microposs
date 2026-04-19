@@ -64,6 +64,54 @@ class InvestorContractCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, default='', allow_blank=True)
 
 
+class InvestorDashboardAggregateSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    capital_in = serializers.DecimalField(max_digits=14, decimal_places=2)
+    capital_out = serializers.DecimalField(max_digits=14, decimal_places=2)
+    capital_net = serializers.DecimalField(max_digits=14, decimal_places=2)
+    profit_accrued = serializers.DecimalField(max_digits=14, decimal_places=2)
+    profit_reversed = serializers.DecimalField(max_digits=14, decimal_places=2)
+    losses_incurred = serializers.DecimalField(max_digits=14, decimal_places=2)
+    dividends_paid = serializers.DecimalField(max_digits=14, decimal_places=2)
+    profit_pending_payout = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class InvestorLedgerEntrySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    date = serializers.DateTimeField()
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField()
+    entry_type = serializers.CharField()
+    source_ref = serializers.CharField()
+
+
+class InvestorLedgerSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    partner_name = serializers.CharField()
+    entries = InvestorLedgerEntrySerializer(many=True)
+
+
+class InvestorProcurementListSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    procurement_type = serializers.CharField()
+    status = serializers.CharField()
+    opened_at = serializers.DateTimeField()
+    received_at = serializers.DateTimeField(allow_null=True)
+    supplier_name = serializers.CharField(allow_blank=True, allow_null=True)
+
+
+class InvestorProcurementDetailSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    procurement_type = serializers.CharField()
+    status = serializers.CharField()
+    opened_at = serializers.DateTimeField()
+    received_at = serializers.DateTimeField(allow_null=True)
+    supplier_name = serializers.CharField(allow_blank=True, allow_null=True)
+    notes = serializers.CharField(allow_blank=True)
+    investor_aggregate = InvestorDashboardAggregateSerializer()
+    investor_ledger = InvestorLedgerSerializer()
+
+
 # InvestorProfitRecordSerializer and InvestorSummarySerializer removed in PR-5.
 # Aggregate data is now computed via partnerships.services.get_partner_aggregate()
 # and returned as a plain dict from InvestorContractViewSet.summary().

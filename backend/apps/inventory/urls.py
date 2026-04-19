@@ -13,6 +13,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register('warehouses', WarehouseViewSet, basename='warehouse')
+router.register('locations', WarehouseViewSet, basename='location')
 router.register('receipts', ReceiptViewSet, basename='receipt')
 router.register('lots', LotViewSet, basename='lot')
 router.register('movements', StockMovementViewSet, basename='movement')

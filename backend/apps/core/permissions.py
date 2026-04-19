@@ -95,7 +95,7 @@ def ensure_request_tenant(request) -> int | None:
     return tenant_id
 
 
-def resolve_user_role(user) -> str | None:
+def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
     """
     Resolve role from the current auth model.
 
@@ -128,6 +128,23 @@ def resolve_user_role(user) -> str | None:
     if hasattr(user, 'owned_businesses') and user.owned_businesses.exists():
         return ROLE_OWNER
 
+    from apps.core.models import Partner
+
+    partner_query = Partner.objects.filter(user_id=user.id, is_active=True)
+    if tenant_id is not None:
+        partner_query = partner_query.filter(tenant_id=tenant_id)
+
+    partner_role = (
+        partner_query
+        .order_by('id')
+        .values_list('role', flat=True)
+        .first()
+    )
+    if partner_role == Partner.Role.INVESTOR:
+        return ROLE_INVESTOR
+    if partner_role == Partner.Role.OPERATOR:
+        return ROLE_OWNER
+
     return None
 
 
@@ -138,7 +155,7 @@ class IsOwner(BasePermission):
         ensure_request_tenant(request)
         return (
             request.user.is_authenticated
-            and resolve_user_role(request.user) == ROLE_OWNER
+            and resolve_user_role(request.user, request.tenant_id) == ROLE_OWNER
         )
 
 
@@ -147,7 +164,7 @@ class IsCashier(BasePermission):
 
     def has_permission(self, request, view):
         ensure_request_tenant(request)
-        role = resolve_user_role(request.user)
+        role = resolve_user_role(request.user, request.tenant_id)
         return (
             request.user.is_authenticated
             and role in (ROLE_OWNER, ROLE_CASHIER)
@@ -159,7 +176,7 @@ class IsCashierOrWarehouse(BasePermission):
 
     def has_permission(self, request, view):
         ensure_request_tenant(request)
-        role = resolve_user_role(request.user)
+        role = resolve_user_role(request.user, request.tenant_id)
         return (
             request.user.is_authenticated
             and role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE)
@@ -171,7 +188,7 @@ class IsWarehouse(BasePermission):
 
     def has_permission(self, request, view):
         ensure_request_tenant(request)
-        role = resolve_user_role(request.user)
+        role = resolve_user_role(request.user, request.tenant_id)
         return (
             request.user.is_authenticated
             and role in (ROLE_OWNER, ROLE_WAREHOUSE)
@@ -185,5 +202,5 @@ class IsInvestor(BasePermission):
         ensure_request_tenant(request)
         return (
             request.user.is_authenticated
-            and resolve_user_role(request.user) == ROLE_INVESTOR
+            and resolve_user_role(request.user, request.tenant_id) == ROLE_INVESTOR
         )

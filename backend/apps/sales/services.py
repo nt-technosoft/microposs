@@ -692,12 +692,15 @@ def close_pos_session(
     with transaction.atomic():
         session = PosSession.objects.select_for_update().get(pk=session.pk)
 
-        # Calculate expected cash
-        cash_sales_total = Sale.objects.filter(
-            pos_session=session,
-            status=Sale.SaleStatus.COMPLETED,
-            payment_method=Sale.PaymentMethod.CASH,
-        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+        # Calculate expected cash from incoming cash payments.
+        from apps.sales.models import SalePayment
+
+        cash_sales_total = SalePayment.objects.filter(
+            sale__pos_session=session,
+            sale__status=Sale.SaleStatus.COMPLETED,
+            role=SalePayment.Role.INCOMING,
+            method=SalePayment.Method.CASH,
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
         expected_cash = session.opening_cash + cash_sales_total
 

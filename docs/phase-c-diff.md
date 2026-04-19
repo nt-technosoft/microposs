@@ -228,7 +228,9 @@
 7. **PR-7 Cash layer:** CashAccount, CashEntry, CurrencyExchange, Refund, OwnerContribution, OperatingExpense polish.
 8. **PR-8 Returns:** Return + ReturnLine + resolution, интеграция с PartnerLedger (PROFIT_REVERSED, LOSS_INCURRED).
 9. **PR-9 bootstrap_demo + фикстуры** переписать.
-10. **PR-10 Frontend API-клиенты + экраны** (возможно разбить).
+10. **PR-10 Frontend API/types/stores** — reuse foundation (tokens, shared/base components, app shell, router meta idea), rewrite contracts and state tied to legacy Receipt/InvestorSummary model.
+11. **PR-11 Frontend feature/views** — controlled migration of domain screens and flows under vacuum-model, not a full visual redesign.
+12. **PR-12 Excel/final cleanup** — separate discovery/design track under user control; not part of the ordinary frontend implementation wave.
 
 ---
 

@@ -5,15 +5,96 @@ Investors API views.
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from apps.core.models import Partner
 from apps.core.permissions import IsOwner, IsInvestor
+from apps.partnerships.models import ProcurementPartnerLedger
+from apps.partnerships.services import get_partner_aggregate
 
 from .models import Investor, InvestorContract
 from .serializers import (
     InvestorSerializer, InvestorCreateSerializer,
     InvestorContractSerializer, InvestorContractCreateSerializer,
+    InvestorDashboardAggregateSerializer, InvestorLedgerSerializer,
+    InvestorProcurementListSerializer, InvestorProcurementDetailSerializer,
 )
 from .services import close_investor_contract, update_investor_summary
+
+
+def _get_request_investor_partner(request):
+    return Partner.objects.get(
+        tenant_id=request.tenant_id,
+        user_id=request.user.id,
+        role=Partner.Role.INVESTOR,
+    )
+
+
+def _serialize_investor_ledger(ledger):
+    return {
+        'partner_id': ledger.partner_id,
+        'partner_name': ledger.partner.display_name,
+        'entries': [
+            {
+                'id': entry.id,
+                'date': entry.date,
+                'amount': entry.amount,
+                'currency': entry.currency,
+                'entry_type': entry.entry_type,
+                'source_ref': entry.source_ref,
+            }
+            for entry in ledger.entries.order_by('date', 'id')
+        ],
+    }
+
+
+class InvestorDashboardView(APIView):
+    permission_classes = [IsInvestor]
+
+    def get(self, request):
+        partner = _get_request_investor_partner(request)
+        data = {'partner_id': partner.id, **get_partner_aggregate(partner.id, request.tenant_id)}
+        serializer = InvestorDashboardAggregateSerializer(data)
+        return Response(serializer.data)
+
+
+class InvestorProcurementView(APIView):
+    permission_classes = [IsInvestor]
+
+    def get(self, request, procurement_id=None):
+        partner = _get_request_investor_partner(request)
+        ledgers = ProcurementPartnerLedger.objects.filter(
+            tenant_id=request.tenant_id,
+            partner=partner,
+        ).select_related('procurement__supplier', 'partner')
+
+        if procurement_id is None:
+            payload = [
+                {
+                    'id': ledger.procurement_id,
+                    'procurement_type': ledger.procurement.procurement_type,
+                    'status': ledger.procurement.status,
+                    'opened_at': ledger.procurement.opened_at,
+                    'received_at': ledger.procurement.received_at,
+                    'supplier_name': getattr(ledger.procurement.supplier, 'name', None),
+                }
+                for ledger in ledgers.order_by('-procurement__opened_at')
+            ]
+            return Response(InvestorProcurementListSerializer(payload, many=True).data)
+
+        ledger = ledgers.prefetch_related('entries').get(procurement_id=procurement_id)
+        payload = {
+            'id': ledger.procurement_id,
+            'procurement_type': ledger.procurement.procurement_type,
+            'status': ledger.procurement.status,
+            'opened_at': ledger.procurement.opened_at,
+            'received_at': ledger.procurement.received_at,
+            'supplier_name': getattr(ledger.procurement.supplier, 'name', None),
+            'notes': ledger.procurement.notes,
+            'investor_aggregate': {'partner_id': partner.id, **get_partner_aggregate(partner.id, request.tenant_id)},
+            'investor_ledger': _serialize_investor_ledger(ledger),
+        }
+        return Response(InvestorProcurementDetailSerializer(payload).data)
 
 
 class InvestorViewSet(viewsets.ModelViewSet):

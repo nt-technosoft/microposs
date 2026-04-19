@@ -28,6 +28,11 @@ from .models import (
     DailySummary,
     CashFlowSummary,
     ExchangeRate,
+    CashAccount,
+    CashEntry,
+    CurrencyExchange,
+    Refund,
+    OwnerContribution,
 )
 from .serializers import (
     AccountSerializer, AccountCreateSerializer,
@@ -38,6 +43,10 @@ from .serializers import (
     ExchangeRateSerializer,
     ExchangeRateManualCreateSerializer,
     ExchangeRateRefreshSerializer,
+    CashAccountSerializer, CashAccountCreateSerializer,
+    CashEntrySerializer, CurrencyExchangeSerializer, CurrencyExchangeCreateSerializer,
+    RefundSerializer, RefundCreateSerializer,
+    OwnerContributionSerializer, OwnerContributionCreateSerializer,
 )
 from .services import (
     get_trial_balance,
@@ -45,6 +54,9 @@ from .services import (
     upsert_exchange_rate,
     sync_official_exchange_rate,
     get_fx_rate_for_date,
+    exchange_currency,
+    refund_customer,
+    record_owner_contribution,
 )
 from .chart_of_accounts import setup_chart_of_accounts
 
@@ -150,6 +162,131 @@ def _ensure_finance_aggregates(
             cache.delete(lock_key)
 
     return date_from, date_to
+
+
+class CashAccountViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['name']
+
+    def get_queryset(self):
+        return CashAccount.objects.filter(tenant_id=self.request.tenant_id)
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CashAccountCreateSerializer
+        return CashAccountSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = CashAccountCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        account = CashAccount.objects.create(
+            tenant_id=request.tenant_id,
+            name=data['name'],
+            currency=data['currency'].upper(),
+            kind=data['kind'],
+            linked_account_id=data.get('linked_account_id'),
+        )
+        return Response(CashAccountSerializer(account).data, status=status.HTTP_201_CREATED)
+
+
+class CashEntryViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CashEntrySerializer
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+
+    def get_queryset(self):
+        queryset = CashEntry.objects.filter(tenant_id=self.request.tenant_id).select_related('account')
+        account_id = self.request.query_params.get('account')
+        if account_id:
+            queryset = queryset.filter(account_id=account_id)
+        return queryset
+
+
+class CurrencyExchangeViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return CurrencyExchange.objects.filter(tenant_id=self.request.tenant_id).select_related('from_account', 'to_account')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CurrencyExchangeCreateSerializer
+        return CurrencyExchangeSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = CurrencyExchangeCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        exchange = exchange_currency(
+            tenant_id=request.tenant_id,
+            from_account_id=data['from_account_id'],
+            to_account_id=data['to_account_id'],
+            from_amount=data['from_amount'],
+            rate=data['rate'],
+            notes=data.get('notes', ''),
+        )
+        return Response(CurrencyExchangeSerializer(exchange).data, status=status.HTTP_201_CREATED)
+
+
+class RefundViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return Refund.objects.filter(tenant_id=self.request.tenant_id).select_related('customer', 'account', 'return_ref')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RefundCreateSerializer
+        return RefundSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = RefundCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        refund = refund_customer(
+            tenant_id=request.tenant_id,
+            customer_id=data['customer_id'],
+            sale_id=data['sale_id'],
+            amount=data['amount'],
+            currency=data['currency'],
+            fx_rate=data['fx_rate'],
+            method=data['method'],
+            account_id=data.get('account_id'),
+            return_ref_id=data.get('return_ref_id'),
+        )
+        return Response(RefundSerializer(refund).data, status=status.HTTP_201_CREATED)
+
+
+class OwnerContributionViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return OwnerContribution.objects.filter(tenant_id=self.request.tenant_id).select_related('to_account')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return OwnerContributionCreateSerializer
+        return OwnerContributionSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = OwnerContributionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        contribution = record_owner_contribution(
+            tenant_id=request.tenant_id,
+            amount=data['amount'],
+            currency=data['currency'],
+            to_account_id=data['to_account_id'],
+            notes=data.get('notes', ''),
+        )
+        return Response(OwnerContributionSerializer(contribution).data, status=status.HTTP_201_CREATED)
 
 
 class AccountViewSet(viewsets.ModelViewSet):

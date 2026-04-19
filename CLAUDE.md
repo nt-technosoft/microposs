@@ -41,3 +41,10 @@ MicroPOS — mobile-first POS platform for small retail businesses with Islamic 
 - Design tokens in CSS custom properties
 - Lucide icons (no emojis as structural icons)
 - All animations 150-300ms, respect prefers-reduced-motion
+
+## Vacuum Rework Note
+- Frontend migration follows **reuse foundation / rewrite feature-domain**.
+- Reuse foundation: app shell, shared/base components, design tokens, feedback primitives, auth/session backbone, route meta/access semantics.
+- Rewrite feature-domain: screens, flows, contracts, stores, and adapters still tied to legacy `Receipt`, `InvestorSummary`, and old orchestration.
+- `Receipt` is being replaced by `Procurement` in product and UX terminology.
+- PR-12 (Excel mapping/final cleanup) is a separate discovery/design track under direct user control, not a default continuation of PR-10/11.

@@ -74,7 +74,13 @@ def record_sale(...):
 
 ### 0.5. Frontend порядок
 
-Backend до PR-9 (включительно) → фронт не трогаем (старый UI сломается, но сервер работает через DRF browsable API). После PR-9 — PR-10..12 фронтовой rework одной волной.
+Backend до PR-9 (включительно) → фронт не трогаем (старый UI сломается, но сервер работает через DRF browsable API). После PR-9 — фронтовая волна идёт последовательно через PR-10 → PR-11.
+
+**Execution strategy for frontend:**
+- **Reuse foundation**: app shell, router meta idea, auth/session backbone, design tokens, shared/base components, feedback primitives, i18n/theme/session controls.
+- **Rewrite feature/domain**: page flows, domain views, orchestration-heavy stores, transport contracts tied to legacy Receipt / InvestorSummary era.
+- **Не делаем full redesign**: PR-10/11 — это controlled migration под vacuum-model, а не визуальный снос продукта.
+- **PR-12 не идёт в той же волне**: Excel/final cleanup выносится в отдельный discovery/design трек под личным контролем пользователя.
 
 ### 0.6. Что выключаем на время rework
 
@@ -370,7 +376,9 @@ class Partner(TenantModel):
 
 ### PR-10: Frontend — API clients + types + stores
 
-**Цель:** синхронизация TypeScript слоя с новым backend.
+**Цель:** синхронизация TypeScript слоя с новым backend без сноса foundation-слоя frontend.
+
+**Scope strategy:** shared UI, tokens, app shell и базовые паттерны переиспользуем; меняем только contracts/types/api/stores, которые завязаны на старую доменную модель.
 
 **Файлы:**
 - `frontend/src/types/models.ts` — переписать под новые сущности:
@@ -393,13 +401,15 @@ class Partner(TenantModel):
 - `pnpm typecheck` зелёный.
 - Dev server запускается без runtime ошибок на главной странице.
 
-**Риск:** views сломаются массово. Да, так и планируем — PR-11 это фиксит.
+**Риск:** часть views временно разойдётся с обновлёнными contracts/stores. Это ожидаемо, но не означает полный rewrite фронта: PR-11 фиксит только feature/domain слой, foundation остаётся.
 
 ---
 
 ### PR-11: Frontend views — intake → procurements, sales checkout, investor dashboard
 
-**Цель:** UX под vacuum-модель.
+**Цель:** UX под vacuum-модель без полного visual redesign всего продукта.
+
+**Scope strategy:** переписываем доменные экраны, навигацию и пользовательские сценарии под новую модель данных; shared components, tokens и app shell не сносим, а используем как foundation.
 
 **Файлы:**
 - `frontend/src/modules/intake/` → переименовать в `procurements/`:
@@ -429,7 +439,9 @@ class Partner(TenantModel):
 
 ### PR-12: Excel pipeline разморозка + финальная чистка
 
-**Цель:** вернуть Excel-импорт под новую схему + удалить временные stubs.
+**Статус подхода:** не обычный следующий implementation PR, а отдельный discovery/design трек под личным контролем пользователя.
+
+**Цель:** вернуть Excel-импорт под новую схему + удалить временные stubs, но только после отдельной проработки mapping principles, source-of-truth rules, ambiguity handling и dry-run/mismatch reporting.
 
 **Файлы:**
 - `backend/apps/core/excel_alignment.py` — переписать mapping layer:
