@@ -3,6 +3,8 @@
 ## Purpose
 Зафиксировать, что именно остаётся как foundation для clean-slate frontend rewrite, а что не должно служить основой для нового feature слоя.
 
+Note (restart context): frontend intentionally wiped; `KEEP` below means “recreate and preserve semantics”, not “reuse old files as-is”.
+
 ## KEEP — foundation base
 ### Tooling / config
 - `frontend/package.json`
@@ -12,6 +14,8 @@
 ### App foundation
 - `frontend/src/main.ts`
 - `frontend/src/App.vue` — как временный shell reference, не как immutable final shell
+- `frontend/src/router/index.ts`
+- `frontend/src/router/routes.ts`
 - `frontend/src/api/client.ts`
 
 ### Composables

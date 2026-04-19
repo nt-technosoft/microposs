@@ -37,6 +37,16 @@
 - cart entry point должен оставаться заметным, но не мешать каталогу
 
 ## Dependencies
-- product catalog store
-- current session state
-- cart store
+- `/api/v1/sales/sessions/`
+- `/api/v1/catalog/products/`
+- `/api/v1/catalog/categories/`
+- cart state/store
+
+## Acceptance criteria
+- session header reflects open/closed session state from backend
+- catalog list renders deterministically for owner/cashier and hides owner-only admin controls
+- search/filter interactions never block cart entry point visibility when cart has items
+- forbidden/error states are explicit and recoverable (retry or back navigation)
+
+## Open decision
+- Exact POS session auto-open UX policy (manual open vs implicit open) remains to be finalized against backend workflow.

@@ -9,6 +9,8 @@
 - `frontend/src/stores/session.ts` — как session foundation.
 - `frontend/src/stores/ui.ts` — как theme/locale/layout foundation.
 
+Note: frontend is intentionally wiped; this section defines what to reconstruct first, not what to patch in-place.
+
 ## High-priority rewrite targets
 ### Types
 Current legacy hotspots:

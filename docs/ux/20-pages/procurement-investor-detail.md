@@ -33,6 +33,14 @@
 - numbers and statuses must be understandable on 375px without admin tables
 
 ## Dependencies
-- procurement detail read model
-- investor ledger data
-- payout history data
+- `/api/v1/investors/procurements/:id/`
+- investor ledger payload from procurement detail response
+
+## Acceptance criteria
+- detail page uses canonical investor procurement endpoint only
+- ledger entries and aggregates are consistent with dashboard totals for same investor scope
+- read-only constraint is explicit (no owner-only financial action controls)
+- missing/forbidden procurement id shows explicit investor-friendly error state
+
+## Open decision
+- Separate dedicated `/investor/ledger` page vs keeping timeline inside procurement detail remains open for later phase.

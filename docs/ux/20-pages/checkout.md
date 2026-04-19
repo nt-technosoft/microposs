@@ -39,7 +39,11 @@
 - double submit must be blocked
 
 ## Dependencies
-- sales store
-- cart store
-- customers / receivable contracts
-- warehouse options
+- `/api/v1/sales/sales/`
+- `/api/v1/sales/sessions/`
+- `/api/v1/customers/customers/`
+- warehouse options read model
+
+## API contract note
+- Checkout submit must include `client_request_id` for idempotent create-sale behavior.
+- Duplicate submit with same `client_request_id` must resolve predictably (no double sale).

@@ -5,6 +5,7 @@
 
 ## Document map
 - `00-foundation.md` — визуальные и interaction principles, reuse/rewrite strategy
+- `05-frontend-restart-bootstrap.md` — P0 architecture entrypoint, startup sequence, module boundaries, canonical restart routes
 - `10-navigation-and-roles.md` — role map, workflows, initial screen inventory
 - `15-route-screen-matrix.md` — explicit route ↔ role ↔ screen ↔ view ↔ contract map
 - `16-open-decisions-and-conflicts.md` — explicit contradictions and unresolved policy decisions

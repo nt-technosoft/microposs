@@ -14,8 +14,10 @@ The UX/documentation layer is now **good enough to start clean-slate frontend im
 
 ## What still needs deeper detailing
 ### P0 before broad clean-slate pass
-- resolve explicit role/permission conflicts (`CONF-001`, `CONF-002`)
-- ensure route-screen matrix stays aligned with actual route map
+- freeze restart architecture entrypoint + startup sequence (`05-frontend-restart-bootstrap.md`)
+- apply temporary startup policies for unresolved conflicts (`CONF-001`, `CONF-004`)
+- ensure route-screen matrix stays aligned with backend route map and canonical frontend routes
+- define P0 route priorities (P0/P1/P2) to prevent broad unfocused implementation
 
 ### P1 during early implementation
 - page specs for every currently active route

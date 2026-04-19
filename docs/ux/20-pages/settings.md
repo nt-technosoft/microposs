@@ -28,6 +28,18 @@
 - loading
 - error
 - success feedback
+- forbidden (for corrupted/invalid auth state)
+
+## Dependencies
+- auth/session profile (`/api/v1/auth/me/`)
+
+## Acceptance criteria
+- role/account info is sourced from authenticated profile and updates after relogin
+- logout always returns user to `/login` and clears role-scoped navigation state
+- settings screen never includes owner-only business admin actions
 
 ## UX note
 Этот экран остаётся shared utility screen для всех ролей и не должен смешиваться с business admin settings.
+
+## Open decision
+- Which settings persist server-side vs local-only remains to be finalized during implementation.

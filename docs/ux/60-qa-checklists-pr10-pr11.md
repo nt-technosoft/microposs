@@ -6,6 +6,17 @@
 - stores reflect new backend workflows
 - app boots without runtime errors
 - route access still coherent by role
+- startup sequence from `05-frontend-restart-bootstrap.md` is implemented in order
+- canonical routes used (`/procurements/*`, `/investor/procurements/*`) with no legacy aliases in primary nav
+- idempotent submit verified for sale create and procurement create
+
+## Startup readiness gate (before broad feature coding)
+- [ ] Auth bootstrap works (`token` -> `me` -> role-home)
+- [ ] Role-home redirects are deterministic for all 4 roles
+- [ ] P0 routes exist and render loading/empty/error/forbidden states
+- [ ] Customers screen respects temporary startup policy (cashier read-only)
+- [ ] Investor flow uses bridge endpoints (`dashboard`, `procurements`) not legacy summary-only assumptions
+- [ ] Route guard and backend permission mismatch cases are documented and produce explicit forbidden UX
 
 ## PR-11 checklist
 - each critical role has a coherent home flow

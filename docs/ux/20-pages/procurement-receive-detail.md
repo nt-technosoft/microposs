@@ -22,8 +22,22 @@
 - success
 - forbidden
 
+## Dependencies
+- `/api/v1/partnerships/procurements/:id/`
+- `/api/v1/partnerships/procurements/:id/receive/`
+- `/api/v1/inventory/warehouses/`
+
 ## Critical invariants
 - receive only from `OPEN`
 - zero balance before receive
 - valid warehouse required
 - no ambiguous success state after submit
+
+## Acceptance criteria
+- if procurement balance non-zero, receive CTA is blocked with explicit reason
+- success state confirms status transition to `RECEIVED`
+- repeated tap during submit does not create duplicate receive operations
+- non-owner/non-warehouse role gets explicit forbidden state
+
+## Open decision
+- Whether warehouse role can edit procurement metadata from this screen remains undecided; default is read + receive only.

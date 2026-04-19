@@ -42,6 +42,8 @@
 - `frontend/src/components/feedback/*`
 - `frontend/src/router/routes.ts` (route meta / role semantics as idea)
 
+Note: после wipe это semantic foundation, который нужно заново собрать; это не указание использовать старые feature-файлы.
+
 ## Primary rewrite targets
 - Domain views and flows under `frontend/src/modules/*/views`
 - Contracts in `frontend/src/types/*` tied to old model

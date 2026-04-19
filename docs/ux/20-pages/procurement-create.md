@@ -40,7 +40,17 @@
 - mobile flow must avoid giant single-form overload
 
 ## Dependencies
-- partnerships contracts
-- products/variants data
-- suppliers
-- warehouses for receive step
+- `/api/v1/partnerships/procurements/`
+- `/api/v1/catalog/variants/`
+- `/api/v1/suppliers/suppliers/`
+- `/api/v1/inventory/warehouses/`
+
+## API contract note
+- Procurement create submit must include `client_request_id` for idempotent create-procurement behavior.
+- Duplicate submit with same `client_request_id` must resolve predictably (no duplicate procurement).
+
+## Acceptance criteria
+- partnership contract block validates operator/investor composition before submit
+- invalid contract/items/expenses combinations surface explicit field/section errors
+- successful create lands on created procurement detail with visible status and next action
+- receive action is not offered directly from create screen unless procurement state is truly ready

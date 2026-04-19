@@ -35,5 +35,14 @@
 - owner variant может показывать richer summaries, warehouse variant — operational status first
 
 ## Dependencies
-- procurement list contract
+- `/api/v1/partnerships/procurements/`
 - role-aware filtering
+
+## Acceptance criteria
+- owner and warehouse see only allowed actions (no hidden permission escalation)
+- each card surfaces readiness/block reason for receive-related flows
+- list supports status filtering without route/query ambiguity
+- tap from list opens canonical `/procurements/:id` route
+
+## Open decision
+- Separate `/receiving` dedicated route vs filter preset inside `/procurements` remains unresolved.

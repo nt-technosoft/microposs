@@ -8,8 +8,9 @@
 - product detail
 - other sales-adjacent screens where cart context matters
 
-## Current foundation
-- `frontend/src/components/layout/AppFloatingCart.vue`
+## Foundation status after wipe
+- Legacy `frontend/src/components/layout/AppFloatingCart.vue` was removed during frontend wipe.
+- Recreate floating-cart as a new shared foundation component during restart.
 
 ## Inputs
 - cart item count

@@ -22,7 +22,23 @@
 - create CTA
 - category shortcuts
 
+## Mandatory states
+- loading
+- empty list
+- filtered empty
+- error
+- forbidden
+
+## Dependencies
+- `/api/v1/catalog/products/`
+- `/api/v1/catalog/categories/`
+
 ## Acceptance criteria
 - owner видит management actions
 - warehouse variant не выглядит как кассовый каталог
 - stock signal читается без открытия карточки
+- non-owner попытка owner-action получает predictable forbidden UX state
+- mobile 375px supports search + quick open without horizontal overflow
+
+## Open decision
+- Product create/edit remains P2 in restart sequence; exact inline-edit vs separate-page policy deferred.

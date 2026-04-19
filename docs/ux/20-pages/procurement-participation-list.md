@@ -30,6 +30,14 @@
 - cards should surface status, participation role, pending payout, and recent signal
 
 ## Dependencies
-- investor procurement list
-- aggregate metrics
-- payout indicators
+- `/api/v1/investors/procurements/`
+- `/api/v1/investors/dashboard/` (summary strip/aggregate)
+
+## Acceptance criteria
+- list renders only procurements where current investor participates
+- cards include status + supplier + participation signal without requiring detail open
+- tap on card opens canonical `/investor/procurements/:id` route
+- empty state explicitly explains "no participations yet" instead of generic no-data
+
+## Open decision
+- Whether to include period/filter controls in P0 or postpone to P1 remains open.

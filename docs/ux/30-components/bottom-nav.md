@@ -6,12 +6,19 @@
 ## Used in screens
 - sales catalog
 - products
-- procurements/intake
+- procurements
 - reports
 - settings/more
 
-## Current foundation
-- `frontend/src/components/layout/AppBottomNav.vue`
+## Role tab map (startup baseline)
+- owner: sales, procurements, finance/reports, settings
+- cashier: sales, sales-history, settings
+- warehouse: procurements/receiving, stock, transfers, settings
+- investor: no shared bottom-nav (investor shell has dedicated navigation)
+
+## Foundation status after wipe
+- Legacy `frontend/src/components/layout/AppBottomNav.vue` was removed during frontend wipe.
+- Recreate bottom-nav as a new shared foundation component during restart.
 
 ## Inputs
 - active route

@@ -2,9 +2,14 @@
 
 ## Roles
 - **owner** — полный доступ к платформе и административным сценариям
-- **cashier** — продажа, чек-аут, возвраты, клиенты/долги в пределах sales flow
+- **cashier** — продажа, чек-аут, возвраты, клиенты/долги в пределах sales flow (на старте: customers read-only)
 - **warehouse** — приёмка, lots, stock, transfers, stock movements/disposals
 - **investor** — кабинет участия в закупках, ledger, payouts, история
+
+### Startup policy notes (frontend restart)
+- Cashier write/pay on customers remains disabled until explicit role-policy update.
+- Investor navigation and contracts are procurement-centric (`/investor/procurements/*`), not legacy contracts-centric.
+- Canonical procurement language is mandatory for route labels and nav items.
 
 ## Role-first navigation principle
 Навигация и экранный состав определяются сначала ролью и primary workflows, а не текущей структурой старых модулей.
@@ -42,9 +47,11 @@
 - Deep screens should be reachable by route, but not necessarily primary nav items.
 - Investor flow should remain visually and structurally isolated from owner/cashier shell.
 
-## Current route foundation to preserve
-- `frontend/src/router/routes.ts`
-- `frontend/src/App.vue`
+## Restart route foundation (recreate first)
+- `frontend/src/router/routes.ts` (role meta/access semantics)
+- `frontend/src/App.vue` (shell boundary)
+
+Note: frontend is intentionally wiped; this section describes target foundation files to recreate, not existing files to reuse as-is.
 
 ## Initial screen inventory
 ### Owner

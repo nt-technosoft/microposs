@@ -32,6 +32,14 @@
 - timeline/cards важнее dense admin tables
 
 ## Dependencies
-- investor contracts / ledger data
-- procurement participation list
-- payout history
+- `/api/v1/investors/dashboard/`
+- `/api/v1/investors/procurements/`
+- investor payout read model
+
+## Acceptance criteria
+- dashboard metrics sourced from investor bridge contracts, not legacy summary endpoints
+- tap from dashboard to procurement participation list works without cross-shell navigation glitches
+- investor sees only investor-scope data (no owner finance/cash/admin sections)
+
+## Open decision
+- Detailed payout endpoint shape for investor self-service history still needs final backend contract confirmation.
