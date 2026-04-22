@@ -1,44 +1,49 @@
 # Deploy in Dokploy
 
-Короткий рабочий вариант для этого репо:
+Новый рекомендуемый вариант для этого репо:
 
-- `frontend` — собирает Vue и отдает статику через `nginx`
+- `frontend` — только SPA-статика Vue
 - `backend` — Django + Gunicorn
-- `celery-worker` — фоновые задачи
-- `celery-beat` — планировщик
+- `files` — отдельный nginx только для `/static` и `/media`
+- `celery-worker` / `celery-beat` — фоновые процессы
 - `redis` — внутренний сервис compose
-- `postgres` — внешний сервис, подключается через `DATABASE_URL`
+- `postgres` — внешний Dokploy Database, подключение через `DATABASE_URL`
 
-## Почему так
+## Почему эта схема лучше
 
-Для Dokploy это проще и надежнее:
-
-- один публичный сервис — `frontend`
-- один домен
-- `nginx` проксирует `/api` и `/admin` в backend
-- статика и media разнесены через volumes
+- Dokploy сам роутит по path, без лишнего reverse-proxy между `frontend` и `backend`
+- `frontend` больше не проксирует API
+- `static` и `media` отделены от SPA и API
+- меньше runtime-магии и меньше шансов поймать плавающие `400`
 
 ## Что загрузить в Dokploy
 
 1. Создать сервис типа **Docker Compose**
 2. Использовать корневой [`docker-compose.yml`](/Users/aziztohirov/Desktop/Projects/microposs/docker-compose.yml)
-3. Заполнить переменные окружения по образцу [`dokploy.env.example`](/Users/aziztohirov/Desktop/Projects/microposs/dokploy.env.example)
-4. В `Domains` привязать домен к сервису `frontend`, порт `80`
+3. Заполнить переменные по образцу [`dokploy.env.example`](/Users/aziztohirov/Desktop/Projects/microposs/dokploy.env.example)
+4. В `Domains` задать один и тот же host для нескольких service/path pair
 
-## Важные замечания по Dokploy
+## Domains в Dokploy
 
-Опирался на документацию Dokploy:
+Для домена `micropos.example.com` нужны такие entries:
 
-- Compose env через `.env` рядом с compose, но переменные не попадают в контейнер автоматически без `env_file` или `${VAR}`: [Docker Compose | Dokploy](https://docs.dokploy.com/docs/core/docker-compose)
-- Для публичного домена Dokploy рекомендует управлять routing через UI, а не вручную через Traefik labels: [Domains | Dokploy](https://docs.dokploy.com/docs/core/docker-compose/domains)
-- Для persistence лучше named volumes; абсолютные host paths использовать не стоит: [Docker Compose | Dokploy](https://docs.dokploy.com/docs/core/docker-compose)
+1. `frontend` -> host `micropos.example.com` -> path `/` -> port `80`
+2. `backend` -> host `micropos.example.com` -> path `/api` -> port `8000`
+3. `backend` -> host `micropos.example.com` -> path `/admin` -> port `8000`
+4. `files` -> host `micropos.example.com` -> path `/static` -> port `80`
+5. `files` -> host `micropos.example.com` -> path `/media` -> port `80`
+
+Для всех:
+
+- `Internal Path` -> `/`
+- `Strip Path` -> `OFF`
+- `HTTPS` -> `ON`
 
 ## Обязательные переменные
 
 - `SECRET_KEY`
 - `ALLOWED_HOSTS`
 - `CSRF_TRUSTED_ORIGINS`
-- `APP_DOMAIN`
 - `DATABASE_URL`
 - `REDIS_URL`
 - `CELERY_BROKER_URL`
@@ -55,5 +60,6 @@
 
 ## Что важно не ломать
 
-- Если используешь один домен через `frontend`, оставляй `VITE_API_URL` пустым.
-- Если решишь выносить API на отдельный домен, тогда уже нужно будет отдельно перенастроить `VITE_API_URL`, `CORS_ALLOWED_ORIGINS` и, возможно, `nginx.conf`.
+- Для этой схемы `VITE_API_URL` оставляй пустым
+- `ALLOWED_HOSTS` должен содержать только домен приложения и локальные внутренние хосты по необходимости
+- `CORS_ALLOWED_ORIGINS` и `CSRF_TRUSTED_ORIGINS` должны быть без trailing slash
