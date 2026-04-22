@@ -66,7 +66,7 @@ def _resolve_operation_window(
     *,
     date_from_raw: str | None,
     date_to_raw: str | None,
-) -> tuple[timezone.datetime.date | None, timezone.datetime.date | None]:
+) -> tuple[date_cls | None, date_cls | None]:
     """Resolve requested window or fallback to full operation history."""
     parsed_from = parse_date(date_from_raw) if date_from_raw else None
     parsed_to = parse_date(date_to_raw) if date_to_raw else None
@@ -77,7 +77,7 @@ def _resolve_operation_window(
     if parsed_from and parsed_to:
         return parsed_from, parsed_to
 
-    candidates: list[timezone.datetime.date] = []
+    candidates: list[date_cls] = []
     min_max = [
         Sale.objects.filter(tenant_id=tenant_id, status='completed').aggregate(
             min_dt=Min('created_at'),
@@ -120,7 +120,7 @@ def _ensure_finance_aggregates(
     *,
     date_from_raw: str | None,
     date_to_raw: str | None,
-) -> tuple[timezone.datetime.date | None, timezone.datetime.date | None]:
+) -> tuple[date_cls | None, date_cls | None]:
     """
     Ensure daily finance aggregates exist for requested date range.
     Runs synchronously in API request path for deterministic demo behavior.
