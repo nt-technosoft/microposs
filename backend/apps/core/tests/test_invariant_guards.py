@@ -83,6 +83,19 @@ class InvariantGuardTests(TestCase):
         with self.assertRaisesMessage(ValueError, 'Physical delete forbidden for Lot.'):
             lot.delete()
 
+    def test_receipt_delete_is_forbidden(self):
+        ctx = build_tenant()
+        receipt = Receipt.objects.create(
+            tenant_id=ctx['business'].id,
+            receipt_type=Receipt.ReceiptType.BUSINESS_OWNED,
+            status=Receipt.ReceiptStatus.DRAFT,
+            date=ctx['business'].created_at,
+            destination=ctx['storage'],
+        )
+
+        with self.assertRaisesMessage(ValueError, 'Physical delete forbidden for Receipt.'):
+            receipt.delete()
+
     def test_confirmed_receipt_is_immutable(self):
         ctx = build_tenant()
         receipt = Receipt.objects.create(
@@ -96,6 +109,18 @@ class InvariantGuardTests(TestCase):
 
         with self.assertRaises(ImmutableRecordError):
             receipt.save()
+
+    def test_lot_requires_source_document(self):
+        ctx = build_tenant()
+
+        with self.assertRaisesMessage(ValueError, 'Lot must originate from receipt or procurement item.'):
+            Lot.objects.create(
+                tenant=ctx['business'],
+                product_variant=ctx['variant'],
+                quantity_initial=1,
+                unit_purchase_price=Decimal('10.00'),
+                landed_cost_per_unit=Decimal('10.00'),
+            )
 
     def test_partnership_profit_share_sum_must_equal_one(self):
         ctx = build_tenant()

@@ -150,14 +150,18 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
 
 
 def ensure_request_tenant(request) -> int | None:
-    tenant_id = _coerce_tenant_id(getattr(request, 'tenant_id', None))
-    if tenant_id is not None:
+    header_tenant_id = request.headers.get('X-Tenant-ID')
+    if getattr(request.user, 'is_authenticated', False):
+        tenant_id = resolve_tenant_id_for_user(
+            request.user,
+            header_tenant_id=header_tenant_id,
+        )
+        request.tenant_id = tenant_id
         return tenant_id
 
-    tenant_id = resolve_tenant_id_for_user(
-        request.user,
-        header_tenant_id=request.headers.get('X-Tenant-ID'),
-    )
+    tenant_id = _coerce_tenant_id(getattr(request, 'tenant_id', None))
+    if tenant_id is None:
+        tenant_id = _coerce_tenant_id(header_tenant_id)
     request.tenant_id = tenant_id
     return tenant_id
 

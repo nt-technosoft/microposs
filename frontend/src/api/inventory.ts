@@ -12,6 +12,7 @@ export interface StockSummaryItem {
   warehouse_id: number
   warehouse_name: string
   total_quantity: number
+  total_landed_cost: string
 }
 
 interface FetchLotsParams {

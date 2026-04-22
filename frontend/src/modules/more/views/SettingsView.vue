@@ -1,7 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Moon, Sun, Languages, ShieldCheck, LogOut, Users } from 'lucide-vue-next'
+import {
+  ArrowLeft,
+  Moon,
+  Sun,
+  Languages,
+  ShieldCheck,
+  LogOut,
+  Users,
+  History,
+  ArrowRightLeft,
+  FolderTree,
+  Wallet,
+  Scale,
+  Truck,
+} from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -16,7 +31,79 @@ const localeOptions = [
   { value: 'en', label: 'Английский' },
 ] as const
 
+interface QuickLink {
+  name: string
+  description: string
+  routeName: string
+  icon: Component
+}
+
 const isDark = computed(() => ui.theme === 'dark')
+
+const workspaceLinks = computed<QuickLink[]>(() => {
+  const links: QuickLink[] = []
+
+  if (auth.role === 'owner' || auth.role === 'cashier') {
+    links.push({
+      name: 'История продаж',
+      description: 'Все продажи за смену и детали чеков',
+      routeName: 'sales-history',
+      icon: History,
+    })
+  }
+
+  if (auth.role === 'owner' || auth.role === 'warehouse') {
+    links.push({
+      name: 'Перемещения',
+      description: 'Переводы товаров между точками',
+      routeName: 'stock-transfers',
+      icon: ArrowRightLeft,
+    })
+  }
+
+  return links
+})
+
+const managementLinks = computed<QuickLink[]>(() => {
+  if (!auth.isOwner) return []
+
+  return [
+    {
+      name: 'Покупатели',
+      description: 'Долги клиентов и ручные погашения',
+      routeName: 'customers',
+      icon: Users,
+    },
+    {
+      name: 'Поставщики',
+      description: 'Кредиторка и оплаты поставщикам',
+      routeName: 'suppliers',
+      icon: Truck,
+    },
+    {
+      name: 'Категории',
+      description: 'Структура каталога и шаблоны атрибутов',
+      routeName: 'categories',
+      icon: FolderTree,
+    },
+    {
+      name: 'Обмен валют',
+      description: 'Кассовые операции и FX-обмен',
+      routeName: 'finance-exchange',
+      icon: Wallet,
+    },
+    {
+      name: 'Сверка',
+      description: 'Контроль остатков и расхождений',
+      routeName: 'reports-reconciliation',
+      icon: Scale,
+    },
+  ]
+})
+
+function openQuickLink(routeName: string): void {
+  router.push({ name: routeName })
+}
 
 function handleLogout(): void {
   auth.logout()
@@ -88,6 +175,44 @@ function handleLogout(): void {
             />
             <span class="slider" />
           </label>
+        </div>
+      </section>
+
+      <section v-if="workspaceLinks.length > 0" class="card">
+        <h2 class="section-title">Рабочие разделы</h2>
+        <div class="nav-list">
+          <button
+            v-for="link in workspaceLinks"
+            :key="link.routeName"
+            class="nav-row"
+            type="button"
+            @click="openQuickLink(link.routeName)"
+          >
+            <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
+            <span class="setting-meta">
+              <span class="setting-name">{{ link.name }}</span>
+              <span class="setting-desc">{{ link.description }}</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <section v-if="managementLinks.length > 0" class="card">
+        <h2 class="section-title">Справочники и контроль</h2>
+        <div class="nav-list">
+          <button
+            v-for="link in managementLinks"
+            :key="link.routeName"
+            class="nav-row"
+            type="button"
+            @click="openQuickLink(link.routeName)"
+          >
+            <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
+            <span class="setting-meta">
+              <span class="setting-name">{{ link.name }}</span>
+              <span class="setting-desc">{{ link.description }}</span>
+            </span>
+          </button>
         </div>
       </section>
 
@@ -196,9 +321,15 @@ function handleLogout(): void {
   width: 100%;
   min-height: 48px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
   text-align: left;
+  padding: var(--space-1) 0;
+}
+
+.nav-list {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .nav-icon {
@@ -220,6 +351,9 @@ function handleLogout(): void {
 
 .setting-meta {
   min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
 }
 
 .setting-name {
@@ -229,7 +363,6 @@ function handleLogout(): void {
 }
 
 .setting-desc {
-  margin-top: 2px;
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
   line-height: var(--leading-normal);

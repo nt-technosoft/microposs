@@ -162,7 +162,7 @@ class Command(BaseCommand):
         receive_procurement(
             tenant_id=business.id,
             procurement_id=procurement.id,
-            destination_warehouse_id=warehouse.id,
+            destination_warehouse_id=store.id,
         )
 
         # ─── Sale: 5 units @ 20 USD (cash, UZS at 12000) ──────────────────────
@@ -176,7 +176,7 @@ class Command(BaseCommand):
         create_sale(
             tenant_id=business.id,
             pos_session_id=session.id,
-            location_id=warehouse.id,  # stock was received into warehouse
+            location_id=store.id,
             sold_by_id=cashier_user.id,
             customer_id=customer.id,
             lines=[{

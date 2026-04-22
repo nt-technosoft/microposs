@@ -75,11 +75,21 @@ class LedgerTotalsSerializer(serializers.Serializer):
     profit_pending_payout = serializers.DecimalField(max_digits=20, decimal_places=2)
 
 
+class InvestorCapitalStateSerializer(serializers.Serializer):
+    sold_cost_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    in_stock_cost_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    tracked_cost_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    sold_revenue_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_revenue_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_partner_profit_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
 class InvestorDashboardAggregateSerializer(LedgerTotalsSerializer):
     partner_id = serializers.IntegerField()
     summary_currency = serializers.CharField()
     functional_uzs = LedgerTotalsSerializer()
     by_currency = serializers.DictField(child=LedgerTotalsSerializer())
+    capital_state = InvestorCapitalStateSerializer()
 
 
 class InvestorLedgerEntrySerializer(serializers.Serializer):
@@ -117,6 +127,7 @@ class InvestorProcurementDetailSerializer(serializers.Serializer):
     supplier_name = serializers.CharField(allow_blank=True, allow_null=True)
     notes = serializers.CharField(allow_blank=True)
     investor_aggregate = InvestorDashboardAggregateSerializer()
+    capital_state = InvestorCapitalStateSerializer()
     investor_ledger = InvestorLedgerSerializer()
 
 

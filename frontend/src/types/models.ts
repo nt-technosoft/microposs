@@ -204,14 +204,28 @@ export interface CartItem {
 }
 
 export interface SaleLine extends BaseModel {
-  lot_id: number
-  product_variant: ProductVariant
+  lot_id?: number
+  lot?: number
+  product_variant: ProductVariant | {
+    id?: number
+    product_name?: string
+    attribute_values?: Array<{
+      attribute_name: string
+      value: string
+    }>
+  } | number
+  product_name?: string
   quantity: number
   unit_price: string
   base_price: string
   price_changed: boolean
   discount_reason: DiscountReason | null
   cost_per_unit: string
+  unit_purchase_price?: string
+  unit_landed_cost?: string
+  profit_distribution_snapshot?: Record<string, string>
+  total?: string
+  gross_profit?: string
 }
 
 export interface SalePayment {
@@ -228,14 +242,26 @@ export interface SalePayment {
 export interface Sale extends BaseModel {
   status: SaleStatus
   payment_method?: PaymentMethod | string
-  customer_id: number | null
+  customer_id?: number | null
+  customer?: number | null
+  customer_name?: string | null
+  location_name?: string
   operation_currency?: string
   operation_amount?: string | null
   fx_rate_snapshot?: string | null
   functional_amount_uzs?: string | null
   total_amount: string
   total_cogs: string
+  purchase_cost?: string
+  landed_cost?: string
+  gross_profit?: string
+  investor_profit?: string
+  business_profit?: string
+  margin_percent?: string
+  markup_percent?: string
   lines: SaleLine[]
+  lines_count?: number
+  paid_total?: string
   payments?: SalePayment[]
   notes: string
 }
@@ -277,11 +303,21 @@ export interface InvestorLedgerTotals {
   profit_pending_payout: string
 }
 
+export interface InvestorCapitalState {
+  sold_cost_uzs: string
+  in_stock_cost_uzs: string
+  tracked_cost_uzs: string
+  sold_revenue_uzs: string
+  projected_revenue_uzs: string
+  projected_partner_profit_uzs: string
+}
+
 export interface InvestorDashboardAggregate extends InvestorLedgerTotals {
   partner_id: number
   summary_currency: string
   functional_uzs: InvestorLedgerTotals
   by_currency: Record<string, InvestorLedgerTotals>
+  capital_state: InvestorCapitalState
 }
 
 export interface InvestorProcurementListItem {
@@ -313,6 +349,7 @@ export interface InvestorProcurementDetail {
   supplier_name: string | null
   notes: string
   investor_aggregate: InvestorDashboardAggregate
+  capital_state: InvestorCapitalState
   investor_ledger: {
     partner_id: number
     partner_name: string

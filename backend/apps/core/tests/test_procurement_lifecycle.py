@@ -4,6 +4,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.finance.models import ExchangeRate
+from apps.core.models import Partner
 from apps.inventory.models import LotStock
 from apps.partnerships.models import Procurement, ProcurementBalance
 from apps.partnerships.services import (
@@ -481,3 +482,54 @@ class ProcurementLifecycleTests(TestCase):
         )
         self.assertEqual(Decimal(partners['INVESTOR']['capital_share']), Decimal('0.700000'))
         self.assertEqual(Decimal(partners['OPERATOR']['capital_share']), Decimal('0.300000'))
+
+    def test_add_contribution_rejects_partner_outside_procurement_contract(self):
+        ctx = build_tenant()
+        outsider = Partner.objects.create(
+            tenant=ctx['business'],
+            role=Partner.Role.INVESTOR,
+            display_name='Outsider',
+            is_active=True,
+        )
+
+        procurement = open_procurement(
+            tenant_id=ctx['business'].id,
+            procurement_type=Procurement.Type.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+            contract={
+                'mudaraba_ratio': Decimal('0.571429'),
+                'planned_budget': Decimal('100'),
+                'currency': 'USD',
+                'partners': [
+                    {
+                        'partner_id': ctx['investor'].id,
+                        'role': 'INVESTOR',
+                        'planned_capital_share': Decimal('70'),
+                        'profit_share': Decimal('0.4'),
+                    },
+                    {
+                        'partner_id': ctx['operator'].id,
+                        'role': 'OPERATOR',
+                        'planned_capital_share': Decimal('30'),
+                        'profit_share': Decimal('0.6'),
+                    },
+                ],
+            },
+            items=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'USD',
+                'fx_rate': Decimal('12000'),
+            }],
+        )
+
+        with self.assertRaisesMessage(ValueError, 'Selected partner is not part of this procurement contract.'):
+            add_contribution(
+                tenant_id=ctx['business'].id,
+                procurement_id=procurement.id,
+                partner_id=outsider.id,
+                amount=Decimal('70'),
+                currency='USD',
+                fx_rate=Decimal('12000'),
+            )

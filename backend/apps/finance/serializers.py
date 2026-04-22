@@ -156,6 +156,45 @@ class CashFlowSummarySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class SaleProfitabilitySerializer(serializers.Serializer):
+    sale_id = serializers.IntegerField()
+    date = serializers.DateTimeField()
+    location_id = serializers.IntegerField()
+    location_name = serializers.CharField()
+    customer_id = serializers.IntegerField(allow_null=True)
+    customer_name = serializers.CharField(allow_null=True, allow_blank=True)
+    payment_methods = serializers.ListField(child=serializers.CharField())
+    line_count = serializers.IntegerField()
+    quantity_sold = serializers.IntegerField()
+    revenue = serializers.DecimalField(max_digits=20, decimal_places=2)
+    cogs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    margin_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    markup_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+
+
+class ProductProfitabilitySerializer(serializers.Serializer):
+    product_variant_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    current_unit_price = serializers.DecimalField(max_digits=20, decimal_places=2)
+    quantity_sold = serializers.IntegerField()
+    revenue = serializers.DecimalField(max_digits=20, decimal_places=2)
+    cogs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    margin_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    markup_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    remaining_quantity = serializers.IntegerField()
+    remaining_landed_cost = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_revenue = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
 class TrialBalanceSerializer(serializers.Serializer):
     account_id = serializers.IntegerField()
     code = serializers.CharField()

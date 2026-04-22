@@ -130,6 +130,9 @@ class Receipt(ImmutableMixin, TenantModel):
     def __str__(self):
         return f"Receipt #{self.pk} ({self.receipt_type})"
 
+    def delete(self, *args, **kwargs):
+        raise ValueError('Physical delete forbidden for Receipt.')
+
 
 class ReceiptLine(TenantModel):
     """Single line item in a receipt."""
@@ -275,6 +278,11 @@ class Lot(TenantModel):
 
     def __str__(self):
         return f"Lot #{self.pk} ({self.product_variant})"
+
+    def save(self, *args, **kwargs):
+        if not self.pk and self.receipt_id is None and self.procurement_item_id is None:
+            raise ValueError('Lot must originate from receipt or procurement item.')
+        super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         raise ValueError('Physical delete forbidden for Lot.')

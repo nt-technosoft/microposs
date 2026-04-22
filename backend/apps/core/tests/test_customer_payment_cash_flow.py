@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -36,12 +37,7 @@ class CustomerPaymentCashFlowTests(APITestCase):
         )
 
     def auth_owner(self) -> None:
-        response = self.client.post('/api/v1/auth/token/', {
-            'username': 't_owner',
-            'password': 'x',
-        }, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+        self.client.force_authenticate(user=User.objects.get(username='t_owner'))
 
     def test_owner_customer_payment_creates_cash_entry_and_journal(self):
         self.auth_owner()

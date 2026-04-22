@@ -174,5 +174,9 @@ def get_stock_summary(
             'warehouse__name',
         ).annotate(
             total_quantity=models.Sum('quantity_remaining'),
+            total_landed_cost=models.Sum(
+                models.F('quantity_remaining') * models.F('lot__landed_cost_per_unit'),
+                output_field=models.DecimalField(max_digits=20, decimal_places=2),
+            ),
         ).order_by('lot__product_variant__product__name')
     )

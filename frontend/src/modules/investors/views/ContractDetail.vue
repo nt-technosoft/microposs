@@ -82,6 +82,10 @@ function formatDateTime(value: string): string {
   })
 }
 
+function formatCapitalState(field: keyof InvestorProcurementDetail['capital_state']): string {
+  return formatPrice(procurement.value?.capital_state?.[field] ?? '0', 'UZS')
+}
+
 async function loadContract(): Promise<void> {
   if (!Number.isFinite(procurementId.value)) {
     errorMessage.value = 'Некорректный ID прихода'
@@ -164,6 +168,36 @@ onMounted(loadContract)
             <div class="metric">
               <span>Дивиденды</span>
               <strong class="tabular-nums">{{ formatAggregateAmount('dividends_paid', 'USD') }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="section-title">Капитал по этому приходу</h2>
+          <div class="metrics-grid">
+            <div class="metric">
+              <span>Продано по себестоимости</span>
+              <strong class="tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Осталось в товаре</span>
+              <strong class="tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Всего отслеживается</span>
+              <strong class="tabular-nums">{{ formatCapitalState('tracked_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Выручка по проданному</span>
+              <strong class="tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Прогноз выручки по остатку</span>
+              <strong class="tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Прогноз прибыли инвестора</span>
+              <strong class="tabular-nums positive">{{ formatCapitalState('projected_partner_profit_uzs') }}</strong>
             </div>
           </div>
         </section>

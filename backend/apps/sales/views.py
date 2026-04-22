@@ -114,14 +114,15 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = Sale.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('customer', 'pos_session', 'sold_by', 'location')
+        ).select_related(
+            'customer', 'pos_session', 'sold_by', 'location',
+        ).prefetch_related('payments')
 
         if self.action == 'retrieve':
             qs = qs.prefetch_related(
                 'lines__product_variant',
                 'lines__lot',
                 'lines__discount_reason',
-                'payments',
             )
 
         session_id = self.request.query_params.get('session')

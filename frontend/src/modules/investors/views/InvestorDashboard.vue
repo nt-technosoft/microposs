@@ -63,6 +63,10 @@ function formatFunctionalAmount(field: LedgerAmountKey): string {
   return formatPrice(aggregate.value?.functional_uzs?.[field] ?? '0', 'UZS')
 }
 
+function formatCapitalState(field: keyof InvestorDashboardAggregate['capital_state']): string {
+  return formatPrice(aggregate.value?.capital_state?.[field] ?? '0', 'UZS')
+}
+
 function procurementTypeLabel(type: string): string {
   if (type === 'PARTNERSHIP') return 'Партнёрский'
   if (type === 'MUSHARAKA') return 'Мушарака'
@@ -211,6 +215,36 @@ onMounted(loadDashboard)
             </div>
             <span class="record-amount tabular-nums">{{ formatAggregateAmount('dividends_paid', 'USD') }}</span>
           </article>
+        </section>
+
+        <section class="card">
+          <h2 class="section-title">Капитал в товаре</h2>
+          <div class="metrics-grid">
+            <div class="metric">
+              <span>Продано по себестоимости</span>
+              <strong class="tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Осталось в товаре</span>
+              <strong class="tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Всего отслеживается</span>
+              <strong class="tabular-nums">{{ formatCapitalState('tracked_cost_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Выручка по проданному</span>
+              <strong class="tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Прогноз выручки по остатку</span>
+              <strong class="tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
+            </div>
+            <div class="metric">
+              <span>Прогноз прибыли инвестора</span>
+              <strong class="tabular-nums positive">{{ formatCapitalState('projected_partner_profit_uzs') }}</strong>
+            </div>
+          </div>
         </section>
       </template>
     </main>

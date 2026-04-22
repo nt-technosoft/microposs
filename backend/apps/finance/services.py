@@ -1133,3 +1133,211 @@ def record_owner_contribution(
         )
 
     return contribution
+
+
+def _money(value: Decimal | int | float | str) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal('0.01'))
+
+
+def _percent(numerator: Decimal, denominator: Decimal) -> Decimal:
+    if denominator <= 0:
+        return Decimal('0.00')
+    return ((numerator / denominator) * Decimal('100')).quantize(Decimal('0.01'))
+
+
+def _investor_profit_from_distribution(line) -> Decimal:
+    snapshot = line.profit_distribution_snapshot or {}
+    contract_snapshot = line.lot.contract_snapshot or {}
+    partner_roles = {
+        str(meta.get('partner_id')): meta.get('role')
+        for meta in contract_snapshot.get('partners', []) or []
+        if meta.get('partner_id') is not None
+    }
+    return sum(
+        (
+            Decimal(str(amount))
+            for partner_id, amount in snapshot.items()
+            if partner_roles.get(str(partner_id)) == 'INVESTOR'
+        ),
+        Decimal('0.00'),
+    ).quantize(Decimal('0.01'))
+
+
+def get_sales_profitability_rows(
+    *,
+    tenant_id: int,
+    date_from=None,
+    date_to=None,
+    location_id: int | None = None,
+) -> list[dict]:
+    from apps.sales.models import Sale
+
+    queryset = (
+        Sale.objects
+        .filter(tenant_id=tenant_id, status=Sale.SaleStatus.COMPLETED)
+        .select_related('location', 'customer')
+        .prefetch_related('payments', 'lines__lot', 'lines__product_variant__product')
+        .order_by('-date', '-id')
+    )
+    if date_from:
+        queryset = queryset.filter(date__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(date__date__lte=date_to)
+    if location_id:
+        queryset = queryset.filter(location_id=location_id)
+
+    rows: list[dict] = []
+    for sale in queryset:
+        investor_profit = sum(
+            (_investor_profit_from_distribution(line) for line in sale.lines.all()),
+            Decimal('0.00'),
+        ).quantize(Decimal('0.01'))
+        gross_profit = _money(sale.total_amount - sale.total_cogs)
+        rows.append({
+            'sale_id': sale.id,
+            'date': sale.date,
+            'location_id': sale.location_id,
+            'location_name': sale.location.name,
+            'customer_id': sale.customer_id,
+            'customer_name': getattr(sale.customer, 'name', None),
+            'payment_methods': sorted({payment.method for payment in sale.payments.all()}),
+            'line_count': sale.lines.count(),
+            'quantity_sold': sum(int(line.quantity) for line in sale.lines.all()),
+            'revenue': _money(sale.total_amount),
+            'cogs': _money(sale.total_cogs),
+            'gross_profit': gross_profit,
+            'investor_profit': investor_profit,
+            'business_profit': _money(gross_profit - investor_profit),
+            'margin_percent': _percent(gross_profit, _money(sale.total_amount)),
+            'markup_percent': _percent(gross_profit, _money(sale.total_cogs)),
+        })
+    return rows
+
+
+def get_product_profitability_rows(
+    *,
+    tenant_id: int,
+    date_from=None,
+    date_to=None,
+    location_id: int | None = None,
+    warehouse_id: int | None = None,
+) -> list[dict]:
+    from apps.inventory.models import LotStock
+    from apps.sales.models import SaleLine
+    from apps.sales.services import calculate_profit_distribution
+
+    sale_lines = (
+        SaleLine.objects
+        .filter(tenant_id=tenant_id, sale__status='completed')
+        .select_related('sale__location', 'lot', 'product_variant__product')
+        .order_by('product_variant_id', 'id')
+    )
+    if date_from:
+        sale_lines = sale_lines.filter(sale__date__date__gte=date_from)
+    if date_to:
+        sale_lines = sale_lines.filter(sale__date__date__lte=date_to)
+    if location_id:
+        sale_lines = sale_lines.filter(sale__location_id=location_id)
+
+    rows: dict[int, dict] = {}
+
+    def ensure_row(variant) -> dict:
+        row = rows.get(variant.id)
+        if row is None:
+            current_unit_price = _money(variant.effective_price or Decimal('0'))
+            row = {
+                'product_variant_id': variant.id,
+                'product_name': variant.product.name,
+                'current_unit_price': current_unit_price,
+                'quantity_sold': 0,
+                'revenue': Decimal('0.00'),
+                'cogs': Decimal('0.00'),
+                'gross_profit': Decimal('0.00'),
+                'investor_profit': Decimal('0.00'),
+                'business_profit': Decimal('0.00'),
+                'margin_percent': Decimal('0.00'),
+                'markup_percent': Decimal('0.00'),
+                'remaining_quantity': 0,
+                'remaining_landed_cost': Decimal('0.00'),
+                'projected_revenue': Decimal('0.00'),
+                'projected_gross_profit': Decimal('0.00'),
+                'projected_investor_profit': Decimal('0.00'),
+                'projected_business_profit': Decimal('0.00'),
+            }
+            rows[variant.id] = row
+        return row
+
+    for line in sale_lines:
+        row = ensure_row(line.product_variant)
+        revenue = _money(Decimal(str(line.unit_price)) * Decimal(str(line.quantity)))
+        cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(str(line.quantity)))
+        gross = _money(revenue - cogs)
+        investor_profit = _investor_profit_from_distribution(line)
+        row['quantity_sold'] += int(line.quantity)
+        row['revenue'] += revenue
+        row['cogs'] += cogs
+        row['gross_profit'] += gross
+        row['investor_profit'] += investor_profit
+
+    remaining_stock = (
+        LotStock.objects
+        .filter(tenant_id=tenant_id, quantity_remaining__gt=0)
+        .select_related('lot__product_variant__product')
+        .order_by('lot__product_variant_id', 'id')
+    )
+    if warehouse_id:
+        remaining_stock = remaining_stock.filter(warehouse_id=warehouse_id)
+
+    for stock in remaining_stock:
+        variant = stock.lot.product_variant
+        row = ensure_row(variant)
+        qty = int(stock.quantity_remaining)
+        current_price = row['current_unit_price']
+        remaining_cost = _money(Decimal(str(stock.lot.landed_cost_per_unit)) * Decimal(str(qty)))
+        projected_revenue = _money(current_price * Decimal(str(qty)))
+        projected_gross = _money(projected_revenue - remaining_cost)
+        distribution = calculate_profit_distribution(
+            lot=stock.lot,
+            unit_price=current_price,
+            quantity=qty,
+            unit_landed_cost=Decimal(str(stock.lot.landed_cost_per_unit)),
+        )
+        projected_investor_profit = sum(
+            (
+                Decimal(str(amount))
+                for partner_id, amount in distribution.items()
+                if any(
+                    str(meta.get('partner_id')) == str(partner_id)
+                    and meta.get('role') == 'INVESTOR'
+                    for meta in (stock.lot.contract_snapshot or {}).get('partners', []) or []
+                )
+            ),
+            Decimal('0.00'),
+        ).quantize(Decimal('0.01'))
+
+        row['remaining_quantity'] += qty
+        row['remaining_landed_cost'] += remaining_cost
+        row['projected_revenue'] += projected_revenue
+        row['projected_gross_profit'] += projected_gross
+        row['projected_investor_profit'] += projected_investor_profit
+
+    result: list[dict] = []
+    for row in rows.values():
+        row['revenue'] = _money(row['revenue'])
+        row['cogs'] = _money(row['cogs'])
+        row['gross_profit'] = _money(row['gross_profit'])
+        row['investor_profit'] = _money(row['investor_profit'])
+        row['business_profit'] = _money(row['gross_profit'] - row['investor_profit'])
+        row['margin_percent'] = _percent(row['gross_profit'], row['revenue'])
+        row['markup_percent'] = _percent(row['gross_profit'], row['cogs'])
+        row['remaining_landed_cost'] = _money(row['remaining_landed_cost'])
+        row['projected_revenue'] = _money(row['projected_revenue'])
+        row['projected_gross_profit'] = _money(row['projected_gross_profit'])
+        row['projected_investor_profit'] = _money(row['projected_investor_profit'])
+        row['projected_business_profit'] = _money(
+            row['projected_gross_profit'] - row['projected_investor_profit']
+        )
+        result.append(row)
+
+    result.sort(key=lambda item: (-Decimal(str(item['gross_profit'])), item['product_name']))
+    return result

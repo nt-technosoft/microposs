@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, CheckCircle2, AlertCircle, PlusCircle, ArrowRightLeft, Plus, Trash2, RefreshCcw, ChevronDown } from 'lucide-vue-next'
 import { PricingMode, ProcurementStatus, ProcurementType } from '@/types/enums'
-import { formatPrice } from '@/utils/currency'
+import { formatPrice, formatPriceCompact } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { fetchLocations } from '@/api/inventory'
 import { fetchLatestFxRate } from '@/api/finance'
@@ -114,6 +114,11 @@ const stageState = ref({
   receive: true,
   service: false,
 })
+const showFullBalanceHistory = ref(false)
+const expandedBalanceHistoryId = ref<string | null>(null)
+const expandedDraftLineId = ref<string | null>(null)
+const expandedDraftExpenseId = ref<string | null>(null)
+const expandedCostPreviewKey = ref<string | null>(null)
 const exchangeFromCurrency = ref('USD')
 const exchangeToCurrency = ref('UZS')
 const exchangeFromAmount = ref('')
@@ -171,6 +176,12 @@ const contributionPartnerOptions = computed(() => contractPartners.value.map((pa
   value: partner.partner,
   label: `${partner.partner_name} · ${partner.role === 'INVESTOR' ? 'инвестор' : 'бизнес'}`,
 })))
+const balanceParticipantTotals = computed(() => procurement.value?.balance?.participant_totals ?? [])
+const balanceHistoryEntries = computed(() => procurement.value?.balance?.history ?? [])
+const visibleBalanceHistoryEntries = computed(() => showFullBalanceHistory.value
+  ? balanceHistoryEntries.value
+  : balanceHistoryEntries.value.slice(0, 6))
+const hasCollapsedBalanceHistory = computed(() => balanceHistoryEntries.value.length > 6)
 const balanceStatusKind = computed(() => {
   if (procurement.value?.receive_plan.status === 'READY') return 'success'
   return 'blocked'
@@ -227,6 +238,29 @@ const expensesTotal = computed(() => {
 })
 
 const procurementTotal = computed(() => totalAmount.value + expensesTotal.value)
+const costPreviewScenarios = computed(() => {
+  if (!procurement.value) return []
+
+  const scenarios = [
+    {
+      key: 'receive-now',
+      label: 'Если оприходовать сейчас',
+      basis: procurement.value.cost_preview.receive_basis,
+      showStatus: false,
+    },
+  ]
+
+  if (procurement.value.cost_preview.reallocation_pending && procurement.value.cost_preview.if_all_current_lines_paid.lines.length) {
+    scenarios.push({
+      key: 'after-payment',
+      label: 'Если оплатить всё текущее',
+      basis: procurement.value.cost_preview.if_all_current_lines_paid,
+      showStatus: true,
+    })
+  }
+
+  return scenarios.filter((scenario) => scenario.basis.lines.length > 0)
+})
 const headerSummaryItems = computed(() => [
   {
     label: 'Поставщик',
@@ -299,6 +333,18 @@ function focusStage(stage: keyof typeof stageState.value): void {
   })
 }
 
+function syncStageState(detail: ProcurementDetail, force = false): void {
+  if (!force && procurement.value?.status === detail.status) return
+  const isOpen = detail.status === ProcurementStatus.OPEN
+  stageState.value = {
+    contract: false,
+    balance: true,
+    operations: isOpen,
+    receive: isOpen,
+    service: false,
+  }
+}
+
 function buildEmptyDraftLine(): DraftLineRow {
   return {
     id: crypto.randomUUID(),
@@ -325,11 +371,16 @@ function buildEmptyDraftExpense(): DraftExpenseRow {
 }
 
 function addDraftLine(): void {
-  draftLines.value = [...draftLines.value, buildEmptyDraftLine()]
+  const nextLine = buildEmptyDraftLine()
+  draftLines.value = [...draftLines.value, nextLine]
+  expandedDraftLineId.value = nextLine.id
 }
 
 function removeDraftLine(rowId: string): void {
   draftLines.value = draftLines.value.filter((line) => line.id !== rowId)
+  if (expandedDraftLineId.value === rowId) {
+    expandedDraftLineId.value = draftLines.value[0]?.id ?? null
+  }
 }
 
 function updateDraftLine(rowId: string, field: keyof Omit<DraftLineRow, 'id'>, value: string | ProductVariant | null | number): void {
@@ -337,11 +388,16 @@ function updateDraftLine(rowId: string, field: keyof Omit<DraftLineRow, 'id'>, v
 }
 
 function addDraftExpense(): void {
-  draftExpenses.value = [...draftExpenses.value, buildEmptyDraftExpense()]
+  const nextExpense = buildEmptyDraftExpense()
+  draftExpenses.value = [...draftExpenses.value, nextExpense]
+  expandedDraftExpenseId.value = nextExpense.id
 }
 
 function removeDraftExpense(rowId: string): void {
   draftExpenses.value = draftExpenses.value.filter((expense) => expense.id !== rowId)
+  if (expandedDraftExpenseId.value === rowId) {
+    expandedDraftExpenseId.value = draftExpenses.value[0]?.id ?? null
+  }
 }
 
 function updateDraftExpense(rowId: string, field: keyof Omit<DraftExpenseRow, 'id'>, value: string | number | null): void {
@@ -701,6 +757,120 @@ function displayPartnerName(partnerName: string, role?: string | null): string {
   return role === 'OPERATOR' ? 'Бизнес' : partnerName
 }
 
+function formatSharePercent(value: string | number): string {
+  const numeric = typeof value === 'string' ? Number.parseFloat(value) : value
+  if (!Number.isFinite(numeric)) return '0.00%'
+  return `${(numeric * 100).toFixed(2)}%`
+}
+
+function toggleBalanceHistoryEntry(entryId: string): void {
+  expandedBalanceHistoryId.value = expandedBalanceHistoryId.value === entryId ? null : entryId
+}
+
+function toggleDraftLineExpanded(lineId: string): void {
+  expandedDraftLineId.value = expandedDraftLineId.value === lineId ? null : lineId
+}
+
+function toggleDraftExpenseExpanded(expenseId: string): void {
+  expandedDraftExpenseId.value = expandedDraftExpenseId.value === expenseId ? null : expenseId
+}
+
+function balanceHistoryAmountClass(kind: string): string {
+  if (kind === 'CONTRIBUTION') return 'history-amount--in'
+  if (kind === 'WITHDRAWAL') return 'history-amount--out'
+  return 'history-amount--exchange'
+}
+
+function balanceHistoryKindLabel(kind: string): string {
+  if (kind === 'CONTRIBUTION') return 'Приход'
+  if (kind === 'WITHDRAWAL') return 'Расход'
+  return 'Обмен'
+}
+
+function balanceHistoryRowClass(kind: string): string {
+  if (kind === 'CONTRIBUTION') return 'money-flow-row--in'
+  if (kind === 'WITHDRAWAL') return 'money-flow-row--out'
+  return 'money-flow-row--exchange'
+}
+
+function balanceHistorySignedAmount(
+  kind: 'CONTRIBUTION' | 'WITHDRAWAL' | 'EXCHANGE',
+  amount: string | number,
+  currency: string,
+): string {
+  const value = formatCompactAmount(amount, currency)
+  if (kind === 'CONTRIBUTION') return `+${value}`
+  if (kind === 'WITHDRAWAL') return `-${value}`
+  return value
+}
+
+function allocationMethodLabel(value: string): string {
+  return value === 'BY_QUANTITY' ? 'по количеству' : 'по стоимости'
+}
+
+function draftLineSummary(line: DraftLineRow): string {
+  const quantity = parsePositiveNumber(line.quantity)
+  const price = parsePositiveNumber(line.cost_per_unit)
+  if (quantity > 0 && price > 0) {
+    return `${formatPlainAmount(quantity)} шт. · ${formatCompactAmount(price, line.currency)} / шт.`
+  }
+  if (quantity > 0) {
+    return `${formatPlainAmount(quantity)} шт.`
+  }
+  return 'Укажи количество и цену'
+}
+
+function draftLineTotal(line: DraftLineRow): string {
+  const quantity = parsePositiveNumber(line.quantity)
+  const price = parsePositiveNumber(line.cost_per_unit)
+  if (quantity <= 0 || price <= 0) return '—'
+  return formatCompactAmount(quantity * price, line.currency)
+}
+
+function draftExpenseSummary(expense: DraftExpenseRow): string {
+  return [
+    allocationMethodLabel(expense.allocation_method),
+    expense.notes.trim() || null,
+  ].filter(Boolean).join(' · ') || 'Укажи сумму и комментарий при необходимости'
+}
+
+function draftExpenseAmount(expense: DraftExpenseRow): string {
+  const amount = parsePositiveNumber(expense.amount)
+  if (amount <= 0) return '—'
+  return formatCompactAmount(amount, expense.currency)
+}
+
+function paidItemSummary(line: ProcurementDetail['items'][number]): string {
+  return `${formatPlainAmount(line.quantity)} шт. · ${formatCompactAmount(line.unit_purchase_price, line.currency)} / шт.`
+}
+
+function paidExpenseSummary(expense: ProcurementDetail['expenses'][number]): string {
+  return allocationMethodLabel(expense.allocation_method)
+}
+
+function toggleCostPreviewScenario(key: string): void {
+  expandedCostPreviewKey.value = expandedCostPreviewKey.value === key ? null : key
+}
+
+function costPreviewScenarioSummary(itemsCount: number, expensesCount: number): string {
+  return `${itemsCount} тов. · ${expensesCount} расх.`
+}
+
+function costPreviewScenarioExpenses(totalExpenses: string | number): string {
+  return formatPriceCompact(totalExpenses, 'UZS')
+}
+
+function costPreviewLineSummary(
+  line: ProcurementDetail['cost_preview']['receive_basis']['lines'][number],
+  showStatus: boolean,
+): string {
+  const parts = [`${formatPlainAmount(line.quantity)} шт.`]
+  if (showStatus) {
+    parts.push(line.status === 'PAID' ? 'оплачено' : 'черновик')
+  }
+  return parts.join(' · ')
+}
+
 function ledgerPartnerRole(partnerId: number): string | null {
   const match = contractPartners.value.find((partner) => partner.partner === partnerId)
   return match?.role ?? null
@@ -747,8 +917,9 @@ function resetContributionForm(): void {
   contributionAmount.value = ''
   contributionNotes.value = ''
   contributionRateManualOpen.value = false
-  const defaultPartner = contractPartners.value.find((partner) => partner.role === 'OPERATOR') ?? contractPartners.value[0]
-  contributionPartnerId.value = defaultPartner?.partner ?? null
+  contributionPartnerId.value = contractPartners.value.length === 1
+    ? contractPartners.value[0]?.partner ?? null
+    : null
   contributionCurrency.value = normalizeCurrency(procurement.value?.contract?.currency ?? 'USD')
   contributionFxRate.value = defaultFxRateForCurrency(contributionCurrency.value)
 }
@@ -840,6 +1011,8 @@ function populateDraftWorkspace(detail: ProcurementDetail): void {
       allocation_method: expense.allocation_method as DraftExpenseRow['allocation_method'],
       notes: expense.notes ?? '',
     }))
+  expandedDraftLineId.value = draftLines.value[0]?.id ?? null
+  expandedDraftExpenseId.value = draftExpenses.value[0]?.id ?? null
 }
 
 function buildContractPayload(detail: ProcurementDetail) {
@@ -1070,8 +1243,12 @@ async function loadProcurement(): Promise<void> {
   errorMessage.value = null
   try {
     const detail = await fetchProcurement(id)
+    syncStageState(detail, procurement.value === null)
     procurement.value = detail
     populateDraftWorkspace(detail)
+    showFullBalanceHistory.value = false
+    expandedBalanceHistoryId.value = null
+    expandedCostPreviewKey.value = null
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить закупку'
   } finally {
@@ -1265,50 +1442,136 @@ onMounted(async () => {
           </button>
 
           <div v-if="stageState.balance" class="stage-body">
-            <div class="row row-between balance-card-head">
-              <p class="muted">{{ receiveStatusMeta(procurement.receive_plan.status).hint }}</p>
-              <span class="status-pill" :class="balanceStatusKind === 'success' ? 'status-pill--success' : 'status-pill--blocked'">
-                {{ receiveStatusMeta(procurement.receive_plan.status).label }}
-              </span>
+            <div class="balance-overview">
+              <div class="row row-between balance-overview-head">
+                <span class="status-pill" :class="balanceStatusKind === 'success' ? 'status-pill--success' : 'status-pill--blocked'">
+                  {{ receiveStatusMeta(procurement.receive_plan.status).label }}
+                </span>
+                <span class="subtle-meta">{{ balanceHistoryEntries.length }} движ.</span>
+              </div>
+
+              <div v-if="balanceEntries.length" class="balance-chip-list">
+                <span v-for="[currency, amount] in balanceEntries" :key="currency" class="balance-chip">
+                  {{ formatPrice(amount, currency) }}
+                </span>
+              </div>
+              <p v-else class="muted">Баланс пока пуст.</p>
+
+              <p class="balance-caption">
+                {{ procurement.receive_plan.status === 'NOT_OPEN'
+                  ? 'Приход завершён. Ниже показана итоговая картина по балансу и движениям.'
+                  : receiveStatusMeta(procurement.receive_plan.status).hint }}
+              </p>
             </div>
 
-            <div v-if="balanceEntries.length" class="balance-chip-list">
-              <span v-for="[currency, amount] in balanceEntries" :key="currency" class="balance-chip">
-                {{ formatPrice(amount, currency) }}
-              </span>
-            </div>
-            <p v-else class="muted">Баланс пока пуст.</p>
-
-            <div v-if="procurement.balance.exchanges.length" class="balance-block">
-              <strong class="subsection-title">Обмены внутри прихода</strong>
-              <div class="compact-list">
-                <div v-for="exchange in procurement.balance.exchanges" :key="exchange.id" class="compact-row">
-                  <div>
-                    <span class="participant-name">{{ formatPrice(exchange.from_amount, exchange.from_currency) }} -> {{ formatPrice(exchange.to_amount, exchange.to_currency) }}</span>
-                    <span class="line-qty">USD -> UZS {{ formatUsdUzsRate(exchange.rate, exchange.from_currency, exchange.to_currency) }} · {{ formatDateTime(exchange.date) }}<template v-if="exchange.notes"> · {{ exchange.notes }}</template></span>
+            <div v-if="balanceParticipantTotals.length" class="balance-block">
+              <div class="section-inline-head">
+                <strong class="subsection-title">Участники</strong>
+                <span class="subtle-meta">{{ balanceParticipantTotals.length }}</span>
+              </div>
+              <div class="mini-table">
+                <div class="mini-table-head">
+                  <span>Участник</span>
+                  <span>Внёс</span>
+                  <span>Нетто</span>
+                  <span>Доля</span>
+                </div>
+                <div class="mini-table-body">
+                  <div v-for="item in balanceParticipantTotals" :key="item.partner_id" class="mini-table-row">
+                    <div class="mini-table-cell mini-table-cell--main">
+                      <strong class="participant-name">{{ displayPartnerName(item.partner_name, item.role) }}</strong>
+                      <span class="line-qty">{{ roleLabel(item.role) }}</span>
+                    </div>
+                    <div class="mini-table-cell">
+                      <strong class="tabular-nums">{{ formatCompactAmount(item.contributed_amount, item.contract_currency) }}</strong>
+                    </div>
+                    <div class="mini-table-cell">
+                      <strong class="tabular-nums">{{ formatCompactAmount(item.net_capital, item.contract_currency) }}</strong>
+                    </div>
+                    <div class="mini-table-cell">
+                      <strong class="tabular-nums">{{ formatSharePercent(item.actual_capital_share) }}</strong>
+                      <span class="line-qty">профит {{ formatSharePercent(item.planned_profit_share) }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
+            <div v-if="balanceHistoryEntries.length" class="balance-block">
+              <div class="section-inline-head">
+                <strong class="subsection-title">Движение денег</strong>
+                <span class="subtle-meta">{{ balanceHistoryEntries.length }} операций</span>
+              </div>
+              <div class="money-flow-table">
+                <div class="money-flow-head">
+                  <span>Тип</span>
+                  <span>Операция</span>
+                  <span>Сумма</span>
+                </div>
+                <div class="money-flow-body">
+                  <article
+                    v-for="entry in visibleBalanceHistoryEntries"
+                    :key="entry.id"
+                    class="money-flow-row"
+                    :class="[
+                      balanceHistoryRowClass(entry.kind),
+                      { 'money-flow-row--open': expandedBalanceHistoryId === entry.id },
+                    ]"
+                  >
+                    <button class="money-flow-summary" type="button" @click="toggleBalanceHistoryEntry(entry.id)">
+                      <span class="money-flow-kind">
+                        {{ balanceHistoryKindLabel(entry.kind) }}
+                      </span>
+                      <div class="money-flow-main">
+                        <strong class="participant-name">{{ entry.title }}</strong>
+                        <span class="line-qty">
+                          {{ formatDateTime(entry.date) }}
+                          <template v-if="entry.partner_name"> · {{ displayPartnerName(entry.partner_name, entry.partner_role) }}</template>
+                        </span>
+                      </div>
+                      <strong class="tabular-nums history-amount money-flow-amount" :class="balanceHistoryAmountClass(entry.kind)">
+                        {{ balanceHistorySignedAmount(entry.kind, entry.amount, entry.currency) }}
+                      </strong>
+                      <ChevronDown class="stage-chevron money-flow-chevron" :class="{ 'stage-chevron--open': expandedBalanceHistoryId === entry.id }" :size="16" :stroke-width="2" />
+                    </button>
+                    <div v-if="expandedBalanceHistoryId === entry.id" class="money-flow-detail">
+                      <span v-if="entry.kind === 'EXCHANGE'" class="line-qty">
+                        {{ formatCompactAmount(entry.amount, entry.currency) }} -> {{ formatCompactAmount(entry.secondary_amount || '0', entry.secondary_currency) }}
+                        · курс {{ formatUsdUzsRate(entry.fx_rate, entry.currency, entry.secondary_currency || entry.currency) }}
+                      </span>
+                      <span v-else-if="entry.note" class="line-qty">{{ entry.note }}</span>
+                      <span v-else class="line-qty">Без дополнительного комментария</span>
+                    </div>
+                  </article>
+                </div>
+              </div>
+              <button v-if="hasCollapsedBalanceHistory" class="inline-link" type="button" @click="showFullBalanceHistory = !showFullBalanceHistory">
+                {{ showFullBalanceHistory ? 'Свернуть историю' : `Показать все ${balanceHistoryEntries.length} операций` }}
+              </button>
+            </div>
+
             <div v-if="Object.keys(procurement.receive_plan.missing_spend).length" class="balance-block warning-block">
-              <strong class="subsection-title">Есть служебная несостыковка списаний</strong>
-              <p class="muted">В основном сценарии списание происходит из блока товаров и расходов. Для этих данных система видит уже оплаченные позиции без полного движения по балансу.</p>
-              <div class="participants">
-                <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="currency" class="participant-row">
+              <div class="section-inline-head">
+                <strong class="subsection-title">Служебная несостыковка</strong>
+                <button class="inline-link" type="button" @click="toggleStage('service')">
+                  {{ stageState.service ? 'Скрыть' : 'Исправить' }}
+                </button>
+              </div>
+              <div class="compact-inline-list">
+                <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="currency" class="compact-inline-item">
                   <span class="participant-name">{{ currency }}</span>
                   <span class="participant-share">не закрыто {{ amount }}</span>
                 </div>
               </div>
-              <button class="inline-link" type="button" @click="toggleStage('service')">
-                {{ stageState.service ? 'Скрыть сервисные действия' : 'Показать сервисные действия' }}
-              </button>
             </div>
 
             <div v-if="procurement.receive_plan.suggested_withdrawals.length" class="balance-block">
-              <strong class="subsection-title">Излишек к возврату</strong>
-              <div class="participants">
-                <div v-for="item in procurement.receive_plan.suggested_withdrawals" :key="item.partner_id" class="participant-row">
+              <div class="section-inline-head">
+                <strong class="subsection-title">Излишек к возврату</strong>
+                <span class="subtle-meta">{{ procurement.receive_plan.suggested_withdrawals.length }}</span>
+              </div>
+              <div class="compact-inline-list">
+                <div v-for="item in procurement.receive_plan.suggested_withdrawals" :key="item.partner_id" class="compact-inline-item">
                   <span class="participant-name">{{ item.partner_name }}</span>
                   <span class="participant-share">вернуть {{ item.amount }} {{ item.currency }}</span>
                 </div>
@@ -1318,22 +1581,24 @@ onMounted(async () => {
             <div v-if="canManageBalance" class="balance-actions">
               <button class="action-btn" type="button" @click="openContributionSheet()">
                 <PlusCircle :size="16" :stroke-width="2" />
-                Пополнить баланс
+                Пополнить
               </button>
               <button class="action-btn action-btn--secondary" type="button" @click="openExchangeSheet()">
                 <ArrowRightLeft :size="16" :stroke-width="2" />
-                Обмен валют
+                Обменять
               </button>
             </div>
 
             <div v-if="stageState.service && Object.keys(procurement.receive_plan.missing_spend).length" class="service-actions-card">
-              <strong class="subsection-title">Сервисные действия</strong>
-              <p class="muted">Это запасной путь для старых или непоследовательных данных. Для новых операций используй оплату из блока товаров и расходов.</p>
-              <div class="participants">
-                <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="`service-${currency}`" class="participant-row">
+              <div class="section-inline-head">
+                <strong class="subsection-title">Сервисные действия</strong>
+                <span class="subtle-meta">для старых данных</span>
+              </div>
+              <div class="compact-inline-list">
+                <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="`service-${currency}`" class="compact-inline-item">
                   <span class="participant-name">{{ currency }}</span>
                   <button class="inline-link" type="button" @click="openWithdrawalSheet(currency)">
-                    Сервисно списать {{ amount }}
+                    Списать {{ amount }}
                   </button>
                 </div>
               </div>
@@ -1378,14 +1643,23 @@ onMounted(async () => {
               </div>
 
               <div v-if="paidItems.length" class="paid-block">
-                <span class="group-label">Оплаченные товары</span>
-                <div class="compact-list">
-                  <div v-for="line in paidItems" :key="line.id" class="compact-row">
-                    <div>
-                      <span class="participant-name">{{ line.product_variant_name }}</span>
-                      <span class="line-qty">× {{ line.quantity }}</span>
+                <div class="section-inline-head">
+                  <span class="group-label">Оплаченные товары</span>
+                  <span class="subtle-meta">{{ paidItems.length }}</span>
+                </div>
+                <div class="record-table">
+                  <div class="record-table-head">
+                    <span>Позиция</span>
+                    <span>Статус</span>
+                    <span>Сумма</span>
+                  </div>
+                  <div v-for="line in paidItems" :key="line.id" class="record-row record-row--settled">
+                    <div class="record-main">
+                      <strong class="participant-name">{{ line.product_variant_name }}</strong>
+                      <span class="line-qty">{{ paidItemSummary(line) }}</span>
                     </div>
-                    <strong class="tabular-nums">{{ formatPrice(Number(line.quantity) * Number(line.unit_purchase_price), line.currency) }}</strong>
+                    <span class="record-status record-status--settled">Оплачено</span>
+                    <strong class="tabular-nums record-amount">{{ formatPrice(Number(line.quantity) * Number(line.unit_purchase_price), line.currency) }}</strong>
                   </div>
                 </div>
               </div>
@@ -1393,52 +1667,77 @@ onMounted(async () => {
               <div v-if="paidItems.length && draftLines.length" class="workspace-separator" />
 
               <div v-if="draftLines.length" class="draft-block">
-                <span class="group-label">К оплате</span>
-                <div class="draft-list">
-                <div v-for="line in draftLines" :key="line.id" class="draft-card">
-                  <div class="draft-card-head">
-                    <button class="picker-btn draft-product-btn" :class="{ 'picker-btn--placeholder': !line.variant }" type="button" @click="openVariantPicker(line.id)">
-                      {{ line.variant ? variantDisplay(line.variant) : 'Выбрать товар' }}
-                    </button>
-                    <button class="icon-btn-inline" type="button" aria-label="Удалить строку" @click="removeDraftLine(line.id)">
-                      <Trash2 :size="16" :stroke-width="2" />
-                    </button>
+                <div class="section-inline-head">
+                  <span class="group-label">К оплате</span>
+                  <span class="subtle-meta">{{ draftLines.length }}</span>
+                </div>
+                <div class="record-table">
+                  <div class="record-table-head">
+                    <span>Позиция</span>
+                    <span>Статус</span>
+                    <span>Сумма</span>
                   </div>
-                  <div class="draft-line-grid">
-                    <div class="field-group">
-                      <label class="field-label">Кол-во</label>
-                      <input
-                        :value="line.quantity"
-                        class="input-field compact-input"
-                        type="number"
-                        min="0"
-                        placeholder="1"
-                        @input="(e) => updateDraftLine(line.id, 'quantity', (e.target as HTMLInputElement).value)"
-                      />
+                  <article
+                    v-for="line in draftLines"
+                    :key="line.id"
+                    class="record-entry"
+                    :class="{ 'record-entry--open': expandedDraftLineId === line.id }"
+                  >
+                    <div class="record-row">
+                      <button class="record-row-toggle" type="button" @click="toggleDraftLineExpanded(line.id)">
+                        <div class="record-main">
+                          <strong class="participant-name">{{ line.variant ? variantDisplay(line.variant) : 'Новый товар' }}</strong>
+                          <span class="line-qty">{{ draftLineSummary(line) }}</span>
+                        </div>
+                        <span class="record-status record-status--draft">Черновик</span>
+                        <strong class="tabular-nums record-amount">{{ draftLineTotal(line) }}</strong>
+                        <ChevronDown class="stage-chevron record-chevron" :class="{ 'stage-chevron--open': expandedDraftLineId === line.id }" :size="16" :stroke-width="2" />
+                      </button>
+                      <button class="icon-btn-inline record-row-remove" type="button" aria-label="Удалить строку" @click.stop="removeDraftLine(line.id)">
+                        <Trash2 :size="16" :stroke-width="2" />
+                      </button>
                     </div>
-                    <div class="field-group">
-                      <label class="field-label">Цена</label>
-                      <div class="money-field">
-                        <input
-                          :value="line.cost_per_unit"
-                          class="input-field compact-input money-input"
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          @input="(e) => updateDraftLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
-                        />
-                        <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftLineCurrency(line.id)">
-                          <span class="currency-toggle-code">{{ line.currency }}</span>
-                          <span class="currency-toggle-hint" aria-hidden="true">
-                            <RefreshCcw :size="12" :stroke-width="2" />
-                          </span>
-                        </button>
+                    <div v-if="expandedDraftLineId === line.id" class="record-panel">
+                      <button class="picker-btn draft-product-btn" :class="{ 'picker-btn--placeholder': !line.variant }" type="button" @click="openVariantPicker(line.id)">
+                        {{ line.variant ? variantDisplay(line.variant) : 'Выбрать товар' }}
+                      </button>
+                      <div class="draft-line-grid">
+                        <div class="field-group">
+                          <label class="field-label">Кол-во</label>
+                          <input
+                            :value="line.quantity"
+                            class="input-field compact-input"
+                            type="number"
+                            min="0"
+                            placeholder="1"
+                            @input="(e) => updateDraftLine(line.id, 'quantity', (e.target as HTMLInputElement).value)"
+                          />
+                        </div>
+                        <div class="field-group">
+                          <label class="field-label">Цена</label>
+                          <div class="money-field">
+                            <input
+                              :value="line.cost_per_unit"
+                              class="input-field compact-input money-input"
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              @input="(e) => updateDraftLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
+                            />
+                            <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftLineCurrency(line.id)">
+                              <span class="currency-toggle-code">{{ line.currency }}</span>
+                              <span class="currency-toggle-hint" aria-hidden="true">
+                                <RefreshCcw :size="12" :stroke-width="2" />
+                              </span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  </div>
+                  </article>
                 </div>
               </div>
+              <p v-else-if="paidItems.length === 0" class="muted">Товаров пока нет.</p>
 
               <div class="workspace-separator" />
               <div class="action-row action-row--double action-row--compact-double">
@@ -1483,14 +1782,23 @@ onMounted(async () => {
               </button>
 
               <div v-if="paidExpenses.length" class="paid-block">
-                <span class="group-label">Оплаченные расходы</span>
-                <div class="compact-list">
-                  <div v-for="expense in paidExpenses" :key="expense.id" class="compact-row">
-                    <div>
-                      <span class="participant-name">{{ expenseTypeLabel[expense.expense_type] ?? expense.expense_type }}</span>
-                      <span class="line-qty">{{ expense.allocation_method === 'BY_VALUE' ? 'по стоимости' : 'по количеству' }}</span>
+                <div class="section-inline-head">
+                  <span class="group-label">Оплаченные расходы</span>
+                  <span class="subtle-meta">{{ paidExpenses.length }}</span>
+                </div>
+                <div class="record-table">
+                  <div class="record-table-head">
+                    <span>Расход</span>
+                    <span>Статус</span>
+                    <span>Сумма</span>
+                  </div>
+                  <div v-for="expense in paidExpenses" :key="expense.id" class="record-row record-row--settled">
+                    <div class="record-main">
+                      <strong class="participant-name">{{ expenseTypeLabel[expense.expense_type] ?? expense.expense_type }}</strong>
+                      <span class="line-qty">{{ paidExpenseSummary(expense) }}</span>
                     </div>
-                    <strong class="tabular-nums">{{ formatPrice(Number(expense.amount), expense.currency) }}</strong>
+                    <span class="record-status record-status--settled">Оплачено</span>
+                    <strong class="tabular-nums record-amount">{{ formatPrice(Number(expense.amount), expense.currency) }}</strong>
                   </div>
                 </div>
               </div>
@@ -1498,71 +1806,94 @@ onMounted(async () => {
               <div v-if="paidExpenses.length && draftExpenses.length" class="workspace-separator" />
 
               <div v-if="draftExpenses.length" class="draft-block">
-                <span class="group-label">К оплате</span>
-                <div class="draft-list">
-                <div v-for="expense in draftExpenses" :key="expense.id" class="draft-card">
-                  <div class="draft-card-head draft-card-head--text">
-                    <strong>{{ expenseTypeLabel[expense.expense_type] }}</strong>
-                    <button class="icon-btn-inline" type="button" aria-label="Удалить расход" @click="removeDraftExpense(expense.id)">
-                      <Trash2 :size="16" :stroke-width="2" />
-                    </button>
+                <div class="section-inline-head">
+                  <span class="group-label">К оплате</span>
+                  <span class="subtle-meta">{{ draftExpenses.length }}</span>
+                </div>
+                <div class="record-table">
+                  <div class="record-table-head">
+                    <span>Расход</span>
+                    <span>Статус</span>
+                    <span>Сумма</span>
                   </div>
-                  <div class="field-group">
-                    <label class="field-label">Тип</label>
-                    <BaseSelect
-                      :model-value="expense.expense_type"
-                      :options="[
-                        { value: 'CUSTOMS', label: 'Растаможка' },
-                        { value: 'LOGISTICS', label: 'Логистика' },
-                        { value: 'FEE', label: 'Комиссия' },
-                        { value: 'OTHER', label: 'Другое' },
-                      ]"
-                      title="Тип расхода"
-                      @update:model-value="(value) => updateDraftExpense(expense.id, 'expense_type', String(value))"
-                    />
-                  </div>
-                  <div class="expense-grid-split">
-                    <div class="field-group">
-                      <label class="field-label">Разносить</label>
-                      <BaseSelect
-                        :model-value="expense.allocation_method"
-                        :options="allocationOptions"
-                        title="Метод распределения"
-                        @update:model-value="(value) => updateDraftExpense(expense.id, 'allocation_method', String(value))"
-                      />
+                  <article
+                    v-for="expense in draftExpenses"
+                    :key="expense.id"
+                    class="record-entry"
+                    :class="{ 'record-entry--open': expandedDraftExpenseId === expense.id }"
+                  >
+                    <div class="record-row">
+                      <button class="record-row-toggle" type="button" @click="toggleDraftExpenseExpanded(expense.id)">
+                        <div class="record-main">
+                          <strong class="participant-name">{{ expenseTypeLabel[expense.expense_type] }}</strong>
+                          <span class="line-qty">{{ draftExpenseSummary(expense) }}</span>
+                        </div>
+                        <span class="record-status record-status--draft">Черновик</span>
+                        <strong class="tabular-nums record-amount">{{ draftExpenseAmount(expense) }}</strong>
+                        <ChevronDown class="stage-chevron record-chevron" :class="{ 'stage-chevron--open': expandedDraftExpenseId === expense.id }" :size="16" :stroke-width="2" />
+                      </button>
+                      <button class="icon-btn-inline record-row-remove" type="button" aria-label="Удалить расход" @click.stop="removeDraftExpense(expense.id)">
+                        <Trash2 :size="16" :stroke-width="2" />
+                      </button>
                     </div>
-                    <div class="field-group">
-                      <label class="field-label">Сумма</label>
-                      <div class="money-field">
-                        <input
-                          :value="expense.amount"
-                          class="input-field compact-input money-input"
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          @input="(e) => updateDraftExpense(expense.id, 'amount', (e.target as HTMLInputElement).value)"
+                    <div v-if="expandedDraftExpenseId === expense.id" class="record-panel">
+                      <div class="field-group">
+                        <label class="field-label">Тип</label>
+                        <BaseSelect
+                          :model-value="expense.expense_type"
+                          :options="[
+                            { value: 'CUSTOMS', label: 'Растаможка' },
+                            { value: 'LOGISTICS', label: 'Логистика' },
+                            { value: 'FEE', label: 'Комиссия' },
+                            { value: 'OTHER', label: 'Другое' },
+                          ]"
+                          title="Тип расхода"
+                          @update:model-value="(value) => updateDraftExpense(expense.id, 'expense_type', String(value))"
                         />
-                        <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftExpenseCurrency(expense.id)">
-                          <span class="currency-toggle-code">{{ expense.currency }}</span>
-                          <span class="currency-toggle-hint" aria-hidden="true">
-                            <RefreshCcw :size="12" :stroke-width="2" />
-                          </span>
-                        </button>
+                      </div>
+                      <div class="expense-grid-split">
+                        <div class="field-group">
+                          <label class="field-label">Разносить</label>
+                          <BaseSelect
+                            :model-value="expense.allocation_method"
+                            :options="allocationOptions"
+                            title="Метод распределения"
+                            @update:model-value="(value) => updateDraftExpense(expense.id, 'allocation_method', String(value))"
+                          />
+                        </div>
+                        <div class="field-group">
+                          <label class="field-label">Сумма</label>
+                          <div class="money-field">
+                            <input
+                              :value="expense.amount"
+                              class="input-field compact-input money-input"
+                              type="number"
+                              min="0"
+                              placeholder="0"
+                              @input="(e) => updateDraftExpense(expense.id, 'amount', (e.target as HTMLInputElement).value)"
+                            />
+                            <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftExpenseCurrency(expense.id)">
+                              <span class="currency-toggle-code">{{ expense.currency }}</span>
+                              <span class="currency-toggle-hint" aria-hidden="true">
+                                <RefreshCcw :size="12" :stroke-width="2" />
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="field-group">
+                        <label class="field-label">Комментарий</label>
+                        <input
+                          :value="expense.notes"
+                          class="input-field compact-input"
+                          type="text"
+                          placeholder="Например, первая часть растаможки"
+                          @input="(e) => updateDraftExpense(expense.id, 'notes', (e.target as HTMLInputElement).value)"
+                        />
                       </div>
                     </div>
-                  </div>
-                  <div class="field-group">
-                    <label class="field-label">Комментарий</label>
-                    <input
-                      :value="expense.notes"
-                      class="input-field compact-input"
-                      type="text"
-                      placeholder="Например, первая часть растаможки"
-                      @input="(e) => updateDraftExpense(expense.id, 'notes', (e.target as HTMLInputElement).value)"
-                    />
-                  </div>
+                  </article>
                 </div>
-              </div>
               </div>
               <p v-else-if="paidExpenses.length === 0" class="muted">Расходов пока нет.</p>
 
@@ -1595,43 +1926,56 @@ onMounted(async () => {
             <span class="helper-text">UZS-эквивалент всех сохранённых товаров и расходов этого прихода.</span>
           </div>
 
-          <div class="cost-preview-card">
-            <strong class="subsection-title">Предварительная себестоимость</strong>
-            <p class="muted">{{ procurement.cost_preview.message }}</p>
-
-            <div v-if="procurement.cost_preview.receive_basis.lines.length" class="compact-preview-block">
-              <span class="helper-text">Если оприходовать сейчас</span>
-              <div class="compact-list">
-                <div v-for="line in procurement.cost_preview.receive_basis.lines" :key="`receive-preview-${line.item_id}`" class="compact-row compact-row--stacked">
-                  <div>
-                    <span class="participant-name">{{ line.product_variant_name }}</span>
-                    <span class="line-qty">× {{ line.quantity }}</span>
-                  </div>
-                  <div class="compact-preview-metrics">
-                    <span>Себестоимость/шт: <strong class="tabular-nums">{{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong></span>
-                    <span>Разнесено расходов: <strong class="tabular-nums">{{ formatPrice(line.allocated_expense_uzs) }}</strong></span>
-                  </div>
-                </div>
-              </div>
+          <div v-if="procurement.status === ProcurementStatus.OPEN && costPreviewScenarios.length" class="cost-preview-card">
+            <div class="cost-preview-head">
+              <strong class="subsection-title">Предварительная себестоимость</strong>
+              <p class="muted">{{ procurement.cost_preview.message }}</p>
             </div>
 
-            <div
-              v-if="procurement.cost_preview.if_all_current_lines_paid.lines.length && procurement.cost_preview.reallocation_pending"
-              class="compact-preview-block"
-            >
-              <span class="helper-text">Если оплатить все текущие позиции</span>
-              <div class="compact-list">
-                <div v-for="line in procurement.cost_preview.if_all_current_lines_paid.lines" :key="`all-preview-${line.item_id}-${line.status}`" class="compact-row compact-row--stacked">
-                  <div>
-                    <span class="participant-name">{{ line.product_variant_name }}</span>
-                    <span class="line-qty">× {{ line.quantity }} · {{ line.status === 'PAID' ? 'оплачено' : 'черновик' }}</span>
+            <div class="cost-preview-list">
+              <article
+                v-for="scenario in costPreviewScenarios"
+                :key="scenario.key"
+                class="cost-preview-scenario"
+                :class="{ 'cost-preview-scenario--open': expandedCostPreviewKey === scenario.key }"
+              >
+                <button class="cost-preview-summary" type="button" @click="toggleCostPreviewScenario(scenario.key)">
+                  <div class="cost-preview-main">
+                    <strong class="participant-name">{{ scenario.label }}</strong>
+                    <span class="line-qty">{{ costPreviewScenarioSummary(scenario.basis.items_count, scenario.basis.expenses_count) }}</span>
                   </div>
-                  <div class="compact-preview-metrics">
-                    <span>Себестоимость/шт: <strong class="tabular-nums">{{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong></span>
-                    <span>Разнесено расходов: <strong class="tabular-nums">{{ formatPrice(line.allocated_expense_uzs) }}</strong></span>
+                  <div class="cost-preview-meta">
+                    <span class="cost-preview-chip">Расходы {{ costPreviewScenarioExpenses(scenario.basis.total_expenses_uzs) }}</span>
+                  </div>
+                  <ChevronDown class="stage-chevron cost-preview-chevron" :class="{ 'stage-chevron--open': expandedCostPreviewKey === scenario.key }" :size="16" :stroke-width="2" />
+                </button>
+
+                <div v-if="expandedCostPreviewKey === scenario.key" class="cost-preview-detail">
+                  <div class="cost-preview-table">
+                    <div class="cost-preview-table-head">
+                      <span>Товар</span>
+                      <span>Себес./шт</span>
+                      <span>Расходы</span>
+                    </div>
+                    <div
+                      v-for="line in scenario.basis.lines"
+                      :key="`${scenario.key}-${line.item_id}-${line.status}`"
+                      class="cost-preview-line"
+                    >
+                      <div class="cost-preview-line-main">
+                        <strong class="participant-name">{{ line.product_variant_name }}</strong>
+                        <span class="line-qty">{{ costPreviewLineSummary(line, scenario.showStatus) }}</span>
+                      </div>
+                      <div class="cost-preview-line-metric">
+                        <strong class="tabular-nums">{{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong>
+                      </div>
+                      <div class="cost-preview-line-metric">
+                        <strong class="tabular-nums">{{ formatPrice(line.allocated_expense_uzs) }}</strong>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </article>
             </div>
           </div>
           </div>
@@ -1973,8 +2317,8 @@ onMounted(async () => {
 .page-header { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: var(--space-3); height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
 .page-title { flex: 1; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .back-btn, .header-spacer { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-text-primary); }
-.content { display: grid; gap: var(--space-3); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-10)); }
-.card, .footer-card { background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); padding: var(--space-4); }
+.content { display: grid; gap: var(--space-3); padding: var(--space-3); padding-bottom: calc(var(--bottom-nav-height) + var(--space-10)); }
+.card, .footer-card { background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); padding: var(--space-3); }
 .balance-card { gap: var(--space-3); }
 .row { display:flex; align-items:center; gap: var(--space-2); }
 .row-between { justify-content:space-between; }
@@ -1983,10 +2327,10 @@ onMounted(async () => {
 .stage-pill { display:inline-flex; align-items:center; min-height:28px; padding: 0 var(--space-3); border-radius: var(--radius-full); background: var(--color-bg-primary); color: var(--color-text-secondary); border:1px solid var(--color-border-default); font-size: var(--text-xs); font-weight: var(--font-semibold); }
 .stage-pill--done { background: var(--color-success-bg); color: var(--color-success); border-color: transparent; }
 .stage-pill--active { background: var(--color-brand-50); color: var(--color-brand-700); border-color: transparent; }
-.stage-card { display:grid; gap: var(--space-3); }
+.stage-card { display:grid; gap: var(--space-2); }
 .stage-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap: var(--space-3); text-align:left; }
 .stage-summary { color: var(--color-text-secondary); font-size: var(--text-sm); }
-.stage-body { display:grid; gap: var(--space-3); }
+.stage-body { display:grid; gap: var(--space-2); }
 .stage-chevron { color: var(--color-text-secondary); transition: transform .2s ease; }
 .stage-chevron--open { transform: rotate(180deg); }
 .chip { display:inline-flex; align-items:center; border-radius: var(--radius-full); padding: 0 var(--space-2); min-height:22px; font-size: var(--text-xs); font-weight: var(--font-semibold); }
@@ -1995,8 +2339,9 @@ onMounted(async () => {
 .chip-draft { background: var(--color-bg-sunken); color: var(--color-text-secondary); }
 .date, .meta, .muted, .participant-share { color: var(--color-text-secondary); font-size: var(--text-sm); }
 .meta { margin-top: var(--space-3); }
-.section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); margin-bottom: var(--space-3); }
-.summary-grid { display:grid; gap: var(--space-2); margin-top: var(--space-4); }
+.section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); margin-bottom: 0; }
+.summary-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-3); }
+.summary-item:last-child { grid-column: 1 / -1; }
 .summary-item { display:grid; gap: 2px; padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); }
 .summary-label { color: var(--color-text-secondary); font-size: var(--text-sm); }
 .summary-value { color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); }
@@ -2007,9 +2352,44 @@ onMounted(async () => {
 .status-pill { display:inline-flex; align-items:center; min-height:28px; padding: 0 var(--space-3); border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); white-space: nowrap; }
 .status-pill--success { background: var(--color-success-bg); color: var(--color-success); }
 .status-pill--blocked { background: var(--color-warning-bg, var(--color-brand-50)); color: var(--color-warning, var(--color-brand-700)); }
-.balance-chip-list { display:flex; flex-wrap:wrap; gap: var(--space-2); }
-.balance-chip { display:inline-flex; align-items:center; min-height:32px; padding: 0 var(--space-3); border-radius: var(--radius-full); border:1px solid var(--color-border-default); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
+.balance-overview { display:grid; gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-border-subtle); }
+.balance-overview-head { align-items: center; }
+.balance-caption { color: var(--color-text-secondary); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.subtle-meta { color: var(--color-text-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); }
+.balance-chip-list { display:flex; flex-wrap:wrap; gap: 6px; }
+.balance-chip { display:inline-flex; align-items:center; min-height:28px; padding: 0 10px; border-radius: var(--radius-full); border:1px solid var(--color-border-default); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
 .balance-block { display:grid; gap: var(--space-2); }
+.section-inline-head { display:flex; align-items:center; justify-content:space-between; gap: var(--space-2); }
+.mini-table,
+.money-flow-table,
+.record-table { display:grid; gap: 0; border:1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-bg-primary); overflow:hidden; }
+.mini-table-head,
+.money-flow-head,
+.record-table-head { display:grid; align-items:center; gap: var(--space-2); padding: 10px var(--space-3); background: var(--color-bg-sunken); color: var(--color-text-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); }
+.mini-table-head,
+.mini-table-row { grid-template-columns: minmax(0, 1.1fr) repeat(3, minmax(0, 0.8fr)); }
+.record-table-head { grid-template-columns: minmax(0, 1fr) auto auto; }
+.record-table-head span:nth-child(2),
+.record-table-head span:nth-child(3) { justify-self: end; }
+.mini-table-row { display:grid; align-items:center; gap: var(--space-2); padding: var(--space-3); border-top: 1px solid var(--color-border-subtle); }
+.mini-table-cell { min-width: 0; display:grid; gap: 2px; }
+.mini-table-cell--main { align-content: start; }
+.money-flow-head { grid-template-columns: 86px minmax(0, 1fr) auto; }
+.money-flow-row { border-top: 1px solid var(--color-border-subtle); }
+.money-flow-row--in { box-shadow: inset 3px 0 0 var(--color-success); }
+.money-flow-row--out { box-shadow: inset 3px 0 0 var(--color-error); }
+.money-flow-row--exchange { box-shadow: inset 3px 0 0 var(--color-brand-500); }
+.money-flow-summary { width:100%; display:grid; grid-template-columns: 86px minmax(0, 1fr) auto 16px; align-items:center; gap: var(--space-3); padding: var(--space-3); text-align:left; }
+.money-flow-kind { display:inline-flex; align-items:center; justify-content:center; min-height:26px; padding: 0 var(--space-2); border-radius: var(--radius-full); border:1px solid transparent; font-size: var(--text-xs); font-weight: var(--font-semibold); }
+.money-flow-row--in .money-flow-kind { background: var(--color-success-bg); color: var(--color-success); }
+.money-flow-row--out .money-flow-kind { background: var(--color-error-bg); color: var(--color-error); }
+.money-flow-row--exchange .money-flow-kind { background: var(--color-brand-50); color: var(--color-brand-700); }
+.money-flow-main { min-width: 0; display:grid; gap: 4px; }
+.money-flow-amount { white-space: nowrap; }
+.money-flow-detail { display:grid; gap: 4px; padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 98px); }
+.money-flow-chevron { justify-self: end; }
+.compact-inline-list { display:grid; gap: 6px; }
+.compact-inline-item { display:flex; align-items:flex-start; justify-content:space-between; gap: var(--space-3); }
 .warning-block { padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-warning-bg, var(--color-brand-50)); }
 .service-actions-card { display:grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); border:1px dashed var(--color-border-default); background: var(--color-bg-primary); }
 .subsection-title { color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); }
@@ -2038,23 +2418,49 @@ onMounted(async () => {
 .notes { color: var(--color-text-secondary); line-height: var(--leading-normal); }
 .workspace-grid { display:grid; gap: var(--space-4); }
 .workspace-block { display:grid; gap: var(--space-3); padding-top: var(--space-2); }
-.draft-list { display:grid; gap: var(--space-2); }
-.draft-card { display:grid; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); border:1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-.draft-card-head { display:grid; grid-template-columns: minmax(0, 1fr) 36px; gap: var(--space-2); align-items:start; }
-.draft-card-head--text { grid-template-columns: minmax(0, 1fr) 36px; }
 .picker-btn { width:100%; min-height:40px; display:flex; align-items:center; justify-content:flex-start; padding: var(--space-2) var(--space-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); }
 .picker-btn--placeholder { color: var(--color-text-secondary); }
 .draft-product-btn { min-height:40px; }
 .icon-btn-inline { width: 36px; height: 36px; display:inline-flex; align-items:center; justify-content:center; border-radius: var(--radius-md); color: var(--color-brand-600); }
+.record-entry { border-top: 1px solid var(--color-border-subtle); }
+.record-row { display:grid; grid-template-columns: minmax(0, 1fr) 36px; gap: var(--space-1); align-items:start; }
+.record-row--settled { grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-3); align-items:center; padding: var(--space-3); border-top: 1px solid var(--color-border-subtle); }
+.record-row-toggle { width:100%; display:grid; grid-template-columns: minmax(0, 1fr) auto auto 16px; align-items:center; gap: var(--space-3); padding: var(--space-3); text-align:left; }
+.record-main { min-width: 0; display:grid; gap: 4px; }
+.record-status { display:inline-flex; align-items:center; justify-content:center; min-height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); white-space: nowrap; }
+.record-status--settled { background: var(--color-success-bg); color: var(--color-success); }
+.record-status--draft { background: var(--color-bg-elevated); color: var(--color-text-secondary); border:1px solid var(--color-border-default); }
+.record-amount { white-space: nowrap; justify-self: end; }
+.record-chevron { justify-self: end; }
+.record-row-remove { margin-top: var(--space-3); margin-right: var(--space-2); }
+.record-panel { display:grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); border-top: 1px dashed var(--color-border-subtle); background: var(--color-bg-elevated); }
 .draft-line-grid { display:grid; grid-template-columns: minmax(84px, 0.7fr) minmax(0, 1.3fr); gap: var(--space-2); }
 .compact-input { min-height: 40px; }
 .paid-block { display:grid; gap: var(--space-2); padding-top: var(--space-2); }
 .compact-list { display:grid; gap: var(--space-2); }
 .compact-row { display:flex; align-items:center; justify-content:space-between; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); border:1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
 .compact-row--stacked { align-items:flex-start; flex-direction:column; }
-.compact-preview-block { display:grid; gap: var(--space-2); }
-.compact-preview-metrics { display:grid; gap: 2px; color: var(--color-text-secondary); font-size: var(--text-sm); }
+.history-amount--in { color: var(--color-success); }
+.history-amount--out { color: var(--color-error); }
+.history-amount--exchange { color: var(--color-brand-700); }
 .cost-preview-card { display:grid; gap: var(--space-3); padding-top: var(--space-2); }
+.cost-preview-head { display:grid; gap: 4px; }
+.cost-preview-list { display:grid; gap: var(--space-2); }
+.cost-preview-scenario { border:1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-bg-primary); overflow:hidden; }
+.cost-preview-summary { width:100%; display:grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items:center; gap: var(--space-3); padding: var(--space-3); text-align:left; }
+.cost-preview-main { min-width: 0; display:grid; gap: 4px; }
+.cost-preview-meta { display:flex; justify-content:flex-end; }
+.cost-preview-chip { display:inline-flex; align-items:center; min-height:26px; padding: 0 var(--space-2); border-radius: var(--radius-full); background: var(--color-bg-elevated); color: var(--color-text-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); white-space: nowrap; }
+.cost-preview-chevron { justify-self: end; }
+.cost-preview-detail { padding: 0 var(--space-3) var(--space-3); border-top: 1px dashed var(--color-border-subtle); background: var(--color-bg-elevated); }
+.cost-preview-table { display:grid; gap: 0; border:1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); overflow:hidden; }
+.cost-preview-table-head,
+.cost-preview-line { display:grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 0.8fr); gap: var(--space-2); align-items:center; }
+.cost-preview-table-head { padding: 10px var(--space-3); background: var(--color-bg-sunken); color: var(--color-text-secondary); font-size: var(--text-xs); font-weight: var(--font-medium); }
+.cost-preview-line { padding: var(--space-3); border-top: 1px solid var(--color-border-subtle); }
+.cost-preview-line-main,
+.cost-preview-line-metric { min-width: 0; display:grid; gap: 4px; }
+.cost-preview-line-metric { justify-items: end; text-align: right; }
 .summary-metric-card { display:grid; gap: 4px; padding: var(--space-3); border-radius: var(--radius-md); border:1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
 .summary-metric-value { color: var(--color-text-primary); font-size: var(--text-lg); font-weight: var(--font-semibold); }
 .receive-status-line { display:flex; align-items:center; justify-content:space-between; gap: var(--space-2); }
@@ -2111,9 +2517,60 @@ onMounted(async () => {
 .receive-inline-card { display:grid; gap: var(--space-3); padding-top: var(--space-2); }
 .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 9999px; animation: spin .8s linear infinite; }
 @media (max-width: 520px) {
+  .summary-grid { grid-template-columns: 1fr; }
+  .summary-item:last-child { grid-column: auto; }
   .balance-card-head,
   .participant-row,
   .line-row { align-items: flex-start; flex-direction: column; }
+  .section-inline-head,
+  .compact-inline-item,
+  .balance-overview-head { align-items:flex-start; flex-direction: column; }
+  .record-table-head,
+  .money-flow-head,
+  .cost-preview-table-head { display:none; }
+  .money-flow-summary,
+  .record-row-toggle {
+    grid-template-columns: minmax(0, 1fr) auto 16px;
+    align-items: start;
+  }
+  .money-flow-kind,
+  .record-status {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .money-flow-amount,
+  .record-amount {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  .money-flow-chevron,
+  .record-chevron {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  .money-flow-detail { padding-left: var(--space-3); }
+  .cost-preview-summary {
+    grid-template-columns: minmax(0, 1fr) 16px;
+    align-items: start;
+  }
+  .cost-preview-meta {
+    grid-column: 1;
+    justify-content: flex-start;
+  }
+  .cost-preview-chevron {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  .cost-preview-line {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .cost-preview-line-metric { justify-items: start; text-align: left; }
+  .compact-row { align-items: flex-start; }
   .balance-actions { display:grid; grid-template-columns: 1fr; }
   .action-row--double,
   .expense-grid-split { grid-template-columns: 1fr; }

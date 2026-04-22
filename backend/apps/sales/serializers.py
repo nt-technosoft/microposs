@@ -8,6 +8,34 @@ from rest_framework import serializers
 from .models import Sale, SaleLine, SalePayment, Return, ReturnLine, PosSession
 
 
+def _money(value: Decimal | int | float | str) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal('0.01'))
+
+
+def _percent(numerator: Decimal, denominator: Decimal) -> Decimal:
+    if denominator <= 0:
+        return Decimal('0.00')
+    return ((numerator / denominator) * Decimal('100')).quantize(Decimal('0.01'))
+
+
+def _line_investor_profit(line: SaleLine) -> Decimal:
+    snapshot = line.profit_distribution_snapshot or {}
+    contract_snapshot = line.lot.contract_snapshot or {}
+    partner_roles = {
+        str(meta.get('partner_id')): meta.get('role')
+        for meta in contract_snapshot.get('partners', []) or []
+        if meta.get('partner_id') is not None
+    }
+    return sum(
+        (
+            Decimal(str(amount))
+            for partner_id, amount in snapshot.items()
+            if partner_roles.get(str(partner_id)) == 'INVESTOR'
+        ),
+        Decimal('0.00'),
+    ).quantize(Decimal('0.01'))
+
+
 # === POS Session ===
 
 class PosSessionSerializer(serializers.ModelSerializer):
@@ -105,7 +133,52 @@ class SaleLineInputSerializer(serializers.Serializer):
 
 # === Sale ===
 
-class SaleListSerializer(serializers.ModelSerializer):
+class SalePresentationMixin(serializers.ModelSerializer):
+    payment_method = serializers.SerializerMethodField()
+    operation_currency = serializers.SerializerMethodField()
+    operation_amount = serializers.SerializerMethodField()
+    fx_rate_snapshot = serializers.SerializerMethodField()
+    functional_amount_uzs = serializers.SerializerMethodField()
+
+    def _get_incoming_payment(self, obj):
+        return next(
+            (
+                payment for payment in obj.payments.all()
+                if payment.role == SalePayment.Role.INCOMING
+            ),
+            None,
+        )
+
+    def get_payment_method(self, obj):
+        payment = self._get_incoming_payment(obj)
+        return payment.method if payment else None
+
+    def get_operation_currency(self, obj):
+        payment = self._get_incoming_payment(obj)
+        return payment.currency if payment else 'UZS'
+
+    def get_operation_amount(self, obj):
+        payment = self._get_incoming_payment(obj)
+        if payment:
+            return payment.amount
+        return obj.total_amount
+
+    def get_fx_rate_snapshot(self, obj):
+        payment = self._get_incoming_payment(obj)
+        if payment:
+            return payment.fx_rate
+        return Decimal('1')
+
+    def get_functional_amount_uzs(self, obj):
+        payment = self._get_incoming_payment(obj)
+        if not payment:
+            return obj.total_amount
+        if str(payment.currency or 'UZS').upper() == 'UZS':
+            return payment.amount
+        return (payment.amount * payment.fx_rate).quantize(Decimal('0.01'))
+
+
+class SaleListSerializer(SalePresentationMixin, serializers.ModelSerializer):
     lines_count = serializers.SerializerMethodField()
     location_name = serializers.CharField(
         source='location.name', read_only=True,
@@ -118,6 +191,9 @@ class SaleListSerializer(serializers.ModelSerializer):
             'id', 'status', 'date',
             'location', 'location_name',
             'customer', 'total_amount',
+            'payment_method',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'paid_total', 'lines_count',
             'created_at',
         ]
@@ -134,7 +210,7 @@ class SaleListSerializer(serializers.ModelSerializer):
         ))
 
 
-class SaleDetailSerializer(serializers.ModelSerializer):
+class SaleDetailSerializer(SalePresentationMixin, serializers.ModelSerializer):
     lines = SaleLineSerializer(many=True, read_only=True)
     payments = SalePaymentSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(
@@ -143,6 +219,13 @@ class SaleDetailSerializer(serializers.ModelSerializer):
     location_name = serializers.CharField(
         source='location.name', read_only=True,
     )
+    purchase_cost = serializers.SerializerMethodField()
+    landed_cost = serializers.SerializerMethodField()
+    gross_profit = serializers.SerializerMethodField()
+    investor_profit = serializers.SerializerMethodField()
+    business_profit = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
+    markup_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
@@ -151,12 +234,70 @@ class SaleDetailSerializer(serializers.ModelSerializer):
             'location', 'location_name',
             'customer', 'customer_name',
             'pos_session', 'sold_by',
+            'payment_method',
+            'operation_currency', 'operation_amount',
+            'fx_rate_snapshot', 'functional_amount_uzs',
             'total_amount', 'total_cogs',
+            'purchase_cost', 'landed_cost',
+            'gross_profit', 'investor_profit', 'business_profit',
+            'margin_percent', 'markup_percent',
             'lines', 'payments', 'notes',
             'client_request_id',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def _get_lines(self, obj) -> list[SaleLine]:
+        cached_lines = getattr(obj, '_sale_profitability_lines_cache', None)
+        if cached_lines is not None:
+            return cached_lines
+
+        prefetched = getattr(obj, '_prefetched_objects_cache', {}).get('lines')
+        if prefetched is not None:
+            cached_lines = list(prefetched)
+        else:
+            cached_lines = list(obj.lines.select_related('lot'))
+
+        setattr(obj, '_sale_profitability_lines_cache', cached_lines)
+        return cached_lines
+
+    def get_purchase_cost(self, obj):
+        total = sum(
+            (
+                Decimal(str(line.unit_purchase_price)) * Decimal(str(line.quantity))
+                for line in self._get_lines(obj)
+            ),
+            Decimal('0.00'),
+        )
+        return _money(total)
+
+    def get_landed_cost(self, obj):
+        return _money(obj.total_cogs)
+
+    def get_gross_profit(self, obj):
+        return _money(Decimal(str(obj.total_amount)) - Decimal(str(obj.total_cogs)))
+
+    def get_investor_profit(self, obj):
+        total = sum(
+            (_line_investor_profit(line) for line in self._get_lines(obj)),
+            Decimal('0.00'),
+        )
+        return _money(total)
+
+    def get_business_profit(self, obj):
+        gross_profit = Decimal(str(self.get_gross_profit(obj)))
+        investor_profit = Decimal(str(self.get_investor_profit(obj)))
+        return _money(gross_profit - investor_profit)
+
+    def get_margin_percent(self, obj):
+        gross_profit = Decimal(str(self.get_gross_profit(obj)))
+        revenue = _money(obj.total_amount)
+        return _percent(gross_profit, revenue)
+
+    def get_markup_percent(self, obj):
+        gross_profit = Decimal(str(self.get_gross_profit(obj)))
+        landed_cost = _money(obj.total_cogs)
+        return _percent(gross_profit, landed_cost)
 
 
 class SaleCreateSerializer(serializers.Serializer):

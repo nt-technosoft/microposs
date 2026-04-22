@@ -93,6 +93,45 @@ export interface TrialBalanceEntry {
   balance: string
 }
 
+export interface SaleProfitabilityRow {
+  sale_id: number
+  date: string
+  location_id: number
+  location_name: string
+  customer_id: number | null
+  customer_name: string | null
+  payment_methods: string[]
+  line_count: number
+  quantity_sold: number
+  revenue: string
+  cogs: string
+  gross_profit: string
+  investor_profit: string
+  business_profit: string
+  margin_percent: string
+  markup_percent: string
+}
+
+export interface ProductProfitabilityRow {
+  product_variant_id: number
+  product_name: string
+  current_unit_price: string
+  quantity_sold: number
+  revenue: string
+  cogs: string
+  gross_profit: string
+  investor_profit: string
+  business_profit: string
+  margin_percent: string
+  markup_percent: string
+  remaining_quantity: number
+  remaining_landed_cost: string
+  projected_revenue: string
+  projected_gross_profit: string
+  projected_investor_profit: string
+  projected_business_profit: string
+}
+
 export interface ExchangeRateItem {
   id: number
   base_currency: string
@@ -196,6 +235,13 @@ interface FetchCashFlowParams {
   location?: number
 }
 
+interface FetchProfitabilityParams {
+  date_from?: string
+  date_to?: string
+  location?: number
+  warehouse?: number
+}
+
 function extractList<T>(payload: unknown): T[] {
   if (Array.isArray(payload)) {
     return payload as T[]
@@ -287,6 +333,26 @@ export async function fetchCashFlow(params?: FetchCashFlowParams): Promise<CashF
 
 export async function fetchTrialBalance(): Promise<TrialBalanceEntry[]> {
   const { data } = await api.get<TrialBalanceEntry[]>('/api/v1/finance/accounts/trial-balance/')
+  return data
+}
+
+export async function fetchSalesProfitability(
+  params?: FetchProfitabilityParams,
+): Promise<SaleProfitabilityRow[]> {
+  const { data } = await api.get<SaleProfitabilityRow[]>(
+    '/api/v1/finance/sales-profitability/',
+    { params },
+  )
+  return data
+}
+
+export async function fetchProductProfitability(
+  params?: FetchProfitabilityParams,
+): Promise<ProductProfitabilityRow[]> {
+  const { data } = await api.get<ProductProfitabilityRow[]>(
+    '/api/v1/finance/product-profitability/',
+    { params },
+  )
   return data
 }
 

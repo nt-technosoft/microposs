@@ -694,9 +694,14 @@ def add_contribution(
     → BalanceContribution + balances[currency] += amount + Ledger(CAPITAL_IN).
     """
     from .models import (
-        Procurement, ProcurementBalance, BalanceContribution,
+        BalanceContribution,
+        ContractPartner,
+        InvestmentContract,
         PartnerLedgerEntry,
+        Procurement,
+        ProcurementBalance,
     )
+    from apps.core.models import Partner
 
     amount = Decimal(str(amount))
     currency = str(currency or 'UZS').upper()
@@ -713,6 +718,16 @@ def add_contribution(
             raise ValueError(
                 f'Cannot contribute to procurement in status {procurement.status}.'
             )
+        partner = Partner.objects.filter(pk=partner_id, tenant_id=tenant_id).first()
+        if partner is None:
+            raise ValueError('Partner does not belong to this tenant.')
+
+        if procurement.procurement_type in _PARTNERSHIP_TYPES:
+            contract = InvestmentContract.objects.filter(procurement=procurement).first()
+            if contract is None:
+                raise ValueError('Partnership procurement contract is missing.')
+            if not ContractPartner.objects.filter(contract=contract, partner_id=partner_id).exists():
+                raise ValueError('Selected partner is not part of this procurement contract.')
 
         balance = ProcurementBalance.objects.select_for_update().get(
             procurement=procurement, tenant_id=tenant_id,

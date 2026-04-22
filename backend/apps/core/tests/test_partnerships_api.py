@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -16,12 +17,7 @@ class PartnershipsApiTests(APITestCase):
         cls.ctx = build_tenant()
 
     def auth_owner(self) -> None:
-        response = self.client.post('/api/v1/auth/token/', {
-            'username': 't_owner',
-            'password': 'x',
-        }, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+        self.client.force_authenticate(user=User.objects.get(username='t_owner'))
 
     def procurement_payload(self) -> dict:
         return {
@@ -336,6 +332,16 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(detail_response.data['balance']['balances']['USD'], '900.00')
         self.assertEqual(detail_response.data['balance']['balances']['UZS'], '1200000.00')
         self.assertEqual(len(detail_response.data['balance']['exchanges']), 1)
+        self.assertEqual(len(detail_response.data['balance']['contributions']), 1)
+        self.assertEqual(len(detail_response.data['balance']['participant_totals']), 2)
+        self.assertEqual(
+            detail_response.data['balance']['participant_totals'][0]['actual_capital_share'],
+            '1.000000',
+        )
+        self.assertEqual(
+            {item['kind'] for item in detail_response.data['balance']['history']},
+            {'CONTRIBUTION', 'EXCHANGE'},
+        )
 
     def test_owner_cannot_change_contract_after_balance_activity(self):
         self.auth_owner()

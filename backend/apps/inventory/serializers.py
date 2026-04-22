@@ -229,3 +229,4 @@ class StockSummarySerializer(serializers.Serializer):
     warehouse_id = serializers.IntegerField()
     warehouse_name = serializers.CharField(source='warehouse__name')
     total_quantity = serializers.IntegerField()
+    total_landed_cost = serializers.DecimalField(max_digits=20, decimal_places=2)

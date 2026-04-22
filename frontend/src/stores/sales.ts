@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import type { Sale } from '../types/models'
 import type { SaleCreatePayload, ReturnCreatePayload, SaleReturn } from '../api/sales'
+import { useSessionStore } from './session'
 import {
   fetchSales as apiFetchSales,
   fetchSale as apiFetchSale,
@@ -100,9 +101,18 @@ export const useSalesStore = defineStore('sales', {
       this.error = null
 
       try {
+        const sessionStore = useSessionStore()
         const sale = await apiCreateSale(payload)
         this.currentSale = { ...sale }
         this.sales = [{ ...sale }, ...this.sales]
+
+        if (sessionStore.isOpen) {
+          const activeLocationId = typeof sessionStore.currentSession?.location === 'object'
+            ? sessionStore.currentSession.location?.id
+            : undefined
+          await sessionStore.loadCurrentSession(activeLocationId)
+        }
+
         return sale
       } catch (error: unknown) {
         this.error = error instanceof Error

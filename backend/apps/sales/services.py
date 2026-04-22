@@ -118,6 +118,43 @@ def _validate_line_pricing_policy(
     return price_changed, resolved_discount_reason_id
 
 
+def _resolve_default_cash_account_id(
+    *,
+    tenant_id: int,
+    payment_method: str,
+    currency: str,
+) -> int | None:
+    """
+    Resolve a default operational account for sale payments when the UI does not
+    explicitly pass one yet.
+    """
+    from apps.finance.models import CashAccount
+
+    method = str(payment_method or '').upper()
+    normalized_currency = str(currency or 'UZS').upper()
+    kind_map = {
+        'CASH': CashAccount.Kind.CASH,
+        'CARD': CashAccount.Kind.CARD_TERMINAL,
+        'TRANSFER': CashAccount.Kind.BANK,
+    }
+    account_kind = kind_map.get(method)
+    if account_kind is None:
+        return None
+
+    account = (
+        CashAccount.objects
+        .filter(
+            tenant_id=tenant_id,
+            kind=account_kind,
+            currency=normalized_currency,
+            is_active=True,
+        )
+        .order_by('id')
+        .first()
+    )
+    return int(account.id) if account else None
+
+
 def create_sale(
     *,
     tenant_id: int,
@@ -332,6 +369,13 @@ def create_sale(
                 operation_at=date,
                 fx_rate_snapshot=pay.get('fx_rate'),
             )
+            account_id = pay.get('account_id')
+            if account_id is None:
+                account_id = _resolve_default_cash_account_id(
+                    tenant_id=tenant_id,
+                    payment_method=pay['method'],
+                    currency=currency,
+                )
             payment = SalePayment.objects.create(
                 tenant_id=tenant_id,
                 sale=sale,
@@ -341,7 +385,7 @@ def create_sale(
                 fx_rate=fx_rate,
                 method=pay['method'],
                 role=SalePayment.Role.INCOMING,
-                account_id=pay.get('account_id'),
+                account_id=account_id,
             )
             journal_methods.add(payment.method)
 

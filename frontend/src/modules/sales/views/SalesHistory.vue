@@ -169,6 +169,40 @@ function isReturned(sale: Sale): boolean {
   return sale.status === SaleStatus.RETURNED
 }
 
+function lineDisplayName(line: SaleLine): string {
+  const explicitName = (line as SaleLine & { product_name?: string }).product_name
+  if (explicitName && explicitName.trim()) {
+    return explicitName
+  }
+
+  const variant = line.product_variant
+  if (variant && typeof variant === 'object') {
+    const attrs = Array.isArray(variant.attribute_values)
+      ? variant.attribute_values
+        .map((attribute) => attribute.value)
+        .filter((value) => Boolean(value && value.trim()))
+      : []
+
+    if (attrs.length > 0) {
+      return attrs.join(', ')
+    }
+
+    if ('product_name' in variant && variant.product_name) {
+      return variant.product_name
+    }
+
+    if ('id' in variant && variant.id) {
+      return `Вариант #${variant.id}`
+    }
+  }
+
+  if (typeof variant === 'number') {
+    return `Вариант #${variant}`
+  }
+
+  return `Позиция #${line.id}`
+}
+
 function operationTrace(sale: Sale): string {
   const currency = (sale.operation_currency || 'UZS').toUpperCase()
   const opAmount = Number.parseFloat(sale.operation_amount || '')
@@ -185,6 +219,75 @@ function operationTrace(sale: Sale): string {
     return `${opStr} • курс ${fxRate.toFixed(2)} • ${fnStr}`
   }
   return fnStr ? `${opStr} • ${fnStr}` : opStr
+}
+
+function toNumber(value: string | number | null | undefined): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+function formatPercent(value: string | number | null | undefined): string {
+  const amount = toNumber(value)
+  return `${amount.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}%`
+}
+
+function salePurchaseCost(sale: Sale): number {
+  if (sale.purchase_cost != null) {
+    return toNumber(sale.purchase_cost)
+  }
+  return sale.lines.reduce(
+    (sum, line) => sum + toNumber(line.unit_purchase_price) * Number(line.quantity || 0),
+    0,
+  )
+}
+
+function saleRevenue(sale: Sale): number {
+  return toNumber(sale.total_amount)
+}
+
+function saleLandedCost(sale: Sale): number {
+  if (sale.landed_cost != null) {
+    return toNumber(sale.landed_cost)
+  }
+  return toNumber(sale.total_cogs)
+}
+
+function saleGrossProfit(sale: Sale): number {
+  if (sale.gross_profit != null) {
+    return toNumber(sale.gross_profit)
+  }
+  return saleRevenue(sale) - saleLandedCost(sale)
+}
+
+function saleInvestorProfit(sale: Sale): number {
+  return toNumber(sale.investor_profit)
+}
+
+function saleBusinessProfit(sale: Sale): number {
+  if (sale.business_profit != null) {
+    return toNumber(sale.business_profit)
+  }
+  return saleGrossProfit(sale) - saleInvestorProfit(sale)
+}
+
+function saleMarginPercent(sale: Sale): string {
+  if (sale.margin_percent != null) {
+    return formatPercent(sale.margin_percent)
+  }
+
+  const revenue = saleRevenue(sale)
+  if (revenue <= 0) {
+    return '0%'
+  }
+
+  return formatPercent((saleGrossProfit(sale) / revenue) * 100)
 }
 
 // ── Sale detail ─────────────────────────────────────────────────────────────
@@ -360,7 +463,7 @@ function handleReturnPlaceholder(): void {
             class="detail-line"
           >
             <div class="line-info">
-              <span class="line-name">{{ line.product_variant.attribute_values.map(a => a.value).join(', ') || `Вариант #${line.product_variant.id}` }}</span>
+              <span class="line-name">{{ lineDisplayName(line) }}</span>
               <span class="line-qty">× {{ line.quantity }}</span>
             </div>
             <span class="line-price tabular-nums">{{ formatPrice(line.unit_price) }}</span>
@@ -378,6 +481,48 @@ function handleReturnPlaceholder(): void {
         <p v-if="operationTrace(selectedSale)" class="detail-trace">
           {{ operationTrace(selectedSale) }}
         </p>
+
+        <section class="profitability-card">
+          <div class="profitability-header">
+            <div class="profitability-heading">
+              <span class="profitability-title">Прибыльность продажи</span>
+              <span class="profitability-subtitle">Валовая прибыль</span>
+            </div>
+            <strong
+              class="profitability-profit tabular-nums"
+              :class="{ positive: saleGrossProfit(selectedSale) >= 0, negative: saleGrossProfit(selectedSale) < 0 }"
+            >
+              {{ formatPrice(saleGrossProfit(selectedSale)) }}
+            </strong>
+          </div>
+
+          <div class="profitability-grid">
+            <div class="profitability-metric">
+              <span class="metric-label">Выручка</span>
+              <strong class="metric-value tabular-nums">{{ formatPrice(saleRevenue(selectedSale)) }}</strong>
+            </div>
+            <div class="profitability-metric">
+              <span class="metric-label">Закупочная себестоимость</span>
+              <strong class="metric-value tabular-nums">{{ formatPrice(salePurchaseCost(selectedSale)) }}</strong>
+            </div>
+            <div class="profitability-metric">
+              <span class="metric-label">Полная себестоимость</span>
+              <strong class="metric-value tabular-nums">{{ formatPrice(saleLandedCost(selectedSale)) }}</strong>
+            </div>
+            <div class="profitability-metric">
+              <span class="metric-label">Маржа %</span>
+              <strong class="metric-value tabular-nums">{{ saleMarginPercent(selectedSale) }}</strong>
+            </div>
+            <div class="profitability-metric">
+              <span class="metric-label">Инвесторы</span>
+              <strong class="metric-value tabular-nums">{{ formatPrice(saleInvestorProfit(selectedSale)) }}</strong>
+            </div>
+            <div class="profitability-metric">
+              <span class="metric-label">Бизнес</span>
+              <strong class="metric-value tabular-nums">{{ formatPrice(saleBusinessProfit(selectedSale)) }}</strong>
+            </div>
+          </div>
+        </section>
 
         <!-- Return button -->
         <button
@@ -834,6 +979,79 @@ function handleReturnPlaceholder(): void {
   color: var(--color-text-tertiary);
 }
 
+.profitability-card {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--color-brand-50) 0%, var(--color-bg-elevated) 100%);
+  border: 1px solid var(--color-brand-200);
+}
+
+.profitability-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.profitability-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profitability-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.profitability-subtitle {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.profitability-profit {
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+}
+
+.profitability-profit.positive {
+  color: var(--color-success);
+}
+
+.profitability-profit.negative {
+  color: var(--color-error);
+}
+
+.profitability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.profitability-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.metric-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.metric-value {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
 .btn-return {
   width: 100%;
   padding: var(--space-4);
@@ -892,6 +1110,12 @@ function handleReturnPlaceholder(): void {
   .btn-return,
   .btn-retry {
     transition: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .profitability-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

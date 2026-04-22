@@ -13,6 +13,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.analytics.tasks import aggregate_daily_pnl
 from apps.core.permissions import IsOwner
@@ -39,6 +40,7 @@ from .serializers import (
     JournalEntryListSerializer, JournalEntryDetailSerializer,
     ExpenseSerializer, ExpenseCreateSerializer,
     DailySummarySerializer, CashFlowSummarySerializer,
+    SaleProfitabilitySerializer, ProductProfitabilitySerializer,
     TrialBalanceSerializer,
     ExchangeRateSerializer,
     ExchangeRateManualCreateSerializer,
@@ -57,6 +59,8 @@ from .services import (
     exchange_currency,
     refund_customer,
     record_owner_contribution,
+    get_sales_profitability_rows,
+    get_product_profitability_rows,
 )
 from .chart_of_accounts import setup_chart_of_accounts
 
@@ -477,6 +481,40 @@ class CashFlowSummaryViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(date__lte=date_to)
 
         return qs
+
+
+class SaleProfitabilityView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
+        date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
+        location_id = request.query_params.get('location')
+        rows = get_sales_profitability_rows(
+            tenant_id=request.tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+            location_id=int(location_id) if location_id else None,
+        )
+        return Response(SaleProfitabilitySerializer(rows, many=True).data)
+
+
+class ProductProfitabilityView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
+        date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
+        location_id = request.query_params.get('location')
+        warehouse_id = request.query_params.get('warehouse')
+        rows = get_product_profitability_rows(
+            tenant_id=request.tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+            location_id=int(location_id) if location_id else None,
+            warehouse_id=int(warehouse_id) if warehouse_id else None,
+        )
+        return Response(ProductProfitabilitySerializer(rows, many=True).data)
 
 
 class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):

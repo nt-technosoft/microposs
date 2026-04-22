@@ -16,6 +16,121 @@ from apps.core.exceptions import ContractCloseError
 from .models import Investor, InvestorContract
 
 
+def _q(amount: Decimal | int | float | str) -> Decimal:
+    return Decimal(str(amount)).quantize(Decimal('0.01'))
+
+
+def _extract_partner_capital_share(contract_snapshot: dict | None, partner_id: int) -> Decimal:
+    snapshot = contract_snapshot or {}
+    for meta in snapshot.get('partners', []) or []:
+        try:
+            if int(meta.get('partner_id')) == int(partner_id):
+                return Decimal(str(meta.get('capital_share', '0')))
+        except (TypeError, ValueError):
+            continue
+    return Decimal('0')
+
+
+def get_partner_capital_state(
+    *,
+    tenant_id: int,
+    partner_id: int,
+    procurement_id: int | None = None,
+) -> dict:
+    """
+    Capital transparency read-model for a partner in the procurement-based flow.
+
+    Values are functional UZS and are tracked at cost basis:
+    - sold_cost_uzs: partner's capital already sold at landed cost
+    - in_stock_cost_uzs: partner's capital still tied in remaining stock
+    - tracked_cost_uzs: sold + in-stock cost basis
+    - sold_revenue_uzs: informational weighted share of realized revenue
+    - projected_revenue_uzs: informational weighted share of current retail value of remaining stock
+    - projected_partner_profit_uzs: partner's expected profit share if remaining stock sells at current retail price
+    """
+    from apps.inventory.models import Lot
+    from apps.partnerships.models import ProcurementPartnerLedger
+    from apps.sales.models import SaleLine
+    from apps.sales.services import calculate_profit_distribution
+
+    ledger_qs = ProcurementPartnerLedger.objects.filter(
+        tenant_id=tenant_id,
+        partner_id=partner_id,
+    )
+    if procurement_id is not None:
+        ledger_qs = ledger_qs.filter(procurement_id=procurement_id)
+
+    procurement_ids = list(ledger_qs.values_list('procurement_id', flat=True))
+    if not procurement_ids:
+        return {
+            'sold_cost_uzs': Decimal('0.00'),
+            'in_stock_cost_uzs': Decimal('0.00'),
+            'tracked_cost_uzs': Decimal('0.00'),
+            'sold_revenue_uzs': Decimal('0.00'),
+            'projected_revenue_uzs': Decimal('0.00'),
+            'projected_partner_profit_uzs': Decimal('0.00'),
+        }
+
+    lots = list(
+        Lot.objects.filter(
+            tenant_id=tenant_id,
+            procurement_item__procurement_id__in=procurement_ids,
+        ).prefetch_related('stocks').select_related('product_variant__product')
+    )
+
+    lot_shares: dict[int, Decimal] = {}
+    in_stock_cost = Decimal('0.00')
+    projected_revenue = Decimal('0.00')
+    projected_partner_profit = Decimal('0.00')
+    for lot in lots:
+        capital_share = _extract_partner_capital_share(lot.contract_snapshot, partner_id)
+        if capital_share <= 0:
+            continue
+        remaining_qty = sum(stock.quantity_remaining for stock in lot.stocks.all())
+        if remaining_qty > 0:
+            in_stock_cost += (
+                Decimal(str(lot.landed_cost_per_unit))
+                * Decimal(str(remaining_qty))
+                * capital_share
+            )
+            current_price = Decimal(str(lot.product_variant.effective_price or '0'))
+            projected_revenue += current_price * Decimal(str(remaining_qty)) * capital_share
+            projected_distribution = calculate_profit_distribution(
+                lot=lot,
+                unit_price=current_price,
+                quantity=remaining_qty,
+                unit_landed_cost=Decimal(str(lot.landed_cost_per_unit)),
+            )
+            projected_partner_profit += Decimal(
+                str(projected_distribution.get(str(partner_id), '0')),
+            )
+        lot_shares[lot.id] = capital_share
+
+    sold_cost = Decimal('0.00')
+    sold_revenue = Decimal('0.00')
+    if lot_shares:
+        sale_lines = SaleLine.objects.filter(
+            tenant_id=tenant_id,
+            lot_id__in=list(lot_shares.keys()),
+        )
+        for line in sale_lines:
+            capital_share = lot_shares.get(line.lot_id, Decimal('0'))
+            if capital_share <= 0:
+                continue
+            quantity = Decimal(str(line.quantity))
+            sold_cost += Decimal(str(line.unit_landed_cost)) * quantity * capital_share
+            sold_revenue += Decimal(str(line.unit_price)) * quantity * capital_share
+
+    return {
+        'sold_cost_uzs': _q(sold_cost),
+        'in_stock_cost_uzs': _q(in_stock_cost),
+        'tracked_cost_uzs': _q(sold_cost + in_stock_cost),
+        'sold_revenue_uzs': _q(sold_revenue),
+        'projected_revenue_uzs': _q(projected_revenue),
+        'projected_partner_profit_uzs': _q(projected_partner_profit),
+    }
+
+
 def _resolve_contract_receipt_ids(contract: InvestorContract) -> list[int]:
     from apps.inventory.models import Receipt, ReceiptParticipant
 

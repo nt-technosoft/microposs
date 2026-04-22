@@ -51,7 +51,9 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         ).select_related('supplier', 'balance', 'contract').prefetch_related(
             'items__product_variant',
             'expenses',
+            'balance__contributions__partner',
             'balance__withdrawals',
+            'balance__withdrawals__partner',
             'balance__exchanges',
             'contract__contract_partners__partner',
         )

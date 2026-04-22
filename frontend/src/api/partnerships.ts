@@ -65,6 +65,55 @@ export interface ProcurementDetail {
   balance: {
     balances: Record<string, string>
     is_zero: boolean
+    contributions: Array<{
+      id: number
+      partner: number
+      partner_name: string
+      partner_role: string
+      amount: string
+      currency: string
+      fx_rate: string
+      date: string
+      notes: string
+    }>
+    withdrawals: Array<{
+      id: number
+      partner: number | null
+      partner_name: string | null
+      partner_role: string | null
+      amount: string
+      currency: string
+      fx_rate: string
+      date: string
+      reason: string
+    }>
+    participant_totals: Array<{
+      partner_id: number
+      partner_name: string
+      role: string
+      contract_currency: string
+      planned_capital_share: string
+      planned_profit_share: string
+      contributed_amount: string
+      withdrawn_amount: string
+      net_capital: string
+      actual_capital_share: string
+    }>
+    history: Array<{
+      id: string
+      kind: 'CONTRIBUTION' | 'WITHDRAWAL' | 'EXCHANGE'
+      date: string
+      title: string
+      partner_id: number | null
+      partner_name: string | null
+      partner_role: string | null
+      amount: string
+      currency: string
+      secondary_amount: string | null
+      secondary_currency: string | null
+      fx_rate: string
+      note: string
+    }>
     exchanges: Array<{
       id: number
       from_currency: string

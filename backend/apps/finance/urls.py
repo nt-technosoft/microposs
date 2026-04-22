@@ -15,6 +15,8 @@ from .views import (
     CashFlowSummaryViewSet,
     OwnerContributionViewSet,
     RefundViewSet,
+    SaleProfitabilityView,
+    ProductProfitabilityView,
 )
 
 router = DefaultRouter()
@@ -31,5 +33,7 @@ router.register('cash-flow', CashFlowSummaryViewSet, basename='cash-flow')
 router.register('fx-rates', ExchangeRateViewSet, basename='fx-rate')
 
 urlpatterns = [
+    path('sales-profitability/', SaleProfitabilityView.as_view()),
+    path('product-profitability/', ProductProfitabilityView.as_view()),
     path('', include(router.urls)),
 ]

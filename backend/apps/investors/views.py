@@ -21,6 +21,7 @@ from .serializers import (
     InvestorProcurementListSerializer, InvestorProcurementDetailSerializer,
 )
 from .services import close_investor_contract, update_investor_summary
+from .services import get_partner_capital_state
 
 
 def _get_request_investor_partner(request):
@@ -62,7 +63,14 @@ class InvestorDashboardView(APIView):
 
     def get(self, request):
         partner = _get_request_investor_partner(request)
-        data = {'partner_id': partner.id, **get_partner_aggregate(partner.id, request.tenant_id)}
+        data = {
+            'partner_id': partner.id,
+            **get_partner_aggregate(partner.id, request.tenant_id),
+            'capital_state': get_partner_capital_state(
+                tenant_id=request.tenant_id,
+                partner_id=partner.id,
+            ),
+        }
         serializer = InvestorDashboardAggregateSerializer(data)
         return Response(serializer.data)
 
@@ -107,7 +115,17 @@ class InvestorProcurementView(APIView):
                     request.tenant_id,
                     procurement_id=procurement_id,
                 ),
+                'capital_state': get_partner_capital_state(
+                    tenant_id=request.tenant_id,
+                    partner_id=partner.id,
+                    procurement_id=procurement_id,
+                ),
             },
+            'capital_state': get_partner_capital_state(
+                tenant_id=request.tenant_id,
+                partner_id=partner.id,
+                procurement_id=procurement_id,
+            ),
             'investor_ledger': _serialize_investor_ledger(ledger),
         }
         return Response(InvestorProcurementDetailSerializer(payload).data)
