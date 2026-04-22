@@ -70,6 +70,13 @@ const rateNumber = computed(() => {
   return Number.isFinite(value) && value > 0 ? value : 0
 })
 
+function trimTrailingZeros(value: string | number): string {
+  const raw = typeof value === 'number' ? String(value) : value
+  if (!raw) return '0'
+  if (!raw.includes('.')) return raw
+  return raw.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '')
+}
+
 function pairRateFromStandardRate(fromCurrency: string, toCurrency: string, standardRateRaw: string): string {
   const standardRate = Number.parseFloat(standardRateRaw)
   if (!Number.isFinite(standardRate) || standardRate <= 0) return '0'
@@ -334,7 +341,7 @@ onMounted(async () => {
           <div class="helper-card">
             <div class="helper-row">
               <span>Справочный USD/UZS</span>
-              <strong class="tabular-nums">{{ latestUsdUzsRate }}</strong>
+              <strong class="tabular-nums">{{ trimTrailingZeros(latestUsdUzsRate) }}</strong>
             </div>
             <div class="helper-row">
               <span>Направление обмена</span>

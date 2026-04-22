@@ -1427,9 +1427,11 @@ onMounted(async () => {
                           placeholder="0"
                           @input="(e) => updateDraftLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
                         />
-                        <button type="button" class="currency-toggle" @click="toggleDraftLineCurrency(line.id)">
+                        <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftLineCurrency(line.id)">
                           <span class="currency-toggle-code">{{ line.currency }}</span>
-                          <RefreshCcw :size="14" :stroke-width="2" />
+                          <span class="currency-toggle-hint" aria-hidden="true">
+                            <RefreshCcw :size="12" :stroke-width="2" />
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -1540,9 +1542,11 @@ onMounted(async () => {
                           placeholder="0"
                           @input="(e) => updateDraftExpense(expense.id, 'amount', (e.target as HTMLInputElement).value)"
                         />
-                        <button type="button" class="currency-toggle" @click="toggleDraftExpenseCurrency(expense.id)">
+                        <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftExpenseCurrency(expense.id)">
                           <span class="currency-toggle-code">{{ expense.currency }}</span>
-                          <RefreshCcw :size="14" :stroke-width="2" />
+                          <span class="currency-toggle-hint" aria-hidden="true">
+                            <RefreshCcw :size="12" :stroke-width="2" />
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -1862,8 +1866,11 @@ onMounted(async () => {
             <label class="field-label">Сумма</label>
             <div class="money-field">
               <input v-model="contributionAmount" class="input-field money-input" type="number" min="0" placeholder="0" />
-              <button type="button" class="currency-toggle" @click="toggleContributionCurrency">
+              <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleContributionCurrency">
                 <span class="currency-toggle-code">{{ contributionCurrency }}</span>
+                <span class="currency-toggle-hint" aria-hidden="true">
+                  <RefreshCcw :size="12" :stroke-width="2" />
+                </span>
               </button>
             </div>
           </div>
@@ -1872,7 +1879,7 @@ onMounted(async () => {
             <div class="rate-helper-card">
               <div>
                 <label class="field-label">Курс USD -> UZS</label>
-                <strong class="tabular-nums">{{ contributionFxRate }}</strong>
+                <strong class="tabular-nums">{{ trimTrailingZeros(contributionFxRate) }}</strong>
               </div>
               <button class="text-action" type="button" @click="contributionRateManualOpen = !contributionRateManualOpen">
                 {{ contributionRateManualOpen ? 'Скрыть' : 'Изменить курс' }}
@@ -1911,8 +1918,11 @@ onMounted(async () => {
             <label class="field-label">Сумма</label>
             <div class="money-field">
               <input v-model="withdrawalAmount" class="input-field money-input" type="number" min="0" placeholder="0" />
-              <button type="button" class="currency-toggle" @click="toggleWithdrawalCurrency">
+              <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleWithdrawalCurrency">
                 <span class="currency-toggle-code">{{ withdrawalCurrency }}</span>
+                <span class="currency-toggle-hint" aria-hidden="true">
+                  <RefreshCcw :size="12" :stroke-width="2" />
+                </span>
               </button>
             </div>
             <span class="helper-text">Доступно: {{ formatPrice(selectedWithdrawalBalance, withdrawalCurrency) }}</span>
@@ -1922,7 +1932,7 @@ onMounted(async () => {
             <div class="rate-helper-card">
               <div>
                 <label class="field-label">Курс USD -> UZS</label>
-                <strong class="tabular-nums">{{ withdrawalFxRate }}</strong>
+                <strong class="tabular-nums">{{ trimTrailingZeros(withdrawalFxRate) }}</strong>
               </div>
               <button class="text-action" type="button" @click="withdrawalRateManualOpen = !withdrawalRateManualOpen">
                 {{ withdrawalRateManualOpen ? 'Скрыть' : 'Изменить курс' }}
@@ -2086,9 +2096,10 @@ onMounted(async () => {
 .input-field { width: 100%; min-height: 48px; padding: 0 var(--space-4); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); }
 .money-field { position: relative; }
 .money-field--readonly .input-field { background: var(--color-bg-sunken); }
-.money-input { padding-right: 76px; }
-.currency-toggle { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); height: 34px; display:inline-flex; align-items:center; justify-content:center; padding: 0 12px; border-radius: calc(var(--radius-md) - 2px); border:1px solid var(--color-border-default); background: var(--color-bg-elevated); color: var(--color-text-primary); font-weight: var(--font-semibold); }
+.money-input { padding-right: 98px; }
+.currency-toggle { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); height: 34px; display:inline-flex; align-items:center; justify-content:center; gap: 6px; padding: 0 8px 0 10px; border-radius: calc(var(--radius-md) - 2px); border:1px solid var(--color-border-default); background: var(--color-bg-elevated); color: var(--color-text-primary); font-weight: var(--font-semibold); }
 .currency-toggle-code { font-size: var(--text-sm); line-height: 1; }
+.currency-toggle-hint { width: 18px; height: 18px; display:inline-flex; align-items:center; justify-content:center; border-radius: 999px; background: var(--color-brand-50); color: var(--color-brand-700); border: 1px solid var(--color-brand-100); flex: 0 0 auto; }
 .swap-action { width: 44px; height: 44px; display:inline-flex; align-items:center; justify-content:center; border-radius: var(--radius-md); border:1px solid var(--color-border-default); background: var(--color-bg-primary); color: var(--color-brand-700); }
 .sheet-form { display:grid; gap: var(--space-3); padding-bottom: var(--space-4); }
 .sheet-submit-btn { width:100%; height: 48px; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); }
