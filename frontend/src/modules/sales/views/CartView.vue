@@ -32,6 +32,10 @@ function goToCheckout(): void {
   router.push('/sales/checkout')
 }
 
+function openSession(): void {
+  router.push({ name: 'sales-catalog', query: { openSession: '1' } })
+}
+
 function handleQuantityChange(index: number, qty: number): void {
   cartStore.updateQuantity(index, qty)
 }
@@ -87,8 +91,8 @@ function cancelClear(): void {
         <p class="session-warning__title">Нет открытой смены</p>
         <p class="session-warning__text">Откройте кассовую смену, чтобы оформлять продажи</p>
       </div>
-      <BaseButton variant="secondary" size="sm" @click="router.push('/sales')">
-        В каталог
+      <BaseButton variant="secondary" size="sm" @click="openSession">
+        Открыть смену
       </BaseButton>
     </div>
 

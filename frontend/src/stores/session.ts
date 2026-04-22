@@ -9,6 +9,7 @@ import {
   openSession as apiOpenSession,
   closeSession as apiCloseSession,
 } from '../api/sales'
+import { getApiErrorMessage } from '@/utils/errors'
 
 interface SessionState {
   currentSession: PosSession | null
@@ -35,7 +36,15 @@ export const useSessionStore = defineStore('session', {
       const rawLocation = session.location as unknown
 
       if (rawLocation && typeof rawLocation === 'object' && 'id' in rawLocation) {
-        return rawLocation as Location
+        const location = rawLocation as Location
+        const normalizedKind = String(location.kind ?? '').toUpperCase() === 'STORAGE'
+          ? 'storage'
+          : 'shop'
+        return {
+          ...location,
+          kind: normalizedKind,
+          location_type: location.location_type ?? (normalizedKind === 'storage' ? 'warehouse' : 'store'),
+        }
       }
 
       if (typeof rawLocation === 'number') {
@@ -67,16 +76,18 @@ export const useSessionStore = defineStore('session', {
         const sessions = response.results
 
         if (sessions.length > 0) {
-          this.currentSession = { ...sessions[0] }
-          this.location = this.normalizeLocation(sessions[0])
+          const normalizedLocation = this.normalizeLocation(sessions[0])
+          this.currentSession = {
+            ...sessions[0],
+            ...(normalizedLocation ? { location: normalizedLocation } : {}),
+          }
+          this.location = normalizedLocation
         } else {
           this.currentSession = null
           this.location = null
         }
       } catch (error: unknown) {
-        this.error = error instanceof Error
-          ? error.message
-          : 'Не удалось загрузить сессию'
+        this.error = getApiErrorMessage(error, 'Не удалось загрузить смену')
       } finally {
         this.isLoading = false
       }
@@ -88,13 +99,15 @@ export const useSessionStore = defineStore('session', {
 
       try {
         const session = await apiOpenSession({ location_id: locationId, opening_cash: openingCash })
-        this.currentSession = { ...session }
-        this.location = this.normalizeLocation(session)
+        const normalizedLocation = this.normalizeLocation(session)
+        this.currentSession = {
+          ...session,
+          ...(normalizedLocation ? { location: normalizedLocation } : {}),
+        }
+        this.location = normalizedLocation
         return session
       } catch (error: unknown) {
-        this.error = error instanceof Error
-          ? error.message
-          : 'Не удалось открыть сессию'
+        this.error = getApiErrorMessage(error, 'Не удалось открыть смену')
         throw error
       } finally {
         this.isLoading = false
@@ -115,9 +128,7 @@ export const useSessionStore = defineStore('session', {
         this.currentSession = null
         this.location = null
       } catch (error: unknown) {
-        this.error = error instanceof Error
-          ? error.message
-          : 'Не удалось закрыть сессию'
+        this.error = getApiErrorMessage(error, 'Не удалось закрыть смену')
         throw error
       } finally {
         this.isLoading = false

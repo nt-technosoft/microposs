@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Package, Plus, ChevronRight, FolderTree } from 'lucide-vue-next'
+import { Package, Plus, ChevronRight, FolderTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchProducts, fetchCategories } from '@/api/catalog'
 import type { Product, Category } from '@/types/models'
 import BaseSearch from '@/components/base/BaseSearch.vue'
@@ -157,6 +157,10 @@ function navigateToCategories(): void {
   router.push({ name: 'categories' })
 }
 
+function navigateToTransfers(): void {
+  router.push({ name: 'stock-transfers' })
+}
+
 onMounted(async () => {
   await Promise.all([loadCategories(), loadProducts(true)])
 })
@@ -174,6 +178,13 @@ onMounted(async () => {
           @click="navigateToCategories"
         >
           <FolderTree :size="18" :stroke-width="2" />
+        </button>
+        <button
+          class="header-icon-btn"
+          aria-label="Перемещения между точками"
+          @click="navigateToTransfers"
+        >
+          <ArrowRightLeft :size="18" :stroke-width="2" />
         </button>
         <button
           class="header-add-btn"

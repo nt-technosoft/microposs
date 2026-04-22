@@ -1,7 +1,7 @@
 """Shared test fixtures for vacuum-model test suite (PR-9c)."""
 
 from decimal import Decimal
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.utils import timezone
 
 from apps.catalog.models import Category
@@ -10,7 +10,8 @@ from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import CashAccount, Account
-from apps.inventory.models import Warehouse
+from apps.inventory.models import Warehouse, LotStock
+from apps.inventory.services import transfer_lot_stock
 from apps.partnerships.models import Procurement
 from apps.partnerships.services import (
     add_contribution,
@@ -28,6 +29,13 @@ def build_tenant():
     owner = User.objects.create_user(username='t_owner', password='x')
     cashier = User.objects.create_user(username='t_cashier', password='x')
     investor_user = User.objects.create_user(username='t_investor', password='x')
+
+    owner_group, _ = Group.objects.get_or_create(name='owner')
+    cashier_group, _ = Group.objects.get_or_create(name='cashier')
+    investor_group, _ = Group.objects.get_or_create(name='investor')
+    owner.groups.add(owner_group)
+    cashier.groups.add(cashier_group)
+    investor_user.groups.add(investor_group)
 
     business = Business.objects.create(
         owner=owner, name='Test Tenant', currency='UZS', is_active=True,
@@ -163,9 +171,27 @@ def seed_received_procurement(ctx, *, qty=50, unit_usd=10, customs_usd=50):
 
 
 def open_session(ctx):
+    storage_stocks = list(
+        LotStock.objects
+        .filter(
+            tenant_id=ctx['business'].id,
+            warehouse=ctx['storage'],
+            quantity_remaining__gt=0,
+        )
+        .select_related('lot')
+    )
+    for stock in storage_stocks:
+        transfer_lot_stock(
+            tenant_id=ctx['business'].id,
+            lot=stock.lot,
+            from_warehouse=ctx['storage'],
+            to_warehouse=ctx['store'],
+            quantity=stock.quantity_remaining,
+        )
+
     return open_pos_session(
         tenant_id=ctx['business'].id,
-        location_id=ctx['storage'].id,
+        location_id=ctx['store'].id,
         opened_by_id=ctx['cashier'].id,
         opening_cash=Decimal('0'),
     )

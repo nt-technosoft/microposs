@@ -115,11 +115,11 @@ export async function createSale(payload: SaleCreatePayload): Promise<Sale> {
   const body = {
     client_request_id: payload.client_request_id,
     pos_session_id: payload.pos_session_id,
-    location_id: payload.location_id,
     customer_id: payload.customer_id,
     lines: payload.lines,
     payments,
     notes: payload.notes,
+    ...(payload.location_id !== undefined ? { location_id: payload.location_id } : {}),
   }
 
   const { data } = await api.post<Sale>('/api/v1/sales/sales/', body)

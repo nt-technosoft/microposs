@@ -4,11 +4,14 @@ Sales API views — POS sessions, sales, returns.
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from django.db.models import Count, Q, Sum, DecimalField
+from django.db.models.functions import Coalesce
 
 from apps.core.permissions import IsOwner, IsCashier
 
-from .models import Sale, SaleLine, Return, PosSession
+from .models import Sale, SaleLine, Return, PosSession, SalePayment
 from .serializers import (
     PosSessionSerializer, OpenSessionSerializer, CloseSessionSerializer,
     SaleListSerializer, SaleDetailSerializer, SaleCreateSerializer,
@@ -32,11 +35,31 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = PosSession.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('location', 'opened_by', 'closed_by')
+        ).select_related('location', 'opened_by', 'closed_by').annotate(
+            sales_count=Count(
+                'sales',
+                filter=Q(sales__status=Sale.SaleStatus.COMPLETED),
+                distinct=True,
+            ),
+            cash_sales_total=Coalesce(
+                Sum(
+                    'sales__payments__amount',
+                    filter=Q(
+                        sales__status=Sale.SaleStatus.COMPLETED,
+                        sales__payments__role=SalePayment.Role.INCOMING,
+                        sales__payments__method=SalePayment.Method.CASH,
+                    ),
+                ),
+                0,
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            ),
+        )
 
         status_filter = self.request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+            if status_filter == PosSession.SessionStatus.OPEN:
+                qs = qs.filter(opened_by=self.request.user)
 
         location_id = self.request.query_params.get('location')
         if location_id:
@@ -51,12 +74,15 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        session = open_pos_session(
-            tenant_id=request.tenant_id,
-            location_id=data['location_id'],
-            opened_by_id=request.user.pk,
-            opening_cash=data['opening_cash'],
-        )
+        try:
+            session = open_pos_session(
+                tenant_id=request.tenant_id,
+                location_id=data['location_id'],
+                opened_by_id=request.user.pk,
+                opening_cash=data['opening_cash'],
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
         return Response(PosSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='close')
@@ -66,11 +92,14 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = CloseSessionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        session = close_pos_session(
-            session=session,
-            closed_by_id=request.user.pk,
-            actual_cash=serializer.validated_data['actual_cash'],
-        )
+        try:
+            session = close_pos_session(
+                session=session,
+                closed_by_id=request.user.pk,
+                actual_cash=serializer.validated_data['actual_cash'],
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
         return Response(PosSessionSerializer(session).data)
 
 
@@ -122,18 +151,21 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        sale = create_sale(
-            tenant_id=request.tenant_id,
-            pos_session_id=data['pos_session_id'],
-            location_id=data['location_id'],
-            sold_by_id=request.user.pk,
-            customer_id=data.get('customer_id'),
-            lines=[dict(line) for line in data['lines']],
-            payments=[dict(p) for p in data.get('payments', [])],
-            client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
-            notes=data.get('notes', ''),
-            date=data.get('date'),
-        )
+        try:
+            sale = create_sale(
+                tenant_id=request.tenant_id,
+                pos_session_id=data['pos_session_id'],
+                location_id=data.get('location_id'),
+                sold_by_id=request.user.pk,
+                customer_id=data.get('customer_id'),
+                lines=[dict(line) for line in data['lines']],
+                payments=[dict(p) for p in data.get('payments', [])],
+                client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
+                notes=data.get('notes', ''),
+                date=data.get('date'),
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
 
         return Response(SaleDetailSerializer(sale).data, status=status.HTTP_201_CREATED)
 

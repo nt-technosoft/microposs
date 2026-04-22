@@ -2,6 +2,8 @@
 Sales serializers.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import Sale, SaleLine, SalePayment, Return, ReturnLine, PosSession
 
@@ -12,11 +14,19 @@ class PosSessionSerializer(serializers.ModelSerializer):
     location_name = serializers.CharField(
         source='location.name', read_only=True,
     )
+    sales_count = serializers.IntegerField(read_only=True, default=0)
+    cash_sales_total = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+        default='0.00',
+    )
 
     class Meta:
         model = PosSession
         fields = [
             'id', 'location', 'location_name', 'status',
+            'sales_count', 'cash_sales_total',
             'opening_cash', 'expected_cash', 'actual_cash',
             'cash_difference', 'opened_by', 'closed_by',
             'opened_at', 'closed_at',
@@ -30,12 +40,12 @@ class PosSessionSerializer(serializers.ModelSerializer):
 class OpenSessionSerializer(serializers.Serializer):
     location_id = serializers.IntegerField()
     opening_cash = serializers.DecimalField(
-        max_digits=14, decimal_places=2, default=0,
+        max_digits=14, decimal_places=2, default=0, min_value=Decimal('0'),
     )
 
 
 class CloseSessionSerializer(serializers.Serializer):
-    actual_cash = serializers.DecimalField(max_digits=14, decimal_places=2)
+    actual_cash = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0'))
 
 
 # === SalePayment ===
@@ -152,7 +162,7 @@ class SaleDetailSerializer(serializers.ModelSerializer):
 class SaleCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     pos_session_id = serializers.IntegerField()
-    location_id = serializers.IntegerField()
+    location_id = serializers.IntegerField(required=False, allow_null=True)
     date = serializers.DateTimeField(required=False)
     customer_id = serializers.IntegerField(required=False, allow_null=True)
     lines = SaleLineInputSerializer(many=True)

@@ -1,0 +1,39 @@
+.git
+.claude
+**/.DS_Store
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+backend/.venv
+backend/.pytest_cache
+backend/.mypy_cache
+backend/.ruff_cache
+backend/htmlcov
+backend/.coverage
+backend/.coverage.*
+backend/db.sqlite3
+backend/media
+backend/staticfiles
+
+# Node
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/coverage
+frontend/.eslintcache
+
+# Local env / logs
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env.local
+frontend/.env.*
+*.log
+
+# Test artifacts
+test-results
+playwright-report
+

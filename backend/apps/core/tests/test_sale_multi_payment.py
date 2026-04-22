@@ -19,7 +19,7 @@ class SaleMultiPaymentTests(TestCase):
         sale = create_sale(
             tenant_id=ctx['business'].id,
             pos_session_id=session.id,
-            location_id=ctx['storage'].id,
+            location_id=ctx['store'].id,
             sold_by_id=ctx['cashier'].id,
             customer_id=ctx['customer'].id,
             lines=[{
@@ -96,4 +96,4 @@ class SaleMultiPaymentTests(TestCase):
             Decimal(str(snapshot[str(ctx['operator'].id)])),
         )
 
-        self.assertEqual(lot.stocks.get(warehouse=ctx['storage']).quantity_remaining, 50 - line.quantity)
+        self.assertEqual(lot.stocks.get(warehouse=ctx['store']).quantity_remaining, 50 - line.quantity)

@@ -122,7 +122,7 @@ def create_sale(
     *,
     tenant_id: int,
     pos_session_id: int,
-    location_id: int,
+    location_id: int | None,
     sold_by_id: int,
     customer_id: int | None,
     lines: list[dict],
@@ -178,16 +178,20 @@ def create_sale(
             if existing:
                 return existing
 
-        session = PosSession.objects.get(
+        session = PosSession.objects.select_related('location').get(
             pk=pos_session_id,
             tenant_id=tenant_id,
             status=PosSession.SessionStatus.OPEN,
         )
+        if location_id is not None and int(location_id) != session.location_id:
+            raise ValueError('Продажа должна оформляться из точки открытой смены.')
+
+        sale_location_id = session.location_id
 
         sale = Sale.objects.create(
             tenant_id=tenant_id,
             status=Sale.SaleStatus.DRAFT,
-            location_id=location_id,
+            location_id=sale_location_id,
             date=date,
             pos_session=session,
             customer_id=customer_id,
@@ -219,7 +223,7 @@ def create_sale(
 
             allocations = allocate_lot(
                 product_variant_id=variant_id,
-                warehouse_id=location_id,
+                warehouse_id=sale_location_id,
                 quantity=quantity,
                 tenant_id=tenant_id,
             )
@@ -738,6 +742,28 @@ def open_pos_session(
     opening_cash: Decimal = Decimal('0'),
 ) -> PosSession:
     """Open a new POS session (shift)."""
+    from apps.inventory.models import Warehouse
+
+    location = Warehouse.objects.get(pk=location_id, tenant_id=tenant_id)
+    if location.kind != Warehouse.WarehouseKind.SHOP:
+        raise ValueError('Смену можно открыть только на магазине.')
+
+    existing_open_session = PosSession.objects.filter(
+        tenant_id=tenant_id,
+        location_id=location_id,
+        status=PosSession.SessionStatus.OPEN,
+    ).first()
+    if existing_open_session:
+        raise ValueError('На этой точке уже есть открытая смена.')
+
+    existing_user_session = PosSession.objects.filter(
+        tenant_id=tenant_id,
+        opened_by_id=opened_by_id,
+        status=PosSession.SessionStatus.OPEN,
+    ).first()
+    if existing_user_session:
+        raise ValueError('У вас уже есть открытая смена.')
+
     session = PosSession.objects.create(
         tenant_id=tenant_id,
         location_id=location_id,
@@ -772,6 +798,8 @@ def close_pos_session(
 
     with transaction.atomic():
         session = PosSession.objects.select_for_update().get(pk=session.pk)
+        if session.status != PosSession.SessionStatus.OPEN:
+            raise ValueError('Можно закрыть только открытую смену.')
 
         # Calculate expected cash from incoming cash payments.
         from apps.sales.models import SalePayment

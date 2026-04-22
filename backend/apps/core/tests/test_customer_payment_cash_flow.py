@@ -19,7 +19,7 @@ class CustomerPaymentCashFlowTests(APITestCase):
         create_sale(
             tenant_id=cls.ctx['business'].id,
             pos_session_id=session.id,
-            location_id=cls.ctx['storage'].id,
+            location_id=cls.ctx['store'].id,
             sold_by_id=cls.ctx['cashier'].id,
             customer_id=cls.ctx['customer'].id,
             lines=[{

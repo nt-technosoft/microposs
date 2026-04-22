@@ -115,6 +115,7 @@ export interface DiscountReason extends BaseModel {
 export interface Warehouse extends BaseModel {
   name: string
   kind: 'shop' | 'storage'
+  address?: string
   location_type?: 'warehouse' | 'store'
   is_active: boolean
 }
@@ -135,6 +136,7 @@ export interface Lot extends BaseModel {
   receipt?: number | null
   procurement_item?: number | null
   product_variant: ProductVariant
+  product_variant_name?: string
   quantity_initial: number
   quantity_remaining: number
   unit_purchase_price: string
@@ -142,6 +144,19 @@ export interface Lot extends BaseModel {
   contract_snapshot?: Record<string, unknown>
   is_active: boolean
   stocks?: LotStock[]
+}
+
+export interface StockMovement extends BaseModel {
+  lot: number
+  movement_type: string
+  quantity: number
+  from_location?: number | null
+  from_location_name?: string | null
+  to_location?: number | null
+  to_location_name?: string | null
+  reference_type?: string | null
+  reference_id?: number | null
+  notes?: string
 }
 
 export interface ReceiptLine extends BaseModel {
@@ -330,6 +345,8 @@ export interface RiskEvent extends BaseModel {
 export interface PosSession extends BaseModel {
   location: Location
   status: 'open' | 'closed'
+  sales_count?: number
+  cash_sales_total?: string
   opening_cash: string
   expected_cash: string | null
   actual_cash: string | null

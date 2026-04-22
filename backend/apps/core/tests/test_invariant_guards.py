@@ -29,7 +29,7 @@ class InvariantGuardTests(TestCase):
         sale = create_sale(
             tenant_id=ctx['business'].id,
             pos_session_id=session.id,
-            location_id=ctx['storage'].id,
+            location_id=ctx['store'].id,
             sold_by_id=ctx['cashier'].id,
             customer_id=ctx['customer'].id,
             lines=[{
@@ -56,7 +56,7 @@ class InvariantGuardTests(TestCase):
         sale = create_sale(
             tenant_id=ctx['business'].id,
             pos_session_id=session.id,
-            location_id=ctx['storage'].id,
+            location_id=ctx['store'].id,
             sold_by_id=ctx['cashier'].id,
             customer_id=ctx['customer'].id,
             lines=[{

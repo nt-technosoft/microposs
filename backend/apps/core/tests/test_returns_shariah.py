@@ -18,7 +18,7 @@ class ReturnsShariahTests(TestCase):
         sale = create_sale(
             tenant_id=ctx['business'].id,
             pos_session_id=session.id,
-            location_id=ctx['storage'].id,
+            location_id=ctx['store'].id,
             sold_by_id=ctx['cashier'].id,
             customer_id=ctx['customer'].id,
             lines=[{
@@ -52,7 +52,7 @@ class ReturnsShariahTests(TestCase):
             ).order_by('ledger__partner_id')
         )
 
-        self.assertEqual(lot.stocks.get(warehouse=ctx['storage']).quantity_remaining, 46)
+        self.assertEqual(lot.stocks.get(warehouse=ctx['store']).quantity_remaining, 46)
         self.assertTrue(lot.is_active)
 
         sale_line = sale.lines.get()
@@ -77,7 +77,7 @@ class ReturnsShariahTests(TestCase):
         sale = create_sale(
             tenant_id=ctx['business'].id,
             pos_session_id=session.id,
-            location_id=ctx['storage'].id,
+            location_id=ctx['store'].id,
             sold_by_id=ctx['cashier'].id,
             customer_id=ctx['customer'].id,
             lines=[{
@@ -112,7 +112,7 @@ class ReturnsShariahTests(TestCase):
             ).order_by('ledger__partner_id')
         )
 
-        self.assertEqual(lot.stocks.get(warehouse=ctx['storage']).quantity_remaining, 45)
+        self.assertEqual(lot.stocks.get(warehouse=ctx['store']).quantity_remaining, 45)
         self.assertEqual(lot.quantity_initial, 49)
         self.assertEqual(disposal.reason, StockDisposal.Reason.DAMAGED_RETURN)
 

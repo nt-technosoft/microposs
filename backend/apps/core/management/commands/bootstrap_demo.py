@@ -15,7 +15,8 @@ from apps.finance.models import CashAccount
 from apps.inventory.models import Warehouse
 from apps.partnerships.models import Procurement
 from apps.partnerships.services import (
-    open_procurement, add_contribution, add_withdrawal, receive_procurement,
+    open_procurement, add_contribution, pay_procurement_expenses,
+    pay_procurement_items, receive_procurement,
 )
 from apps.sales.services import create_sale, open_pos_session
 from apps.suppliers.models import Supplier
@@ -147,21 +148,14 @@ class Command(BaseCommand):
             notes='Operator seed capital',
         )
 
-        # Drain balance to 0 (items 500 USD + customs 50 USD).
-        add_withdrawal(
+        pay_procurement_items(
             tenant_id=business.id,
             procurement_id=procurement.id,
-            amount=Decimal('500'),
-            currency=usd,
-            fx_rate=fx,
             reason='Payment for items',
         )
-        add_withdrawal(
+        pay_procurement_expenses(
             tenant_id=business.id,
             procurement_id=procurement.id,
-            amount=Decimal('50'),
-            currency=usd,
-            fx_rate=fx,
             reason='Customs payment',
         )
 

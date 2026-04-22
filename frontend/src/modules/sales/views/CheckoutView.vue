@@ -112,14 +112,9 @@ async function confirmSale(): Promise<void> {
   }))
 
   try {
-    const locationId = typeof sessionStore.currentSession.location === 'number'
-      ? sessionStore.currentSession.location
-      : sessionStore.currentSession.location?.id
-
     const sale = await salesStore.createSale({
       client_request_id: generateRequestId(),
       pos_session_id: sessionStore.currentSession.id,
-      location_id: locationId,
       ...(selectedCustomer.value ? { customer_id: selectedCustomer.value.id } : {}),
       lines,
       payments: [{
@@ -143,6 +138,10 @@ async function confirmSale(): Promise<void> {
 
 function goBack(): void {
   router.push('/sales/cart')
+}
+
+function openSession(): void {
+  router.push({ name: 'sales-catalog', query: { openSession: '1' } })
 }
 
 function startNewSale(): void {
@@ -192,6 +191,16 @@ function goToHistory(): void {
                   : 'товаров'
             }}
           </p>
+        </section>
+
+        <section v-if="!sessionStore.isOpen" class="session-alert" aria-label="Статус смены">
+          <div class="session-alert__body">
+            <p class="session-alert__title">Нет открытой смены</p>
+            <p class="session-alert__text">Открой смену, чтобы подтвердить продажу.</p>
+          </div>
+          <BaseButton variant="secondary" size="sm" @click="openSession">
+            Открыть смену
+          </BaseButton>
         </section>
 
         <!-- Payment method -->
@@ -412,6 +421,33 @@ function goToHistory(): void {
 }
 
 .amount-meta {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.session-alert {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.session-alert__body {
+  display: grid;
+  gap: 4px;
+}
+
+.session-alert__title {
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.session-alert__text {
   font-size: var(--text-sm);
   color: var(--color-text-secondary);
   margin: 0;

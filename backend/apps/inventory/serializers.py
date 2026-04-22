@@ -213,6 +213,13 @@ class TransferSerializer(serializers.Serializer):
     to_warehouse_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
 
+    def validate(self, attrs):
+        if attrs['from_warehouse_id'] == attrs['to_warehouse_id']:
+            raise serializers.ValidationError({
+                'to_warehouse_id': 'Склад назначения должен отличаться от склада отправления.',
+            })
+        return attrs
+
 
 # === Stock Summary ===
 

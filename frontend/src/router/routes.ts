@@ -80,6 +80,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/modules/products/views/CategoryList.vue'),
     meta: { roles: ['owner'] },
   },
+  {
+    path: '/stock/transfers',
+    name: 'stock-transfers',
+    component: () => import('@/modules/inventory/views/StockTransfersView.vue'),
+    meta: { roles: ['owner', 'warehouse'] },
+  },
 
   // Procurements (rendered by restored intake views until full slice rewrite)
   {
