@@ -2,6 +2,8 @@
 Core models — foundation for all MicroPOS domain models.
 """
 
+import secrets
+
 from django.db import models
 from django.utils import timezone
 
@@ -129,6 +131,117 @@ class Partner(TenantModel):
 
     def __str__(self):
         return f"{self.display_name} ({self.role})"
+
+
+def generate_invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+class BusinessInvestorRelation(TenantModel):
+    """Explicit visibility/access link between a business and an investor partner."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Ожидает'
+        ACTIVE = 'ACTIVE', 'Активен'
+        REVOKED = 'REVOKED', 'Отозван'
+        BLOCKED = 'BLOCKED', 'Заблокирован'
+
+    class Source(models.TextChoices):
+        MANUAL = 'MANUAL', 'Вручную'
+        INVITE = 'INVITE', 'Инвайт'
+
+    partner = models.ForeignKey(
+        Partner,
+        on_delete=models.PROTECT,
+        related_name='investor_relations',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.MANUAL,
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='created_investor_relations',
+        null=True,
+        blank=True,
+    )
+    notes = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'core_business_investor_relation'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'partner'],
+                name='uq_business_investor_relation',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['tenant', 'status'], name='core_busine_tenant__77b141_idx'),
+            models.Index(fields=['partner', 'status'], name='core_busine_partner_053bdb_idx'),
+        ]
+
+
+class InvestorInvite(TenantModel):
+    """Invite link for attaching an investor user to a business."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Ожидает'
+        ACCEPTED = 'ACCEPTED', 'Принят'
+        REVOKED = 'REVOKED', 'Отозван'
+        EXPIRED = 'EXPIRED', 'Истёк'
+
+    token = models.CharField(
+        max_length=96,
+        unique=True,
+        default=generate_invite_token,
+        db_index=True,
+    )
+    email = models.EmailField(blank=True, default='')
+    display_name = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    invited_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='sent_investor_invites',
+    )
+    accepted_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='accepted_investor_invites',
+        null=True,
+        blank=True,
+    )
+    relation = models.ForeignKey(
+        BusinessInvestorRelation,
+        on_delete=models.SET_NULL,
+        related_name='invites',
+        null=True,
+        blank=True,
+    )
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'core_investor_invite'
+        indexes = [
+            models.Index(fields=['tenant', 'status'], name='core_invest_tenant__be25c0_idx'),
+            models.Index(fields=['expires_at'], name='core_invest_expires_77dcd2_idx'),
+        ]
+
+    @property
+    def is_expired(self):
+        return self.expires_at <= timezone.now()
 
 
 class OutboxEvent(BaseModel):

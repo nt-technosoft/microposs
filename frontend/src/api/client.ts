@@ -1,68 +1,57 @@
-const API_BASE_URL = '/api/v1'
+/**
+ * Axios HTTP client with JWT auth and tenant context.
+ */
 
-export class ApiError extends Error {
-  readonly status: number
+import axios from 'axios'
 
-  constructor(message: string, status: number) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || '',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+// Attach JWT token to every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
   }
-}
+  return config
+})
 
-type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-  body?: unknown
-  token?: string | null
-  clientRequestId?: string
-}
+// Handle 401 — try refresh, then logout
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config
 
-export async function apiRequest<T>(
-  path: string,
-  options: RequestOptions = {},
-): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? 'GET',
-    headers: buildHeaders(options),
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  })
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true
 
-  if (!response.ok) {
-    throw new ApiError(await getErrorMessage(response), response.status)
-  }
+      const refreshToken = localStorage.getItem('refresh_token')
+      if (refreshToken) {
+        try {
+          const { data } = await axios.post(
+            `${import.meta.env.VITE_API_URL}/api/v1/auth/token/refresh/`,
+            { refresh: refreshToken },
+          )
+          localStorage.setItem('access_token', data.access)
+          if (data.refresh) {
+            localStorage.setItem('refresh_token', data.refresh)
+          }
+          originalRequest.headers.Authorization = `Bearer ${data.access}`
+          return api(originalRequest)
+        } catch {
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('refresh_token')
+          window.location.href = '/login'
+        }
+      }
+    }
 
-  if (response.status === 204) {
-    return undefined as T
-  }
+    return Promise.reject(error)
+  },
+)
 
-  return (await response.json()) as T
-}
-
-function buildHeaders(options: RequestOptions): HeadersInit {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-  }
-
-  if (options.body) {
-    headers['Content-Type'] = 'application/json'
-  }
-
-  if (options.token) {
-    headers.Authorization = `Bearer ${options.token}`
-  }
-
-  if (options.clientRequestId) {
-    headers['X-Client-Request-Id'] = options.clientRequestId
-  }
-
-  return headers
-}
-
-async function getErrorMessage(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: string }
-    return payload.detail ?? 'Request failed'
-  } catch {
-    return 'Request failed'
-  }
-}
+export default api

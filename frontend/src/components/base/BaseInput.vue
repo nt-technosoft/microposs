@@ -1,43 +1,103 @@
 <script setup lang="ts">
-defineProps<{
-  label: string
-  modelValue: string
+import { computed } from 'vue'
+
+interface Props {
+  modelValue: string | number
+  label?: string
   placeholder?: string
+  type?: string
+  error?: string
+  disabled?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  label: '',
+  placeholder: '',
+  type: 'text',
+  error: '',
+  disabled: false,
+})
+
+const emit = defineEmits<{
+  'update:modelValue': [value: string | number]
 }>()
 
-defineEmits<{
-  'update:modelValue': [value: string]
-}>()
+const hasError = computed(() => !!props.error)
+
+function onInput(event: Event) {
+  const target = event.target as HTMLInputElement
+  emit('update:modelValue', target.value)
+}
 </script>
 
 <template>
-  <label class="field">
-    <span class="field__label">{{ label }}</span>
+  <div class="input-group" :class="{ 'has-error': hasError }">
+    <label v-if="label" class="input-label">{{ label }}</label>
     <input
-      class="field__input"
+      class="input-field"
+      :type="type"
+      :inputmode="type === 'number' ? 'decimal' : undefined"
       :value="modelValue"
       :placeholder="placeholder"
-      @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+      :disabled="disabled"
+      @input="onInput"
     />
-  </label>
+    <span v-if="hasError" class="input-error" role="alert">{{ error }}</span>
+  </div>
 </template>
 
 <style scoped>
-.field {
-  display: grid;
-  gap: 0.5rem;
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
-.field__label {
+.input-label {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   color: var(--color-text-secondary);
-  font-size: 0.875rem;
 }
 
-.field__input {
-  width: 100%;
-  border: 1px solid var(--color-border);
+.input-field {
+  height: 48px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: 0.875rem 1rem;
+  background: var(--color-bg-elevated);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+  outline: none;
+}
+
+.input-field::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.input-field:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 2px var(--color-brand-100);
+}
+
+.input-field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--color-bg-sunken);
+}
+
+.has-error .input-field {
+  border-color: var(--color-error);
+}
+
+.has-error .input-field:focus {
+  box-shadow: 0 0 0 2px var(--color-error-bg);
+}
+
+.input-error {
+  font-size: var(--text-xs);
+  color: var(--color-error);
 }
 </style>

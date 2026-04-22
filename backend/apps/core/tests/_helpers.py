@@ -6,14 +6,18 @@ from django.utils import timezone
 
 from apps.catalog.models import Category
 from apps.catalog.services import create_product_with_variants
-from apps.core.models import Business, Partner
+from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import CashAccount, Account
 from apps.inventory.models import Warehouse
 from apps.partnerships.models import Procurement
 from apps.partnerships.services import (
-    open_procurement, add_contribution, add_withdrawal, receive_procurement,
+    add_contribution,
+    open_procurement,
+    pay_procurement_expenses,
+    pay_procurement_items,
+    receive_procurement,
 )
 from apps.sales.services import open_pos_session
 from apps.suppliers.models import Supplier
@@ -51,6 +55,13 @@ def build_tenant():
     investor = Partner.objects.create(
         tenant=business, role=Partner.Role.INVESTOR,
         display_name='Inv', user=investor_user, is_active=True,
+    )
+    BusinessInvestorRelation.objects.create(
+        tenant=business,
+        partner=investor,
+        status=BusinessInvestorRelation.Status.ACTIVE,
+        source=BusinessInvestorRelation.Source.MANUAL,
+        created_by=owner,
     )
 
     store = Warehouse.objects.create(
@@ -134,13 +145,13 @@ def seed_received_procurement(ctx, *, qty=50, unit_usd=10, customs_usd=50):
         tenant_id=ctx['business'].id, procurement_id=proc.id,
         partner_id=ctx['operator'].id, amount=op_amt, currency=usd, fx_rate=fx,
     )
-    add_withdrawal(
-        tenant_id=ctx['business'].id, procurement_id=proc.id,
-        amount=Decimal(qty) * Decimal(unit_usd), currency=usd, fx_rate=fx,
+    pay_procurement_items(
+        tenant_id=ctx['business'].id,
+        procurement_id=proc.id,
     )
-    add_withdrawal(
-        tenant_id=ctx['business'].id, procurement_id=proc.id,
-        amount=Decimal(customs_usd), currency=usd, fx_rate=fx,
+    pay_procurement_expenses(
+        tenant_id=ctx['business'].id,
+        procurement_id=proc.id,
     )
     proc = receive_procurement(
         tenant_id=ctx['business'].id, procurement_id=proc.id,

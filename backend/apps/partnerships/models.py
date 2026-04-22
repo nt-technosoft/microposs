@@ -71,6 +71,10 @@ class Procurement(ImmutableMixin, TenantModel):
 class ProcurementItem(TenantModel):
     """A line item on a procurement — product variant + planned quantity."""
 
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        PAID = 'PAID', 'Оплачено'
+
     procurement = models.ForeignKey(
         Procurement,
         on_delete=models.CASCADE,
@@ -85,11 +89,17 @@ class ProcurementItem(TenantModel):
     unit_purchase_price = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
 
     class Meta:
         db_table = 'partnerships_procurement_item'
         indexes = [
             models.Index(fields=['procurement']),
+            models.Index(fields=['procurement', 'status']),
         ]
 
 
@@ -107,6 +117,10 @@ class ProcurementExpense(TenantModel):
         BY_QUANTITY = 'BY_QUANTITY', 'Пропорционально количеству'
         BY_WEIGHT = 'BY_WEIGHT', 'Пропорционально весу'
 
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        PAID = 'PAID', 'Оплачено'
+
     procurement = models.ForeignKey(
         Procurement,
         on_delete=models.CASCADE,
@@ -122,11 +136,17 @@ class ProcurementExpense(TenantModel):
         default=AllocationMethod.BY_VALUE,
     )
     notes = models.CharField(max_length=255, blank=True, default='')
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
 
     class Meta:
         db_table = 'partnerships_procurement_expense'
         indexes = [
             models.Index(fields=['procurement']),
+            models.Index(fields=['procurement', 'status']),
         ]
 
 
@@ -148,8 +168,8 @@ class InvestmentContract(TenantModel):
         related_name='contract',
     )
     mudaraba_ratio = models.DecimalField(
-        max_digits=6,
-        decimal_places=4,
+        max_digits=8,
+        decimal_places=6,
         help_text='m in [0..1]; investor profit = capital * m',
     )
     loss_rule = models.CharField(
@@ -284,6 +304,30 @@ class BalanceWithdrawal(TenantModel):
         ]
 
 
+class ProcurementBalanceExchange(TenantModel):
+    """Explicit FX conversion inside a procurement balance."""
+
+    balance = models.ForeignKey(
+        ProcurementBalance,
+        on_delete=models.CASCADE,
+        related_name='exchanges',
+    )
+    from_currency = models.CharField(max_length=3, default='UZS')
+    from_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    to_currency = models.CharField(max_length=3, default='USD')
+    to_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    date = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_balance_exchange'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['balance']),
+        ]
+
+
 # ─── Partner Ledger ────────────────────────────────────────────────────────────
 
 class ProcurementPartnerLedger(TenantModel):
@@ -342,6 +386,18 @@ class PartnerLedgerEntry(TenantModel):
     date = models.DateTimeField()
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        default=Decimal('1'),
+        help_text='Snapshot rate to UZS for this ledger entry.',
+    )
+    functional_amount_uzs = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text='Entry amount converted to tenant functional currency (UZS).',
+    )
     entry_type = models.CharField(max_length=20, choices=EntryType.choices)
     source_ref = models.CharField(
         max_length=100,
@@ -356,6 +412,17 @@ class PartnerLedgerEntry(TenantModel):
             models.Index(fields=['ledger', 'entry_type']),
             models.Index(fields=['tenant', 'date']),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.amount and not self.functional_amount_uzs:
+            if str(self.currency).upper() == 'UZS':
+                self.fx_rate = Decimal('1')
+                self.functional_amount_uzs = Decimal(str(self.amount)).quantize(Decimal('0.01'))
+            else:
+                self.functional_amount_uzs = (
+                    Decimal(str(self.amount)) * Decimal(str(self.fx_rate or Decimal('1')))
+                ).quantize(Decimal('0.01'))
+        super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         raise ValueError('PartnerLedgerEntry is append-only. Physical delete forbidden.')

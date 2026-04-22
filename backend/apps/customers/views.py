@@ -74,6 +74,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
             fx_rate=data.get('fx_rate', '1'),
             payment_method=data['payment_method'],
             notes=data.get('notes', ''),
+            account_id=data.get('account_id'),
         )
         return Response(CustomerPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
 

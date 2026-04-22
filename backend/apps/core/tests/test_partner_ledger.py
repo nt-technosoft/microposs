@@ -61,10 +61,10 @@ class PartnerLedgerAggregateTests(TestCase):
         investor_profit = Decimal(str(line_snapshot[str(ctx['investor'].id)]))
         operator_profit = Decimal(str(line_snapshot[str(ctx['operator'].id)]))
 
-        self.assertEqual(investor['capital_in'], investor_capital_in)
-        self.assertEqual(operator['capital_in'], operator_capital_in)
-        self.assertEqual(investor['capital_out'], Decimal('0.00'))
-        self.assertEqual(operator['capital_out'], Decimal('0.00'))
+        self.assertEqual(investor['by_currency']['USD']['capital_in'], investor_capital_in)
+        self.assertEqual(operator['by_currency']['USD']['capital_in'], operator_capital_in)
+        self.assertEqual(investor['by_currency']['USD']['capital_out'], Decimal('0.00'))
+        self.assertEqual(operator['by_currency']['USD']['capital_out'], Decimal('0.00'))
 
         self.assertEqual(investor['profit_accrued'], investor_profit)
         self.assertEqual(operator['profit_accrued'], operator_profit)
@@ -120,6 +120,6 @@ class PartnerLedgerAggregateTests(TestCase):
             (sale.total_amount - sale.total_cogs).quantize(Decimal('0.01')),
         )
         self.assertEqual(
-            investor['capital_in'] + operator['capital_in'],
+            investor['by_currency']['USD']['capital_in'] + operator['by_currency']['USD']['capital_in'],
             procurement.contract.planned_budget,
         )

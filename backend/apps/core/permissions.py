@@ -15,6 +15,16 @@ KNOWN_ROLES = {
 }
 
 
+def _group_names(user) -> set[str]:
+    if not getattr(user, 'is_authenticated', False):
+        return set()
+    return {
+        name.strip().lower()
+        for name in user.groups.values_list('name', flat=True)
+        if isinstance(name, str)
+    }
+
+
 def _coerce_tenant_id(raw_value) -> int | None:
     if raw_value in (None, ''):
         return None
@@ -35,12 +45,22 @@ def _user_has_tenant_access(user, tenant_id: int | None) -> bool:
     if hasattr(user, 'owned_businesses') and user.owned_businesses.filter(id=tenant_id, is_active=True).exists():
         return True
 
-    from apps.core.models import Partner
+    from apps.core.models import BusinessInvestorRelation, Partner
 
-    return Partner.objects.filter(
+    if Partner.objects.filter(
         user_id=user.id,
         tenant_id=tenant_id,
         is_active=True,
+        role=Partner.Role.OPERATOR,
+    ).exists():
+        return True
+
+    return BusinessInvestorRelation.objects.filter(
+        tenant_id=tenant_id,
+        status=BusinessInvestorRelation.Status.ACTIVE,
+        partner__user_id=user.id,
+        partner__is_active=True,
+        partner__role=Partner.Role.INVESTOR,
     ).exists()
 
 
@@ -68,15 +88,28 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
         tenant_id = _coerce_tenant_id(owned_business_id)
 
     if tenant_id is None:
-        from apps.core.models import Partner
+        from apps.core.models import BusinessInvestorRelation, Partner
 
         partner_tenant_id = (
-            Partner.objects
-            .filter(user_id=user.id, is_active=True)
+            BusinessInvestorRelation.objects
+            .filter(
+                partner__user_id=user.id,
+                partner__is_active=True,
+                partner__role=Partner.Role.INVESTOR,
+                status=BusinessInvestorRelation.Status.ACTIVE,
+            )
             .order_by('id')
             .values_list('tenant_id', flat=True)
             .first()
         )
+        if partner_tenant_id is None:
+            partner_tenant_id = (
+                Partner.objects
+                .filter(user_id=user.id, is_active=True, role=Partner.Role.OPERATOR)
+                .order_by('id')
+                .values_list('tenant_id', flat=True)
+                .first()
+            )
         tenant_id = _coerce_tenant_id(partner_tenant_id)
 
     if tenant_id is None and (user.is_superuser or user.is_staff):
@@ -90,6 +123,16 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
             .first()
         )
         tenant_id = _coerce_tenant_id(system_business_id)
+
+    if tenant_id is None:
+        group_names = _group_names(user)
+        if (
+            ROLE_INVESTOR in group_names
+            and ROLE_OWNER not in group_names
+            and ROLE_CASHIER not in group_names
+            and ROLE_WAREHOUSE not in group_names
+        ):
+            return None
 
     if tenant_id is None:
         from apps.core.models import Business
@@ -137,31 +180,40 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
         if normalized in KNOWN_ROLES:
             return normalized
 
-    from apps.core.models import Partner
+    from apps.core.models import BusinessInvestorRelation, Partner
 
     partner_query = Partner.objects.filter(user_id=user.id, is_active=True)
     if tenant_id is not None:
         partner_query = partner_query.filter(tenant_id=tenant_id)
 
-    partner_role = (
-        partner_query
-        .order_by('id')
-        .values_list('role', flat=True)
-        .first()
-    )
-    if partner_role == Partner.Role.INVESTOR:
-        return ROLE_INVESTOR
-    if partner_role == Partner.Role.OPERATOR:
+    if partner_query.filter(role=Partner.Role.OPERATOR).exists():
         return ROLE_OWNER
 
-    group_names = {
-        name.strip().lower()
-        for name in user.groups.values_list('name', flat=True)
-        if isinstance(name, str)
-    }
-    for role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE, ROLE_INVESTOR):
+    investor_partner_ids = partner_query.filter(
+        role=Partner.Role.INVESTOR,
+    ).values('id')
+    investor_relation_query = BusinessInvestorRelation.objects.filter(
+        partner_id__in=investor_partner_ids,
+        status=BusinessInvestorRelation.Status.ACTIVE,
+    )
+    if tenant_id is not None:
+        investor_relation_query = investor_relation_query.filter(tenant_id=tenant_id)
+    if investor_relation_query.exists():
+        return ROLE_INVESTOR
+
+    group_names = _group_names(user)
+    for role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE):
         if role in group_names:
             return role
+    if ROLE_INVESTOR in group_names:
+        if tenant_id is None or BusinessInvestorRelation.objects.filter(
+            tenant_id=tenant_id,
+            status=BusinessInvestorRelation.Status.ACTIVE,
+            partner__user_id=user.id,
+            partner__is_active=True,
+            partner__role=Partner.Role.INVESTOR,
+        ).exists():
+            return ROLE_INVESTOR
 
     if user.is_superuser or user.is_staff:
         return ROLE_OWNER

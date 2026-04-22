@@ -129,6 +129,11 @@ def record_customer_payment(
                 tenant_id=tenant_id,
             ).first()
             if account is not None:
+                if account.currency != currency:
+                    raise ValueError(
+                        f'Payment currency {currency} does not match cash account '
+                        f'{account.name} currency {account.currency}.'
+                    )
                 cash_entry = create_cash_entry(
                     tenant_id=tenant_id,
                     account=account,
@@ -158,15 +163,6 @@ def record_customer_payment(
         receivable.balances = balances
         receivable.save(update_fields=['balances', 'updated_at'])
 
-        from apps.finance.services import record_debt_payment_journal
-        record_debt_payment_journal(
-            tenant_id=tenant_id,
-            payment_id=payment.pk,
-            amount=amount,
-            payment_type=payment_method,
-            date=payment.date,
-        )
-
         if cash_entry is not None and account is not None and account.linked_account_id:
             record_journal_from_cash_entry(
                 tenant_id=tenant_id,
@@ -175,6 +171,15 @@ def record_customer_payment(
                 operation_id=payment.pk,
                 counterpart_account_code='1200',
                 description=f'Customer payment #{payment.pk}',
+                date=payment.date,
+            )
+        else:
+            from apps.finance.services import record_debt_payment_journal
+            record_debt_payment_journal(
+                tenant_id=tenant_id,
+                payment_id=payment.pk,
+                amount=amount,
+                payment_type=payment_method,
                 date=payment.date,
             )
 

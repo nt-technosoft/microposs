@@ -4,6 +4,7 @@ Investors API views.
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -23,11 +24,17 @@ from .services import close_investor_contract, update_investor_summary
 
 
 def _get_request_investor_partner(request):
-    return Partner.objects.get(
-        tenant_id=request.tenant_id,
-        user_id=request.user.id,
-        role=Partner.Role.INVESTOR,
-    )
+    if request.tenant_id is None:
+        raise PermissionDenied('Investor account is not linked to a business yet.')
+
+    try:
+        return Partner.objects.get(
+            tenant_id=request.tenant_id,
+            user_id=request.user.id,
+            role=Partner.Role.INVESTOR,
+        )
+    except Partner.DoesNotExist as exc:
+        raise PermissionDenied('Investor account is not linked to this business.') from exc
 
 
 def _serialize_investor_ledger(ledger):
@@ -40,6 +47,8 @@ def _serialize_investor_ledger(ledger):
                 'date': entry.date,
                 'amount': entry.amount,
                 'currency': entry.currency,
+                'fx_rate': entry.fx_rate,
+                'functional_amount_uzs': entry.functional_amount_uzs,
                 'entry_type': entry.entry_type,
                 'source_ref': entry.source_ref,
             }
@@ -91,7 +100,14 @@ class InvestorProcurementView(APIView):
             'received_at': ledger.procurement.received_at,
             'supplier_name': getattr(ledger.procurement.supplier, 'name', None),
             'notes': ledger.procurement.notes,
-            'investor_aggregate': {'partner_id': partner.id, **get_partner_aggregate(partner.id, request.tenant_id)},
+            'investor_aggregate': {
+                'partner_id': partner.id,
+                **get_partner_aggregate(
+                    partner.id,
+                    request.tenant_id,
+                    procurement_id=procurement_id,
+                ),
+            },
             'investor_ledger': _serialize_investor_ledger(ledger),
         }
         return Response(InvestorProcurementDetailSerializer(payload).data)

@@ -1,28 +1,65 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterView } from 'vue-router'
+import { useRoute } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { useBreakpoint } from '@/composables/useBreakpoint'
+import AppBottomNav from '@/components/layout/AppBottomNav.vue'
+import AppFloatingCart from '@/components/layout/AppFloatingCart.vue'
+import AppToastContainer from '@/components/feedback/AppToastContainer.vue'
 
-import AppToast from '@/components/feedback/AppToast.vue'
-import AppLoadingOverlay from '@/components/feedback/AppLoadingOverlay.vue'
-import { useUiStore } from '@/stores/ui'
+const route = useRoute()
+const auth = useAuthStore()
+const { isDesktop } = useBreakpoint()
 
-const uiStore = useUiStore()
-const isBusy = computed(() => uiStore.isBusy)
-const toastMessage = computed(() => uiStore.toastMessage)
+const showNav = computed(() => {
+  return auth.isAuthenticated && route.meta.layout !== 'blank' && route.meta.layout !== 'investor'
+})
+
+const showCart = computed(() => {
+  if (!auth.isAuthenticated || route.meta.layout === 'investor' || route.meta.layout === 'blank') {
+    return false
+  }
+
+  if (
+    route.name === 'cart'
+    || route.name === 'checkout'
+    || route.path.startsWith('/sales/cart')
+    || route.path.startsWith('/sales/checkout')
+  ) {
+    return false
+  }
+
+  return true
+})
 </script>
 
 <template>
-  <div class="app-shell">
-    <RouterView />
-    <AppLoadingOverlay v-if="isBusy" />
-    <AppToast v-if="toastMessage" :message="toastMessage" />
+  <div class="app-root">
+    <main class="app-main" :class="{ 'has-bottom-nav': showNav && !isDesktop }">
+      <RouterView />
+    </main>
+
+    <AppFloatingCart v-if="showCart" />
+    <AppBottomNav v-if="showNav && !isDesktop" />
+    <AppToastContainer />
   </div>
 </template>
 
 <style scoped>
-.app-shell {
-  min-height: 100vh;
-  background: var(--color-background);
-  color: var(--color-text-primary);
+.app-root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-content-width);
+  margin: 0 auto;
+}
+
+.app-main.has-bottom-nav {
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
 }
 </style>

@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from .models import (
     BalanceContribution,
+    ProcurementBalanceExchange,
     BalanceWithdrawal,
     ContractPartner,
     DividendPayment,
@@ -15,6 +16,7 @@ from .models import (
     ProcurementItem,
     ProcurementPartnerLedger,
 )
+from .services import build_procurement_cost_preview, build_receive_plan
 
 
 class ProcurementItemSerializer(serializers.ModelSerializer):
@@ -24,7 +26,7 @@ class ProcurementItemSerializer(serializers.ModelSerializer):
         model = ProcurementItem
         fields = [
             'id', 'product_variant', 'product_variant_name', 'quantity',
-            'unit_purchase_price', 'currency', 'fx_rate',
+            'unit_purchase_price', 'currency', 'fx_rate', 'status',
         ]
         read_only_fields = ['id']
 
@@ -34,7 +36,7 @@ class ProcurementExpenseSerializer(serializers.ModelSerializer):
         model = ProcurementExpense
         fields = [
             'id', 'expense_type', 'amount', 'currency', 'fx_rate',
-            'allocation_method', 'notes',
+            'allocation_method', 'notes', 'status',
         ]
         read_only_fields = ['id']
 
@@ -64,21 +66,38 @@ class InvestmentContractSerializer(serializers.ModelSerializer):
 
 
 class ProcurementBalanceSerializer(serializers.ModelSerializer):
+    exchanges = serializers.SerializerMethodField()
     is_zero = serializers.SerializerMethodField()
 
     class Meta:
         model = ProcurementBalance
-        fields = ['balances', 'is_zero']
+        fields = ['balances', 'is_zero', 'exchanges']
 
     def get_is_zero(self, obj):
         balances = obj.balances or {}
         return all(Decimal(str(value)) == Decimal('0') for value in balances.values())
 
+    def get_exchanges(self, obj):
+        return ProcurementBalanceExchangeSerializer(obj.exchanges.all(), many=True).data
+
+
+class ProcurementBalanceExchangeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProcurementBalanceExchange
+        fields = [
+            'id', 'from_currency', 'from_amount', 'to_currency', 'to_amount',
+            'rate', 'date', 'notes',
+        ]
+        read_only_fields = ['id', 'date']
+
 
 class PartnerLedgerEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = PartnerLedgerEntry
-        fields = ['id', 'date', 'amount', 'currency', 'entry_type', 'source_ref']
+        fields = [
+            'id', 'date', 'amount', 'currency', 'fx_rate',
+            'functional_amount_uzs', 'entry_type', 'source_ref',
+        ]
         read_only_fields = ['id']
 
 
@@ -96,24 +115,56 @@ class ProcurementListSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     items_count = serializers.SerializerMethodField()
     is_receive_ready = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
+    receive_status = serializers.SerializerMethodField()
+    receive_message = serializers.SerializerMethodField()
 
     class Meta:
         model = Procurement
         fields = [
             'id', 'procurement_type', 'status', 'opened_at', 'received_at',
-            'supplier', 'supplier_name', 'items_count', 'is_receive_ready', 'notes',
+            'supplier', 'supplier_name', 'items_count', 'is_receive_ready',
+            'total_amount', 'notes', 'receive_status', 'receive_message',
         ]
         read_only_fields = ['id']
 
     def get_items_count(self, obj):
         return obj.items.count()
 
+    def _receive_plan(self, obj):
+        cache = self.context.setdefault('_receive_plan_cache', {})
+        if obj.pk not in cache:
+            cache[obj.pk] = build_receive_plan(obj)
+        return cache[obj.pk]
+
+    def get_total_amount(self, obj):
+        item_total = sum(
+            (
+                Decimal(str(item.quantity))
+                * Decimal(str(item.unit_purchase_price))
+                * Decimal(str(item.fx_rate))
+                for item in obj.items.all()
+            ),
+            Decimal('0'),
+        )
+        expense_total = sum(
+            (
+                Decimal(str(expense.amount))
+                * Decimal(str(expense.fx_rate))
+                for expense in obj.expenses.all()
+            ),
+            Decimal('0'),
+        )
+        return str((item_total + expense_total).quantize(Decimal('0.01')))
+
     def get_is_receive_ready(self, obj):
-        balance = getattr(obj, 'balance', None)
-        if balance is None:
-            return False
-        balances = balance.balances or {}
-        return all(Decimal(str(value)) == Decimal('0') for value in balances.values())
+        return self._receive_plan(obj)['status'] in ('READY', 'AUTO_SURPLUS')
+
+    def get_receive_status(self, obj):
+        return self._receive_plan(obj)['status']
+
+    def get_receive_message(self, obj):
+        return self._receive_plan(obj)['message']
 
 
 class ProcurementDetailSerializer(serializers.ModelSerializer):
@@ -122,15 +173,23 @@ class ProcurementDetailSerializer(serializers.ModelSerializer):
     expenses = ProcurementExpenseSerializer(many=True, read_only=True)
     contract = InvestmentContractSerializer(read_only=True)
     balance = ProcurementBalanceSerializer(read_only=True)
+    receive_plan = serializers.SerializerMethodField()
+    cost_preview = serializers.SerializerMethodField()
 
     class Meta:
         model = Procurement
         fields = [
             'id', 'procurement_type', 'status', 'opened_at', 'received_at', 'closed_at',
             'supplier', 'supplier_name', 'notes', 'client_request_id',
-            'items', 'expenses', 'contract', 'balance',
+            'items', 'expenses', 'contract', 'balance', 'receive_plan', 'cost_preview',
         ]
         read_only_fields = ['id']
+
+    def get_receive_plan(self, obj):
+        return build_receive_plan(obj)
+
+    def get_cost_preview(self, obj):
+        return build_procurement_cost_preview(obj)
 
 
 class ContractPartnerInputSerializer(serializers.Serializer):
@@ -141,7 +200,7 @@ class ContractPartnerInputSerializer(serializers.Serializer):
 
 
 class InvestmentContractInputSerializer(serializers.Serializer):
-    mudaraba_ratio = serializers.DecimalField(max_digits=6, decimal_places=6)
+    mudaraba_ratio = serializers.DecimalField(max_digits=7, decimal_places=6)
     planned_budget = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     partners = ContractPartnerInputSerializer(many=True)
@@ -208,8 +267,29 @@ class BalanceWithdrawalCreateSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 
+class BalanceExchangeCreateSerializer(serializers.Serializer):
+    from_currency = serializers.CharField(max_length=3)
+    from_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    to_currency = serializers.CharField(max_length=3)
+    rate = serializers.DecimalField(max_digits=14, decimal_places=6)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
 class ReceiveProcurementSerializer(serializers.Serializer):
     destination_warehouse_id = serializers.IntegerField()
+
+
+class PayProcurementItemsSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class PayProcurementExpensesSerializer(serializers.Serializer):
+    expense_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+    )
+    reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 
 class DividendPaymentSerializer(serializers.ModelSerializer):

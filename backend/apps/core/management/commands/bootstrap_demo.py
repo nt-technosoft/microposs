@@ -8,7 +8,7 @@ from django.db import transaction
 
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
-from apps.core.models import Business, Partner
+from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import CashAccount
@@ -361,6 +361,15 @@ class Command(BaseCommand):
                 role=Partner.Role.INVESTOR,
                 display_name='Устоз (инвестор)',
                 defaults={'user': investor_user, 'is_active': True},
+            )
+            BusinessInvestorRelation.objects.get_or_create(
+                tenant=business,
+                partner=investor,
+                defaults={
+                    'status': BusinessInvestorRelation.Status.ACTIVE,
+                    'source': BusinessInvestorRelation.Source.MANUAL,
+                    'created_by': owner_user,
+                },
             )
 
             # ─── Cash accounts ────────────────────────────────────────────────

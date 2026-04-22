@@ -354,6 +354,11 @@ def create_sale(
             ).first()
             if account is None:
                 continue
+            if account.currency != currency:
+                raise ValueError(
+                    f'Payment currency {currency} does not match cash account '
+                    f'{account.name} currency {account.currency}.'
+                )
 
             cash_entry = create_cash_entry(
                 tenant_id=tenant_id,

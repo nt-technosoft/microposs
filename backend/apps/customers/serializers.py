@@ -75,4 +75,5 @@ class CustomerPaymentCreateSerializer(serializers.Serializer):
         max_digits=14, decimal_places=6, required=False, default='1',
     )
     payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
+    account_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
