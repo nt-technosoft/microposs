@@ -5,6 +5,8 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-}
     restart: unless-stopped
     depends_on:
       - backend

@@ -46,6 +46,10 @@ router.beforeEach(async (to) => {
     try {
       await auth.ensureUserLoaded()
     } catch {
+      if (to.name === 'login') {
+        auth.logout()
+        return true
+      }
       return { name: 'login', query: { redirect: to.fullPath } }
     }
   }
