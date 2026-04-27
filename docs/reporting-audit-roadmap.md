@@ -1,7 +1,18 @@
 # MicroPOS — Reporting and Financial Audit Roadmap
 
-**Snapshot:** 2026-04-23  
+**Snapshot:** 2026-04-27  
 **Goal:** make partnership trading transparent, auditable, and explainable for owner, business operator, and investor.
+
+## 0. Progress Snapshot
+
+- **Backend reporting/audit foundation:** `~90%`
+- **Frontend reporting/transparency UI:** `~75%`
+- **Docs/status sync:** `~50%`
+
+Current state:
+- core read-models and audit endpoints mostly exist;
+- owner and investor UI already expose the main profitability and transparency surfaces;
+- the biggest remaining gap is no longer raw calculation, but deeper drill-down, reconciliation-as-audit, and document sync.
 
 ## 1. Main Decision
 
@@ -50,12 +61,17 @@ Reason:
 - **Profitability read-models**
   - sales profitability
   - product profitability
+  - procurement profitability
   - projected remaining stock margin
+- **Audit / reconciliation**
+  - reconciliation summary endpoint
+  - sale explanation endpoint surface for owner audit flow
 
 ### Already exists in frontend
 
 - `/reports` — owner dashboard
 - `/reports/reconciliation`
+- `/reports/audit/sales/:id`
 - `/finance/exchange`
 - `/investor`
 - `/investor/procurements/:id`
@@ -63,11 +79,11 @@ Reason:
 
 ### Main gaps
 
-- no UI surface yet for the new profitability read-models
-- no full **per procurement** profitability screen
-- no explicit **sales detail profitability** surface in operational history
-- no complete **audit screen** that explains every number end-to-end
-- reconciliation still needs its own focused scenario audit
+- roadmap docs are behind the code and need active syncing
+- no dedicated **per procurement** audit/explanation screen yet; procurement profitability currently lives inside owner `/reports`
+- investor transparency still lacks deeper drill-down by product / lot / sale line / day
+- category/location profitability is not yet surfaced as a first-class report
+- reconciliation endpoint and UI exist and now have scenario coverage for `ok / warning / mismatch`; broader owner-facing trust review remains part of manual smoke
 
 ## 3. Reporting Philosophy
 
@@ -246,31 +262,31 @@ Below is the recommended minimum set.
 
 ## P0 — must exist
 
-1. **Sale profitability detail**
-2. **Product profitability**
-3. **Inventory valuation by location**
-4. **Investor capital state**
-5. **Investor pending payout / obligation**
-6. **Audit trail for one sale line**
-7. **Shift/day closing report**
+1. **Sale profitability detail** — `Implemented`
+2. **Product profitability** — `Implemented`
+3. **Inventory valuation by location** — `Partial`
+4. **Investor capital state** — `Implemented`
+5. **Investor pending payout / obligation** — `Implemented`
+6. **Audit trail for one sale line** — `Implemented`
+7. **Shift/day closing report** — `Partial`
 
 ## P1 — should exist next
 
-8. **Procurement profitability**
-9. **Category profitability**
-10. **Aging / stale stock report**
-11. **Receivables aging**
-12. **Payables aging**
-13. **Cash account movement report**
-14. **Owner contribution / withdrawal report**
+8. **Procurement profitability** — `Implemented` in dashboard, `Partial` as deep drill-down
+9. **Category profitability** — `Missing`
+10. **Aging / stale stock report** — `Missing`
+11. **Receivables aging** — `Partial`
+12. **Payables aging** — `Partial`
+13. **Cash account movement report** — `Partial`
+14. **Owner contribution / withdrawal report** — `Partial`
 
 ## P2 — advanced
 
-15. **Projected gross margin on remaining stock**
-16. **Margin waterfall**
-17. **FX impact report**
-18. **Partner settlement planner**
-19. **Exportable audit packs**
+15. **Projected gross margin on remaining stock** — `Implemented` at investor/product/procurement summary level
+16. **Margin waterfall** — `Missing`
+17. **FX impact report** — `Partial`
+18. **Partner settlement planner** — `Missing`
+19. **Exportable audit packs** — `Missing`
 
 ## 6. Required Slices / Filters
 
@@ -410,42 +426,52 @@ Before adding more report screens, run a structured audit of expected consequenc
 
 ## 10. Recommended Delivery Order
 
-## Stage 1 — Audit and trust foundation
+## Stage 0 — Doc sync
 
 Deliverables:
-- operation audit matrix
-- expected outcome checklist per operation
-- bug list from real execution
-- invariant sign-off gaps
+- sync roadmap/matrix/status docs with current code
+- mark which old gaps are already closed
+- leave only the real remaining tail in planning docs
 
-This should come first.
+## Stage 1 — Reconciliation trust audit
 
-## Stage 2 — P0 reporting read models
+Deliverables:
+- controlled scenario pack for reconciliation
+- expected vs actual examples for import/operations deltas
+- sign-off that reconciliation surfaces real business mismatches, not only raw endpoint health
 
-Backend:
-- sale profitability read model
-- inventory valuation read model
-- investor capital state read model
-- procurement profitability read model
+Status today:
+- healthy path covered
+- warning path covered
+- structural mismatch path covered
+
+Remaining:
+- keep reconciliation in owner smoke as reports expand
+
+## Stage 2 — Deep reporting drill-down
+
+Backend/API:
+- keep current profitability contracts stable
+- extend only where a drill-down truly needs more detail
 
 Frontend:
-- reports information architecture
-- owner report pages
-- investor transparency pages
+- procurement profitability detail
+- investor deeper transparency by product / lot / sale line
+- better owner audit navigation from reports to explanation screens
 
-## Stage 3 — Audit explainability
+## Stage 3 — Next analytical slices
 
-Add deep drill-down:
-- sale line -> lot -> procurement -> ledger -> journal
+- category profitability
+- location profitability
+- receivables/payables aging
+- cash movement views
 
-This is the most important transparency feature for disputes.
+## Stage 4 — Advanced analytics and exports
 
-## Stage 4 — Advanced analytics
-
-- projected margin
-- aging
-- scenario/export
-- richer filters
+- margin waterfall
+- FX impact expansion
+- partner settlement planner
+- exportable audit packs
 
 ## 11. Concrete Implementation Plan
 
@@ -463,6 +489,12 @@ Then execute flows and log:
 - severity
 
 ## Step B — Backend report contracts
+
+Status today:
+- sales/product/procurement profitability — done
+- investor capital state — done
+- sale explanation surface — done
+- reconciliation summary endpoint — done
 
 Add endpoints/read models for:
 
@@ -499,6 +531,17 @@ Add endpoints/read models for:
 
 ## Step C — Frontend report IA
 
+Status today:
+- owner `/reports` is already the main report surface
+- reconciliation screen exists
+- sale explanation screen exists
+- investor dashboard/procurement transparency exists
+
+Main remaining frontend work:
+- deeper procurement audit view
+- deeper investor drill-down
+- category/location analytics surfaces
+
 Restructure `/reports` into:
 
 - Overview
@@ -509,6 +552,12 @@ Restructure `/reports` into:
 - Audit
 
 ## Step D — Investor surfaces
+
+Status today:
+- summary — done
+- procurements — done
+- capital state / pending payout / projected metrics — done
+- deeper audit drill-down — still pending
 
 Expand investor cabinet with:
 

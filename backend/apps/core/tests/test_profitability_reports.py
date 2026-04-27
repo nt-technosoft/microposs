@@ -213,3 +213,44 @@ class ProfitabilityReportsTests(APITestCase):
             Decimal(row['projected_investor_profit']),
             projected_investor_profit,
         )
+
+    def test_procurement_profitability_detail_endpoint_exposes_item_level_breakdown(self):
+        self.auth_owner()
+
+        response = self.client.get(f'/api/v1/finance/procurement-profitability/{self.procurement.id}/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        payload = response.data
+        procurement_row = payload['procurement']
+        self.assertEqual(procurement_row['procurement_id'], self.procurement.id)
+        self.assertEqual(len(payload['items']), 1)
+
+        item_row = payload['items'][0]
+        remaining_quantity = sum(stock.quantity_remaining for stock in self.lot.stocks.all())
+        projected_distribution = calculate_profit_distribution(
+            lot=self.lot,
+            unit_price=Decimal(str(self.ctx['variant'].effective_price)),
+            quantity=remaining_quantity,
+            unit_landed_cost=Decimal(str(self.lot.landed_cost_per_unit)),
+        )
+        projected_investor_profit = Decimal(
+            str(projected_distribution[str(self.ctx['investor'].id)]),
+        )
+        gross_profit = (self.sale.total_amount - self.sale.total_cogs).quantize(Decimal('0.01'))
+        investor_profit = Decimal(
+            str(self.sale_line.profit_distribution_snapshot[str(self.ctx['investor'].id)]),
+        )
+
+        self.assertEqual(item_row['procurement_item_id'], self.procurement.items.get().id)
+        self.assertEqual(item_row['product_variant_id'], self.ctx['variant'].id)
+        self.assertEqual(item_row['purchased_quantity'], 50)
+        self.assertEqual(item_row['sold_quantity'], 5)
+        self.assertEqual(item_row['remaining_quantity'], remaining_quantity)
+        self.assertEqual(Decimal(item_row['revenue']), self.sale.total_amount)
+        self.assertEqual(Decimal(item_row['cogs']), self.sale.total_cogs)
+        self.assertEqual(Decimal(item_row['gross_profit']), gross_profit)
+        self.assertEqual(Decimal(item_row['investor_profit']), investor_profit)
+        self.assertEqual(
+            Decimal(item_row['projected_investor_profit']),
+            projected_investor_profit,
+        )

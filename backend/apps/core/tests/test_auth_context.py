@@ -11,10 +11,11 @@ class AuthContextTests(APITestCase):
     def setUpTestData(cls):
         call_command('reset_workflow_demo')
 
-    def test_unlinked_investor_keeps_investor_role_without_active_tenant(self):
+    def test_linked_investor_gets_investor_role_and_active_tenant(self):
         self.client.force_authenticate(user=User.objects.get(username='investor'))
         response = self.client.get('/api/v1/auth/me/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['role'], 'investor')
-        self.assertIsNone(response.data['active_tenant_id'])
+        self.assertIsNotNone(response.data['active_tenant_id'])
+        self.assertEqual(response.data['tenant_name'], 'MicroPOS Workflow')

@@ -16,6 +16,7 @@ import {
   Wallet,
   Scale,
   Truck,
+  Map,
 } from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
@@ -42,6 +43,13 @@ const isDark = computed(() => ui.theme === 'dark')
 
 const workspaceLinks = computed<QuickLink[]>(() => {
   const links: QuickLink[] = []
+
+  links.push({
+    name: 'Карта разделов',
+    description: 'Что где находится и какие экраны открываются из контекста',
+    routeName: 'settings-page-map',
+    icon: Map,
+  })
 
   if (auth.role === 'owner' || auth.role === 'cashier') {
     links.push({

@@ -143,6 +143,12 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/reports/procurements/:id',
+    name: 'reports-procurement-profitability',
+    component: () => import('@/modules/reports/views/ProcurementProfitabilityView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/reports/audit/sales/:id',
     name: 'reports-sale-explanation',
     component: () => import('@/modules/reports/views/SaleExplanationView.vue'),
@@ -178,6 +184,12 @@ const routes: RouteRecordRaw[] = [
     path: '/settings',
     name: 'settings',
     component: () => import('@/modules/more/views/SettingsView.vue'),
+    meta: { roles: ['owner', 'cashier', 'warehouse', 'investor'] },
+  },
+  {
+    path: '/settings/map',
+    name: 'settings-page-map',
+    component: () => import('@/modules/more/views/PageMapView.vue'),
     meta: { roles: ['owner', 'cashier', 'warehouse', 'investor'] },
   },
 

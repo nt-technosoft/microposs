@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, CheckCircle2, AlertCircle, PlusCircle, ArrowRightLeft, Plus, Trash2, RefreshCcw, ChevronDown } from 'lucide-vue-next'
+import { ArrowLeft, CheckCircle2, AlertCircle, PlusCircle, ArrowRightLeft, Plus, Trash2, RefreshCcw, ChevronDown, BarChart3 } from 'lucide-vue-next'
 import { PricingMode, ProcurementStatus, ProcurementType } from '@/types/enums'
 import { formatPrice, formatPriceCompact } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -331,6 +331,10 @@ function focusStage(stage: keyof typeof stageState.value): void {
   window.requestAnimationFrame(() => {
     document.getElementById(`stage-${stage}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
+}
+
+function openProcurementAudit(): void {
+  router.push({ name: 'reports-procurement-profitability', params: { id: route.params.id } })
 }
 
 function syncStageState(detail: ProcurementDetail, force = false): void {
@@ -1402,6 +1406,14 @@ onMounted(async () => {
             <button class="stage-pill" :class="canReceive ? 'stage-pill--done' : ''" type="button" @click="focusStage('receive')">4. Оприходование</button>
           </div>
 
+          <button v-if="auth.isOwner" class="audit-entry" type="button" @click="openProcurementAudit">
+            <span class="audit-entry-icon"><BarChart3 :size="16" :stroke-width="1.75" /></span>
+            <span class="audit-entry-copy">
+              <strong>Аудит закупки</strong>
+              <span>Прибыль, остаток, прогноз и распределение долей</span>
+            </span>
+          </button>
+
           <div class="summary-grid">
             <div v-for="item in headerSummaryItems" :key="item.label" class="summary-item">
               <span class="summary-label">{{ item.label }}</span>
@@ -2327,6 +2339,11 @@ onMounted(async () => {
 .stage-pill { display:inline-flex; align-items:center; min-height:28px; padding: 0 var(--space-3); border-radius: var(--radius-full); background: var(--color-bg-primary); color: var(--color-text-secondary); border:1px solid var(--color-border-default); font-size: var(--text-xs); font-weight: var(--font-semibold); }
 .stage-pill--done { background: var(--color-success-bg); color: var(--color-success); border-color: transparent; }
 .stage-pill--active { background: var(--color-brand-50); color: var(--color-brand-700); border-color: transparent; }
+.audit-entry { width:100%; display:flex; align-items:center; gap:var(--space-3); min-height:48px; margin-top:var(--space-3); padding:var(--space-2) var(--space-3); border:1px solid var(--color-border-subtle); border-radius:var(--radius-md); background:var(--color-bg-primary); color:var(--color-text-primary); text-align:left; }
+.audit-entry-icon { width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; border-radius:var(--radius-md); background:var(--color-brand-50); color:var(--color-brand-600); }
+.audit-entry-copy { min-width:0; display:grid; gap:2px; }
+.audit-entry-copy strong { font-size:var(--text-sm); font-weight:var(--font-semibold); }
+.audit-entry-copy span { font-size:var(--text-xs); color:var(--color-text-secondary); line-height:var(--leading-normal); }
 .stage-card { display:grid; gap: var(--space-2); }
 .stage-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap: var(--space-3); text-align:left; }
 .stage-summary { color: var(--color-text-secondary); font-size: var(--text-sm); }

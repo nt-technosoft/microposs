@@ -1,6 +1,6 @@
 # MicroPOS — Implementation Status
 
-**Snapshot date:** 2026-04-19  
+**Snapshot date:** 2026-04-27  
 **Branch:** `vacuum-rework`  
 **Hardening track:** Vacuum backend + clean-slate frontend restart
 
@@ -18,9 +18,11 @@
 | Analytics/outbox crashers | `Implemented` | Legacy analytics task paths retired/hardened; outbox consumer now safer against duplicate processing and silent drops |
 | Sale credit receivable accrual | `Implemented` | Credit sale now accrues receivable and is covered by regression test |
 | Sale cash/journal wiring | `Implemented` | Cash-linked sale paths now create cash entries and accounting side effects in current tested flows |
+| Reporting read-models | `Implemented` | Sales/product/procurement profitability, investor capital-state, and reconciliation summary endpoints are live |
+| Reporting / transparency UI | `Partial` | Owner reports, reconciliation view, sale explanation, and investor capital-state screens are live; deeper procurement/investor drill-down remains |
 | Tenant/role hardening | `Partial` | Tenant selection and tenant-first role resolution improved; broader multi-tenant regression expansion still pending |
 | Immutability/delete hardening | `Partial` | Core finalized-record protections improved; broader regression coverage still pending |
-| Legacy docs alignment | `In progress` | Role matrix/compliance/frontend architecture are being brought to current vacuum state |
+| Legacy docs alignment | `In progress` | Role matrix/compliance/frontend architecture are being brought to current vacuum state; reporting/audit docs still catching up to newer UI/API work |
 
 ## Gate Progress
 

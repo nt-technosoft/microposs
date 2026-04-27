@@ -8,10 +8,11 @@ from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
 from apps.catalog.models import DiscountReason
-from apps.core.models import Business, Partner
+from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import Account, CashAccount
 from apps.inventory.models import Warehouse
+from apps.investors.models import Investor
 
 
 class Command(BaseCommand):
@@ -44,7 +45,7 @@ class Command(BaseCommand):
         self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse)")
         self.stdout.write(
             f"  investor / {options['investor_password']} "
-            "(unlinked investor user)"
+            "(linked investor)"
         )
 
     def _wipe_business_data(self) -> None:
@@ -171,6 +172,28 @@ class Command(BaseCommand):
             role=Partner.Role.OPERATOR,
             display_name='Owner operator',
             user=users['owner'],
+            is_active=True,
+        )
+        investor_partner = Partner.objects.create(
+            tenant=business,
+            role=Partner.Role.INVESTOR,
+            display_name='Устоз',
+            user=users['investor'],
+            is_active=True,
+        )
+        BusinessInvestorRelation.objects.create(
+            tenant=business,
+            partner=investor_partner,
+            status=BusinessInvestorRelation.Status.ACTIVE,
+            source=BusinessInvestorRelation.Source.MANUAL,
+            created_by=users['owner'],
+            notes='Workflow audit baseline investor access',
+        )
+        Investor.objects.create(
+            tenant=business,
+            user=users['investor'],
+            name='Устоз',
+            email=users['investor'].email,
             is_active=True,
         )
 

@@ -219,6 +219,35 @@ class ProcurementProfitabilitySerializer(serializers.Serializer):
     projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
 
 
+class ProcurementProfitabilityItemSerializer(serializers.Serializer):
+    procurement_item_id = serializers.IntegerField()
+    product_variant_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    current_unit_price = serializers.DecimalField(max_digits=20, decimal_places=2)
+    purchased_quantity = serializers.IntegerField()
+    sold_quantity = serializers.IntegerField()
+    remaining_quantity = serializers.IntegerField()
+    unit_purchase_price = serializers.DecimalField(max_digits=20, decimal_places=2)
+    landed_cost_per_unit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    revenue = serializers.DecimalField(max_digits=20, decimal_places=2)
+    cogs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    margin_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    markup_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    remaining_landed_cost = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_revenue = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
+class ProcurementProfitabilityDetailSerializer(serializers.Serializer):
+    procurement = ProcurementProfitabilitySerializer()
+    items = ProcurementProfitabilityItemSerializer(many=True)
+
+
 class TrialBalanceSerializer(serializers.Serializer):
     account_id = serializers.IntegerField()
     code = serializers.CharField()

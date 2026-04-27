@@ -555,8 +555,8 @@ function openSaleExplanation(saleId: number): void {
   router.push({ name: 'reports-sale-explanation', params: { id: saleId } })
 }
 
-function openProcurementDetail(procurementId: number): void {
-  router.push({ name: 'procurement-detail', params: { id: procurementId } })
+function openProcurementAudit(procurementId: number): void {
+  router.push({ name: 'reports-procurement-profitability', params: { id: procurementId } })
 }
 </script>
 
@@ -1213,8 +1213,8 @@ function openProcurementDetail(procurementId: number): void {
                     <span class="detail-chip">Прогноз {{ formatPrice(procurement.projected_gross_profit) }}</span>
                     <span class="detail-chip">Инв. прогноз {{ formatPrice(procurement.projected_investor_profit) }}</span>
                     <span class="detail-chip">Бизн. прогноз {{ formatPrice(procurement.projected_business_profit) }}</span>
-                    <button type="button" class="detail-chip detail-chip--action" @click.stop="openProcurementDetail(procurement.procurement_id)">
-                      Открыть приход
+                    <button type="button" class="detail-chip detail-chip--action" @click.stop="openProcurementAudit(procurement.procurement_id)">
+                      Аудит закупки
                     </button>
                   </div>
                 </article>

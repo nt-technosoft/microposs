@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -19,6 +20,7 @@ from apps.analytics.tasks import aggregate_daily_pnl
 from apps.core.permissions import IsOwner
 from apps.customers.models import CustomerPayment
 from apps.inventory.models import Receipt
+from apps.partnerships.models import Procurement
 from apps.sales.models import Sale
 from apps.suppliers.models import SupplierPayment
 
@@ -40,7 +42,8 @@ from .serializers import (
     JournalEntryListSerializer, JournalEntryDetailSerializer,
     ExpenseSerializer, ExpenseCreateSerializer,
     DailySummarySerializer, CashFlowSummarySerializer,
-    SaleProfitabilitySerializer, ProductProfitabilitySerializer, ProcurementProfitabilitySerializer,
+    SaleProfitabilitySerializer, ProductProfitabilitySerializer,
+    ProcurementProfitabilitySerializer, ProcurementProfitabilityDetailSerializer,
     TrialBalanceSerializer,
     ExchangeRateSerializer,
     ExchangeRateManualCreateSerializer,
@@ -62,6 +65,7 @@ from .services import (
     get_sales_profitability_rows,
     get_product_profitability_rows,
     get_procurement_profitability_rows,
+    get_procurement_profitability_detail,
 )
 from .chart_of_accounts import setup_chart_of_accounts
 
@@ -530,6 +534,20 @@ class ProcurementProfitabilityView(APIView):
             date_to=date_to,
         )
         return Response(ProcurementProfitabilitySerializer(rows, many=True).data)
+
+
+class ProcurementProfitabilityDetailView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, procurement_id: int):
+        try:
+            payload = get_procurement_profitability_detail(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement_id,
+            )
+        except Procurement.DoesNotExist:
+            raise NotFound('Закупка не найдена')
+        return Response(ProcurementProfitabilityDetailSerializer(payload).data)
 
 
 class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):

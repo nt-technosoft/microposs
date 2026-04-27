@@ -1,7 +1,7 @@
 # MicroPOS — Financial Audit Matrix
 
-**Snapshot:** 2026-04-23  
-**Companion docs:** [reporting-audit-roadmap.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/reporting-audit-roadmap.md), [financial-audit-batch-1.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/financial-audit-batch-1.md), [financial-audit-batch-2.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/financial-audit-batch-2.md)
+**Snapshot:** 2026-04-27  
+**Companion docs:** [reporting-audit-roadmap.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/reporting-audit-roadmap.md), [financial-audit-batch-1.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/financial-audit-batch-1.md), [financial-audit-batch-2.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/financial-audit-batch-2.md), [financial-audit-batch-3.md](/Users/aziztohirov/Desktop/Projects/microposs/docs/financial-audit-batch-3.md)
 
 ## Purpose
 
@@ -68,8 +68,8 @@ Audit these first:
 | A20 | Investor dashboard aggregate | trust layer | invested, capital net, accrued profit, dividends paid, pending payout computed from partner ledger correctly | `test_partner_ledger.py`, `test_investor_bridge_api.py`, `test_audit_batch_two.py` | `Covered` |
 | A21 | Investor procurement detail | drill-down trust layer | procurement-level ledger and aggregate reflect only investor’s own participation and selected procurement | `test_investor_bridge_api.py`, `test_tenant_context.py`, `test_audit_batch_two.py` | `Covered` |
 | A22 | Owner reports dashboard | management visibility | daily summary, cash flow, stock summary, debt/payables, cash balances reconcile with transactional flows | `test_audit_batch_one.py`, existing finance endpoints | `Covered` |
-| A23 | Sales history / sale detail | operational explainability | sale card, detail, payment method, line items, profitability preview stay consistent with backend data | current UI recently hardened; needs manual regression | `Partial` |
-| A24 | Reconciliation endpoint | audit bridge | latest reconciliation exposes computed vs expected deltas and gap summary after import/operations | endpoint exists; no focused scenario audit yet | `Missing` |
+| A23 | Sales history / sale detail | operational explainability | sale card, detail, payment method, line items, profitability preview stay consistent with backend data | `SalesHistory.vue`, `SaleExplanationView.vue`, `test_profitability_reports.py`; broader manual regression still pending | `Partial` |
+| A24 | Reconciliation endpoint | audit bridge | latest reconciliation exposes computed vs expected deltas and gap summary after import/operations | `test_reconciliation_view.py`, `/reports/reconciliation`, `financial-audit-batch-3.md` | `Covered` |
 | A25 | Profitability read-models | owner analytics foundation | sale profitability, product profitability, remaining stock projection, investor/business split remain consistent with transactional engine | `test_profitability_reports.py` | `Covered` |
 
 ---
@@ -186,10 +186,10 @@ These are the first things still hidden enough to justify manual audit:
 
 1. **Session statistics after every sale type**
    - cash, card, credit, mixed
-2. **Sales detail profitability UI**
-   - currently operational, not analytical
-3. **Reconciliation endpoint scenario audit**
-   - still no focused controlled scenario over import/operations deltas
+2. **Procurement / investor drill-down trust audit**
+   - verify that summary profitability and investor transparency remain explainable at procurement level in real UI flows
+3. **Category/location reporting trust audit**
+   - verify that next analytics slices stay aligned with the same transactional engine
 
 ---
 
