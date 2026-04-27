@@ -430,6 +430,94 @@ def record_sale_journal(
     )
 
 
+def record_sale_settlement_journal(
+    *,
+    tenant_id: int,
+    sale_id: int,
+    amount: Decimal,
+    payment_method: str,
+    debit_account_code: str | None = None,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    """
+    Record only the revenue/settlement side of a sale.
+    Used for cash/card/transfer/credit splits so mixed sales can be journaled
+    without duplicating revenue or forcing everything into a single entry.
+    """
+    normalized_amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if normalized_amount <= 0:
+        raise ValueError('Sale settlement journal amount must be > 0')
+
+    method = str(payment_method or '').upper()
+    if debit_account_code:
+        debit_code = debit_account_code
+    elif method == 'CASH':
+        debit_code = '1000'
+    elif method in {'CARD', 'TRANSFER'}:
+        debit_code = '1010'
+    else:
+        debit_code = '1200'
+
+    journal_description = description or f'Sale #{sale_id} settlement'
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type='sale',
+        operation_id=sale_id,
+        lines=[
+            {
+                'account_code': debit_code,
+                'debit': normalized_amount,
+                'credit': Decimal('0'),
+                'description': journal_description,
+            },
+            {
+                'account_code': '4000',
+                'debit': Decimal('0'),
+                'credit': normalized_amount,
+                'description': journal_description,
+            },
+        ],
+        description=journal_description,
+        date=date,
+    )
+
+
+def record_sale_cogs_journal(
+    *,
+    tenant_id: int,
+    sale_id: int,
+    total_cogs: Decimal,
+    date=None,
+) -> JournalEntry | None:
+    """Record the cost/inventory side of a sale once per completed sale."""
+    normalized_cogs = _to_decimal(total_cogs).quantize(Decimal('0.01'))
+    if normalized_cogs <= 0:
+        return None
+
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type='sale',
+        operation_id=sale_id,
+        lines=[
+            {
+                'account_code': '5000',
+                'debit': normalized_cogs,
+                'credit': Decimal('0'),
+                'description': f'Sale #{sale_id} cost of goods',
+            },
+            {
+                'account_code': '1100',
+                'debit': Decimal('0'),
+                'credit': normalized_cogs,
+                'description': f'Sale #{sale_id} inventory reduction',
+            },
+        ],
+        description=f'Sale #{sale_id} COGS',
+        date=date,
+    )
+
+
 def record_receipt_journal(
     tenant_id: int,
     receipt_id: int,
@@ -1148,6 +1236,19 @@ def _percent(numerator: Decimal, denominator: Decimal) -> Decimal:
 def _investor_profit_from_distribution(line) -> Decimal:
     snapshot = line.profit_distribution_snapshot or {}
     contract_snapshot = line.lot.contract_snapshot or {}
+    return _investor_profit_from_snapshot(
+        snapshot=snapshot,
+        contract_snapshot=contract_snapshot,
+    )
+
+
+def _investor_profit_from_snapshot(
+    *,
+    snapshot: dict | None,
+    contract_snapshot: dict | None,
+) -> Decimal:
+    snapshot = snapshot or {}
+    contract_snapshot = contract_snapshot or {}
     partner_roles = {
         str(meta.get('partner_id')): meta.get('role')
         for meta in contract_snapshot.get('partners', []) or []
@@ -1340,4 +1441,175 @@ def get_product_profitability_rows(
         result.append(row)
 
     result.sort(key=lambda item: (-Decimal(str(item['gross_profit'])), item['product_name']))
+    return result
+
+
+def get_procurement_profitability_rows(
+    *,
+    tenant_id: int,
+    date_from=None,
+    date_to=None,
+) -> list[dict]:
+    from apps.inventory.models import LotStock
+    from apps.partnerships.models import Procurement
+    from apps.sales.models import SaleLine
+    from apps.sales.services import calculate_profit_distribution
+
+    sale_lines = (
+        SaleLine.objects
+        .filter(
+            tenant_id=tenant_id,
+            sale__status='completed',
+            lot__procurement_item__isnull=False,
+        )
+        .select_related(
+            'sale',
+            'lot__product_variant',
+            'lot__procurement_item__procurement__supplier',
+        )
+        .order_by('lot__procurement_item__procurement_id', 'id')
+    )
+    if date_from:
+        sale_lines = sale_lines.filter(sale__date__date__gte=date_from)
+    if date_to:
+        sale_lines = sale_lines.filter(sale__date__date__lte=date_to)
+    sale_lines = list(sale_lines)
+
+    remaining_stock = list(
+        LotStock.objects
+        .filter(
+            tenant_id=tenant_id,
+            quantity_remaining__gt=0,
+            lot__procurement_item__isnull=False,
+        )
+        .select_related(
+            'lot__product_variant',
+            'lot__procurement_item__procurement__supplier',
+        )
+        .order_by('lot__procurement_item__procurement_id', 'id')
+    )
+
+    procurement_ids = {
+        line.lot.procurement_item.procurement_id
+        for line in sale_lines
+        if line.lot.procurement_item_id
+    } | {
+        stock.lot.procurement_item.procurement_id
+        for stock in remaining_stock
+        if stock.lot.procurement_item_id
+    }
+
+    procurements = (
+        Procurement.objects
+        .filter(tenant_id=tenant_id, id__in=procurement_ids)
+        .select_related('supplier')
+        .prefetch_related('items')
+    )
+    procurement_map = {procurement.id: procurement for procurement in procurements}
+
+    rows: dict[int, dict] = {}
+
+    def ensure_row(procurement_id: int) -> dict | None:
+        procurement = procurement_map.get(procurement_id)
+        if procurement is None:
+            return None
+
+        row = rows.get(procurement_id)
+        if row is None:
+            row = {
+                'procurement_id': procurement.id,
+                'procurement_type': procurement.procurement_type,
+                'status': procurement.status,
+                'opened_at': procurement.opened_at,
+                'received_at': procurement.received_at,
+                'supplier_name': getattr(procurement.supplier, 'name', None),
+                'item_count': len(procurement.items.all()),
+                'quantity_sold': 0,
+                'remaining_quantity': 0,
+                'revenue': Decimal('0.00'),
+                'cogs': Decimal('0.00'),
+                'gross_profit': Decimal('0.00'),
+                'investor_profit': Decimal('0.00'),
+                'business_profit': Decimal('0.00'),
+                'margin_percent': Decimal('0.00'),
+                'markup_percent': Decimal('0.00'),
+                'remaining_landed_cost': Decimal('0.00'),
+                'projected_revenue': Decimal('0.00'),
+                'projected_gross_profit': Decimal('0.00'),
+                'projected_investor_profit': Decimal('0.00'),
+                'projected_business_profit': Decimal('0.00'),
+            }
+            rows[procurement_id] = row
+        return row
+
+    for line in sale_lines:
+        procurement_id = line.lot.procurement_item.procurement_id
+        row = ensure_row(procurement_id)
+        if row is None:
+            continue
+
+        revenue = _money(Decimal(str(line.unit_price)) * Decimal(str(line.quantity)))
+        cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(str(line.quantity)))
+        gross = _money(revenue - cogs)
+        investor_profit = _investor_profit_from_distribution(line)
+
+        row['quantity_sold'] += int(line.quantity)
+        row['revenue'] += revenue
+        row['cogs'] += cogs
+        row['gross_profit'] += gross
+        row['investor_profit'] += investor_profit
+
+    for stock in remaining_stock:
+        procurement_id = stock.lot.procurement_item.procurement_id
+        row = ensure_row(procurement_id)
+        if row is None:
+            continue
+
+        qty = int(stock.quantity_remaining)
+        current_price = _money(stock.lot.product_variant.effective_price or Decimal('0'))
+        remaining_cost = _money(Decimal(str(stock.lot.landed_cost_per_unit)) * Decimal(str(qty)))
+        projected_revenue = _money(current_price * Decimal(str(qty)))
+        projected_gross = _money(projected_revenue - remaining_cost)
+        distribution = calculate_profit_distribution(
+            lot=stock.lot,
+            unit_price=current_price,
+            quantity=qty,
+            unit_landed_cost=Decimal(str(stock.lot.landed_cost_per_unit)),
+        )
+        projected_investor_profit = _investor_profit_from_snapshot(
+            snapshot=distribution,
+            contract_snapshot=stock.lot.contract_snapshot,
+        )
+
+        row['remaining_quantity'] += qty
+        row['remaining_landed_cost'] += remaining_cost
+        row['projected_revenue'] += projected_revenue
+        row['projected_gross_profit'] += projected_gross
+        row['projected_investor_profit'] += projected_investor_profit
+
+    result: list[dict] = []
+    for row in rows.values():
+        row['revenue'] = _money(row['revenue'])
+        row['cogs'] = _money(row['cogs'])
+        row['gross_profit'] = _money(row['gross_profit'])
+        row['investor_profit'] = _money(row['investor_profit'])
+        row['business_profit'] = _money(row['gross_profit'] - row['investor_profit'])
+        row['margin_percent'] = _percent(row['gross_profit'], row['revenue'])
+        row['markup_percent'] = _percent(row['gross_profit'], row['cogs'])
+        row['remaining_landed_cost'] = _money(row['remaining_landed_cost'])
+        row['projected_revenue'] = _money(row['projected_revenue'])
+        row['projected_gross_profit'] = _money(row['projected_gross_profit'])
+        row['projected_investor_profit'] = _money(row['projected_investor_profit'])
+        row['projected_business_profit'] = _money(
+            row['projected_gross_profit'] - row['projected_investor_profit']
+        )
+        result.append(row)
+
+    result.sort(
+        key=lambda item: (
+            -Decimal(str(item['gross_profit'])),
+            -Decimal(str(item['projected_gross_profit'])),
+            item['procurement_id'],
+        )
+    )
     return result

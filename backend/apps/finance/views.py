@@ -40,7 +40,7 @@ from .serializers import (
     JournalEntryListSerializer, JournalEntryDetailSerializer,
     ExpenseSerializer, ExpenseCreateSerializer,
     DailySummarySerializer, CashFlowSummarySerializer,
-    SaleProfitabilitySerializer, ProductProfitabilitySerializer,
+    SaleProfitabilitySerializer, ProductProfitabilitySerializer, ProcurementProfitabilitySerializer,
     TrialBalanceSerializer,
     ExchangeRateSerializer,
     ExchangeRateManualCreateSerializer,
@@ -61,6 +61,7 @@ from .services import (
     record_owner_contribution,
     get_sales_profitability_rows,
     get_product_profitability_rows,
+    get_procurement_profitability_rows,
 )
 from .chart_of_accounts import setup_chart_of_accounts
 
@@ -515,6 +516,20 @@ class ProductProfitabilityView(APIView):
             warehouse_id=int(warehouse_id) if warehouse_id else None,
         )
         return Response(ProductProfitabilitySerializer(rows, many=True).data)
+
+
+class ProcurementProfitabilityView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
+        date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
+        rows = get_procurement_profitability_rows(
+            tenant_id=request.tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return Response(ProcurementProfitabilitySerializer(rows, many=True).data)
 
 
 class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):

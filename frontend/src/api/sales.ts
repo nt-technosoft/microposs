@@ -61,6 +61,134 @@ export interface SaleReturn {
   lines: ReturnLinePayload[]
 }
 
+export interface SaleExplanationPartnerSplit {
+  partner_id: number | null
+  partner_name: string
+  role: 'INVESTOR' | 'OPERATOR' | 'UNKNOWN'
+  capital_share: string | null
+  profit_share: string | null
+  profit_amount: string
+}
+
+export interface SaleExplanationLine {
+  sale_line_id: number
+  product_name: string
+  quantity: number
+  unit_price: string
+  revenue: string
+  unit_purchase_price: string
+  purchase_cost: string
+  unit_landed_cost: string
+  landed_cost: string
+  gross_profit: string
+  margin_percent: string
+  lot: {
+    id: number
+    received_at: string | null
+    quantity_initial: number
+    quantity_remaining: number
+    unit_purchase_price: string
+    landed_cost_per_unit: string
+  }
+  procurement: null | {
+    id: number
+    procurement_type: string
+    status: string
+    opened_at: string
+    received_at: string | null
+    supplier_name: string | null
+  }
+  partner_split: SaleExplanationPartnerSplit[]
+}
+
+export interface SaleExplanationCashEntry {
+  id: number
+  date: string
+  payment_id: number | null
+  payment_method: string | null
+  account_name: string
+  direction: string
+  amount: string
+}
+
+export interface SaleExplanationReceivableEntry {
+  id: number
+  date: string
+  entry_type: string
+  amount: string
+  currency: string
+  fx_rate: string
+  source_ref: string
+}
+
+export interface SaleExplanationJournalLine {
+  id: number
+  account_code: string
+  account_name: string
+  debit: string
+  credit: string
+  description: string
+}
+
+export interface SaleExplanationJournalEntry {
+  id: number
+  date: string
+  description: string
+  total_debit: string
+  total_credit: string
+  lines: SaleExplanationJournalLine[]
+}
+
+export interface SaleExplanationLedgerEntry {
+  id: number
+  date: string
+  entry_type: string
+  amount: string
+  currency: string
+  functional_amount_uzs: string
+  source_ref: string
+  partner_id: number
+  partner_name: string
+  partner_role: string
+  procurement_id: number
+}
+
+export interface SaleExplanation {
+  sale: {
+    id: number
+    date: string
+    created_at: string
+    status: string
+    location_name: string
+    customer_name: string | null
+    pos_session_id: number | null
+    payment_methods: string[]
+    paid_total: string
+    credit_total: string
+    revenue: string
+    landed_cost: string
+    gross_profit: string
+    investor_profit: string
+    business_profit: string
+    margin_percent: string
+    notes: string
+  }
+  payments: Array<{
+    id: number
+    date: string
+    method: string
+    amount: string
+    currency: string
+    fx_rate: string
+    account_id: number | null
+  }>
+  cash_entries: SaleExplanationCashEntry[]
+  receivable_entries: SaleExplanationReceivableEntry[]
+  journal_entries: SaleExplanationJournalEntry[]
+  ledger_entries: SaleExplanationLedgerEntry[]
+  lines: SaleExplanationLine[]
+}
+
 interface FetchSessionsParams {
   status?: 'open' | 'closed'
   location?: number
@@ -96,6 +224,11 @@ export async function fetchSales(params?: FetchSalesParams): Promise<PaginatedRe
 
 export async function fetchSale(id: number): Promise<Sale> {
   const { data } = await api.get<Sale>(`/api/v1/sales/sales/${id}/`)
+  return data
+}
+
+export async function fetchSaleExplanation(id: number): Promise<SaleExplanation> {
+  const { data } = await api.get<SaleExplanation>(`/api/v1/sales/sales/${id}/explanation/`)
   return data
 }
 

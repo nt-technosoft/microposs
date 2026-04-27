@@ -17,6 +17,7 @@ from .views import (
     RefundViewSet,
     SaleProfitabilityView,
     ProductProfitabilityView,
+    ProcurementProfitabilityView,
 )
 
 router = DefaultRouter()
@@ -35,5 +36,6 @@ router.register('fx-rates', ExchangeRateViewSet, basename='fx-rate')
 urlpatterns = [
     path('sales-profitability/', SaleProfitabilityView.as_view()),
     path('product-profitability/', ProductProfitabilityView.as_view()),
+    path('procurement-profitability/', ProcurementProfitabilityView.as_view()),
     path('', include(router.urls)),
 ]

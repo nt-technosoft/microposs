@@ -37,8 +37,25 @@ class SaleCreditIntegrityTests(TestCase):
 
         receivable_entry = ReceivableEntry.objects.get(source_ref=f'sale:{sale.pk}')
         customer_receivable = ctx['customer'].receivable
-        journals = JournalEntry.objects.filter(operation_type='sale', operation_id=sale.pk)
+        journals = JournalEntry.objects.filter(
+            operation_type='sale',
+            operation_id=sale.pk,
+        ).prefetch_related('lines__account')
 
         self.assertEqual(receivable_entry.amount, Decimal('480000.00'))
         self.assertEqual(customer_receivable.balances['UZS'], '480000.00')
-        self.assertEqual(journals.count(), 1)
+        self.assertEqual(journals.count(), 2)
+
+        account_map: dict[str, tuple[Decimal, Decimal]] = {}
+        for journal in journals:
+            for line in journal.lines.all():
+                current = account_map.get(line.account.code, (Decimal('0.00'), Decimal('0.00')))
+                account_map[line.account.code] = (
+                    current[0] + line.debit,
+                    current[1] + line.credit,
+                )
+
+        self.assertEqual(account_map['1200'], (sale.total_amount, Decimal('0.00')))
+        self.assertEqual(account_map['4000'], (Decimal('0.00'), sale.total_amount))
+        self.assertEqual(account_map['5000'], (sale.total_cogs, Decimal('0.00')))
+        self.assertEqual(account_map['1100'], (Decimal('0.00'), sale.total_cogs))

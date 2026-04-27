@@ -17,6 +17,7 @@ from .serializers import (
     SaleListSerializer, SaleDetailSerializer, SaleCreateSerializer,
     ReturnSerializer, ReturnCreateSerializer,
 )
+from .explanations import build_sale_explanation
 from .services import (
     create_sale, process_return,
     open_pos_session, close_pos_session,
@@ -109,6 +110,8 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-created_at']
 
     def get_permissions(self):
+        if self.action == 'explanation':
+            return [IsOwner()]
         return [IsCashier()]
 
     def get_queryset(self):
@@ -118,10 +121,12 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
             'customer', 'pos_session', 'sold_by', 'location',
         ).prefetch_related('payments')
 
-        if self.action == 'retrieve':
+        if self.action in ('retrieve', 'explanation'):
             qs = qs.prefetch_related(
                 'lines__product_variant',
                 'lines__lot',
+                'lines__lot__stocks',
+                'lines__lot__procurement_item__procurement__supplier',
                 'lines__discount_reason',
             )
 
@@ -169,6 +174,14 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
             raise ValidationError({'detail': str(error)}) from error
 
         return Response(SaleDetailSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='explanation')
+    def explanation(self, request, pk=None):
+        sale = self.get_object()
+        return Response(build_sale_explanation(
+            sale=sale,
+            tenant_id=request.tenant_id,
+        ))
 
     @action(detail=True, methods=['post'], url_path='return')
     def process_return_action(self, request, pk=None):

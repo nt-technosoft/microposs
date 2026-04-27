@@ -9,11 +9,13 @@ import {
   fetchCashAccounts,
   fetchSalesProfitability,
   fetchProductProfitability,
+  fetchProcurementProfitability,
   type DailySummary,
   type CashFlowItem,
   type CashAccountRecord,
   type SaleProfitabilityRow,
   type ProductProfitabilityRow,
+  type ProcurementProfitabilityRow,
 } from '@/api/finance'
 import { fetchDebtSummary, type DebtSummaryItem } from '@/api/customers'
 import { fetchPayablesSummary, type PayablesSummaryItem } from '@/api/suppliers'
@@ -24,9 +26,10 @@ import { formatPrice } from '@/utils/currency'
 // ── Types ───────────────────────────────────────────────────────────────────
 
 type Period = 'today' | 'week' | 'month' | 'all' | 'custom'
-type AnalyticsView = 'sales' | 'products'
+type AnalyticsView = 'sales' | 'products' | 'procurements'
 type SalesSort = 'profit' | 'margin' | 'revenue'
 type ProductSort = 'profit' | 'projected' | 'remaining'
+type ProcurementSort = 'profit' | 'projected' | 'remaining'
 
 interface PeriodOption {
   value: Period
@@ -54,14 +57,21 @@ const trialBalance = ref<Array<{ code: string; balance: string }>>([])
 const cashAccounts = ref<CashAccountRecord[]>([])
 const salesProfitability = ref<SaleProfitabilityRow[]>([])
 const productProfitability = ref<ProductProfitabilityRow[]>([])
+const procurementProfitability = ref<ProcurementProfitabilityRow[]>([])
 const analyticsView = ref<AnalyticsView>('sales')
 const salesSort = ref<SalesSort>('profit')
 const productSort = ref<ProductSort>('profit')
+const procurementSort = ref<ProcurementSort>('profit')
 const salesExpanded = ref(false)
 const productsExpanded = ref(false)
+const procurementsExpanded = ref(false)
 const debtExpanded = ref(false)
+const salesSummaryExpanded = ref(false)
+const productsSummaryExpanded = ref(false)
+const procurementsSummaryExpanded = ref(false)
 const expandedSaleId = ref<number | null>(null)
 const expandedProductId = ref<number | null>(null)
+const expandedProcurementId = ref<number | null>(null)
 
 const loadingSummary = ref(false)
 const loadingCashFlow = ref(false)
@@ -250,6 +260,36 @@ const productProfitabilityTotals = computed(() => {
   })
 })
 
+const procurementProfitabilityTotals = computed(() => {
+  return procurementProfitability.value.reduce((acc, procurement) => ({
+    revenue: acc.revenue + parseFloat(procurement.revenue || '0'),
+    cogs: acc.cogs + parseFloat(procurement.cogs || '0'),
+    grossProfit: acc.grossProfit + parseFloat(procurement.gross_profit || '0'),
+    investorProfit: acc.investorProfit + parseFloat(procurement.investor_profit || '0'),
+    businessProfit: acc.businessProfit + parseFloat(procurement.business_profit || '0'),
+    remainingLandedCost: acc.remainingLandedCost + parseFloat(procurement.remaining_landed_cost || '0'),
+    projectedRevenue: acc.projectedRevenue + parseFloat(procurement.projected_revenue || '0'),
+    projectedGrossProfit: acc.projectedGrossProfit + parseFloat(procurement.projected_gross_profit || '0'),
+    projectedInvestorProfit: acc.projectedInvestorProfit + parseFloat(procurement.projected_investor_profit || '0'),
+    projectedBusinessProfit: acc.projectedBusinessProfit + parseFloat(procurement.projected_business_profit || '0'),
+    quantitySold: acc.quantitySold + Number(procurement.quantity_sold || 0),
+    remainingQuantity: acc.remainingQuantity + Number(procurement.remaining_quantity || 0),
+  }), {
+    revenue: 0,
+    cogs: 0,
+    grossProfit: 0,
+    investorProfit: 0,
+    businessProfit: 0,
+    remainingLandedCost: 0,
+    projectedRevenue: 0,
+    projectedGrossProfit: 0,
+    projectedInvestorProfit: 0,
+    projectedBusinessProfit: 0,
+    quantitySold: 0,
+    remainingQuantity: 0,
+  })
+})
+
 const salesProfitabilitySorted = computed(() => {
   return [...salesProfitability.value].sort((left, right) => {
     if (salesSort.value === 'margin') {
@@ -286,6 +326,24 @@ const visibleProductProfitability = computed(() =>
     : productProfitabilitySorted.value.slice(0, ANALYTICS_PREVIEW_LIMIT),
 )
 
+const procurementProfitabilitySorted = computed(() => {
+  return [...procurementProfitability.value].sort((left, right) => {
+    if (procurementSort.value === 'projected') {
+      return parseFloat(right.projected_gross_profit || '0') - parseFloat(left.projected_gross_profit || '0')
+    }
+    if (procurementSort.value === 'remaining') {
+      return parseFloat(right.remaining_landed_cost || '0') - parseFloat(left.remaining_landed_cost || '0')
+    }
+    return parseFloat(right.gross_profit || '0') - parseFloat(left.gross_profit || '0')
+  })
+})
+
+const visibleProcurementProfitability = computed(() =>
+  procurementsExpanded.value
+    ? procurementProfitabilitySorted.value
+    : procurementProfitabilitySorted.value.slice(0, ANALYTICS_PREVIEW_LIMIT),
+)
+
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString('ru-RU', {
     day: 'numeric',
@@ -311,10 +369,16 @@ function setProductSort(next: ProductSort): void {
   expandedProductId.value = null
 }
 
+function setProcurementSort(next: ProcurementSort): void {
+  procurementSort.value = next
+  expandedProcurementId.value = null
+}
+
 function setAnalyticsView(next: AnalyticsView): void {
   analyticsView.value = next
   expandedSaleId.value = null
   expandedProductId.value = null
+  expandedProcurementId.value = null
 }
 
 function toggleDebtExpanded(): void {
@@ -329,8 +393,31 @@ function toggleProductExpanded(id: number): void {
   expandedProductId.value = expandedProductId.value === id ? null : id
 }
 
+function toggleProcurementExpanded(id: number): void {
+  expandedProcurementId.value = expandedProcurementId.value === id ? null : id
+}
+
 function paymentMethodsLabel(methods: string[]): string {
   return methods.length ? methods.join(', ') : 'Без метода оплаты'
+}
+
+function procurementTypeLabel(type: string): string {
+  if (type === 'PARTNERSHIP') return 'Партнёрский'
+  if (type === 'MUSHARAKA') return 'Мушарака'
+  if (type === 'OWN_FUNDS') return 'Свои деньги'
+  return type
+}
+
+function procurementStatusLabel(status: string): string {
+  if (status === 'RECEIVED') return 'Оприходован'
+  if (status === 'OPEN') return 'Открыт'
+  if (status === 'CLOSED') return 'Закрыт'
+  if (status === 'CANCELLED') return 'Отменён'
+  return status
+}
+
+function procurementDateLabel(procurement: ProcurementProfitabilityRow): string {
+  return formatDateTime(procurement.received_at || procurement.opened_at)
 }
 
 // ── Data loading ─────────────────────────────────────────────────────────────
@@ -404,15 +491,18 @@ async function loadAnalytics(): Promise<void> {
   loadingAnalytics.value = true
   try {
     const range = getDateRange(period.value)
-    const [salesRows, productRows] = await Promise.all([
+    const [salesRows, productRows, procurementRows] = await Promise.all([
       fetchSalesProfitability(range),
       fetchProductProfitability(range),
+      fetchProcurementProfitability(range),
     ])
     salesProfitability.value = salesRows
     productProfitability.value = productRows
+    procurementProfitability.value = procurementRows
   } catch {
     salesProfitability.value = []
     productProfitability.value = []
+    procurementProfitability.value = []
   } finally {
     loadingAnalytics.value = false
   }
@@ -459,6 +549,14 @@ function openReconciliation(): void {
 
 function openCurrencyExchange(): void {
   router.push({ name: 'finance-exchange' })
+}
+
+function openSaleExplanation(saleId: number): void {
+  router.push({ name: 'reports-sale-explanation', params: { id: saleId } })
+}
+
+function openProcurementDetail(procurementId: number): void {
+  router.push({ name: 'procurement-detail', params: { id: procurementId } })
 }
 </script>
 
@@ -540,7 +638,7 @@ function openCurrencyExchange(): void {
               <span class="overview-kicker">Финансовый обзор</span>
               <h2 class="overview-title">{{ selectedPeriodLabel }}</h2>
               <p class="overview-note">
-                Исторический эквивалент UZS для P&amp;L и cash flow. Валютные остатки показаны отдельно, чтобы не смешивать курсовую картину.
+                P&amp;L и cash flow показаны в UZS-эквиваленте. Валюты вынесены отдельно.
               </p>
             </div>
 
@@ -549,7 +647,7 @@ function openCurrencyExchange(): void {
                 Обмен валют
               </button>
               <button class="action-pill" type="button" @click="openReconciliation">
-                Сверка Excel
+                Сверка
               </button>
             </div>
           </div>
@@ -622,7 +720,7 @@ function openCurrencyExchange(): void {
           <div class="workspace-head">
             <div>
               <h2 class="workspace-title">Деньги и обязательства</h2>
-              <p class="workspace-note">Один экран для cash flow, валютных остатков, долгов и складского давления на оборот.</p>
+              <p class="workspace-note">Cash flow, долги и склад в одном блоке.</p>
             </div>
           </div>
 
@@ -782,7 +880,7 @@ function openCurrencyExchange(): void {
           <div class="workspace-head workspace-head--analytics">
             <div>
               <h2 class="workspace-title">Прибыльность</h2>
-              <p class="workspace-note">Owner-срез по продажам и товарам без лишнего шума. Сначала итог, затем компактный список лидеров.</p>
+              <p class="workspace-note">Итог сверху, лидеры ниже. Детали только по нажатию.</p>
             </div>
 
             <div class="analytics-switch" role="tablist" aria-label="Тип прибыльности">
@@ -802,12 +900,28 @@ function openCurrencyExchange(): void {
               >
                 Товары
               </button>
+              <button
+                type="button"
+                class="analytics-switch-btn"
+                :class="{ active: analyticsView === 'procurements' }"
+                @click="setAnalyticsView('procurements')"
+              >
+                Закупки
+              </button>
             </div>
           </div>
 
           <p v-if="loadingAnalytics" class="workspace-note">Собираю аналитический срез...</p>
 
-          <template v-else-if="analyticsView === 'sales' ? salesProfitability.length : productProfitability.length">
+          <template
+            v-else-if="
+              analyticsView === 'sales'
+                ? salesProfitability.length
+                : analyticsView === 'products'
+                  ? productProfitability.length
+                  : procurementProfitability.length
+            "
+          >
             <div class="summary-strip">
               <template v-if="analyticsView === 'sales'">
                 <div class="summary-card summary-card--primary">
@@ -828,15 +942,24 @@ function openCurrencyExchange(): void {
                   <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.revenue) }}</strong>
                   <span class="metric-note">Себестоимость {{ formatPrice(salesProfitabilityTotals.cogs) }}</span>
                 </div>
-                <div class="summary-support">
-                  <span class="inline-chip inline-chip--muted">Инвестор {{ formatPrice(salesProfitabilityTotals.investorProfit) }}</span>
-                  <span class="inline-chip inline-chip--muted">Бизнес {{ formatPrice(salesProfitabilityTotals.businessProfit) }}</span>
-                  <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.lineCount }} строк</span>
-                  <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.quantitySold }} шт.</span>
+                <div class="summary-footer">
+                  <button
+                    type="button"
+                    class="expand-btn expand-btn--soft"
+                    @click="salesSummaryExpanded = !salesSummaryExpanded"
+                  >
+                    {{ salesSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                  </button>
+                  <div v-if="salesSummaryExpanded" class="summary-support">
+                    <span class="inline-chip inline-chip--muted">Инвестор {{ formatPrice(salesProfitabilityTotals.investorProfit) }}</span>
+                    <span class="inline-chip inline-chip--muted">Бизнес {{ formatPrice(salesProfitabilityTotals.businessProfit) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.lineCount }} строк</span>
+                    <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.quantitySold }} шт.</span>
+                  </div>
                 </div>
               </template>
 
-              <template v-else>
+              <template v-else-if="analyticsView === 'products'">
                 <div class="summary-card summary-card--primary">
                   <span class="metric-label">Факт. прибыль</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.grossProfit) }}</strong>
@@ -845,10 +968,47 @@ function openCurrencyExchange(): void {
                   <span class="metric-label">Прогноз прибыли</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.projectedGrossProfit) }}</strong>
                 </div>
-                <div class="summary-support">
-                  <span class="inline-chip inline-chip--muted">Продажи {{ formatPrice(productProfitabilityTotals.revenue) }}</span>
-                  <span class="inline-chip inline-chip--muted">Остаток {{ formatPrice(productProfitabilityTotals.remainingLandedCost) }}</span>
-                  <span class="inline-chip inline-chip--muted">{{ productProfitabilityTotals.remainingQuantity }} шт. в остатке</span>
+                <div class="summary-footer">
+                  <button
+                    type="button"
+                    class="expand-btn expand-btn--soft"
+                    @click="productsSummaryExpanded = !productsSummaryExpanded"
+                  >
+                    {{ productsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                  </button>
+                  <div v-if="productsSummaryExpanded" class="summary-support">
+                    <span class="inline-chip inline-chip--muted">Продажи {{ formatPrice(productProfitabilityTotals.revenue) }}</span>
+                    <span class="inline-chip inline-chip--muted">Остаток {{ formatPrice(productProfitabilityTotals.remainingLandedCost) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ productProfitabilityTotals.remainingQuantity }} шт. в остатке</span>
+                  </div>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="summary-card summary-card--primary">
+                  <span class="metric-label">Факт. прибыль</span>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.grossProfit) }}</strong>
+                  <span class="metric-note">Инвестор {{ formatPrice(procurementProfitabilityTotals.investorProfit) }} · бизнес {{ formatPrice(procurementProfitabilityTotals.businessProfit) }}</span>
+                </div>
+                <div class="summary-card">
+                  <span class="metric-label">Прогноз прибыли</span>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.projectedGrossProfit) }}</strong>
+                  <span class="metric-note">Остаток {{ formatPrice(procurementProfitabilityTotals.remainingLandedCost) }}</span>
+                </div>
+                <div class="summary-footer">
+                  <button
+                    type="button"
+                    class="expand-btn expand-btn--soft"
+                    @click="procurementsSummaryExpanded = !procurementsSummaryExpanded"
+                  >
+                    {{ procurementsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                  </button>
+                  <div v-if="procurementsSummaryExpanded" class="summary-support">
+                    <span class="inline-chip inline-chip--muted">Выручка {{ formatPrice(procurementProfitabilityTotals.revenue) }}</span>
+                    <span class="inline-chip inline-chip--muted">Продано {{ procurementProfitabilityTotals.quantitySold }} шт.</span>
+                    <span class="inline-chip inline-chip--muted">В остатке {{ procurementProfitabilityTotals.remainingQuantity }} шт.</span>
+                    <span class="inline-chip inline-chip--muted">Прогноз инвестора {{ formatPrice(procurementProfitabilityTotals.projectedInvestorProfit) }}</span>
+                  </div>
                 </div>
               </template>
             </div>
@@ -872,7 +1032,7 @@ function openCurrencyExchange(): void {
               </div>
 
               <div
-                v-else
+                v-else-if="analyticsView === 'products'"
                 class="segment-control"
                 role="tablist"
                 aria-label="Сортировка товаров"
@@ -888,18 +1048,43 @@ function openCurrencyExchange(): void {
                 </button>
               </div>
 
+              <div
+                v-else
+                class="segment-control"
+                role="tablist"
+                aria-label="Сортировка закупок"
+              >
+                <button type="button" class="segment-btn" :class="{ active: procurementSort === 'profit' }" @click="setProcurementSort('profit')">
+                  По прибыли
+                </button>
+                <button type="button" class="segment-btn" :class="{ active: procurementSort === 'projected' }" @click="setProcurementSort('projected')">
+                  По прогнозу
+                </button>
+                <button type="button" class="segment-btn" :class="{ active: procurementSort === 'remaining' }" @click="setProcurementSort('remaining')">
+                  По остатку
+                </button>
+              </div>
+
               <span class="workspace-note">
                 {{ analyticsView === 'sales'
                   ? `${salesProfitabilitySorted.length} продаж в срезе · детали по нажатию`
-                  : `${productProfitabilitySorted.length} товаров в срезе · детали по нажатию`
+                  : analyticsView === 'products'
+                    ? `${productProfitabilitySorted.length} товаров в срезе · детали по нажатию`
+                    : `${procurementProfitabilitySorted.length} закупок в срезе · детали по нажатию`
                 }}
               </span>
             </div>
 
             <div class="analytics-table">
               <div class="analytics-table-note">
-                <span>{{ analyticsView === 'sales' ? 'Лидеры по выбранной сортировке' : 'Товары-лидеры по выбранной сортировке' }}</span>
-                <span>Детали скрыты до открытия строки</span>
+                <span>{{
+                  analyticsView === 'sales'
+                    ? 'Лидеры по сортировке'
+                    : analyticsView === 'products'
+                      ? 'Товары-лидеры'
+                      : 'Закупки-лидеры'
+                }}</span>
+                <span>Строка открывает детали</span>
               </div>
 
               <template v-if="analyticsView === 'sales'">
@@ -938,11 +1123,14 @@ function openCurrencyExchange(): void {
                     <span class="detail-chip">Инвестор {{ formatPrice(sale.investor_profit) }}</span>
                     <span class="detail-chip">Бизнес {{ formatPrice(sale.business_profit) }}</span>
                     <span class="detail-chip">{{ paymentMethodsLabel(sale.payment_methods) }}</span>
+                    <button type="button" class="detail-chip detail-chip--action" @click.stop="openSaleExplanation(sale.sale_id)">
+                      Аудит продажи
+                    </button>
                   </div>
                 </article>
               </template>
 
-              <template v-else>
+              <template v-else-if="analyticsView === 'products'">
                 <article
                   v-for="product in visibleProductProfitability"
                   :key="product.product_variant_id"
@@ -982,15 +1170,74 @@ function openCurrencyExchange(): void {
                   </div>
                 </article>
               </template>
+
+              <template v-else>
+                <article
+                  v-for="procurement in visibleProcurementProfitability"
+                  :key="procurement.procurement_id"
+                  class="analytics-row"
+                  :class="{ open: expandedProcurementId === procurement.procurement_id }"
+                >
+                  <button type="button" class="analytics-toggle" @click="toggleProcurementExpanded(procurement.procurement_id)">
+                    <div class="analytics-main">
+                      <div class="analytics-title-row">
+                        <strong class="analytics-title">Приход #{{ procurement.procurement_id }}</strong>
+                        <span class="analytics-badge">{{ procurement.item_count }} SKU</span>
+                      </div>
+                      <span class="analytics-meta">{{ procurementDateLabel(procurement) }} · {{ procurement.supplier_name || 'Без поставщика' }}</span>
+                      <span class="analytics-meta">{{ procurementStatusLabel(procurement.status) }} · {{ procurement.quantity_sold }} прод. · {{ procurement.remaining_quantity }} ост.</span>
+                    </div>
+                    <div class="analytics-side">
+                      <strong class="analytics-amount tabular-nums">{{ formatPrice(procurement.gross_profit) }}</strong>
+                      <span class="analytics-side-meta">
+                        <span class="analytics-trend">Прогноз {{ formatPrice(procurement.projected_gross_profit) }}</span>
+                        <ChevronDown
+                          :size="16"
+                          :stroke-width="1.8"
+                          class="analytics-chevron"
+                          :class="{ open: expandedProcurementId === procurement.procurement_id }"
+                        />
+                      </span>
+                    </div>
+                  </button>
+
+                  <div v-if="expandedProcurementId === procurement.procurement_id" class="analytics-details">
+                    <span class="detail-chip">{{ procurementTypeLabel(procurement.procurement_type) }}</span>
+                    <span class="detail-chip">{{ procurementStatusLabel(procurement.status) }}</span>
+                    <span class="detail-chip">Выручка {{ formatPrice(procurement.revenue) }}</span>
+                    <span class="detail-chip">Себестоимость {{ formatPrice(procurement.cogs) }}</span>
+                    <span class="detail-chip">Факт {{ formatPrice(procurement.gross_profit) }}</span>
+                    <span class="detail-chip">Инвестор {{ formatPrice(procurement.investor_profit) }}</span>
+                    <span class="detail-chip">Бизнес {{ formatPrice(procurement.business_profit) }}</span>
+                    <span class="detail-chip">Остаток {{ formatPrice(procurement.remaining_landed_cost) }}</span>
+                    <span class="detail-chip">Прогноз {{ formatPrice(procurement.projected_gross_profit) }}</span>
+                    <span class="detail-chip">Инв. прогноз {{ formatPrice(procurement.projected_investor_profit) }}</span>
+                    <span class="detail-chip">Бизн. прогноз {{ formatPrice(procurement.projected_business_profit) }}</span>
+                    <button type="button" class="detail-chip detail-chip--action" @click.stop="openProcurementDetail(procurement.procurement_id)">
+                      Открыть приход
+                    </button>
+                  </div>
+                </article>
+              </template>
             </div>
 
             <button
-              v-if="analyticsView === 'sales'
-                ? salesProfitabilitySorted.length > ANALYTICS_PREVIEW_LIMIT
-                : productProfitabilitySorted.length > ANALYTICS_PREVIEW_LIMIT"
+              v-if="
+                analyticsView === 'sales'
+                  ? salesProfitabilitySorted.length > ANALYTICS_PREVIEW_LIMIT
+                  : analyticsView === 'products'
+                    ? productProfitabilitySorted.length > ANALYTICS_PREVIEW_LIMIT
+                    : procurementProfitabilitySorted.length > ANALYTICS_PREVIEW_LIMIT
+              "
               type="button"
               class="expand-btn"
-              @click="analyticsView === 'sales' ? (salesExpanded = !salesExpanded) : (productsExpanded = !productsExpanded)"
+              @click="
+                analyticsView === 'sales'
+                  ? (salesExpanded = !salesExpanded)
+                  : analyticsView === 'products'
+                    ? (productsExpanded = !productsExpanded)
+                    : (procurementsExpanded = !procurementsExpanded)
+              "
             >
               {{
                 analyticsView === 'sales'
@@ -1000,9 +1247,17 @@ function openCurrencyExchange(): void {
                       : `Показать ещё ${salesProfitabilitySorted.length - visibleSalesProfitability.length} продаж`
                   )
                   : (
-                    productsExpanded
-                      ? 'Свернуть товары'
-                      : `Показать ещё ${productProfitabilitySorted.length - visibleProductProfitability.length} товаров`
+                    analyticsView === 'products'
+                      ? (
+                        productsExpanded
+                          ? 'Свернуть товары'
+                          : `Показать ещё ${productProfitabilitySorted.length - visibleProductProfitability.length} товаров`
+                      )
+                      : (
+                        procurementsExpanded
+                          ? 'Свернуть закупки'
+                          : `Показать ещё ${procurementProfitabilitySorted.length - visibleProcurementProfitability.length} закупок`
+                      )
                   )
               }}
             </button>
@@ -1011,7 +1266,9 @@ function openCurrencyExchange(): void {
           <p v-else class="workspace-note">
             {{ analyticsView === 'sales'
               ? 'За выбранный период завершённых продаж нет.'
-              : 'Пока нет данных по товарам.'
+              : analyticsView === 'products'
+                ? 'Пока нет данных по товарам.'
+                : 'Пока нет данных по закупкам.'
             }}
           </p>
         </section>
@@ -1560,6 +1817,13 @@ function openCurrencyExchange(): void {
   gap: var(--space-2);
 }
 
+.summary-footer {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
 .expand-btn--soft {
   justify-self: start;
   padding-left: 0;
@@ -1680,6 +1944,7 @@ function openCurrencyExchange(): void {
 .detail-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 30px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-full);
@@ -1687,6 +1952,13 @@ function openCurrencyExchange(): void {
   border: 1px solid var(--color-border-subtle);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
+}
+
+.detail-chip--action {
+  color: var(--color-brand-700);
+  border-color: var(--color-brand-200);
+  background: var(--color-brand-50);
+  font-weight: var(--font-medium);
 }
 
 .error-box {

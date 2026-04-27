@@ -143,6 +143,12 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/reports/audit/sales/:id',
+    name: 'reports-sale-explanation',
+    component: () => import('@/modules/reports/views/SaleExplanationView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/finance/exchange',
     name: 'finance-exchange',
     component: () => import('@/modules/finance/views/CurrencyExchangeView.vue'),

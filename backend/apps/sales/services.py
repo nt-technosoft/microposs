@@ -183,7 +183,8 @@ def create_sale(
     from apps.finance.models import CashAccount, CashEntry
     from apps.finance.services import (
         create_cash_entry,
-        record_journal_from_cash_entry,
+        record_sale_cogs_journal,
+        record_sale_settlement_journal,
         record_sale_journal,
     )
     from apps.inventory.services import allocate_lot
@@ -359,7 +360,7 @@ def create_sale(
 
         # SalePayments
         credit_amount = Decimal('0')
-        journal_methods: set[str] = set()
+        settlement_journals: list[dict] = []
         for pay in payments:
             amount = Decimal(str(pay['amount']))
             currency = str(pay.get('currency', 'UZS')).upper()
@@ -387,48 +388,56 @@ def create_sale(
                 role=SalePayment.Role.INCOMING,
                 account_id=account_id,
             )
-            journal_methods.add(payment.method)
 
             if payment.method == SalePayment.Method.CREDIT:
                 credit_amount += amount
+                settlement_journals.append({
+                    'amount': amount,
+                    'payment_method': payment.method,
+                    'debit_account_code': None,
+                    'description': f'Sale credit #{sale.pk}',
+                })
                 continue
 
+            debit_account_code = None
             if payment.account_id is None:
+                settlement_journals.append({
+                    'amount': amount,
+                    'payment_method': payment.method,
+                    'debit_account_code': debit_account_code,
+                    'description': f'Sale payment #{payment.pk}',
+                })
                 continue
 
             account = CashAccount.objects.select_for_update().filter(
                 pk=payment.account_id,
                 tenant_id=tenant_id,
             ).first()
-            if account is None:
-                continue
-            if account.currency != currency:
-                raise ValueError(
-                    f'Payment currency {currency} does not match cash account '
-                    f'{account.name} currency {account.currency}.'
-                )
+            if account is not None:
+                if account.currency != currency:
+                    raise ValueError(
+                        f'Payment currency {currency} does not match cash account '
+                        f'{account.name} currency {account.currency}.'
+                    )
 
-            cash_entry = create_cash_entry(
-                tenant_id=tenant_id,
-                account=account,
-                direction=CashEntry.Direction.IN,
-                amount=amount,
-                date=date,
-                source_ref_type='sale_payment',
-                source_ref_id=payment.pk,
-            )
-
-            if account.linked_account_id:
-                counterpart_account = '4000'
-                record_journal_from_cash_entry(
+                create_cash_entry(
                     tenant_id=tenant_id,
-                    cash_entry=cash_entry,
-                    operation_type='sale',
-                    operation_id=sale.pk,
-                    counterpart_account_code=counterpart_account,
-                    description=f'Sale payment #{payment.pk}',
+                    account=account,
+                    direction=CashEntry.Direction.IN,
+                    amount=amount,
                     date=date,
+                    source_ref_type='sale_payment',
+                    source_ref_id=payment.pk,
                 )
+                if account.linked_account_id:
+                    debit_account_code = account.linked_account.code
+
+            settlement_journals.append({
+                'amount': amount,
+                'payment_method': payment.method,
+                'debit_account_code': debit_account_code,
+                'description': f'Sale payment #{payment.pk}',
+            })
 
         if credit_amount > 0 and customer_id is not None:
             accrue_debt(
@@ -457,13 +466,21 @@ def create_sale(
                 payment_method='credit',
                 date=date,
             )
-        elif journal_methods == {SalePayment.Method.CREDIT}:
-            record_sale_journal(
+        else:
+            for journal in settlement_journals:
+                record_sale_settlement_journal(
+                    tenant_id=tenant_id,
+                    sale_id=sale.pk,
+                    amount=journal['amount'],
+                    payment_method=journal['payment_method'],
+                    debit_account_code=journal['debit_account_code'],
+                    description=journal['description'],
+                    date=date,
+                )
+            record_sale_cogs_journal(
                 tenant_id=tenant_id,
                 sale_id=sale.pk,
-                total_amount=total_amount,
                 total_cogs=total_cogs,
-                payment_method='credit',
                 date=date,
             )
 

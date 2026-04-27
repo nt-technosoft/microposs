@@ -242,6 +242,7 @@ export interface SalePayment {
 export interface Sale extends BaseModel {
   status: SaleStatus
   payment_method?: PaymentMethod | string
+  payment_methods?: string[]
   customer_id?: number | null
   customer?: number | null
   customer_name?: string | null

@@ -135,23 +135,32 @@ class SaleLineInputSerializer(serializers.Serializer):
 
 class SalePresentationMixin(serializers.ModelSerializer):
     payment_method = serializers.SerializerMethodField()
+    payment_methods = serializers.SerializerMethodField()
     operation_currency = serializers.SerializerMethodField()
     operation_amount = serializers.SerializerMethodField()
     fx_rate_snapshot = serializers.SerializerMethodField()
     functional_amount_uzs = serializers.SerializerMethodField()
 
+    def _get_incoming_payments(self, obj):
+        return [
+            payment for payment in obj.payments.all()
+            if payment.role == SalePayment.Role.INCOMING
+        ]
+
     def _get_incoming_payment(self, obj):
-        return next(
-            (
-                payment for payment in obj.payments.all()
-                if payment.role == SalePayment.Role.INCOMING
-            ),
-            None,
-        )
+        payments = self._get_incoming_payments(obj)
+        return payments[0] if payments else None
+
+    def get_payment_methods(self, obj):
+        methods = []
+        for payment in self._get_incoming_payments(obj):
+            if payment.method not in methods:
+                methods.append(payment.method)
+        return methods
 
     def get_payment_method(self, obj):
-        payment = self._get_incoming_payment(obj)
-        return payment.method if payment else None
+        methods = self.get_payment_methods(obj)
+        return methods[0] if methods else None
 
     def get_operation_currency(self, obj):
         payment = self._get_incoming_payment(obj)
@@ -191,7 +200,7 @@ class SaleListSerializer(SalePresentationMixin, serializers.ModelSerializer):
             'id', 'status', 'date',
             'location', 'location_name',
             'customer', 'total_amount',
-            'payment_method',
+            'payment_method', 'payment_methods',
             'operation_currency', 'operation_amount',
             'fx_rate_snapshot', 'functional_amount_uzs',
             'paid_total', 'lines_count',
@@ -234,7 +243,7 @@ class SaleDetailSerializer(SalePresentationMixin, serializers.ModelSerializer):
             'location', 'location_name',
             'customer', 'customer_name',
             'pos_session', 'sold_by',
-            'payment_method',
+            'payment_method', 'payment_methods',
             'operation_currency', 'operation_amount',
             'fx_rate_snapshot', 'functional_amount_uzs',
             'total_amount', 'total_cogs',

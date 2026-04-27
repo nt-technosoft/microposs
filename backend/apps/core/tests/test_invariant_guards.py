@@ -71,7 +71,11 @@ class InvariantGuardTests(TestCase):
                 'method': SalePayment.Method.CREDIT,
             }],
         )
-        journal = JournalEntry.objects.get(operation_type='sale', operation_id=sale.pk)
+        journal = JournalEntry.objects.filter(
+            operation_type='sale',
+            operation_id=sale.pk,
+        ).order_by('id').first()
+        self.assertIsNotNone(journal)
 
         with self.assertRaisesMessage(ValueError, 'Physical delete forbidden for JournalEntry.'):
             journal.delete()

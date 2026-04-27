@@ -27,14 +27,38 @@ export interface AgingReportItem {
   total_outstanding: string
 }
 
+export interface ReconciliationCheck {
+  code: string
+  title: string
+  summary: string
+  status: 'ok' | 'warning' | 'mismatch'
+  actual_label: string
+  expected_label: string
+  actual_amount: string
+  expected_amount: string
+  delta_amount: string
+  mismatch_count: number
+  sample_refs: string[]
+}
+
+export interface ReconciliationHighlight {
+  key: string
+  label: string
+  value: string
+}
+
 export interface ReconciliationSummary {
-  batch_id: number
-  batch_mode: string
-  finished_at: string
-  computed: Record<string, unknown>
-  expected: Record<string, unknown>
-  deltas: Record<string, unknown>
-  gap_summary: Record<string, number>
+  generated_at: string
+  overall_status: 'ok' | 'warning' | 'mismatch'
+  totals: {
+    total_checks: number
+    ok_checks: number
+    warning_checks: number
+    mismatch_checks: number
+    affected_records: number
+  }
+  highlights: ReconciliationHighlight[]
+  checks: ReconciliationCheck[]
 }
 
 interface FetchProductPerformanceParams {

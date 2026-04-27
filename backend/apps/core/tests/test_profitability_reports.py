@@ -5,6 +5,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.partnerships.models import Procurement
 from apps.sales.models import SalePayment
 from apps.sales.services import calculate_profit_distribution, create_sale
 
@@ -159,4 +160,56 @@ class ProfitabilityReportsTests(APITestCase):
         self.assertEqual(
             Decimal(response.data['markup_percent']),
             ((gross_profit / self.sale.total_cogs) * Decimal('100')).quantize(Decimal('0.01')),
+        )
+
+    def test_procurement_profitability_endpoint_groups_realized_and_projected_metrics(self):
+        self.auth_owner()
+
+        response = self.client.get('/api/v1/finance/procurement-profitability/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+        row = response.data[0]
+        remaining_quantity = sum(stock.quantity_remaining for stock in self.lot.stocks.all())
+        remaining_cost = (
+            Decimal(str(self.lot.landed_cost_per_unit))
+            * Decimal(str(remaining_quantity))
+        ).quantize(Decimal('0.01'))
+        projected_revenue = (
+            Decimal(str(self.ctx['variant'].effective_price))
+            * Decimal(str(remaining_quantity))
+        ).quantize(Decimal('0.01'))
+        projected_distribution = calculate_profit_distribution(
+            lot=self.lot,
+            unit_price=Decimal(str(self.ctx['variant'].effective_price)),
+            quantity=remaining_quantity,
+            unit_landed_cost=Decimal(str(self.lot.landed_cost_per_unit)),
+        )
+        projected_investor_profit = Decimal(
+            str(projected_distribution[str(self.ctx['investor'].id)]),
+        )
+        gross_profit = (self.sale.total_amount - self.sale.total_cogs).quantize(Decimal('0.01'))
+        investor_profit = Decimal(
+            str(self.sale_line.profit_distribution_snapshot[str(self.ctx['investor'].id)]),
+        )
+
+        self.assertEqual(row['procurement_id'], self.procurement.id)
+        self.assertEqual(row['procurement_type'], Procurement.Type.PARTNERSHIP)
+        self.assertEqual(row['status'], Procurement.Status.RECEIVED)
+        self.assertEqual(row['item_count'], 1)
+        self.assertEqual(row['quantity_sold'], 5)
+        self.assertEqual(row['remaining_quantity'], remaining_quantity)
+        self.assertEqual(Decimal(row['revenue']), self.sale.total_amount)
+        self.assertEqual(Decimal(row['cogs']), self.sale.total_cogs)
+        self.assertEqual(Decimal(row['gross_profit']), gross_profit)
+        self.assertEqual(Decimal(row['investor_profit']), investor_profit)
+        self.assertEqual(Decimal(row['remaining_landed_cost']), remaining_cost)
+        self.assertEqual(Decimal(row['projected_revenue']), projected_revenue)
+        self.assertEqual(
+            Decimal(row['projected_gross_profit']),
+            (projected_revenue - remaining_cost).quantize(Decimal('0.01')),
+        )
+        self.assertEqual(
+            Decimal(row['projected_investor_profit']),
+            projected_investor_profit,
         )

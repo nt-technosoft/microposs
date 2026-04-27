@@ -132,6 +132,30 @@ export interface ProductProfitabilityRow {
   projected_business_profit: string
 }
 
+export interface ProcurementProfitabilityRow {
+  procurement_id: number
+  procurement_type: string
+  status: string
+  opened_at: string
+  received_at: string | null
+  supplier_name: string | null
+  item_count: number
+  quantity_sold: number
+  remaining_quantity: number
+  revenue: string
+  cogs: string
+  gross_profit: string
+  investor_profit: string
+  business_profit: string
+  margin_percent: string
+  markup_percent: string
+  remaining_landed_cost: string
+  projected_revenue: string
+  projected_gross_profit: string
+  projected_investor_profit: string
+  projected_business_profit: string
+}
+
 export interface ExchangeRateItem {
   id: number
   base_currency: string
@@ -351,6 +375,16 @@ export async function fetchProductProfitability(
 ): Promise<ProductProfitabilityRow[]> {
   const { data } = await api.get<ProductProfitabilityRow[]>(
     '/api/v1/finance/product-profitability/',
+    { params },
+  )
+  return data
+}
+
+export async function fetchProcurementProfitability(
+  params?: FetchProfitabilityParams,
+): Promise<ProcurementProfitabilityRow[]> {
+  const { data } = await api.get<ProcurementProfitabilityRow[]>(
+    '/api/v1/finance/procurement-profitability/',
     { params },
   )
   return data

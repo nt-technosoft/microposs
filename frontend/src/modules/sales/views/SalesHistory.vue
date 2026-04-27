@@ -1,23 +1,27 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { SlidersHorizontal, RotateCcw } from 'lucide-vue-next'
 import { useSalesStore } from '@/stores/sales'
 import { useSessionStore } from '@/stores/session'
+import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { PaymentMethod, SaleStatus } from '@/types/enums'
-import type { Sale, SaleLine } from '@/types/models'
+import type { Sale, SaleLine, SalePayment } from '@/types/models'
 import { formatPrice } from '@/utils/currency'
 
 // ── Stores & composables ────────────────────────────────────────────────────
 
 const salesStore = useSalesStore()
 const sessionStore = useSessionStore()
+const authStore = useAuthStore()
 const toast = useToast()
+const router = useRouter()
 
 // ── Filter state ────────────────────────────────────────────────────────────
 
-type FilterOption = 'all' | PaymentMethod
+type FilterOption = 'all' | 'mixed' | PaymentMethod
 
 interface FilterChip {
   value: FilterOption
@@ -28,7 +32,9 @@ const FILTER_CHIPS: FilterChip[] = [
   { value: 'all', label: 'Все' },
   { value: PaymentMethod.CASH, label: 'Наличные' },
   { value: PaymentMethod.CARD, label: 'Карта' },
+  { value: PaymentMethod.TRANSFER, label: 'Перевод' },
   { value: PaymentMethod.CREDIT, label: 'В долг' },
+  { value: 'mixed', label: 'Смешанные' },
 ]
 
 const activeFilter = ref<FilterOption>('all')
@@ -55,17 +61,64 @@ onMounted(async () => {
   await loadSales(1)
 })
 
-watch(activeFilter, () => {
+watch(() => sessionStore.currentSession?.id ?? null, () => {
   loadSales(1)
 })
 
 // ── Filtered sales ──────────────────────────────────────────────────────────
 
+const activeSession = computed(() => sessionStore.currentSession)
+const hasActiveSession = computed(() => sessionStore.isOpen && !!activeSession.value)
+const canOpenExplanation = computed(() => authStore.isOwner)
+
+function normalizePaymentMethod(method: PaymentMethod | string | null | undefined): string | null {
+  if (!method) return null
+
+  const normalized = String(method).toUpperCase()
+  if (normalized === PaymentMethod.CASH_LEGACY.toUpperCase()) return PaymentMethod.CASH
+  if (normalized === PaymentMethod.CARD_LEGACY.toUpperCase()) return PaymentMethod.CARD
+  if (normalized === PaymentMethod.CREDIT_LEGACY.toUpperCase()) return PaymentMethod.CREDIT
+  if (normalized === PaymentMethod.TRANSFER) return PaymentMethod.TRANSFER
+  if (normalized === PaymentMethod.CASH) return PaymentMethod.CASH
+  if (normalized === PaymentMethod.CARD) return PaymentMethod.CARD
+  if (normalized === PaymentMethod.CREDIT) return PaymentMethod.CREDIT
+  return normalized
+}
+
+function salePaymentMethods(sale: Sale): string[] {
+  const rawMethods = Array.isArray(sale.payment_methods) && sale.payment_methods.length > 0
+    ? sale.payment_methods
+    : Array.isArray(sale.payments) && sale.payments.length > 0
+      ? sale.payments
+        .filter((payment) => payment.role === 'INCOMING')
+        .map((payment) => payment.method)
+      : sale.payment_method
+        ? [sale.payment_method]
+        : []
+
+  const methods: string[] = []
+  for (const method of rawMethods) {
+    const normalized = normalizePaymentMethod(method)
+    if (normalized && !methods.includes(normalized)) {
+      methods.push(normalized)
+    }
+  }
+  return methods
+}
+
+function isMixedPayment(sale: Sale): boolean {
+  return salePaymentMethods(sale).length > 1
+}
+
+function saleMatchesFilter(sale: Sale, filter: FilterOption): boolean {
+  if (filter === 'all') return true
+  if (filter === 'mixed') return isMixedPayment(sale)
+  return salePaymentMethods(sale).includes(filter)
+}
+
 const filteredSales = computed<Sale[]>(() => {
   if (activeFilter.value === 'all') return salesStore.sales
-  return salesStore.sales.filter(
-    (sale) => sale.payment_method === activeFilter.value,
-  )
+  return salesStore.sales.filter((sale) => saleMatchesFilter(sale, activeFilter.value))
 })
 
 // ── Date grouping ───────────────────────────────────────────────────────────
@@ -152,6 +205,7 @@ function itemsLabel(sale: Sale): string {
 }
 
 function paymentLabel(method: PaymentMethod | string | undefined): string {
+  const normalized = normalizePaymentMethod(method)
   const map: Record<string, string> = {
     [PaymentMethod.CASH]: 'Наличные',
     [PaymentMethod.CARD]: 'Карта',
@@ -161,8 +215,50 @@ function paymentLabel(method: PaymentMethod | string | undefined): string {
     [PaymentMethod.CARD_LEGACY]: 'Карта',
     [PaymentMethod.CREDIT_LEGACY]: 'В долг',
   }
-  if (!method) return 'Не указано'
-  return map[method] ?? method
+  if (!normalized) return 'Не указано'
+  return map[normalized] ?? normalized
+}
+
+function paymentMethodsLabel(methods: string[]): string {
+  if (!methods.length) return 'Не указано'
+  return methods.map((method) => paymentLabel(method)).join(' + ')
+}
+
+function paymentBadgeLabel(sale: Sale): string {
+  const methods = salePaymentMethods(sale)
+  if (methods.length > 1) return 'Смешанная'
+  return paymentLabel(methods[0])
+}
+
+function paymentBadgeClass(sale: Sale): string {
+  if (isMixedPayment(sale)) return 'badge-mixed'
+  const method = salePaymentMethods(sale)[0]
+  return method ? `badge-${method.toLowerCase()}` : 'badge-unknown'
+}
+
+function paymentSummaryLabel(sale: Sale): string {
+  const methods = salePaymentMethods(sale)
+  return paymentMethodsLabel(methods)
+}
+
+function incomingPayments(sale: Sale): SalePayment[] {
+  return Array.isArray(sale.payments)
+    ? sale.payments.filter((payment) => payment.role === 'INCOMING')
+    : []
+}
+
+function paymentAmountTrace(payment: SalePayment): string {
+  const currency = (payment.currency || 'UZS').toUpperCase()
+  const amount = formatPrice(payment.amount, currency)
+  if (currency === 'UZS') {
+    return amount
+  }
+
+  const fxRate = Number.parseFloat(payment.fx_rate || '')
+  if (Number.isFinite(fxRate) && fxRate > 0) {
+    return `${amount} • курс ${fxRate.toFixed(2)}`
+  }
+  return amount
 }
 
 function isReturned(sale: Sale): boolean {
@@ -290,6 +386,13 @@ function saleMarginPercent(sale: Sale): string {
   return formatPercent((saleGrossProfit(sale) / revenue) * 100)
 }
 
+function sessionMetaLabel(): string {
+  if (!activeSession.value) {
+    return 'Открытая смена не найдена, поэтому ниже показаны все продажи.'
+  }
+  return `${sessionStore.location?.name || 'Точка продаж'} • ${formatDateTime(activeSession.value.opened_at)}`
+}
+
 // ── Sale detail ─────────────────────────────────────────────────────────────
 
 async function openDetail(sale: Sale): Promise<void> {
@@ -318,6 +421,13 @@ function closeDetail(): void {
 function handleReturnPlaceholder(): void {
   toast.info('Coming soon')
 }
+
+function openExplanation(): void {
+  if (!selectedSale.value) return
+  const saleId = selectedSale.value.id
+  closeDetail()
+  router.push({ name: 'reports-sale-explanation', params: { id: saleId } })
+}
 </script>
 
 <template>
@@ -343,6 +453,45 @@ function handleReturnPlaceholder(): void {
       </button>
     </div>
 
+    <section class="session-summary" :class="{ 'session-summary--inactive': !hasActiveSession }">
+      <div class="session-summary__header">
+        <div class="session-summary__title-wrap">
+          <p class="session-summary__eyebrow">Смена и оплаты</p>
+          <h2 class="session-summary__title">
+            {{ hasActiveSession && activeSession ? `Смена #${activeSession.id}` : 'История без открытой смены' }}
+          </h2>
+        </div>
+        <span class="session-summary__badge" :class="{ 'session-summary__badge--open': hasActiveSession }">
+          {{ hasActiveSession ? 'Открыта' : 'Все продажи' }}
+        </span>
+      </div>
+
+      <p class="session-summary__meta">{{ sessionMetaLabel() }}</p>
+
+      <div v-if="hasActiveSession && activeSession" class="session-summary__grid">
+        <div class="session-summary__metric">
+          <span class="session-summary__label">Старт</span>
+          <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.opening_cash) }}</strong>
+        </div>
+        <div class="session-summary__metric">
+          <span class="session-summary__label">Наличные продажи</span>
+          <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.cash_sales_total || '0') }}</strong>
+        </div>
+        <div class="session-summary__metric">
+          <span class="session-summary__label">Ожидается в кассе</span>
+          <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.expected_cash || activeSession.opening_cash) }}</strong>
+        </div>
+        <div class="session-summary__metric">
+          <span class="session-summary__label">Продаж</span>
+          <strong class="session-summary__value tabular-nums">{{ activeSession.sales_count ?? 0 }}</strong>
+        </div>
+      </div>
+
+      <p class="session-summary__hint">
+        Фильтры ниже учитывают и смешанные оплаты, а не только первый платёж продажи.
+      </p>
+    </section>
+
     <!-- ── Content ───────────────────────────────────────────── -->
     <div class="content">
 
@@ -366,7 +515,13 @@ function handleReturnPlaceholder(): void {
       <div v-else-if="!salesStore.isLoading && filteredSales.length === 0" class="state-box">
         <p class="state-title">Продаж нет</p>
         <p class="state-body">
-          {{ activeFilter === 'all' ? 'В этой сессии ещё нет продаж' : 'Нет продаж с выбранным способом оплаты' }}
+          {{
+            activeFilter === 'all'
+              ? hasActiveSession
+                ? 'В этой сессии ещё нет продаж'
+                : 'Продаж пока нет'
+              : 'Нет продаж с выбранным способом оплаты'
+          }}
         </p>
       </div>
 
@@ -402,10 +557,11 @@ function handleReturnPlaceholder(): void {
               <span v-if="operationTrace(sale)" class="sale-trace">{{ operationTrace(sale) }}</span>
               <span
                 class="badge"
-                :class="`badge-${sale.payment_method}`"
+                :class="paymentBadgeClass(sale)"
               >
-                {{ paymentLabel(sale.payment_method) }}
+                {{ paymentBadgeLabel(sale) }}
               </span>
+              <span class="sale-payment-note">{{ paymentSummaryLabel(sale) }}</span>
             </div>
           </button>
         </section>
@@ -444,9 +600,9 @@ function handleReturnPlaceholder(): void {
           <span class="detail-date">{{ formatDateTime(selectedSale.created_at) }}</span>
           <span
             class="badge"
-            :class="`badge-${selectedSale.payment_method}`"
+            :class="paymentBadgeClass(selectedSale)"
           >
-            {{ paymentLabel(selectedSale.payment_method) }}
+            {{ paymentBadgeLabel(selectedSale) }}
           </span>
         </div>
 
@@ -481,6 +637,34 @@ function handleReturnPlaceholder(): void {
         <p v-if="operationTrace(selectedSale)" class="detail-trace">
           {{ operationTrace(selectedSale) }}
         </p>
+
+        <section class="payment-card">
+          <div class="payment-card__header">
+            <div class="payment-card__heading">
+              <span class="payment-card__title">Оплата</span>
+              <span class="payment-card__subtitle">{{ paymentSummaryLabel(selectedSale) }}</span>
+            </div>
+            <strong class="payment-card__total tabular-nums">{{ formatPrice(selectedSale.total_amount) }}</strong>
+          </div>
+
+          <div v-if="incomingPayments(selectedSale).length > 0" class="payment-list">
+            <div
+              v-for="payment in incomingPayments(selectedSale)"
+              :key="payment.id"
+              class="payment-row"
+            >
+              <div class="payment-row__info">
+                <span class="payment-row__method">{{ paymentLabel(payment.method) }}</span>
+                <span class="payment-row__meta">{{ payment.currency.toUpperCase() }}</span>
+              </div>
+              <span class="payment-row__amount tabular-nums">{{ paymentAmountTrace(payment) }}</span>
+            </div>
+          </div>
+
+          <p v-else class="payment-card__empty">
+            Отдельная разбивка оплат для этой продажи не загружена.
+          </p>
+        </section>
 
         <section class="profitability-card">
           <div class="profitability-header">
@@ -523,6 +707,14 @@ function handleReturnPlaceholder(): void {
             </div>
           </div>
         </section>
+
+        <button
+          v-if="canOpenExplanation"
+          class="btn-explain"
+          @click="openExplanation"
+        >
+          Почему эта цифра такая
+        </button>
 
         <!-- Return button -->
         <button
@@ -628,6 +820,106 @@ function handleReturnPlaceholder(): void {
 
 .filter-chip:active {
   transform: scale(0.96);
+}
+
+/* ── Session summary ────────────────────────────────────────────────────── */
+
+.session-summary {
+  margin: 0 var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-subtle);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-brand-50) 72%, white 28%) 0%, var(--color-bg-elevated) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.session-summary--inactive {
+  background:
+    linear-gradient(180deg, var(--color-bg-secondary) 0%, var(--color-bg-elevated) 100%);
+}
+
+.session-summary__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.session-summary__title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-summary__eyebrow {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.session-summary__title {
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.session-summary__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.session-summary__badge--open {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.session-summary__meta {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-snug);
+}
+
+.session-summary__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.session-summary__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.session-summary__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.session-summary__value {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.session-summary__hint {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* ── Content ────────────────────────────────────────────────────────────── */
@@ -749,6 +1041,14 @@ function handleReturnPlaceholder(): void {
   line-height: var(--leading-snug);
 }
 
+.sale-payment-note {
+  max-width: 200px;
+  text-align: right;
+  font-size: var(--text-2xs);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-snug);
+}
+
 /* ── Badges ─────────────────────────────────────────────────────────────── */
 
 .badge {
@@ -771,9 +1071,24 @@ function handleReturnPlaceholder(): void {
   color: var(--color-info);
 }
 
+.badge-transfer {
+  background: color-mix(in srgb, var(--color-brand-50) 65%, white 35%);
+  color: var(--color-brand-600);
+}
+
 .badge-credit {
   background: var(--color-warning-bg);
   color: var(--color-warning);
+}
+
+.badge-mixed {
+  background: color-mix(in srgb, var(--color-info-bg) 45%, var(--color-warning-bg) 55%);
+  color: var(--color-text-primary);
+}
+
+.badge-unknown {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
 }
 
 .badge-return {
@@ -979,6 +1294,88 @@ function handleReturnPlaceholder(): void {
   color: var(--color-text-tertiary);
 }
 
+.payment-card {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.payment-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.payment-card__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.payment-card__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.payment-card__subtitle {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.payment-card__total {
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  color: var(--color-text-primary);
+}
+
+.payment-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.payment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.payment-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.payment-row__method {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--color-text-primary);
+}
+
+.payment-row__meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.payment-row__amount {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+  text-align: right;
+}
+
+.payment-card__empty {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
 .profitability-card {
   margin-bottom: var(--space-6);
   padding: var(--space-4);
@@ -1052,6 +1449,25 @@ function handleReturnPlaceholder(): void {
   color: var(--color-text-primary);
 }
 
+.btn-explain {
+  width: 100%;
+  margin-bottom: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-brand-200);
+  background: color-mix(in srgb, var(--color-brand-50) 70%, white 30%);
+  color: var(--color-brand-700);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+}
+
+.btn-explain:hover {
+  background: color-mix(in srgb, var(--color-brand-50) 82%, white 18%);
+  border-color: var(--color-brand-300);
+}
+
 .btn-return {
   width: 100%;
   padding: var(--space-4);
@@ -1114,6 +1530,7 @@ function handleReturnPlaceholder(): void {
 }
 
 @media (max-width: 420px) {
+  .session-summary__grid,
   .profitability-grid {
     grid-template-columns: 1fr;
   }
