@@ -81,6 +81,7 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
                 location_id=data['location_id'],
                 opened_by_id=request.user.pk,
                 opening_cash=data['opening_cash'],
+                opening_cash_by_currency=data.get('opening_cash_by_currency') or None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
@@ -98,6 +99,7 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
                 session=session,
                 closed_by_id=request.user.pk,
                 actual_cash=serializer.validated_data['actual_cash'],
+                actual_cash_by_currency=serializer.validated_data.get('actual_cash_by_currency') or None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error

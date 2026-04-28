@@ -21,6 +21,7 @@ import { fetchDebtSummary, type DebtSummaryItem } from '@/api/customers'
 import { fetchPayablesSummary, type PayablesSummaryItem } from '@/api/suppliers'
 import { fetchStockSummary, type StockSummaryItem } from '@/api/inventory'
 import { useToast } from '@/composables/useToast'
+import { useFxRate } from '@/composables/useFxRate'
 import { formatPrice } from '@/utils/currency'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ type AnalyticsView = 'sales' | 'products' | 'procurements'
 type SalesSort = 'profit' | 'margin' | 'revenue'
 type ProductSort = 'profit' | 'projected' | 'remaining'
 type ProcurementSort = 'profit' | 'projected' | 'remaining'
+type ReportCurrency = 'UZS' | 'USD'
 
 interface PeriodOption {
   value: Period
@@ -40,6 +42,11 @@ interface PeriodOption {
 
 const toast = useToast()
 const router = useRouter()
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRate,
+} = useFxRate()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -72,6 +79,7 @@ const procurementsSummaryExpanded = ref(false)
 const expandedSaleId = ref<number | null>(null)
 const expandedProductId = ref<number | null>(null)
 const expandedProcurementId = ref<number | null>(null)
+const reportCurrency = ref<ReportCurrency>('UZS')
 
 const loadingSummary = ref(false)
 const loadingCashFlow = ref(false)
@@ -218,13 +226,60 @@ const overallMargin = computed(() => (
     : 0
 ))
 
+function reportNumberFromUzs(value: string | number | null | undefined): number {
+  const raw = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '0'))
+  const amount = Number.isFinite(raw) ? raw : 0
+  if (reportCurrency.value === 'UZS') return amount
+  const fx = Number.parseFloat(latestUsdRate.value || '0')
+  return Number.isFinite(fx) && fx > 0 ? amount / fx : amount
+}
+
+function rowReportNumber(
+  row: { display?: { currency: string; amounts: Record<string, string> } },
+  key: string,
+  fallback: string | number | null | undefined,
+): number {
+  const displayValue = row.display?.currency === reportCurrency.value ? row.display.amounts[key] : undefined
+  if (displayValue !== undefined) {
+    const parsed = Number.parseFloat(displayValue)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return reportNumberFromUzs(fallback)
+}
+
+function formatReportPrice(value: string | number | null | undefined): string {
+  return formatPrice(reportNumberFromUzs(value), reportCurrency.value)
+}
+
+function formatRowReportPrice(
+  row: { display?: { currency: string; amounts: Record<string, string> } },
+  key: string,
+  fallback: string | number | null | undefined,
+): string {
+  return formatPrice(rowReportNumber(row, key, fallback), reportCurrency.value)
+}
+
+async function setReportCurrency(currency: ReportCurrency): Promise<void> {
+  if (reportCurrency.value === currency) return
+  reportCurrency.value = currency
+  if (currency === 'USD' && !latestUsdRate.value) {
+    try {
+      await loadLatestUsdRate()
+    } catch {
+      reportCurrency.value = 'UZS'
+      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+    }
+  }
+  await loadAnalytics()
+}
+
 const salesProfitabilityTotals = computed(() => {
   return salesProfitability.value.reduce((acc, sale) => ({
-    revenue: acc.revenue + parseFloat(sale.revenue || '0'),
-    cogs: acc.cogs + parseFloat(sale.cogs || '0'),
-    grossProfit: acc.grossProfit + parseFloat(sale.gross_profit || '0'),
-    investorProfit: acc.investorProfit + parseFloat(sale.investor_profit || '0'),
-    businessProfit: acc.businessProfit + parseFloat(sale.business_profit || '0'),
+    revenue: acc.revenue + rowReportNumber(sale, 'revenue', sale.revenue),
+    cogs: acc.cogs + rowReportNumber(sale, 'cogs', sale.cogs),
+    grossProfit: acc.grossProfit + rowReportNumber(sale, 'gross_profit', sale.gross_profit),
+    investorProfit: acc.investorProfit + rowReportNumber(sale, 'investor_profit', sale.investor_profit),
+    businessProfit: acc.businessProfit + rowReportNumber(sale, 'business_profit', sale.business_profit),
     quantitySold: acc.quantitySold + Number(sale.quantity_sold || 0),
     lineCount: acc.lineCount + Number(sale.line_count || 0),
   }), {
@@ -240,13 +295,13 @@ const salesProfitabilityTotals = computed(() => {
 
 const productProfitabilityTotals = computed(() => {
   return productProfitability.value.reduce((acc, product) => ({
-    revenue: acc.revenue + parseFloat(product.revenue || '0'),
-    grossProfit: acc.grossProfit + parseFloat(product.gross_profit || '0'),
-    remainingLandedCost: acc.remainingLandedCost + parseFloat(product.remaining_landed_cost || '0'),
-    projectedRevenue: acc.projectedRevenue + parseFloat(product.projected_revenue || '0'),
-    projectedGrossProfit: acc.projectedGrossProfit + parseFloat(product.projected_gross_profit || '0'),
-    projectedInvestorProfit: acc.projectedInvestorProfit + parseFloat(product.projected_investor_profit || '0'),
-    projectedBusinessProfit: acc.projectedBusinessProfit + parseFloat(product.projected_business_profit || '0'),
+    revenue: acc.revenue + rowReportNumber(product, 'revenue', product.revenue),
+    grossProfit: acc.grossProfit + rowReportNumber(product, 'gross_profit', product.gross_profit),
+    remainingLandedCost: acc.remainingLandedCost + rowReportNumber(product, 'remaining_landed_cost', product.remaining_landed_cost),
+    projectedRevenue: acc.projectedRevenue + rowReportNumber(product, 'projected_revenue', product.projected_revenue),
+    projectedGrossProfit: acc.projectedGrossProfit + rowReportNumber(product, 'projected_gross_profit', product.projected_gross_profit),
+    projectedInvestorProfit: acc.projectedInvestorProfit + rowReportNumber(product, 'projected_investor_profit', product.projected_investor_profit),
+    projectedBusinessProfit: acc.projectedBusinessProfit + rowReportNumber(product, 'projected_business_profit', product.projected_business_profit),
     remainingQuantity: acc.remainingQuantity + Number(product.remaining_quantity || 0),
   }), {
     revenue: 0,
@@ -262,16 +317,16 @@ const productProfitabilityTotals = computed(() => {
 
 const procurementProfitabilityTotals = computed(() => {
   return procurementProfitability.value.reduce((acc, procurement) => ({
-    revenue: acc.revenue + parseFloat(procurement.revenue || '0'),
-    cogs: acc.cogs + parseFloat(procurement.cogs || '0'),
-    grossProfit: acc.grossProfit + parseFloat(procurement.gross_profit || '0'),
-    investorProfit: acc.investorProfit + parseFloat(procurement.investor_profit || '0'),
-    businessProfit: acc.businessProfit + parseFloat(procurement.business_profit || '0'),
-    remainingLandedCost: acc.remainingLandedCost + parseFloat(procurement.remaining_landed_cost || '0'),
-    projectedRevenue: acc.projectedRevenue + parseFloat(procurement.projected_revenue || '0'),
-    projectedGrossProfit: acc.projectedGrossProfit + parseFloat(procurement.projected_gross_profit || '0'),
-    projectedInvestorProfit: acc.projectedInvestorProfit + parseFloat(procurement.projected_investor_profit || '0'),
-    projectedBusinessProfit: acc.projectedBusinessProfit + parseFloat(procurement.projected_business_profit || '0'),
+    revenue: acc.revenue + rowReportNumber(procurement, 'revenue', procurement.revenue),
+    cogs: acc.cogs + rowReportNumber(procurement, 'cogs', procurement.cogs),
+    grossProfit: acc.grossProfit + rowReportNumber(procurement, 'gross_profit', procurement.gross_profit),
+    investorProfit: acc.investorProfit + rowReportNumber(procurement, 'investor_profit', procurement.investor_profit),
+    businessProfit: acc.businessProfit + rowReportNumber(procurement, 'business_profit', procurement.business_profit),
+    remainingLandedCost: acc.remainingLandedCost + rowReportNumber(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost),
+    projectedRevenue: acc.projectedRevenue + rowReportNumber(procurement, 'projected_revenue', procurement.projected_revenue),
+    projectedGrossProfit: acc.projectedGrossProfit + rowReportNumber(procurement, 'projected_gross_profit', procurement.projected_gross_profit),
+    projectedInvestorProfit: acc.projectedInvestorProfit + rowReportNumber(procurement, 'projected_investor_profit', procurement.projected_investor_profit),
+    projectedBusinessProfit: acc.projectedBusinessProfit + rowReportNumber(procurement, 'projected_business_profit', procurement.projected_business_profit),
     quantitySold: acc.quantitySold + Number(procurement.quantity_sold || 0),
     remainingQuantity: acc.remainingQuantity + Number(procurement.remaining_quantity || 0),
   }), {
@@ -296,9 +351,9 @@ const salesProfitabilitySorted = computed(() => {
       return parseFloat(right.margin_percent || '0') - parseFloat(left.margin_percent || '0')
     }
     if (salesSort.value === 'revenue') {
-      return parseFloat(right.revenue || '0') - parseFloat(left.revenue || '0')
+      return rowReportNumber(right, 'revenue', right.revenue) - rowReportNumber(left, 'revenue', left.revenue)
     }
-    return parseFloat(right.gross_profit || '0') - parseFloat(left.gross_profit || '0')
+    return rowReportNumber(right, 'gross_profit', right.gross_profit) - rowReportNumber(left, 'gross_profit', left.gross_profit)
   })
 })
 
@@ -311,12 +366,12 @@ const visibleSalesProfitability = computed(() =>
 const productProfitabilitySorted = computed(() => {
   return [...productProfitability.value].sort((left, right) => {
     if (productSort.value === 'projected') {
-      return parseFloat(right.projected_gross_profit || '0') - parseFloat(left.projected_gross_profit || '0')
+      return rowReportNumber(right, 'projected_gross_profit', right.projected_gross_profit) - rowReportNumber(left, 'projected_gross_profit', left.projected_gross_profit)
     }
     if (productSort.value === 'remaining') {
-      return parseFloat(right.remaining_landed_cost || '0') - parseFloat(left.remaining_landed_cost || '0')
+      return rowReportNumber(right, 'remaining_landed_cost', right.remaining_landed_cost) - rowReportNumber(left, 'remaining_landed_cost', left.remaining_landed_cost)
     }
-    return parseFloat(right.gross_profit || '0') - parseFloat(left.gross_profit || '0')
+    return rowReportNumber(right, 'gross_profit', right.gross_profit) - rowReportNumber(left, 'gross_profit', left.gross_profit)
   })
 })
 
@@ -329,12 +384,12 @@ const visibleProductProfitability = computed(() =>
 const procurementProfitabilitySorted = computed(() => {
   return [...procurementProfitability.value].sort((left, right) => {
     if (procurementSort.value === 'projected') {
-      return parseFloat(right.projected_gross_profit || '0') - parseFloat(left.projected_gross_profit || '0')
+      return rowReportNumber(right, 'projected_gross_profit', right.projected_gross_profit) - rowReportNumber(left, 'projected_gross_profit', left.projected_gross_profit)
     }
     if (procurementSort.value === 'remaining') {
-      return parseFloat(right.remaining_landed_cost || '0') - parseFloat(left.remaining_landed_cost || '0')
+      return rowReportNumber(right, 'remaining_landed_cost', right.remaining_landed_cost) - rowReportNumber(left, 'remaining_landed_cost', left.remaining_landed_cost)
     }
-    return parseFloat(right.gross_profit || '0') - parseFloat(left.gross_profit || '0')
+    return rowReportNumber(right, 'gross_profit', right.gross_profit) - rowReportNumber(left, 'gross_profit', left.gross_profit)
   })
 })
 
@@ -492,10 +547,11 @@ async function loadAnalytics(): Promise<void> {
   loadingAnalytics.value = true
   try {
     const range = getDateRange(period.value)
+    const params = { ...range, report_currency: reportCurrency.value }
     const [salesRows, productRows, procurementRows] = await Promise.all([
-      fetchSalesProfitability(range),
-      fetchProductProfitability(range),
-      fetchProcurementProfitability(range),
+      fetchSalesProfitability(params),
+      fetchProductProfitability(params),
+      fetchProcurementProfitability(params),
     ])
     salesProfitability.value = salesRows
     productProfitability.value = productRows
@@ -639,11 +695,29 @@ function openProcurementAudit(procurementId: number): void {
               <span class="overview-kicker">Финансовый обзор</span>
               <h2 class="overview-title">{{ selectedPeriodLabel }}</h2>
               <p class="overview-note">
-                P&amp;L и cash flow показаны в UZS-эквиваленте. Валюты вынесены отдельно.
+                KPI показаны в выбранной валюте отчёта. Реальные кассы вынесены отдельно.
               </p>
             </div>
 
             <div class="overview-actions">
+              <div class="currency-switch" role="group" aria-label="Валюта отчёта">
+                <button
+                  type="button"
+                  class="currency-switch__btn"
+                  :class="{ active: reportCurrency === 'UZS' }"
+                  @click="setReportCurrency('UZS')"
+                >
+                  UZS
+                </button>
+                <button
+                  type="button"
+                  class="currency-switch__btn"
+                  :class="{ active: reportCurrency === 'USD' }"
+                  @click="setReportCurrency('USD')"
+                >
+                  USD
+                </button>
+              </div>
               <button class="action-pill" type="button" @click="openCurrencyExchange">
                 Обмен валют
               </button>
@@ -656,32 +730,41 @@ function openProcurementAudit(procurementId: number): void {
           <div class="overview-grid">
             <article class="overview-primary">
               <span class="metric-label">Выручка</span>
-              <strong class="overview-primary-value tabular-nums">{{ formatPrice(metrics.revenue) }}</strong>
+              <strong class="overview-primary-value tabular-nums">{{ formatReportPrice(metrics.revenue) }}</strong>
               <div class="overview-primary-meta">
                 <span>{{ metrics.salesCount }} продаж</span>
                 <span>{{ metrics.salesDays }} дней с продажами</span>
-                <span>Возвраты {{ formatPrice(metrics.returns) }}</span>
+                <span>Возвраты {{ formatReportPrice(metrics.returns) }}</span>
               </div>
             </article>
 
             <article class="metric-tile metric-tile--profit">
               <span class="metric-label">Валовая прибыль</span>
-              <strong class="metric-value tabular-nums">{{ formatPrice(metrics.profit) }}</strong>
-              <span class="metric-note">Себестоимость {{ formatPrice(metrics.cogs) }}</span>
+              <strong class="metric-value tabular-nums">{{ formatReportPrice(metrics.profit) }}</strong>
+              <span class="metric-note">Себестоимость {{ formatReportPrice(metrics.cogs) }}</span>
             </article>
 
             <article class="metric-tile" :class="cashFlowTotals.net < 0 ? 'metric-tile--danger' : 'metric-tile--brand'">
               <span class="metric-label">Чистый поток</span>
               <strong class="metric-value tabular-nums">
-                {{ cashFlowTotals.net >= 0 ? '+' : '' }}{{ formatPrice(cashFlowTotals.net) }}
+                {{ cashFlowTotals.net >= 0 ? '+' : '' }}{{ formatReportPrice(cashFlowTotals.net) }}
               </strong>
-              <span class="metric-note">Приход {{ formatPrice(cashFlowTotals.inflows) }} · расход {{ formatPrice(cashFlowTotals.outflows) }}</span>
+              <span class="metric-note">Приход {{ formatReportPrice(cashFlowTotals.inflows) }} · расход {{ formatReportPrice(cashFlowTotals.outflows) }}</span>
             </article>
 
             <article class="metric-tile">
-              <span class="metric-label">Касса и банк</span>
-              <strong class="metric-value tabular-nums">{{ formatPrice(cashBalance) }}</strong>
-              <span class="metric-note">Доступный cash в UZS-эквиваленте</span>
+              <span class="metric-label">Денежные счета</span>
+              <div v-if="nativeCashByCurrency.length" class="cash-native-list">
+                <strong
+                  v-for="item in nativeCashByCurrency"
+                  :key="`cash-${item.currency}`"
+                  class="metric-value metric-value--stacked tabular-nums"
+                >
+                  {{ formatPrice(item.amount, item.currency) }}
+                </strong>
+              </div>
+              <strong v-else class="metric-value tabular-nums">{{ formatPrice(0) }}</strong>
+              <span class="metric-note">Нативные остатки без смешивания валют</span>
             </article>
 
             <article class="metric-tile">
@@ -692,7 +775,7 @@ function openProcurementAudit(procurementId: number): void {
 
             <article class="metric-tile">
               <span class="metric-label">Склад</span>
-              <strong class="metric-value tabular-nums">{{ formatPrice(inventoryTotals.value) }}</strong>
+              <strong class="metric-value tabular-nums">{{ formatReportPrice(inventoryTotals.value) }}</strong>
               <span class="metric-note">{{ inventoryTotals.qty }} шт. на остатке</span>
             </article>
           </div>
@@ -700,9 +783,9 @@ function openProcurementAudit(procurementId: number): void {
           <div class="overview-footer">
             <span class="overview-footer-label">Контрольные метрики</span>
             <div class="inline-chip-list">
-              <span class="inline-chip">Дебиторка {{ formatPrice(totalDebt) }}</span>
-              <span class="inline-chip">Кредиторка {{ formatPrice(totalPayables) }}</span>
-              <span class="inline-chip">Возвраты {{ formatPrice(metrics.returns) }}</span>
+              <span class="inline-chip">Дебиторка {{ formatReportPrice(totalDebt) }}</span>
+              <span class="inline-chip">Кредиторка {{ formatReportPrice(totalPayables) }}</span>
+              <span class="inline-chip">Возвраты {{ formatReportPrice(metrics.returns) }}</span>
               <span v-if="loadingParity" class="inline-chip">Обновляю остатки...</span>
             </div>
             <div v-if="nativeCashByCurrency.length" class="inline-chip-list">
@@ -721,7 +804,7 @@ function openProcurementAudit(procurementId: number): void {
           <div class="workspace-head">
             <div>
               <h2 class="workspace-title">Деньги и обязательства</h2>
-              <p class="workspace-note">Cash flow, долги и склад в одном блоке.</p>
+              <p class="workspace-note">Денежный поток, долги и склад в выбранной валюте отчёта.</p>
             </div>
           </div>
 
@@ -753,7 +836,7 @@ function openProcurementAudit(procurementId: number): void {
                     <span class="money-label">Приход</span>
                     <span class="money-caption">Деньги вошли в кассу и счета</span>
                   </div>
-                  <strong class="money-value money-value--in tabular-nums">{{ formatPrice(cashFlowTotals.inflows) }}</strong>
+                  <strong class="money-value money-value--in tabular-nums">{{ formatReportPrice(cashFlowTotals.inflows) }}</strong>
                 </div>
 
                 <div class="money-row">
@@ -764,7 +847,7 @@ function openProcurementAudit(procurementId: number): void {
                     <span class="money-label">Расход</span>
                     <span class="money-caption">Платежи, закупки и прочие списания</span>
                   </div>
-                  <strong class="money-value money-value--out tabular-nums">{{ formatPrice(cashFlowTotals.outflows) }}</strong>
+                  <strong class="money-value money-value--out tabular-nums">{{ formatReportPrice(cashFlowTotals.outflows) }}</strong>
                 </div>
 
                 <div class="money-divider" />
@@ -780,7 +863,7 @@ function openProcurementAudit(procurementId: number): void {
                   >
                     <TrendingUp v-if="cashFlowTotals.net >= 0" :size="14" :stroke-width="2" />
                     <TrendingDown v-else :size="14" :stroke-width="2" />
-                    {{ cashFlowTotals.net >= 0 ? '+' : '' }}{{ formatPrice(cashFlowTotals.net) }}
+                    {{ cashFlowTotals.net >= 0 ? '+' : '' }}{{ formatReportPrice(cashFlowTotals.net) }}
                   </strong>
                 </div>
               </div>
@@ -803,22 +886,22 @@ function openProcurementAudit(procurementId: number): void {
               <div class="card-head">
                 <div>
                   <span class="card-kicker">Риски</span>
-                  <h3 class="card-title">Обязательства и давление на оборот</h3>
+                  <h3 class="card-title">Долги и склад</h3>
                 </div>
               </div>
 
               <div class="obligation-grid">
                 <div class="obligation-tile">
                   <span class="metric-label">Дебиторка</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(totalDebt) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatReportPrice(totalDebt) }}</strong>
                 </div>
                 <div class="obligation-tile">
                   <span class="metric-label">Кредиторка</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(totalPayables) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatReportPrice(totalPayables) }}</strong>
                 </div>
                 <div class="obligation-tile">
                   <span class="metric-label">Склад по себестоимости</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(inventoryTotals.value) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatReportPrice(inventoryTotals.value) }}</strong>
                 </div>
                 <div class="obligation-tile">
                   <span class="metric-label">Остаток в штуках</span>
@@ -854,7 +937,7 @@ function openProcurementAudit(procurementId: number): void {
                           {{ debtExpanded ? (debtor.phone || 'Без номера') : 'Покупатель' }}
                         </span>
                       </div>
-                      <strong class="debtor-amount tabular-nums">{{ formatPrice(debtor.outstanding_balance) }}</strong>
+                      <strong class="debtor-amount tabular-nums">{{ formatReportPrice(debtor.outstanding_balance) }}</strong>
                     </div>
                   </div>
 
@@ -927,7 +1010,7 @@ function openProcurementAudit(procurementId: number): void {
               <template v-if="analyticsView === 'sales'">
                 <div class="summary-card summary-card--primary">
                   <span class="metric-label">Валовая прибыль</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.grossProfit) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
                   <span class="metric-note">
                     Маржа {{
                       formatPercent(
@@ -940,8 +1023,8 @@ function openProcurementAudit(procurementId: number): void {
                 </div>
                 <div class="summary-card">
                   <span class="metric-label">Выручка</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.revenue) }}</strong>
-                  <span class="metric-note">Себестоимость {{ formatPrice(salesProfitabilityTotals.cogs) }}</span>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.revenue, reportCurrency) }}</strong>
+                  <span class="metric-note">Себестоимость {{ formatPrice(salesProfitabilityTotals.cogs, reportCurrency) }}</span>
                 </div>
                 <div class="summary-footer">
                   <button
@@ -952,8 +1035,8 @@ function openProcurementAudit(procurementId: number): void {
                     {{ salesSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
                   </button>
                   <div v-if="salesSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Инвестор {{ formatPrice(salesProfitabilityTotals.investorProfit) }}</span>
-                    <span class="inline-chip inline-chip--muted">Бизнес {{ formatPrice(salesProfitabilityTotals.businessProfit) }}</span>
+                    <span class="inline-chip inline-chip--muted">Инвестор {{ formatPrice(salesProfitabilityTotals.investorProfit, reportCurrency) }}</span>
+                    <span class="inline-chip inline-chip--muted">Бизнес {{ formatPrice(salesProfitabilityTotals.businessProfit, reportCurrency) }}</span>
                     <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.lineCount }} строк</span>
                     <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.quantitySold }} шт.</span>
                   </div>
@@ -963,11 +1046,11 @@ function openProcurementAudit(procurementId: number): void {
               <template v-else-if="analyticsView === 'products'">
                 <div class="summary-card summary-card--primary">
                   <span class="metric-label">Факт. прибыль</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.grossProfit) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
                 </div>
                 <div class="summary-card">
                   <span class="metric-label">Прогноз прибыли</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.projectedGrossProfit) }}</strong>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.projectedGrossProfit, reportCurrency) }}</strong>
                 </div>
                 <div class="summary-footer">
                   <button
@@ -978,8 +1061,8 @@ function openProcurementAudit(procurementId: number): void {
                     {{ productsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
                   </button>
                   <div v-if="productsSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Продажи {{ formatPrice(productProfitabilityTotals.revenue) }}</span>
-                    <span class="inline-chip inline-chip--muted">Остаток {{ formatPrice(productProfitabilityTotals.remainingLandedCost) }}</span>
+                    <span class="inline-chip inline-chip--muted">Продажи {{ formatPrice(productProfitabilityTotals.revenue, reportCurrency) }}</span>
+                    <span class="inline-chip inline-chip--muted">Остаток {{ formatPrice(productProfitabilityTotals.remainingLandedCost, reportCurrency) }}</span>
                     <span class="inline-chip inline-chip--muted">{{ productProfitabilityTotals.remainingQuantity }} шт. в остатке</span>
                   </div>
                 </div>
@@ -988,13 +1071,13 @@ function openProcurementAudit(procurementId: number): void {
               <template v-else>
                 <div class="summary-card summary-card--primary">
                   <span class="metric-label">Факт. прибыль</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.grossProfit) }}</strong>
-                  <span class="metric-note">Инвестор {{ formatPrice(procurementProfitabilityTotals.investorProfit) }} · бизнес {{ formatPrice(procurementProfitabilityTotals.businessProfit) }}</span>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
+                  <span class="metric-note">Инвестор {{ formatPrice(procurementProfitabilityTotals.investorProfit, reportCurrency) }} · бизнес {{ formatPrice(procurementProfitabilityTotals.businessProfit, reportCurrency) }}</span>
                 </div>
                 <div class="summary-card">
                   <span class="metric-label">Прогноз прибыли</span>
-                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.projectedGrossProfit) }}</strong>
-                  <span class="metric-note">Остаток {{ formatPrice(procurementProfitabilityTotals.remainingLandedCost) }}</span>
+                  <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.projectedGrossProfit, reportCurrency) }}</strong>
+                  <span class="metric-note">Остаток {{ formatPrice(procurementProfitabilityTotals.remainingLandedCost, reportCurrency) }}</span>
                 </div>
                 <div class="summary-footer">
                   <button
@@ -1005,10 +1088,10 @@ function openProcurementAudit(procurementId: number): void {
                     {{ procurementsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
                   </button>
                   <div v-if="procurementsSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Выручка {{ formatPrice(procurementProfitabilityTotals.revenue) }}</span>
+                    <span class="inline-chip inline-chip--muted">Выручка {{ formatPrice(procurementProfitabilityTotals.revenue, reportCurrency) }}</span>
                     <span class="inline-chip inline-chip--muted">Продано {{ procurementProfitabilityTotals.quantitySold }} шт.</span>
                     <span class="inline-chip inline-chip--muted">В остатке {{ procurementProfitabilityTotals.remainingQuantity }} шт.</span>
-                    <span class="inline-chip inline-chip--muted">Прогноз инвестора {{ formatPrice(procurementProfitabilityTotals.projectedInvestorProfit) }}</span>
+                    <span class="inline-chip inline-chip--muted">Прогноз инвестора {{ formatPrice(procurementProfitabilityTotals.projectedInvestorProfit, reportCurrency) }}</span>
                   </div>
                 </div>
               </template>
@@ -1105,7 +1188,7 @@ function openProcurementAudit(procurementId: number): void {
                       <span class="analytics-meta">{{ sale.quantity_sold }} шт. · {{ sale.customer_name || 'Без клиента' }}</span>
                     </div>
                     <div class="analytics-side">
-                      <strong class="analytics-amount tabular-nums">{{ formatPrice(sale.gross_profit) }}</strong>
+                      <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(sale, 'gross_profit', sale.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
                         <span class="analytics-trend">Маржа {{ formatPercent(sale.margin_percent) }}</span>
                         <ChevronDown
@@ -1119,10 +1202,10 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedSaleId === sale.sale_id" class="analytics-details">
-                    <span class="detail-chip">Выручка {{ formatPrice(sale.revenue) }}</span>
-                    <span class="detail-chip">Себестоимость {{ formatPrice(sale.cogs) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatPrice(sale.investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatPrice(sale.business_profit) }}</span>
+                    <span class="detail-chip">Выручка {{ formatRowReportPrice(sale, 'revenue', sale.revenue) }}</span>
+                    <span class="detail-chip">Себестоимость {{ formatRowReportPrice(sale, 'cogs', sale.cogs) }}</span>
+                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(sale, 'investor_profit', sale.investor_profit) }}</span>
+                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(sale, 'business_profit', sale.business_profit) }}</span>
                     <span class="detail-chip">{{ paymentMethodsLabel(sale.payment_methods) }}</span>
                     <button type="button" class="detail-chip detail-chip--action" @click.stop="openSaleExplanation(sale.sale_id)">
                       Аудит продажи
@@ -1145,10 +1228,10 @@ function openProcurementAudit(procurementId: number): void {
                         <span class="analytics-badge">{{ product.quantity_sold }} продано</span>
                       </div>
                       <span class="analytics-meta">Остаток {{ product.remaining_quantity }} шт.</span>
-                      <span class="analytics-meta">Цена {{ formatPrice(product.current_unit_price) }}</span>
+                      <span class="analytics-meta">Цена {{ formatRowReportPrice(product, 'current_unit_price', product.current_unit_price) }}</span>
                     </div>
                     <div class="analytics-side">
-                      <strong class="analytics-amount tabular-nums">{{ formatPrice(product.gross_profit) }}</strong>
+                      <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(product, 'gross_profit', product.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
                         <span class="analytics-trend">Маржа {{ formatPercent(product.margin_percent) }}</span>
                         <ChevronDown
@@ -1162,12 +1245,12 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedProductId === product.product_variant_id" class="analytics-details">
-                    <span class="detail-chip">Продажи {{ formatPrice(product.revenue) }}</span>
-                    <span class="detail-chip">Факт {{ formatPrice(product.gross_profit) }}</span>
-                    <span class="detail-chip">Остаток {{ formatPrice(product.remaining_landed_cost) }}</span>
-                    <span class="detail-chip">Прогноз {{ formatPrice(product.projected_gross_profit) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatPrice(product.projected_investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatPrice(product.projected_business_profit) }}</span>
+                    <span class="detail-chip">Продажи {{ formatRowReportPrice(product, 'revenue', product.revenue) }}</span>
+                    <span class="detail-chip">Факт {{ formatRowReportPrice(product, 'gross_profit', product.gross_profit) }}</span>
+                    <span class="detail-chip">Остаток {{ formatRowReportPrice(product, 'remaining_landed_cost', product.remaining_landed_cost) }}</span>
+                    <span class="detail-chip">Прогноз {{ formatRowReportPrice(product, 'projected_gross_profit', product.projected_gross_profit) }}</span>
+                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(product, 'projected_investor_profit', product.projected_investor_profit) }}</span>
+                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(product, 'projected_business_profit', product.projected_business_profit) }}</span>
                   </div>
                 </article>
               </template>
@@ -1189,9 +1272,9 @@ function openProcurementAudit(procurementId: number): void {
                       <span class="analytics-meta">{{ procurementStatusLabel(procurement.status) }} · {{ procurement.quantity_sold }} прод. · {{ procurement.remaining_quantity }} ост.</span>
                     </div>
                     <div class="analytics-side">
-                      <strong class="analytics-amount tabular-nums">{{ formatPrice(procurement.gross_profit) }}</strong>
+                      <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(procurement, 'gross_profit', procurement.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
-                        <span class="analytics-trend">Прогноз {{ formatPrice(procurement.projected_gross_profit) }}</span>
+                        <span class="analytics-trend">Прогноз {{ formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}</span>
                         <ChevronDown
                           :size="16"
                           :stroke-width="1.8"
@@ -1205,15 +1288,15 @@ function openProcurementAudit(procurementId: number): void {
                   <div v-if="expandedProcurementId === procurement.procurement_id" class="analytics-details">
                     <span class="detail-chip">{{ procurementTypeLabel(procurement.procurement_type) }}</span>
                     <span class="detail-chip">{{ procurementStatusLabel(procurement.status) }}</span>
-                    <span class="detail-chip">Выручка {{ formatPrice(procurement.revenue) }}</span>
-                    <span class="detail-chip">Себестоимость {{ formatPrice(procurement.cogs) }}</span>
-                    <span class="detail-chip">Факт {{ formatPrice(procurement.gross_profit) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatPrice(procurement.investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatPrice(procurement.business_profit) }}</span>
-                    <span class="detail-chip">Остаток {{ formatPrice(procurement.remaining_landed_cost) }}</span>
-                    <span class="detail-chip">Прогноз {{ formatPrice(procurement.projected_gross_profit) }}</span>
-                    <span class="detail-chip">Инв. прогноз {{ formatPrice(procurement.projected_investor_profit) }}</span>
-                    <span class="detail-chip">Бизн. прогноз {{ formatPrice(procurement.projected_business_profit) }}</span>
+                    <span class="detail-chip">Выручка {{ formatRowReportPrice(procurement, 'revenue', procurement.revenue) }}</span>
+                    <span class="detail-chip">Себестоимость {{ formatRowReportPrice(procurement, 'cogs', procurement.cogs) }}</span>
+                    <span class="detail-chip">Факт {{ formatRowReportPrice(procurement, 'gross_profit', procurement.gross_profit) }}</span>
+                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(procurement, 'investor_profit', procurement.investor_profit) }}</span>
+                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(procurement, 'business_profit', procurement.business_profit) }}</span>
+                    <span class="detail-chip">Остаток {{ formatRowReportPrice(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}</span>
+                    <span class="detail-chip">Прогноз {{ formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}</span>
+                    <span class="detail-chip">Инв. прогноз {{ formatRowReportPrice(procurement, 'projected_investor_profit', procurement.projected_investor_profit) }}</span>
+                    <span class="detail-chip">Бизн. прогноз {{ formatRowReportPrice(procurement, 'projected_business_profit', procurement.projected_business_profit) }}</span>
                     <button type="button" class="detail-chip detail-chip--action" @click.stop="openProcurementAudit(procurement.procurement_id)">
                       Аудит закупки
                     </button>
@@ -1507,6 +1590,31 @@ function openProcurementAudit(procurementId: number): void {
   gap: var(--space-2);
 }
 
+.currency-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(46px, 1fr));
+  min-height: 40px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.currency-switch__btn {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.currency-switch__btn.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-brand-700);
+  box-shadow: var(--shadow-xs);
+}
+
 .overview-grid,
 .obligation-grid,
 .summary-strip,
@@ -1559,6 +1667,15 @@ function openProcurementAudit(procurementId: number): void {
   color: var(--color-text-primary);
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
+}
+
+.cash-native-list {
+  display: grid;
+  gap: 2px;
+}
+
+.metric-value--stacked {
+  line-height: var(--leading-tight);
 }
 
 .metric-tile--profit .metric-value { color: var(--color-success); }
@@ -2064,35 +2181,153 @@ function openProcurementAudit(procurementId: number): void {
 
   .analytics-switch,
   .segment-control {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    padding-bottom: 2px;
+    overflow: hidden;
+    gap: 4px;
+    padding: 4px;
+    border-radius: var(--radius-full);
+    background: var(--color-bg-sunken);
   }
 
   .analytics-switch-btn,
-  .segment-btn,
+  .segment-btn {
+    width: 100%;
+    min-width: 0;
+    padding: 0 var(--space-2);
+    justify-content: center;
+    text-align: center;
+    font-size: var(--text-xs);
+  }
+
   .inline-chip,
   .detail-chip {
     white-space: nowrap;
   }
 
+  .toolbar-row {
+    gap: var(--space-2);
+  }
+
+  .toolbar-row .workspace-note {
+    font-size: var(--text-xs);
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-card {
+    min-width: 0;
+    padding: var(--space-3);
+  }
+
+  .summary-card .metric-value {
+    font-size: var(--text-base);
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .summary-card .metric-note {
+    font-size: var(--text-xs);
+  }
+
+  .summary-footer {
+    grid-column: 1 / -1;
+  }
+
   .analytics-table-note {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-bg-primary);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .analytics-table-note span:first-child {
+    color: var(--color-text-primary);
+    font-weight: var(--font-semibold);
+  }
+
+  .analytics-table-note span:last-child {
+    display: none;
+  }
+
+  .analytics-row {
+    gap: 0;
+    padding: 0;
   }
 
   .analytics-toggle {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: 0;
+  }
+
+  .analytics-title-row {
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+  }
+
+  .analytics-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .analytics-badge {
+    flex-shrink: 0;
+    min-height: 20px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .analytics-main .analytics-meta:nth-of-type(n + 2) {
+    display: none;
+  }
+
+  .analytics-meta {
+    font-size: var(--text-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .analytics-side {
-    justify-items: start;
-    text-align: left;
+    justify-items: end;
+    text-align: right;
+  }
+
+  .analytics-amount {
+    font-size: var(--text-sm);
+  }
+
+  .analytics-side-meta {
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .analytics-trend {
+    font-size: var(--text-xs);
   }
 
   .analytics-details {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 var(--space-3) var(--space-3);
+  }
+
+  .detail-chip {
+    min-width: 0;
+    min-height: 28px;
+    justify-content: flex-start;
+    padding: 0 var(--space-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: var(--text-xs);
   }
 
   .money-row,

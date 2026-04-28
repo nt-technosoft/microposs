@@ -6,10 +6,23 @@ from decimal import Decimal
 
 from rest_framework import serializers
 from .models import Sale, SaleLine, SalePayment, Return, ReturnLine, PosSession
+from .currency import payment_functional_amount_uzs
 
 
 def _money(value: Decimal | int | float | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('0.01'))
+
+
+def _currency_map(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for currency, amount in value.items():
+        normalized = str(currency or '').upper()
+        if not normalized:
+            continue
+        result[normalized] = str(_money(amount or '0'))
+    return result
 
 
 def _percent(numerator: Decimal, denominator: Decimal) -> Decimal:
@@ -49,14 +62,18 @@ class PosSessionSerializer(serializers.ModelSerializer):
         read_only=True,
         default='0.00',
     )
+    cash_sales_by_currency = serializers.SerializerMethodField()
 
     class Meta:
         model = PosSession
         fields = [
             'id', 'location', 'location_name', 'status',
             'sales_count', 'cash_sales_total',
+            'cash_sales_by_currency',
             'opening_cash', 'expected_cash', 'actual_cash',
             'cash_difference', 'opened_by', 'closed_by',
+            'opening_cash_by_currency', 'expected_cash_by_currency',
+            'actual_cash_by_currency', 'cash_difference_by_currency',
             'opened_at', 'closed_at',
         ]
         read_only_fields = [
@@ -64,28 +81,61 @@ class PosSessionSerializer(serializers.ModelSerializer):
             'opened_at', 'closed_at',
         ]
 
+    def get_cash_sales_by_currency(self, obj):
+        totals: dict[str, Decimal] = {}
+        for payment in SalePayment.objects.filter(
+            sale__pos_session=obj,
+            sale__status=Sale.SaleStatus.COMPLETED,
+            role=SalePayment.Role.INCOMING,
+            method=SalePayment.Method.CASH,
+        ):
+            currency = str(payment.currency or 'UZS').upper()
+            totals[currency] = totals.get(currency, Decimal('0.00')) + payment.amount
+        return {currency: str(_money(amount)) for currency, amount in sorted(totals.items())}
+
 
 class OpenSessionSerializer(serializers.Serializer):
     location_id = serializers.IntegerField()
     opening_cash = serializers.DecimalField(
         max_digits=14, decimal_places=2, default=0, min_value=Decimal('0'),
     )
+    opening_cash_by_currency = serializers.DictField(
+        child=serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0')),
+        required=False,
+        default=dict,
+    )
+
+    def validate_opening_cash_by_currency(self, value):
+        return _currency_map(value)
 
 
 class CloseSessionSerializer(serializers.Serializer):
     actual_cash = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0'))
+    actual_cash_by_currency = serializers.DictField(
+        child=serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0')),
+        required=False,
+        default=dict,
+    )
+
+    def validate_actual_cash_by_currency(self, value):
+        return _currency_map(value)
 
 
 # === SalePayment ===
 
 class SalePaymentSerializer(serializers.ModelSerializer):
+    functional_amount_uzs = serializers.SerializerMethodField()
+
     class Meta:
         model = SalePayment
         fields = [
             'id', 'date', 'amount', 'currency', 'fx_rate',
-            'method', 'role', 'account_id',
+            'functional_amount_uzs', 'method', 'role', 'account_id',
         ]
         read_only_fields = ['id']
+
+    def get_functional_amount_uzs(self, obj):
+        return payment_functional_amount_uzs(obj)
 
 
 class SalePaymentInputSerializer(serializers.Serializer):
@@ -116,6 +166,7 @@ class SaleLineSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'lot', 'product_variant', 'product_name',
             'quantity', 'unit_price', 'base_price',
+            'operation_currency', 'operation_unit_price', 'fx_rate_snapshot',
             'price_changed', 'discount_reason',
             'unit_purchase_price', 'unit_landed_cost',
             'profit_distribution_snapshot',
@@ -128,6 +179,19 @@ class SaleLineInputSerializer(serializers.Serializer):
     product_variant_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
     unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    operation_currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    operation_unit_price = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+    )
+    fx_rate = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
     discount_reason_id = serializers.IntegerField(required=False, allow_null=True)
 
 
@@ -163,13 +227,20 @@ class SalePresentationMixin(serializers.ModelSerializer):
         return methods[0] if methods else None
 
     def get_operation_currency(self, obj):
+        currencies = {
+            str(payment.currency or 'UZS').upper()
+            for payment in self._get_incoming_payments(obj)
+        }
+        if len(currencies) > 1:
+            return 'MIXED'
         payment = self._get_incoming_payment(obj)
         return payment.currency if payment else 'UZS'
 
     def get_operation_amount(self, obj):
-        payment = self._get_incoming_payment(obj)
-        if payment:
-            return payment.amount
+        payments = self._get_incoming_payments(obj)
+        currencies = {str(payment.currency or 'UZS').upper() for payment in payments}
+        if len(currencies) == 1:
+            return sum((payment.amount for payment in payments), Decimal('0.00'))
         return obj.total_amount
 
     def get_fx_rate_snapshot(self, obj):
@@ -179,12 +250,10 @@ class SalePresentationMixin(serializers.ModelSerializer):
         return Decimal('1')
 
     def get_functional_amount_uzs(self, obj):
-        payment = self._get_incoming_payment(obj)
-        if not payment:
+        payments = self._get_incoming_payments(obj)
+        if not payments:
             return obj.total_amount
-        if str(payment.currency or 'UZS').upper() == 'UZS':
-            return payment.amount
-        return (payment.amount * payment.fx_rate).quantize(Decimal('0.01'))
+        return sum((payment_functional_amount_uzs(payment) for payment in payments), Decimal('0.00'))
 
 
 class SaleListSerializer(SalePresentationMixin, serializers.ModelSerializer):
@@ -212,9 +281,8 @@ class SaleListSerializer(SalePresentationMixin, serializers.ModelSerializer):
         return obj.lines.count()
 
     def get_paid_total(self, obj):
-        from decimal import Decimal
         return str(sum(
-            p.amount for p in obj.payments.all()
+            payment_functional_amount_uzs(p) for p in obj.payments.all()
             if p.role == SalePayment.Role.INCOMING
         ))
 

@@ -6,6 +6,7 @@ from apps.core.models import Partner
 from apps.customers.models import ReceivableEntry
 from apps.finance.models import CashEntry, JournalEntry
 from apps.partnerships.models import PartnerLedgerEntry
+from apps.sales.currency import payment_functional_amount_uzs
 
 
 _ZERO = Decimal('0.00')
@@ -144,11 +145,11 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
     paid_total = _ZERO
     credit_total = _ZERO
     for payment in payments:
-        paid_total += _money(payment.amount)
+        paid_total += payment_functional_amount_uzs(payment)
         if payment.method not in sale_payment_methods:
             sale_payment_methods.append(payment.method)
         if payment.method == payment.Method.CREDIT:
-            credit_total += _money(payment.amount)
+            credit_total += payment_functional_amount_uzs(payment)
 
     investor_profit = _ZERO
     business_profit = _ZERO
@@ -179,6 +180,9 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
             'product_name': str(line.product_variant),
             'quantity': line.quantity,
             'unit_price': str(_money(line.unit_price)),
+            'operation_currency': line.operation_currency,
+            'operation_unit_price': str(_money(line.operation_unit_price or line.unit_price)),
+            'fx_rate_snapshot': str(line.fx_rate_snapshot),
             'revenue': str(revenue),
             'unit_purchase_price': str(_money(line.unit_purchase_price)),
             'purchase_cost': str(purchase_cost),
@@ -233,6 +237,7 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
                 'amount': str(_money(payment.amount)),
                 'currency': payment.currency,
                 'fx_rate': str(payment.fx_rate),
+                'functional_amount_uzs': str(payment_functional_amount_uzs(payment)),
                 'account_id': payment.account_id,
             }
             for payment in payments
@@ -244,6 +249,7 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
                 'payment_id': entry.source_ref_id,
                 'payment_method': payment_by_id.get(entry.source_ref_id).method if entry.source_ref_id in payment_by_id else None,
                 'account_name': entry.account.name,
+                'currency': entry.account.currency,
                 'direction': entry.direction,
                 'amount': str(_money(entry.amount)),
             }

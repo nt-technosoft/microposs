@@ -20,6 +20,11 @@ from .fx_rates import (
     to_functional_amount_uzs,
     upsert_exchange_rate,
 )
+from .report_currency import (
+    REPORT_AMOUNT_KEYS,
+    ReportCurrencyContext,
+    resolve_report_currency_context,
+)
 
 
 def _to_decimal(value: str | int | float | Decimal) -> Decimal:
@@ -974,6 +979,19 @@ def _percent(numerator: Decimal, denominator: Decimal) -> Decimal:
     return ((numerator / denominator) * Decimal('100')).quantize(Decimal('0.01'))
 
 
+def _display_payload(row: dict, context: ReportCurrencyContext) -> dict:
+    keys = [key for key in REPORT_AMOUNT_KEYS if key in row]
+    return {
+        **context.meta(),
+        'amounts': context.values(row, keys),
+    }
+
+
+def _attach_display(row: dict, context: ReportCurrencyContext) -> dict:
+    row['display'] = _display_payload(row, context)
+    return row
+
+
 def _investor_profit_from_distribution(line) -> Decimal:
     snapshot = line.profit_distribution_snapshot or {}
     contract_snapshot = line.lot.contract_snapshot or {}
@@ -1011,8 +1029,16 @@ def get_sales_profitability_rows(
     date_from=None,
     date_to=None,
     location_id: int | None = None,
+    report_currency: str | None = None,
 ) -> list[dict]:
     from apps.sales.models import Sale
+
+    display_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=report_currency,
+        default_currency='UZS',
+        rate_date=date_to,
+    )
 
     queryset = (
         Sale.objects
@@ -1035,7 +1061,7 @@ def get_sales_profitability_rows(
             Decimal('0.00'),
         ).quantize(Decimal('0.01'))
         gross_profit = _money(sale.total_amount - sale.total_cogs)
-        rows.append({
+        rows.append(_attach_display({
             'sale_id': sale.id,
             'date': sale.date,
             'location_id': sale.location_id,
@@ -1052,7 +1078,7 @@ def get_sales_profitability_rows(
             'business_profit': _money(gross_profit - investor_profit),
             'margin_percent': _percent(gross_profit, _money(sale.total_amount)),
             'markup_percent': _percent(gross_profit, _money(sale.total_cogs)),
-        })
+        }, display_context))
     return rows
 
 
@@ -1063,10 +1089,18 @@ def get_product_profitability_rows(
     date_to=None,
     location_id: int | None = None,
     warehouse_id: int | None = None,
+    report_currency: str | None = None,
 ) -> list[dict]:
     from apps.inventory.models import LotStock
     from apps.sales.models import SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
+
+    display_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=report_currency,
+        default_currency='UZS',
+        rate_date=date_to,
+    )
 
     sale_lines = (
         SaleLine.objects
@@ -1179,7 +1213,7 @@ def get_product_profitability_rows(
         row['projected_business_profit'] = _money(
             row['projected_gross_profit'] - row['projected_investor_profit']
         )
-        result.append(row)
+        result.append(_attach_display(row, display_context))
 
     result.sort(key=lambda item: (-Decimal(str(item['gross_profit'])), item['product_name']))
     return result
@@ -1191,11 +1225,19 @@ def get_procurement_profitability_rows(
     date_from=None,
     date_to=None,
     procurement_id: int | None = None,
+    report_currency: str | None = None,
 ) -> list[dict]:
     from apps.inventory.models import LotStock
     from apps.partnerships.models import Procurement
     from apps.sales.models import SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
+
+    display_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=report_currency,
+        default_currency='UZS',
+        rate_date=date_to,
+    )
 
     sale_lines = (
         SaleLine.objects
@@ -1352,7 +1394,7 @@ def get_procurement_profitability_rows(
         row['projected_business_profit'] = _money(
             row['projected_gross_profit'] - row['projected_investor_profit']
         )
-        result.append(row)
+        result.append(_attach_display(row, display_context))
 
     result.sort(
         key=lambda item: (
@@ -1368,6 +1410,7 @@ def get_procurement_profitability_detail(
     *,
     tenant_id: int,
     procurement_id: int,
+    report_currency: str | None = None,
 ) -> dict:
     from apps.inventory.models import LotStock
     from apps.partnerships.models import Procurement
@@ -1377,16 +1420,28 @@ def get_procurement_profitability_detail(
     procurement = (
         Procurement.objects
         .filter(tenant_id=tenant_id, id=procurement_id)
-        .select_related('supplier')
+        .select_related('supplier', 'agreement', 'contract')
         .prefetch_related('items__product_variant__product', 'items__lots__stocks')
         .first()
     )
     if procurement is None:
         raise Procurement.DoesNotExist
 
+    default_report_currency = 'UZS'
+    if procurement.agreement_id and procurement.agreement.currency:
+        default_report_currency = procurement.agreement.currency
+    elif hasattr(procurement, 'contract') and procurement.contract.currency:
+        default_report_currency = procurement.contract.currency
+    display_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=report_currency,
+        default_currency=default_report_currency,
+    )
+
     summary_rows = get_procurement_profitability_rows(
         tenant_id=tenant_id,
         procurement_id=procurement_id,
+        report_currency=display_context.currency,
     )
     summary = summary_rows[0] if summary_rows else {
         'procurement_id': procurement.id,
@@ -1411,6 +1466,7 @@ def get_procurement_profitability_detail(
         'projected_investor_profit': Decimal('0.00'),
         'projected_business_profit': Decimal('0.00'),
     }
+    _attach_display(summary, display_context)
 
     sale_lines = list(
         SaleLine.objects
@@ -1540,7 +1596,7 @@ def get_procurement_profitability_detail(
         row['projected_business_profit'] = _money(
             row['projected_gross_profit'] - row['projected_investor_profit']
         )
-        item_rows.append(row)
+        item_rows.append(_attach_display(row, display_context))
 
     item_rows.sort(
         key=lambda item: (
@@ -1551,6 +1607,7 @@ def get_procurement_profitability_detail(
     )
 
     return {
+        'report_currency': display_context.meta(),
         'procurement': summary,
         'items': item_rows,
     }
@@ -1560,6 +1617,7 @@ def get_agreement_profitability_detail(
     *,
     tenant_id: int,
     agreement_id: int,
+    report_currency: str | None = None,
 ) -> dict:
     from apps.partnerships.models import (
         AgreementAllocation,
@@ -1587,6 +1645,12 @@ def get_agreement_profitability_detail(
     if agreement is None:
         raise InvestmentAgreement.DoesNotExist
 
+    display_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=report_currency,
+        default_currency=agreement.currency,
+    )
+
     procurement_rows: list[dict] = []
     totals = {
         'revenue': Decimal('0.00'),
@@ -1609,6 +1673,7 @@ def get_agreement_profitability_detail(
         rows = get_procurement_profitability_rows(
             tenant_id=tenant_id,
             procurement_id=procurement.id,
+            report_currency=display_context.currency,
         )
         if rows:
             row = rows[0]
@@ -1672,6 +1737,12 @@ def get_agreement_profitability_detail(
                 'received_at': batch.received_at,
                 'items_count': batch.items_count,
                 'total_inventory_uzs': _money(batch.total_inventory_uzs),
+                'display': {
+                    **display_context.meta(),
+                    'amounts': {
+                        'total_inventory': str(display_context.convert_uzs(batch.total_inventory_uzs)),
+                    },
+                },
                 'capital_allocations': [
                     {
                         'partner_id': allocation.partner_id,
@@ -1688,6 +1759,7 @@ def get_agreement_profitability_detail(
         ]
         row['pending_paid_items_count'] = pending_paid_items_count
         row['draft_items_count'] = draft_items_count
+        _attach_display(row, display_context)
         procurement_rows.append(row)
 
     ledger_rows = (
@@ -1859,6 +1931,21 @@ def get_agreement_profitability_detail(
             + row['agreement_returned']
         )
         row['profit_pending_payout'] = max(Decimal('0.00'), profit_pending)
+        row['display'] = {
+            **display_context.meta(),
+            'amounts': display_context.values(row, [
+                'allocated_functional_uzs',
+                'returned_functional_uzs',
+                'pending_prepaid_cost_estimate_uzs',
+                'capital_in',
+                'capital_out',
+                'profit_accrued',
+                'profit_reversed',
+                'losses_incurred',
+                'dividends_paid',
+                'profit_pending_payout',
+            ]),
+        }
         for key, value in list(row.items()):
             if isinstance(value, Decimal):
                 row[key] = str(_money(value))
@@ -1889,7 +1976,9 @@ def get_agreement_profitability_detail(
         'projected_investor_profit': _money(totals['projected_investor_profit']),
         'projected_business_profit': _money(totals['projected_business_profit']),
     }
+    _attach_display(summary, display_context)
     return {
+        'report_currency': display_context.meta(),
         'agreement': summary,
         'partners': sorted(serialized_partners, key=lambda item: (item['role'], item['partner_id'])),
         'procurements': procurement_rows,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRightLeft, Package2, RefreshCw } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRightLeft, ChevronDown, Package2, RefreshCw } from 'lucide-vue-next'
 import { fetchLocations, fetchLots, fetchStockMovements, transferStock } from '@/api/inventory'
 import type { Location, Lot, StockMovement } from '@/types/models'
 import BaseSelect from '@/components/base/BaseSelect.vue'
@@ -16,11 +16,17 @@ const toast = useToast()
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isLoadingLots = ref(false)
+const isLoadingMoreTransfers = ref(false)
 const locations = ref<Location[]>([])
 const lots = ref<Lot[]>([])
 const recentTransfers = ref<StockMovement[]>([])
+const transferPage = ref(1)
+const transferTotal = ref(0)
+const expandedTransferId = ref<number | null>(null)
 const formError = ref('')
 const loadError = ref('')
+
+const TRANSFER_PAGE_SIZE = 6
 
 const form = ref({
   fromWarehouseId: null as number | null,
@@ -109,6 +115,8 @@ const transferCandidatesEmpty = computed(() =>
   && lots.value.length === 0,
 )
 
+const hasMoreTransfers = computed(() => recentTransfers.value.length < transferTotal.value)
+
 function formatDate(date: string): string {
   return new Intl.DateTimeFormat('ru-RU', {
     day: 'numeric',
@@ -118,16 +126,66 @@ function formatDate(date: string): string {
   }).format(new Date(date))
 }
 
+function formatFullDate(date: string): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(date))
+}
+
+function movementTitle(movement: StockMovement): string {
+  return movement.lot_product_name || `Партия #${movement.lot}`
+}
+
+function movementSource(movement: StockMovement): string {
+  if (movement.lot_procurement_id) return `Приход #${movement.lot_procurement_id}`
+  if (movement.lot_receipt_id) return `Документ #${movement.lot_receipt_id}`
+  return `Партия #${movement.lot}`
+}
+
+function toggleTransferDetails(id: number): void {
+  expandedTransferId.value = expandedTransferId.value === id ? null : id
+}
+
+async function loadTransferHistory({ reset = false } = {}): Promise<void> {
+  const nextPage = reset ? 1 : transferPage.value + 1
+  if (!reset) isLoadingMoreTransfers.value = true
+  try {
+    const response = await fetchStockMovements({
+      movement_type: 'transfer',
+      page: nextPage,
+      page_size: TRANSFER_PAGE_SIZE,
+    })
+    recentTransfers.value = reset
+      ? response.results
+      : [...recentTransfers.value, ...response.results]
+    transferTotal.value = response.count
+    transferPage.value = nextPage
+  } catch (error: unknown) {
+    const message = getApiErrorMessage(error, 'Не удалось загрузить историю перемещений')
+    if (reset) loadError.value = message
+    else toast.error(message)
+  } finally {
+    isLoadingMoreTransfers.value = false
+  }
+}
+
 async function loadLocationsAndMovements(): Promise<void> {
   isLoading.value = true
   loadError.value = ''
   try {
     const [loadedLocations, movementsResponse] = await Promise.all([
       fetchLocations(),
-      fetchStockMovements({ movement_type: 'transfer', page: 1, page_size: 6 }),
+      fetchStockMovements({ movement_type: 'transfer', page: 1, page_size: TRANSFER_PAGE_SIZE }),
     ])
     locations.value = loadedLocations
     recentTransfers.value = movementsResponse.results
+    transferTotal.value = movementsResponse.count
+    transferPage.value = 1
+    expandedTransferId.value = null
 
     if (!form.value.fromWarehouseId) {
       const defaultSource = loadedLocations.find((location) => location.kind === 'storage') ?? loadedLocations[0]
@@ -331,23 +389,67 @@ onMounted(async () => {
       </section>
 
       <section class="panel">
-        <h2 class="section-title">Последние перемещения</h2>
+        <div class="section-title-row">
+          <div class="section-heading">
+            <h2 class="section-title">История перемещений</h2>
+            <p v-if="transferTotal > 0" class="section-meta">
+              Показано {{ recentTransfers.length }} из {{ transferTotal }}
+            </p>
+          </div>
+          <button class="ghost-refresh" type="button" @click="loadTransferHistory({ reset: true })">
+            <RefreshCw :size="16" :stroke-width="2" />
+          </button>
+        </div>
         <div v-if="recentTransfers.length === 0" class="history-empty">
           Перемещений пока нет.
         </div>
         <ul v-else class="history-list">
-          <li v-for="movement in recentTransfers" :key="movement.id" class="history-item">
-            <div class="history-main">
-              <span class="history-route">
-                {{ movement.from_location_name || 'Источник' }} → {{ movement.to_location_name || 'Назначение' }}
-              </span>
-              <strong class="history-qty">{{ movement.quantity }} шт</strong>
-            </div>
-            <div class="history-sub">
-              Лот #{{ movement.lot }} · {{ formatDate(movement.created_at) }}
+          <li
+            v-for="movement in recentTransfers"
+            :key="movement.id"
+            class="history-item"
+          >
+            <button
+              class="history-toggle"
+              type="button"
+              :aria-expanded="expandedTransferId === movement.id"
+              @click="toggleTransferDetails(movement.id)"
+            >
+              <div class="history-main">
+                <span class="history-product">{{ movementTitle(movement) }}</span>
+                <strong class="history-qty">{{ movement.quantity }} шт</strong>
+              </div>
+              <div class="history-sub">
+                <span>{{ movement.from_location_name || 'Источник' }} → {{ movement.to_location_name || 'Назначение' }}</span>
+                <ChevronDown class="history-chevron" :size="16" :stroke-width="2" />
+              </div>
+            </button>
+
+            <div v-if="expandedTransferId === movement.id" class="history-details">
+              <div class="detail-row">
+                <span>Источник партии</span>
+                <strong>{{ movementSource(movement) }}</strong>
+              </div>
+              <div class="detail-row">
+                <span>Дата</span>
+                <strong>{{ formatFullDate(movement.created_at) }}</strong>
+              </div>
+              <div v-if="movement.lot_landed_cost_per_unit" class="detail-row">
+                <span>Себестоимость</span>
+                <strong>{{ movement.lot_landed_cost_per_unit }} / шт</strong>
+              </div>
             </div>
           </li>
         </ul>
+        <button
+          v-if="hasMoreTransfers"
+          class="secondary-btn"
+          type="button"
+          :disabled="isLoadingMoreTransfers"
+          @click="loadTransferHistory()"
+        >
+          {{ isLoadingMoreTransfers ? 'Загружаем...' : 'Показать ещё' }}
+        </button>
       </section>
     </div>
   </div>
@@ -421,10 +523,21 @@ onMounted(async () => {
   gap: var(--space-3);
 }
 
+.section-heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .section-title {
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
+}
+
+.section-meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
 }
 
 .ghost-refresh {
@@ -506,6 +619,20 @@ onMounted(async () => {
   opacity: 0.5;
 }
 
+.secondary-btn {
+  min-height: 44px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-primary);
+  color: var(--color-brand-700);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.secondary-btn:disabled {
+  opacity: 0.55;
+}
+
 .empty-icon {
   width: 68px;
   height: 68px;
@@ -529,10 +656,20 @@ onMounted(async () => {
 
 .history-item {
   display: grid;
-  gap: 4px;
-  padding: var(--space-3) var(--space-4);
+  overflow: hidden;
   border-radius: var(--radius-lg);
   background: var(--color-bg-secondary);
+}
+
+.history-toggle {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
 .history-main {
@@ -542,9 +679,14 @@ onMounted(async () => {
   gap: var(--space-3);
 }
 
-.history-route {
+.history-product {
+  min-width: 0;
   font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
   color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-qty {
@@ -554,7 +696,54 @@ onMounted(async () => {
 }
 
 .history-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
+}
+
+.history-sub span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-chevron {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  transition: transform 160ms ease;
+}
+
+.history-toggle[aria-expanded='true'] .history-chevron {
+  transform: rotate(180deg);
+}
+
+.history-details {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.detail-row span {
+  color: var(--color-text-secondary);
+}
+
+.detail-row strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-semibold);
+  text-align: right;
 }
 </style>

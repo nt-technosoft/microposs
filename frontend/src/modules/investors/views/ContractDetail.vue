@@ -4,11 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, RefreshCcw, Scale, ScrollText, Wallet } from 'lucide-vue-next'
 
 import { fetchInvestorProcurementDetail } from '@/api/investors'
+import { useFxRate } from '@/composables/useFxRate'
+import { useToast } from '@/composables/useToast'
 import type { InvestorLedgerEntry, InvestorProcurementDetail } from '@/types/models'
 import {
-  formatAggregateAmount,
   formatDateTime,
-  formatFunctionalAmount,
   ledgerEntryLabel,
   ledgerEntryTone,
   procurementStatusLabel,
@@ -19,20 +19,69 @@ import { formatPrice } from '@/utils/currency'
 
 const route = useRoute()
 const router = useRouter()
+const toast = useToast()
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRate,
+} = useFxRate()
 
 const procurement = ref<InvestorProcurementDetail | null>(null)
 const isLoading = ref(true)
 const errorMessage = ref('')
+const reportCurrency = ref<'UZS' | 'USD'>('USD')
 
 const procurementId = computed(() => Number(route.params.id))
 
 function formatCapitalState(field: keyof InvestorProcurementDetail['capital_state']): string {
-  return formatPrice(procurement.value?.capital_state?.[field] ?? '0', 'UZS')
+  return formatReportPrice(procurement.value?.capital_state?.[field] ?? '0')
 }
 
-function entryFunctionalHint(entry: InvestorLedgerEntry): string {
-  if (entry.currency === 'UZS') return ''
-  return `≈ ${formatPrice(entry.functional_amount_uzs, 'UZS')}`
+function reportNumberFromUzs(value: string | number | null | undefined): number {
+  const amount = Number.parseFloat(String(value ?? '0'))
+  if (!Number.isFinite(amount)) return 0
+  if (reportCurrency.value === 'UZS') return amount
+  const fx = Number.parseFloat(latestUsdRate.value || '0')
+  return Number.isFinite(fx) && fx > 0 ? amount / fx : amount
+}
+
+function formatReportPrice(value: string | number | null | undefined): string {
+  return formatPrice(reportNumberFromUzs(value), reportCurrency.value)
+}
+
+function formatLedgerTotal(field: keyof InvestorProcurementDetail['investor_aggregate']['functional_uzs']): string {
+  return formatReportPrice(procurement.value?.investor_aggregate.functional_uzs?.[field] ?? '0')
+}
+
+function entryAmountLabel(entry: InvestorLedgerEntry): string {
+  return formatReportPrice(entry.functional_amount_uzs)
+}
+
+function entrySecondaryHint(entry: InvestorLedgerEntry): string {
+  const native = String(entry.currency || 'UZS').toUpperCase()
+  if (native === reportCurrency.value) return ''
+  return `Оригинал ${formatPrice(entry.amount, native)}`
+}
+
+function sourceRefLabel(rawRef: string | null | undefined): string {
+  if (!rawRef) return ''
+  const parts = rawRef.split(':').filter(Boolean)
+  const source = parts[0]
+  const id = parts[1]
+  const nested = parts[2]
+  const nestedId = parts[3]
+  const labels: Record<string, string> = {
+    sale: 'Продажа',
+    sale_line: 'Строка продажи',
+    return: 'Возврат',
+    risk_event: 'Риск',
+    contribution: 'Взнос',
+    dividend_payment: 'Выплата прибыли',
+    procurement: 'Приход',
+  }
+  if (source === 'return' && nested === 'line' && id && nestedId) return `Возврат #${id} · строка #${nestedId}`
+  if (id) return `${labels[source] ?? source.replaceAll('_', ' ')} #${id}`
+  return labels[source] ?? rawRef.replaceAll('_', ' ')
 }
 
 function entryToneClass(entry: InvestorLedgerEntry): string {
@@ -54,10 +103,30 @@ async function loadContract(): Promise<void> {
 
   try {
     procurement.value = await fetchInvestorProcurementDetail(procurementId.value)
+    if (reportCurrency.value === 'USD' && !latestUsdRate.value) {
+      try {
+        await loadLatestUsdRate()
+      } catch {
+        reportCurrency.value = 'UZS'
+      }
+    }
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить приход'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
+  if (reportCurrency.value === currency) return
+  reportCurrency.value = currency
+  if (currency === 'USD' && !latestUsdRate.value) {
+    try {
+      await loadLatestUsdRate()
+    } catch {
+      reportCurrency.value = 'UZS'
+      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+    }
   }
 }
 
@@ -112,12 +181,16 @@ onMounted(loadContract)
           </div>
 
           <div class="investor-hero__value">
+            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+              <button type="button" :class="{ active: reportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
+              <button type="button" :class="{ active: reportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
+            </div>
             <strong class="investor-hero__amount tabular-nums">
-              {{ formatFunctionalAmount(procurement.investor_aggregate, 'profit_pending_payout') }}
+              {{ formatLedgerTotal('profit_pending_payout') }}
             </strong>
             <span class="investor-hero__foot">
-              Начислено {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_accrued', 'UZS') }}
-              · вложено {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_in', 'USD') }}
+              Начислено {{ formatLedgerTotal('profit_accrued') }}
+              · вложено {{ formatLedgerTotal('capital_in') }}
             </span>
           </div>
         </section>
@@ -126,14 +199,14 @@ onMounted(loadContract)
           <article class="investor-summary-stat investor-summary-stat--accent">
             <span class="investor-summary-stat__label">Вложено в приход</span>
             <strong class="investor-summary-stat__value tabular-nums">
-              {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_in', 'USD') }}
+              {{ formatLedgerTotal('capital_in') }}
             </strong>
-            <span class="investor-summary-stat__hint">Ваш capital in по этому приходу</span>
+            <span class="investor-summary-stat__hint">Ваш вклад по этому приходу</span>
           </article>
           <article class="investor-summary-stat">
             <span class="investor-summary-stat__label">Чистый капитал</span>
             <strong class="investor-summary-stat__value tabular-nums">
-              {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_net', 'USD') }}
+              {{ formatLedgerTotal('capital_net') }}
             </strong>
             <span class="investor-summary-stat__hint">Вносы минус возвраты по приходу</span>
           </article>
@@ -142,14 +215,14 @@ onMounted(loadContract)
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatCapitalState('tracked_cost_uzs') }}
             </strong>
-            <span class="investor-summary-stat__hint">Сколько капитала ещё крутится в stock</span>
+            <span class="investor-summary-stat__hint">Сколько капитала ещё лежит в остатке</span>
           </article>
           <article class="investor-summary-stat">
             <span class="investor-summary-stat__label">Прогноз прибыли</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatCapitalState('projected_partner_profit_uzs') }}
             </strong>
-            <span class="investor-summary-stat__hint">Potential upside on the remaining goods</span>
+            <span class="investor-summary-stat__hint">Ожидаемая прибыль по остатку</span>
           </article>
         </section>
 
@@ -211,37 +284,37 @@ onMounted(loadContract)
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Начисленная прибыль</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">
-                {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_accrued', 'UZS') }}
+                {{ formatLedgerTotal('profit_accrued') }}
               </strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">К выплате</span>
               <strong class="investor-detail-card__value tabular-nums">
-                {{ formatFunctionalAmount(procurement.investor_aggregate, 'profit_pending_payout') }}
+                {{ formatLedgerTotal('profit_pending_payout') }}
               </strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Возврат капитала</span>
               <strong class="investor-detail-card__value tabular-nums">
-                {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_out', 'USD') }}
+                {{ formatLedgerTotal('capital_out') }}
               </strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Дивиденды выплачены</span>
               <strong class="investor-detail-card__value tabular-nums">
-                {{ formatAggregateAmount(procurement.investor_aggregate, 'dividends_paid', 'USD') }}
+                {{ formatLedgerTotal('dividends_paid') }}
               </strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Убытки</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">
-                {{ formatAggregateAmount(procurement.investor_aggregate, 'losses_incurred', 'UZS') }}
+                {{ formatLedgerTotal('losses_incurred') }}
               </strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Корректировки прибыли</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">
-                {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_reversed', 'UZS') }}
+                {{ formatLedgerTotal('profit_reversed') }}
               </strong>
             </article>
           </div>
@@ -313,14 +386,14 @@ onMounted(loadContract)
               <div class="ledger-row__main">
                 <strong class="ledger-row__title">{{ ledgerEntryLabel(entry.entry_type) }}</strong>
                 <span class="ledger-row__meta">{{ formatDateTime(entry.date) }}</span>
-                <span v-if="entry.source_ref" class="ledger-row__meta">{{ entry.source_ref }}</span>
+                <span v-if="entry.source_ref" class="ledger-row__meta">{{ sourceRefLabel(entry.source_ref) }}</span>
               </div>
               <div class="ledger-row__side">
                 <strong class="ledger-row__amount tabular-nums" :class="entryToneClass(entry)">
-                  {{ formatPrice(entry.amount, entry.currency) }}
+                  {{ entryAmountLabel(entry) }}
                 </strong>
-                <span v-if="entryFunctionalHint(entry)" class="ledger-row__meta">
-                  {{ entryFunctionalHint(entry) }}
+                <span v-if="entrySecondaryHint(entry)" class="ledger-row__meta">
+                  {{ entrySecondaryHint(entry) }}
                 </span>
               </div>
             </article>
@@ -351,6 +424,30 @@ onMounted(loadContract)
 
 .detail-card--wide {
   grid-column: 1 / -1;
+}
+
+.investor-currency-switch {
+  justify-self: end;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(44px, 1fr));
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, white 18%, transparent);
+  border: 1px solid color-mix(in srgb, white 16%, transparent);
+}
+
+.investor-currency-switch button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  color: color-mix(in srgb, white 78%, transparent);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.investor-currency-switch button.active {
+  background: white;
+  color: var(--color-brand-800);
 }
 
 .ledger-stack {
@@ -407,6 +504,11 @@ onMounted(loadContract)
 }
 
 @media (max-width: 420px) {
+  .investor-currency-switch {
+    justify-self: stretch;
+    width: 100%;
+  }
+
   .ledger-row {
     grid-template-columns: 10px minmax(0, 1fr);
   }

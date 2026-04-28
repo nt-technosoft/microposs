@@ -33,6 +33,16 @@ class FxRateApiTests(APITestCase):
         self.assertTrue(access)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
 
+    def _auth_investor(self) -> None:
+        token_response = self.client.post('/api/v1/auth/token/', {
+            'username': 'investor',
+            'password': 'Investor123!',
+        }, format='json')
+        self.assertEqual(token_response.status_code, status.HTTP_200_OK)
+        access = token_response.data.get('access')
+        self.assertTrue(access)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+
     def test_owner_can_create_manual_rate_and_read_latest(self):
         self._auth_owner()
 
@@ -54,6 +64,35 @@ class FxRateApiTests(APITestCase):
             'quote_currency': 'UZS',
             'on_date': '2026-04-16',
         })
+        self.assertEqual(latest_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(latest_response.data['rate'], '12650.000000')
+
+    def test_investor_can_read_latest_rate_for_report_currency(self):
+        ExchangeRate.objects.filter(
+            tenant=self.tenant,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=date(2026, 4, 16),
+        ).delete()
+        ExchangeRate.objects.create(
+            tenant=self.tenant,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=date(2026, 4, 16),
+            rate=Decimal('12650.000000'),
+            source=ExchangeRate.Source.MANUAL,
+            is_manual=True,
+            notes='Investor read test',
+            raw_payload={},
+        )
+        self._auth_investor()
+
+        latest_response = self.client.get('/api/v1/finance/fx-rates/latest/', {
+            'base_currency': 'USD',
+            'quote_currency': 'UZS',
+            'on_date': '2026-04-16',
+        })
+
         self.assertEqual(latest_response.status_code, status.HTTP_200_OK)
         self.assertEqual(latest_response.data['rate'], '12650.000000')
 

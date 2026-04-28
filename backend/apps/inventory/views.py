@@ -180,7 +180,13 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = StockMovement.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('from_location', 'to_location', 'lot')
+        ).select_related(
+            'from_location',
+            'to_location',
+            'lot__product_variant__product',
+            'lot__procurement_item__procurement',
+            'lot__receipt',
+        )
 
         movement_type = self.request.query_params.get('movement_type')
         if movement_type:

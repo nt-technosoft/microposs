@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.finance.models import CashAccount
+from apps.finance.models import Account, CashAccount
 from apps.sales.models import SalePayment
 from apps.sales.services import close_pos_session, create_sale
 
@@ -83,6 +83,58 @@ class ReconciliationViewTests(APITestCase):
         self.assertEqual(checks['sales_journal_revenue']['status'], 'ok')
         self.assertEqual(checks['sales_journal_cogs']['status'], 'ok')
         self.assertEqual(checks['sales_journal_cogs']['mismatch_count'], 0)
+
+    def test_operational_reconciliation_converts_usd_sale_payments_to_functional_uzs(self):
+        seed_received_procurement(self.ctx)
+        session = open_session(self.ctx)
+        usd_cash = CashAccount.objects.create(
+            tenant=self.ctx['business'],
+            name='USD Cash',
+            currency='USD',
+            kind=CashAccount.Kind.CASH,
+            linked_account=Account.objects.get(tenant=self.ctx['business'], code='1000'),
+        )
+
+        create_sale(
+            tenant_id=self.ctx['business'].id,
+            pos_session_id=session.id,
+            location_id=self.ctx['store'].id,
+            sold_by_id=self.ctx['cashier'].id,
+            customer_id=self.ctx['customer'].id,
+            lines=[{
+                'product_variant_id': self.ctx['variant'].id,
+                'quantity': 1,
+                'operation_currency': 'USD',
+                'operation_unit_price': Decimal('20.00'),
+                'fx_rate': Decimal('12000.00'),
+                'unit_price': Decimal('240000.00'),
+            }],
+            payments=[{
+                'amount': Decimal('20.00'),
+                'currency': 'USD',
+                'fx_rate': Decimal('12000.00'),
+                'method': SalePayment.Method.CASH,
+                'account_id': usd_cash.id,
+            }],
+        )
+
+        close_pos_session(
+            session=session,
+            closed_by_id=self.ctx['cashier'].id,
+            actual_cash=Decimal('0.00'),
+            actual_cash_by_currency={'UZS': Decimal('0.00'), 'USD': Decimal('20.00')},
+        )
+
+        self.auth_owner()
+        response = self.client.get('/api/v1/core/excel/reconciliation/latest/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data['overall_status'], 'ok')
+        checks = {item['code']: item for item in response.data['checks']}
+        self.assertEqual(checks['sales_settlement']['status'], 'ok')
+        self.assertEqual(checks['sales_journal_revenue']['status'], 'ok')
+        self.assertEqual(checks['closed_sessions_expected_cash']['status'], 'ok')
+        self.assertEqual(checks['closed_sessions_cash_difference']['status'], 'ok')
 
     def test_operational_reconciliation_treats_nonzero_cash_difference_as_warning(self):
         seed_received_procurement(self.ctx)

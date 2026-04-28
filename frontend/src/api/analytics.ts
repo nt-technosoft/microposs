@@ -39,12 +39,15 @@ export interface ReconciliationCheck {
   delta_amount: string
   mismatch_count: number
   sample_refs: string[]
+  actual_by_currency?: Record<string, string>
+  expected_by_currency?: Record<string, string>
 }
 
 export interface ReconciliationHighlight {
   key: string
   label: string
   value: string
+  currency?: string
 }
 
 export interface ReconciliationSummary {

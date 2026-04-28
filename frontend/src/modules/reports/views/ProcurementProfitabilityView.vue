@@ -19,16 +19,29 @@ const error = ref<string | null>(null)
 const report = ref<ProcurementProfitabilityDetail | null>(null)
 const procurementDetail = ref<ProcurementDetail | null>(null)
 const expandedItemId = ref<number | null>(null)
+const selectedReportCurrency = ref<'UZS' | 'USD' | ''>('')
 
 const procurementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.procurement ?? null)
 const itemRows = computed(() => report.value?.items ?? [])
+const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? 'UZS')
 const participantTotals = computed(() => procurementDetail.value?.balance.participant_totals ?? [])
 const balanceHistory = computed(() => procurementDetail.value?.balance.history ?? [])
 const visibleHistory = computed(() => balanceHistory.value.slice(0, 4))
 
 function formatAmount(value: string | number, currency = 'UZS'): string {
   return formatPrice(value, currency)
+}
+
+function formatReportAmount(
+  row: { display?: { currency: string; amounts: Record<string, string> } } | null | undefined,
+  key: string,
+  fallback: string | number,
+): string {
+  if (row?.display?.amounts?.[key] !== undefined) {
+    return formatPrice(row.display.amounts[key], row.display.currency)
+  }
+  return formatAmount(fallback)
 }
 
 function formatPercent(value: string | number | null | undefined): string {
@@ -104,7 +117,10 @@ async function load(): Promise<void> {
   error.value = null
   try {
     const [reportPayload, procurementPayload] = await Promise.all([
-      fetchProcurementProfitabilityDetail(procurementId.value),
+      fetchProcurementProfitabilityDetail(
+        procurementId.value,
+        selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
+      ),
       fetchProcurement(procurementId.value),
     ])
     report.value = reportPayload
@@ -114,6 +130,11 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
+  selectedReportCurrency.value = currency
+  await load()
 }
 
 onMounted(load)
@@ -156,24 +177,28 @@ onMounted(load)
             </div>
           </div>
           <div class="hero-value">
+            <div class="report-currency-switch" role="group" aria-label="Валюта аудита">
+              <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
+              <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
+            </div>
             <span class="hero-label">Факт. прибыль</span>
-            <strong class="hero-amount tabular-nums">{{ formatAmount(summary.gross_profit) }}</strong>
-            <span class="hero-note">Прогноз {{ formatAmount(summary.projected_gross_profit) }}</span>
+            <strong class="hero-amount tabular-nums">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
+            <span class="hero-note">Прогноз {{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</span>
           </div>
         </section>
 
         <section class="summary-band">
           <article class="summary-metric">
             <span class="metric-label">Выручка</span>
-            <strong class="metric-value tabular-nums">{{ formatAmount(summary.revenue) }}</strong>
+            <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong>
           </article>
           <article class="summary-metric">
             <span class="metric-label">Себестоимость</span>
-            <strong class="metric-value tabular-nums">{{ formatAmount(summary.cogs) }}</strong>
+            <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong>
           </article>
           <article class="summary-metric">
             <span class="metric-label">В остатке</span>
-            <strong class="metric-value tabular-nums">{{ formatAmount(summary.remaining_landed_cost) }}</strong>
+            <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong>
           </article>
           <article class="summary-metric">
             <span class="metric-label">Продано / остаток</span>
@@ -193,27 +218,27 @@ onMounted(load)
           <div class="formula-list">
             <div class="formula-row">
               <span>Фактическая прибыль</span>
-              <strong class="mono">{{ formatAmount(summary.gross_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
             </div>
             <div class="formula-row">
               <span>Инвесторы из факта</span>
-              <strong class="mono">{{ formatAmount(summary.investor_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'investor_profit', summary.investor_profit) }}</strong>
             </div>
             <div class="formula-row">
               <span>Бизнес из факта</span>
-              <strong class="mono">{{ formatAmount(summary.business_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'business_profit', summary.business_profit) }}</strong>
             </div>
             <div class="formula-row">
               <span>Прогноз по остатку</span>
-              <strong class="mono">{{ formatAmount(summary.projected_gross_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</strong>
             </div>
             <div class="formula-row">
               <span>Инвесторы из прогноза</span>
-              <strong class="mono">{{ formatAmount(summary.projected_investor_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'projected_investor_profit', summary.projected_investor_profit) }}</strong>
             </div>
             <div class="formula-row">
               <span>Бизнес из прогноза</span>
-              <strong class="mono">{{ formatAmount(summary.projected_business_profit) }}</strong>
+              <strong class="mono">{{ formatReportAmount(summary, 'projected_business_profit', summary.projected_business_profit) }}</strong>
             </div>
           </div>
         </section>
@@ -247,8 +272,8 @@ onMounted(load)
                   </div>
                 </div>
                 <div class="item-side">
-                  <strong class="item-profit tabular-nums">{{ formatAmount(item.gross_profit) }}</strong>
-                  <span class="item-projection">Прогноз {{ formatAmount(item.projected_gross_profit) }}</span>
+                  <strong class="item-profit tabular-nums">{{ formatReportAmount(item, 'gross_profit', item.gross_profit) }}</strong>
+                  <span class="item-projection">Прогноз {{ formatReportAmount(item, 'projected_gross_profit', item.projected_gross_profit) }}</span>
                   <ChevronDown :size="16" :stroke-width="1.8" class="item-chevron" :class="{ open: expandedItemId === item.procurement_item_id }" />
                 </div>
               </button>
@@ -257,15 +282,15 @@ onMounted(load)
                 <div class="detail-grid">
                   <div class="detail-box">
                     <span class="detail-label">Закупка / landed</span>
-                    <strong class="mono">{{ formatAmount(item.unit_purchase_price) }} / {{ formatAmount(item.landed_cost_per_unit) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'unit_purchase_price', item.unit_purchase_price) }} / {{ formatReportAmount(item, 'landed_cost_per_unit', item.landed_cost_per_unit) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Текущая цена</span>
-                    <strong class="mono">{{ formatAmount(item.current_unit_price) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'current_unit_price', item.current_unit_price) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Факт выручки / COGS</span>
-                    <strong class="mono">{{ formatAmount(item.revenue) }} / {{ formatAmount(item.cogs) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'revenue', item.revenue) }} / {{ formatReportAmount(item, 'cogs', item.cogs) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Markup</span>
@@ -273,19 +298,19 @@ onMounted(load)
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Инвестор / бизнес</span>
-                    <strong class="mono">{{ formatAmount(item.investor_profit) }} / {{ formatAmount(item.business_profit) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'investor_profit', item.investor_profit) }} / {{ formatReportAmount(item, 'business_profit', item.business_profit) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Остаток / прогноз</span>
-                    <strong class="mono">{{ formatAmount(item.remaining_landed_cost) }} / {{ formatAmount(item.projected_revenue) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'remaining_landed_cost', item.remaining_landed_cost) }} / {{ formatReportAmount(item, 'projected_revenue', item.projected_revenue) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Прогноз инвестора</span>
-                    <strong class="mono">{{ formatAmount(item.projected_investor_profit) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'projected_investor_profit', item.projected_investor_profit) }}</strong>
                   </div>
                   <div class="detail-box">
                     <span class="detail-label">Прогноз бизнеса</span>
-                    <strong class="mono">{{ formatAmount(item.projected_business_profit) }}</strong>
+                    <strong class="mono">{{ formatReportAmount(item, 'projected_business_profit', item.projected_business_profit) }}</strong>
                   </div>
                 </div>
               </div>
@@ -461,6 +486,31 @@ onMounted(load)
 .hero-value {
   display: grid;
   gap: 4px;
+}
+
+.report-currency-switch {
+  justify-self: start;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(44px, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.report-currency-switch button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-currency-switch button.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-brand-700);
 }
 
 .hero-label,

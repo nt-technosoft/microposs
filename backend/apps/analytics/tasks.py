@@ -212,12 +212,19 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
     # Cash flow summary
     from apps.sales.models import SalePayment
-    cash_sales = SalePayment.objects.filter(
-        tenant_id=tenant_id,
-        role=SalePayment.Role.INCOMING,
-        method=SalePayment.Method.CASH,
-        date__range=(day_start, day_end),
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    from apps.sales.currency import payment_functional_amount_uzs
+    cash_sales = sum(
+        (
+            payment_functional_amount_uzs(payment)
+            for payment in SalePayment.objects.filter(
+                tenant_id=tenant_id,
+                role=SalePayment.Role.INCOMING,
+                method=SalePayment.Method.CASH,
+                date__range=(day_start, day_end),
+            )
+        ),
+        Decimal('0'),
+    )
 
     from apps.customers.models import CustomerPayment
     debt_payments = CustomerPayment.objects.filter(

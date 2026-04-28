@@ -96,12 +96,20 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    async openSession(locationId: number, openingCash: number): Promise<PosSession> {
+    async openSession(
+      locationId: number,
+      openingCash: number,
+      openingCashByCurrency?: Record<string, string | number>,
+    ): Promise<PosSession> {
       this.isLoading = true
       this.error = null
 
       try {
-        const session = await apiOpenSession({ location_id: locationId, opening_cash: openingCash })
+        const session = await apiOpenSession({
+          location_id: locationId,
+          opening_cash: openingCash,
+          ...(openingCashByCurrency ? { opening_cash_by_currency: openingCashByCurrency } : {}),
+        })
         const normalizedLocation = this.normalizeLocation(session)
         this.currentSession = {
           ...session,
@@ -118,7 +126,7 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    async closeSession(actualCash: number): Promise<void> {
+    async closeSession(actualCash: number, actualCashByCurrency?: Record<string, string | number>): Promise<void> {
       if (!this.currentSession) {
         this.error = 'Нет активной сессии для закрытия'
         return
@@ -128,7 +136,10 @@ export const useSessionStore = defineStore('session', {
       this.error = null
 
       try {
-        await apiCloseSession(this.currentSession.id, { actual_cash: actualCash })
+        await apiCloseSession(this.currentSession.id, {
+          actual_cash: actualCash,
+          ...(actualCashByCurrency ? { actual_cash_by_currency: actualCashByCurrency } : {}),
+        })
         this.currentSession = null
         this.location = null
         useCartStore().clear()

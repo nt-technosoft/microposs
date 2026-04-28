@@ -11,6 +11,9 @@ export interface SaleLineInput {
   product_variant_id: number
   quantity: number
   unit_price: number
+  operation_currency?: string
+  operation_unit_price?: string | number | null
+  fx_rate?: string | number | null
   discount_reason_id?: number
 }
 
@@ -36,10 +39,12 @@ export interface SaleCreatePayload {
 export interface OpenSessionPayload {
   location_id: number
   opening_cash: number
+  opening_cash_by_currency?: Record<string, string | number>
 }
 
 export interface CloseSessionPayload {
   actual_cash: number
+  actual_cash_by_currency?: Record<string, string | number>
 }
 
 export interface ReturnLinePayload {
@@ -75,6 +80,9 @@ export interface SaleExplanationLine {
   product_name: string
   quantity: number
   unit_price: string
+  operation_currency?: string
+  operation_unit_price?: string | null
+  fx_rate_snapshot?: string | null
   revenue: string
   unit_purchase_price: string
   purchase_cost: string
@@ -107,6 +115,7 @@ export interface SaleExplanationCashEntry {
   payment_id: number | null
   payment_method: string | null
   account_name: string
+  currency?: string
   direction: string
   amount: string
 }
@@ -177,10 +186,11 @@ export interface SaleExplanation {
     id: number
     date: string
     method: string
-    amount: string
-    currency: string
-    fx_rate: string
-    account_id: number | null
+  amount: string
+  currency: string
+  fx_rate: string
+  functional_amount_uzs?: string
+  account_id: number | null
   }>
   cash_entries: SaleExplanationCashEntry[]
   receivable_entries: SaleExplanationReceivableEntry[]

@@ -12,14 +12,27 @@ const loading = ref(false)
 const error = ref('')
 const report = ref<AgreementProfitabilityDetail | null>(null)
 const expandedProcurementId = ref<number | null>(null)
+const selectedReportCurrency = ref<'UZS' | 'USD' | ''>('')
 
 const agreementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.agreement ?? null)
 const partners = computed(() => report.value?.partners ?? [])
 const procurements = computed(() => report.value?.procurements ?? [])
+const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? 'UZS')
 
 function formatAmount(value: string | number, currency = 'UZS'): string {
   return formatPrice(value, currency)
+}
+
+function formatReportAmount(
+  row: { display?: { currency: string; amounts: Record<string, string> } } | null | undefined,
+  key: string,
+  fallback: string | number,
+): string {
+  if (row?.display?.amounts?.[key] !== undefined) {
+    return formatPrice(row.display.amounts[key], row.display.currency)
+  }
+  return formatAmount(fallback)
 }
 
 function formatDate(value: string | null): string {
@@ -67,12 +80,20 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    report.value = await fetchAgreementProfitabilityDetail(agreementId.value)
+    report.value = await fetchAgreementProfitabilityDetail(
+      agreementId.value,
+      selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
+    )
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Не удалось загрузить отчёт договора'
   } finally {
     loading.value = false
   }
+}
+
+async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
+  selectedReportCurrency.value = currency
+  await load()
 }
 
 onMounted(load)
@@ -97,17 +118,21 @@ onMounted(load)
       <template v-else-if="summary">
         <section class="hero">
           <span>Инвестдоговор #{{ summary.agreement_id }} · {{ formatDate(summary.opened_at) }}</span>
-          <strong>{{ formatAmount(summary.gross_profit) }}</strong>
-          <small>фактическая прибыль · прогноз {{ formatAmount(summary.projected_gross_profit) }}</small>
+          <div class="currency-switch" role="group" aria-label="Валюта отчёта договора">
+            <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
+            <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
+          </div>
+          <strong>{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
+          <small>фактическая прибыль · прогноз {{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</small>
         </section>
 
         <section class="metric-grid">
           <div><span>Остаток договора</span><strong>{{ balanceLabel(summary.balances) }}</strong></div>
-          <div><span>Выручка</span><strong>{{ formatAmount(summary.revenue) }}</strong></div>
-          <div><span>Себестоимость продаж</span><strong>{{ formatAmount(summary.cogs) }}</strong></div>
-          <div><span>Товар в наличии</span><strong>{{ formatAmount(summary.remaining_landed_cost) }}</strong></div>
-          <div><span>Уже принято</span><strong>{{ formatAmount(summary.received_landed_cost) }}</strong></div>
-          <div><span>Оплачено в пути</span><strong>{{ formatAmount(summary.pending_prepaid_cost) }}</strong></div>
+          <div><span>Выручка</span><strong>{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong></div>
+          <div><span>Себестоимость продаж</span><strong>{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong></div>
+          <div><span>Товар в наличии</span><strong>{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong></div>
+          <div><span>Уже принято</span><strong>{{ formatReportAmount(summary, 'received_landed_cost', summary.received_landed_cost) }}</strong></div>
+          <div><span>Оплачено в пути</span><strong>{{ formatReportAmount(summary, 'pending_prepaid_cost', summary.pending_prepaid_cost) }}</strong></div>
           <div><span>Продано / остаток</span><strong>{{ summary.quantity_sold }} / {{ summary.remaining_quantity }}</strong></div>
           <div><span>Приходов</span><strong>{{ summary.procurements_count }}</strong></div>
         </section>
@@ -126,7 +151,7 @@ onMounted(load)
               </span>
             </div>
             <div class="row-side">
-              <strong>{{ formatAmount(partner.profit_pending_payout) }}</strong>
+              <strong>{{ formatReportAmount(partner, 'profit_pending_payout', partner.profit_pending_payout) }}</strong>
               <span>к выплате · остаток {{ formatAmount(partner.agreement_available, partner.agreement_currency) }}</span>
             </div>
           </article>
@@ -141,11 +166,11 @@ onMounted(load)
             <button class="procurement-toggle" type="button" @click="toggleProcurement(procurement.procurement_id)">
               <div>
                 <strong>#{{ procurement.procurement_id }} · {{ procurement.supplier_name || 'без поставщика' }}</strong>
-                <span>{{ procurementStatusLabel(procurement.status) }} · на складе {{ formatAmount(procurement.received_landed_cost ?? '0') }} · в пути {{ formatAmount(procurement.pending_prepaid_cost ?? '0') }}</span>
+                <span>{{ procurementStatusLabel(procurement.status) }} · на складе {{ formatReportAmount(procurement, 'received_landed_cost', procurement.received_landed_cost ?? '0') }} · в пути {{ formatReportAmount(procurement, 'pending_prepaid_cost', procurement.pending_prepaid_cost ?? '0') }}</span>
               </div>
               <div class="row-side">
-                <strong>{{ formatAmount(procurement.gross_profit) }}</strong>
-                <span>продано {{ formatAmount(procurement.cogs) }}</span>
+                <strong>{{ formatReportAmount(procurement, 'gross_profit', procurement.gross_profit) }}</strong>
+                <span>продано {{ formatReportAmount(procurement, 'cogs', procurement.cogs) }}</span>
               </div>
               <ChevronDown class="chevron" :class="{ open: expandedProcurementId === procurement.procurement_id }" :size="16" />
             </button>
@@ -153,10 +178,10 @@ onMounted(load)
               <div><span>Партии</span><strong>{{ procurement.receive_batches_count ?? 0 }}</strong></div>
               <div><span>В пути строк</span><strong>{{ procurement.pending_paid_items_count ?? 0 }}</strong></div>
               <div><span>Черновики</span><strong>{{ procurement.draft_items_count ?? 0 }}</strong></div>
-              <div><span>Остаток</span><strong>{{ formatAmount(procurement.remaining_landed_cost) }}</strong></div>
+              <div><span>Остаток</span><strong>{{ formatReportAmount(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}</strong></div>
               <div v-for="batch in procurement.receive_batches ?? []" :key="`batch-${procurement.procurement_id}-${batch.id}`" class="batch-share-row">
                 <span>Партия #{{ batch.id }} · {{ batch.items_count }} поз.</span>
-                <strong>{{ formatAmount(batch.total_inventory_uzs) }}</strong>
+                <strong>{{ batch.display?.amounts?.total_inventory ? formatAmount(batch.display.amounts.total_inventory, batch.display.currency) : formatAmount(batch.total_inventory_uzs) }}</strong>
                 <small v-for="allocation in batch.capital_allocations" :key="`batch-${batch.id}-${allocation.partner_id}`">
                   {{ displayPartnerName(allocation.partner_name, allocation.role) }}:
                   кап. {{ formatRatio(allocation.capital_share) }} · приб. {{ formatRatio(allocation.profit_share) }}
@@ -183,6 +208,9 @@ h1 { margin:0; text-align:center; font-size:var(--text-lg); font-weight:var(--fo
 .hero { display:grid; gap:4px; padding:var(--space-4); border-radius:var(--radius-lg); background:var(--color-brand-800); color:white; }
 .hero span,.hero small { color:color-mix(in srgb, white 72%, transparent); font-size:var(--text-xs); }
 .hero strong { font-size:var(--text-2xl); }
+.currency-switch { display:inline-grid; grid-template-columns:repeat(2, minmax(48px, 1fr)); gap:2px; justify-self:start; padding:3px; border-radius:999px; background:color-mix(in srgb, white 16%, transparent); border:1px solid color-mix(in srgb, white 14%, transparent); }
+.currency-switch button { min-height:28px; padding:0 var(--space-2); border-radius:999px; color:color-mix(in srgb, white 78%, transparent); font-size:var(--text-xs); font-weight:var(--font-semibold); }
+.currency-switch button.active { background:white; color:var(--color-brand-800); }
 .metric-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-2); }
 .metric-grid div,.section { border:1px solid var(--color-border-subtle); border-radius:var(--radius-md); background:var(--color-bg-elevated); }
 .metric-grid div { display:grid; gap:3px; padding:var(--space-3); }

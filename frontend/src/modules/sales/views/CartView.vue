@@ -4,23 +4,30 @@ import { useRouter } from 'vue-router'
 import { ShoppingBag, ShoppingCart, ArrowLeft, Trash2, CircleAlert } from 'lucide-vue-next'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
+import { useFxRate } from '@/composables/useFxRate'
+import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import BaseButton from '@/components/base/BaseButton.vue'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
-import PriceDisplay from '@/components/data/PriceDisplay.vue'
 
 const router = useRouter()
 const cartStore = useCartStore()
 const sessionStore = useSessionStore()
+const toast = useToast()
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadUsdRate,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 
 const removingIndex = ref<number | null>(null)
 const showClearConfirm = ref(false)
 
-const lineTotal = computed(() =>
+const lineNativeTotal = computed(() =>
   (index: number): number => {
     const item = cartStore.items[index]
     if (!item) return 0
-    return parseFloat(item.unit_price) * item.quantity
+    return parseFloat(item.operation_unit_price ?? item.unit_price) * item.quantity
   },
 )
 
@@ -54,6 +61,18 @@ function openSession(): void {
 
 function handleQuantityChange(index: number, qty: number): void {
   cartStore.updateQuantity(index, qty)
+}
+
+async function setLineCurrency(index: number, currency: 'UZS' | 'USD'): Promise<void> {
+  if (currency === 'USD' && !latestUsdRate.value) {
+    try {
+      await loadUsdRate()
+    } catch {
+      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      return
+    }
+  }
+  cartStore.updateItemCurrency(index, currency, currency === 'USD' ? latestUsdRate.value : '1')
 }
 
 function handleRemove(index: number): void {
@@ -148,7 +167,13 @@ function cancelClear(): void {
             <div class="cart-item__info">
               <span class="cart-item__name">{{ item.product_name }}</span>
               <span class="cart-item__unit-price">
-                {{ formatPrice(item.unit_price) }} / шт.
+                {{ formatPrice(item.operation_unit_price ?? item.unit_price, item.operation_currency ?? 'UZS') }} / шт.
+              </span>
+              <span
+                v-if="item.operation_currency === 'USD'"
+                class="cart-item__price-change"
+              >
+                {{ formatPrice(item.unit_price, 'UZS') }} · курс {{ Number(item.fx_rate || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}
               </span>
               <span v-if="item.price_changed" class="cart-item__price-change">
                 База: {{ formatPrice(item.base_price) }}
@@ -171,11 +196,27 @@ function cancelClear(): void {
               :max="itemAvailableStock(index)"
               @update:model-value="handleQuantityChange(index, $event)"
             />
-            <PriceDisplay
-              :amount="lineTotal(index)"
-              size="md"
-              class="cart-item__line-total"
-            />
+            <div class="cart-item__money">
+              <div class="line-currency-toggle">
+                <button
+                  type="button"
+                  :class="{ active: (item.operation_currency ?? 'UZS') === 'UZS' }"
+                  @click="setLineCurrency(index, 'UZS')"
+                >
+                  UZS
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: item.operation_currency === 'USD' }"
+                  @click="setLineCurrency(index, 'USD')"
+                >
+                  USD
+                </button>
+              </div>
+              <strong class="cart-item__line-total">
+                {{ formatPrice(lineNativeTotal(index), item.operation_currency ?? 'UZS') }}
+              </strong>
+            </div>
           </div>
         </li>
       </TransitionGroup>
@@ -185,7 +226,14 @@ function cancelClear(): void {
     <footer v-if="!cartStore.isEmpty" class="cart-footer">
       <div class="cart-footer__summary">
         <span class="cart-footer__label">Итого</span>
-        <PriceDisplay :amount="cartStore.total" size="lg" />
+        <div class="cart-footer__totals">
+          <strong
+            v-for="total in cartStore.totalsByCurrency"
+            :key="total.currency"
+          >
+            {{ formatPrice(total.amount, total.currency) }}
+          </strong>
+        </div>
       </div>
       <p v-if="cartBlockReason" class="cart-footer__warning">
         {{ cartBlockReason }}
@@ -497,13 +545,47 @@ function cancelClear(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
   padding-top: var(--space-2);
   border-top: 1px solid var(--color-border-subtle);
 }
 
+.cart-item__money {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-2);
+  min-width: 128px;
+}
+
+.line-currency-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.line-currency-toggle button {
+  min-width: 42px;
+  height: 26px;
+  padding: 0 var(--space-1);
+  border-radius: calc(var(--radius-md) - 2px);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: var(--font-semibold);
+}
+
+.line-currency-toggle button.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-brand-700);
+  box-shadow: var(--shadow-sm);
+}
+
 .cart-item__line-total {
-  font-size: var(--text-lg) !important;
-  color: var(--color-brand-600) !important;
+  color: var(--color-brand-600);
+  font-size: var(--text-base);
+  font-weight: var(--font-bold);
+  white-space: nowrap;
 }
 
 /* ==============================
@@ -531,6 +613,16 @@ function cancelClear(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cart-footer__totals {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--color-text-primary);
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
 }
 
 .cart-footer__warning {

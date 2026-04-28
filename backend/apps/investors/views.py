@@ -135,6 +135,8 @@ class InvestorAgreementView(APIView):
     permission_classes = [IsInvestor]
 
     def get(self, request, agreement_id=None):
+        from rest_framework.exceptions import ValidationError
+        from apps.finance.report_currency import ReportCurrencyError
         from apps.finance.services import get_agreement_profitability_detail
         from apps.partnerships.models import InvestmentAgreement
 
@@ -167,10 +169,14 @@ class InvestorAgreementView(APIView):
         agreement = agreements.filter(pk=agreement_id).first()
         if agreement is None:
             raise PermissionDenied('Agreement is not available for this investor.')
-        payload = get_agreement_profitability_detail(
-            tenant_id=request.tenant_id,
-            agreement_id=agreement.id,
-        )
+        try:
+            payload = get_agreement_profitability_detail(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement.id,
+                report_currency=request.query_params.get('report_currency'),
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         payload['current_partner_id'] = partner.id
         return Response(payload)
 

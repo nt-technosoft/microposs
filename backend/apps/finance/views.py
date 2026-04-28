@@ -12,12 +12,12 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.analytics.tasks import aggregate_daily_pnl
-from apps.core.permissions import IsOwner
+from apps.core.permissions import IsOwner, IsInvestor
 from apps.customers.models import CustomerPayment
 from apps.inventory.models import Receipt
 from apps.partnerships.models import Procurement
@@ -66,6 +66,7 @@ from .services import (
     get_agreement_profitability_detail,
 )
 from .fx_rates import get_fx_rate_for_date, sync_official_exchange_rate, upsert_exchange_rate
+from .report_currency import ReportCurrencyError
 from .chart_of_accounts import setup_chart_of_accounts
 
 
@@ -494,12 +495,16 @@ class SaleProfitabilityView(APIView):
         date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
         location_id = request.query_params.get('location')
-        rows = get_sales_profitability_rows(
-            tenant_id=request.tenant_id,
-            date_from=date_from,
-            date_to=date_to,
-            location_id=int(location_id) if location_id else None,
-        )
+        try:
+            rows = get_sales_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                location_id=int(location_id) if location_id else None,
+                report_currency=request.query_params.get('report_currency'),
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         return Response(SaleProfitabilitySerializer(rows, many=True).data)
 
 
@@ -511,13 +516,17 @@ class ProductProfitabilityView(APIView):
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
         location_id = request.query_params.get('location')
         warehouse_id = request.query_params.get('warehouse')
-        rows = get_product_profitability_rows(
-            tenant_id=request.tenant_id,
-            date_from=date_from,
-            date_to=date_to,
-            location_id=int(location_id) if location_id else None,
-            warehouse_id=int(warehouse_id) if warehouse_id else None,
-        )
+        try:
+            rows = get_product_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                location_id=int(location_id) if location_id else None,
+                warehouse_id=int(warehouse_id) if warehouse_id else None,
+                report_currency=request.query_params.get('report_currency'),
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         return Response(ProductProfitabilitySerializer(rows, many=True).data)
 
 
@@ -527,11 +536,15 @@ class ProcurementProfitabilityView(APIView):
     def get(self, request):
         date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
-        rows = get_procurement_profitability_rows(
-            tenant_id=request.tenant_id,
-            date_from=date_from,
-            date_to=date_to,
-        )
+        try:
+            rows = get_procurement_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                report_currency=request.query_params.get('report_currency'),
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         return Response(ProcurementProfitabilitySerializer(rows, many=True).data)
 
 
@@ -543,9 +556,12 @@ class ProcurementProfitabilityDetailView(APIView):
             payload = get_procurement_profitability_detail(
                 tenant_id=request.tenant_id,
                 procurement_id=procurement_id,
+                report_currency=request.query_params.get('report_currency'),
             )
         except Procurement.DoesNotExist:
             raise NotFound('Закупка не найдена')
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         return Response(ProcurementProfitabilityDetailSerializer(payload).data)
 
 
@@ -559,9 +575,12 @@ class AgreementProfitabilityDetailView(APIView):
             payload = get_agreement_profitability_detail(
                 tenant_id=request.tenant_id,
                 agreement_id=agreement_id,
+                report_currency=request.query_params.get('report_currency'),
             )
         except InvestmentAgreement.DoesNotExist:
             raise NotFound('Инвестдоговор не найден')
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
         return Response(payload)
 
 
@@ -573,6 +592,11 @@ class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ExchangeRateSerializer
     permission_classes = [IsOwner]
     ordering = ['-rate_date', '-updated_at']
+
+    def get_permissions(self):
+        if self.action in {'list', 'retrieve', 'latest'}:
+            return [(IsOwner | IsInvestor)()]
+        return [IsOwner()]
 
     def get_queryset(self):
         qs = ExchangeRate.objects.filter(tenant_id=self.request.tenant_id)

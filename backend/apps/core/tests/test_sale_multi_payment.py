@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.finance.models import CashEntry, JournalEntry
+from apps.finance.models import Account, CashAccount, CashEntry, JournalEntry
 from apps.partnerships.models import PartnerLedgerEntry
 from apps.sales.models import Sale, SalePayment
 from apps.sales.serializers import SaleDetailSerializer, SaleListSerializer
@@ -180,3 +180,63 @@ class SaleMultiPaymentTests(TestCase):
             detail_payload['payment_methods'],
             [SalePayment.Method.CASH, SalePayment.Method.CREDIT],
         )
+
+    def test_usd_cash_sale_keeps_cash_native_and_journal_functional(self):
+        ctx = build_tenant()
+        seed_received_procurement(ctx)
+        session = open_session(ctx)
+        usd_cash = CashAccount.objects.create(
+            tenant=ctx['business'],
+            name='USD Cash',
+            currency='USD',
+            kind=CashAccount.Kind.CASH,
+            linked_account=Account.objects.get(tenant=ctx['business'], code='1000'),
+        )
+
+        sale = create_sale(
+            tenant_id=ctx['business'].id,
+            pos_session_id=session.id,
+            location_id=ctx['store'].id,
+            sold_by_id=ctx['cashier'].id,
+            customer_id=ctx['customer'].id,
+            lines=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': 1,
+                'operation_currency': 'USD',
+                'operation_unit_price': Decimal('20.00'),
+                'fx_rate': Decimal('12000.00'),
+                'unit_price': Decimal('240000.00'),
+            }],
+            payments=[{
+                'amount': Decimal('20.00'),
+                'currency': 'USD',
+                'fx_rate': Decimal('12000.00'),
+                'method': SalePayment.Method.CASH,
+                'account_id': usd_cash.id,
+            }],
+        )
+
+        usd_cash.refresh_from_db()
+        line = sale.lines.get()
+        payment = sale.payments.get()
+        cash_entry = CashEntry.objects.get(source_ref_type='sale_payment', source_ref_id=payment.id)
+
+        self.assertEqual(sale.total_amount, Decimal('240000.00'))
+        self.assertEqual(line.operation_currency, 'USD')
+        self.assertEqual(line.operation_unit_price, Decimal('20.00'))
+        self.assertEqual(line.unit_price, Decimal('240000.00'))
+        self.assertEqual(payment.amount, Decimal('20.00'))
+        self.assertEqual(payment.currency, 'USD')
+        self.assertEqual(cash_entry.amount, Decimal('20.00'))
+        self.assertEqual(usd_cash.balance, Decimal('20.00'))
+
+        revenue = Decimal('0.00')
+        debit_cash = Decimal('0.00')
+        for journal in JournalEntry.objects.filter(operation_type='sale', operation_id=sale.id):
+            for journal_line in journal.lines.select_related('account'):
+                if journal_line.account.code == '4000':
+                    revenue += journal_line.credit - journal_line.debit
+                if journal_line.account.code == '1000':
+                    debit_cash += journal_line.debit - journal_line.credit
+        self.assertEqual(revenue, Decimal('240000.00'))
+        self.assertEqual(debit_cash, Decimal('240000.00'))

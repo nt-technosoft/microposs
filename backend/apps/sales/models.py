@@ -67,6 +67,26 @@ class PosSession(TenantModel):
         blank=True,
         help_text='actual - expected. Logged in RiskEvent if != 0.',
     )
+    opening_cash_by_currency = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Native opening cash by currency, e.g. {"UZS": "100000.00", "USD": "20.00"}.',
+    )
+    expected_cash_by_currency = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Native expected cash by currency calculated on close.',
+    )
+    actual_cash_by_currency = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Native actual cash by currency entered on close.',
+    )
+    cash_difference_by_currency = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Native cash difference by currency.',
+    )
     opened_at = models.DateTimeField(auto_now_add=True)
     closed_at = models.DateTimeField(null=True, blank=True)
 
@@ -229,7 +249,21 @@ class SaleLine(TenantModel):
     unit_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text='Actual sale price per unit.',
+        help_text='Functional UZS sale price per unit.',
+    )
+    operation_currency = models.CharField(max_length=3, default='UZS')
+    operation_unit_price = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text='Native sale price per unit as entered by cashier.',
+    )
+    fx_rate_snapshot = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        default=Decimal('1'),
+        help_text='Immutable FX snapshot used to convert operation price to UZS.',
     )
     base_price = models.DecimalField(
         max_digits=12,

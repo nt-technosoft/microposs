@@ -79,8 +79,14 @@ export async function fetchInvestorAgreements(): Promise<InvestorAgreementListIt
   return toList<InvestorAgreementListItem>(data)
 }
 
-export async function fetchInvestorAgreementDetail(agreementId: number): Promise<AgreementProfitabilityDetail> {
-  const { data } = await api.get<AgreementProfitabilityDetail>(`/api/v1/investors/agreements/${agreementId}/`)
+export async function fetchInvestorAgreementDetail(
+  agreementId: number,
+  params?: { report_currency?: string },
+): Promise<AgreementProfitabilityDetail> {
+  const { data } = await api.get<AgreementProfitabilityDetail>(
+    `/api/v1/investors/agreements/${agreementId}/`,
+    { params },
+  )
   return data
 }
 

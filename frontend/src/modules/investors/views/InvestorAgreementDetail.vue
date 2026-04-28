@@ -23,6 +23,7 @@ const report = ref<AgreementProfitabilityDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
 const expandedProcurementId = ref<number | null>(null)
+const selectedReportCurrency = ref<'UZS' | 'USD' | ''>('')
 
 const agreementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.agreement ?? null)
@@ -30,9 +31,21 @@ const currentPartner = computed(() =>
   report.value?.partners.find((row) => row.partner_id === report.value?.current_partner_id) ?? null,
 )
 const procurements = computed(() => report.value?.procurements ?? [])
+const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? summary.value?.currency ?? 'UZS')
 
 function formatAmount(value: string | number | null | undefined, currency = 'UZS'): string {
   return formatPrice(value ?? '0', currency)
+}
+
+function formatReportAmount(
+  row: { display?: { currency: string; amounts: Record<string, string> } } | null | undefined,
+  key: string,
+  fallback: string | number | null | undefined,
+): string {
+  if (row?.display?.amounts?.[key] !== undefined) {
+    return formatAmount(row.display.amounts[key], row.display.currency)
+  }
+  return formatAmount(fallback)
 }
 
 function toggleProcurement(id: number): void {
@@ -52,12 +65,21 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    report.value = await fetchInvestorAgreementDetail(agreementId.value)
+    report.value = await fetchInvestorAgreementDetail(
+      agreementId.value,
+      selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
+    )
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Не удалось загрузить договор'
   } finally {
     loading.value = false
   }
+}
+
+async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
+  if (selectedReportCurrency.value === currency && activeReportCurrency.value === currency) return
+  selectedReportCurrency.value = currency
+  await load()
 }
 
 onMounted(load)
@@ -111,12 +133,16 @@ onMounted(load)
           </div>
 
           <div class="investor-hero__value">
+            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+              <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
+              <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
+            </div>
             <strong class="investor-hero__amount tabular-nums">
-              {{ formatAmount(currentPartner?.profit_pending_payout ?? '0') }}
+              {{ formatReportAmount(currentPartner, 'profit_pending_payout', currentPartner?.profit_pending_payout ?? '0') }}
             </strong>
             <span class="investor-hero__foot">
-              Начислено {{ formatAmount(currentPartner?.profit_accrued ?? '0') }}
-              · выплачено {{ formatAmount(currentPartner?.dividends_paid ?? '0') }}
+              Начислено {{ formatReportAmount(currentPartner, 'profit_accrued', currentPartner?.profit_accrued ?? '0') }}
+              · выплачено {{ formatReportAmount(currentPartner, 'dividends_paid', currentPartner?.dividends_paid ?? '0') }}
             </span>
           </div>
         </section>
@@ -195,14 +221,14 @@ onMounted(load)
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Оплачено, но ещё в пути</span>
               <strong class="investor-detail-card__value tabular-nums">
-                {{ formatAmount(currentPartner?.pending_prepaid_cost_estimate_uzs ?? '0') }}
+                {{ formatReportAmount(currentPartner, 'pending_prepaid_cost_estimate_uzs', currentPartner?.pending_prepaid_cost_estimate_uzs ?? '0') }}
               </strong>
               <span class="investor-detail-card__hint">Деньги уже ушли, но товар ещё не принят на склад.</span>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">К выплате</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">
-                {{ formatAmount(currentPartner?.profit_pending_payout ?? '0') }}
+                {{ formatReportAmount(currentPartner, 'profit_pending_payout', currentPartner?.profit_pending_payout ?? '0') }}
               </strong>
               <span class="investor-detail-card__hint">Невыплаченная прибыль по вашей стороне.</span>
             </article>
@@ -225,31 +251,31 @@ onMounted(load)
           <div class="investor-grid-2">
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Выручка</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.revenue) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Себестоимость продаж</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.cogs) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Фактическая прибыль</span>
-              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatAmount(summary.gross_profit) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Ожидаемая прибыль</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.projected_gross_profit) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Уже принято на склад</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.received_landed_cost) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'received_landed_cost', summary.received_landed_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Осталось в товаре</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.remaining_landed_cost) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Оплачено в пути</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.pending_prepaid_cost) }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'pending_prepaid_cost', summary.pending_prepaid_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Продано / осталось</span>
@@ -301,7 +327,7 @@ onMounted(load)
 
                 <div class="investor-list-row__side agreement-row__side">
                   <div class="agreement-row__side-copy">
-                    <span class="investor-list-row__value tabular-nums">{{ formatAmount(procurement.gross_profit) }}</span>
+                    <span class="investor-list-row__value tabular-nums">{{ formatReportAmount(procurement, 'gross_profit', procurement.gross_profit) }}</span>
                     <span class="investor-list-row__caption">Факт. прибыль</span>
                   </div>
                   <ChevronDown
@@ -318,25 +344,25 @@ onMounted(load)
                   <article class="investor-detail-card">
                     <span class="investor-detail-card__label">Уже на складе</span>
                     <strong class="investor-detail-card__value tabular-nums">
-                      {{ formatAmount(procurement.received_landed_cost ?? '0') }}
+                      {{ formatReportAmount(procurement, 'received_landed_cost', procurement.received_landed_cost ?? '0') }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
                     <span class="investor-detail-card__label">В пути</span>
                     <strong class="investor-detail-card__value tabular-nums">
-                      {{ formatAmount(procurement.pending_prepaid_cost ?? '0') }}
+                      {{ formatReportAmount(procurement, 'pending_prepaid_cost', procurement.pending_prepaid_cost ?? '0') }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
                     <span class="investor-detail-card__label">Остаток в товаре</span>
                     <strong class="investor-detail-card__value tabular-nums">
-                      {{ formatAmount(procurement.remaining_landed_cost) }}
+                      {{ formatReportAmount(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
                     <span class="investor-detail-card__label">Ожидаемая прибыль</span>
                     <strong class="investor-detail-card__value tabular-nums">
-                      {{ formatAmount(procurement.projected_gross_profit) }}
+                      {{ formatReportAmount(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
@@ -413,9 +439,38 @@ onMounted(load)
   gap: var(--space-3);
 }
 
+.investor-currency-switch {
+  justify-self: end;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(44px, 1fr));
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, white 18%, transparent);
+  border: 1px solid color-mix(in srgb, white 16%, transparent);
+}
+
+.investor-currency-switch button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  color: color-mix(in srgb, white 78%, transparent);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.investor-currency-switch button.active {
+  background: white;
+  color: var(--color-brand-800);
+}
+
 @media (max-width: 420px) {
   .agreement-row__side {
     grid-template-columns: 1fr auto;
+  }
+
+  .investor-currency-switch {
+    justify-self: stretch;
+    width: 100%;
   }
 }
 </style>

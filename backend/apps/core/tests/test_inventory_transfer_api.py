@@ -77,3 +77,5 @@ class InventoryTransferApiTests(APITestCase):
         self.assertEqual(filtered.status_code, status.HTTP_200_OK)
         self.assertEqual(filtered.data['count'], 1)
         self.assertEqual(filtered.data['results'][0]['movement_type'], StockMovement.MovementType.TRANSFER)
+        self.assertEqual(filtered.data['results'][0]['lot_product_name'], str(self.lot.product_variant))
+        self.assertIn('lot_procurement_id', filtered.data['results'][0])

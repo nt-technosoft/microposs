@@ -173,6 +173,7 @@ class SaleProfitabilitySerializer(serializers.Serializer):
     business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     margin_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
     markup_percent = serializers.DecimalField(max_digits=8, decimal_places=2)
+    display = serializers.DictField(required=False)
 
 
 class ProductProfitabilitySerializer(serializers.Serializer):
@@ -193,6 +194,7 @@ class ProductProfitabilitySerializer(serializers.Serializer):
     projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    display = serializers.DictField(required=False)
 
 
 class ProcurementProfitabilitySerializer(serializers.Serializer):
@@ -217,6 +219,7 @@ class ProcurementProfitabilitySerializer(serializers.Serializer):
     projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    display = serializers.DictField(required=False)
 
 
 class ProcurementProfitabilityItemSerializer(serializers.Serializer):
@@ -241,9 +244,11 @@ class ProcurementProfitabilityItemSerializer(serializers.Serializer):
     projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    display = serializers.DictField(required=False)
 
 
 class ProcurementProfitabilityDetailSerializer(serializers.Serializer):
+    report_currency = serializers.DictField(required=False)
     procurement = ProcurementProfitabilitySerializer()
     items = ProcurementProfitabilityItemSerializer(many=True)
 

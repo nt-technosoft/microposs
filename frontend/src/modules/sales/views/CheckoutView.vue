@@ -10,8 +10,8 @@ import { useIdempotency } from '@/composables/useIdempotency'
 import { useToast } from '@/composables/useToast'
 import { PaymentMethod } from '@/types/enums'
 import type { Customer } from '@/types/models'
+import { formatPrice } from '@/utils/currency'
 import BaseButton from '@/components/base/BaseButton.vue'
-import PriceDisplay from '@/components/data/PriceDisplay.vue'
 import SaleSuccessScreen from '../components/SaleSuccessScreen.vue'
 import CustomerSelectSheet from '../components/CustomerSelectSheet.vue'
 
@@ -53,6 +53,23 @@ const paymentOptions: PaymentOption[] = [
 
 const selectedMethod = ref<PaymentMethod>(PaymentMethod.CASH)
 const creditRequired = computed(() => selectedMethod.value === PaymentMethod.CREDIT)
+const checkoutTotals = computed(() => cartStore.totalsByCurrency)
+const checkoutPayments = computed(() => {
+  const totals = new Map<string, { amount: number; currency: string; fx_rate: string }>()
+  for (const item of cartStore.items) {
+    const currency = (item.operation_currency ?? 'UZS').toUpperCase()
+    const fx = currency === 'UZS' ? '1' : (item.fx_rate ?? '1')
+    const key = `${currency}:${fx}`
+    const native = Number.parseFloat(item.operation_unit_price ?? item.unit_price) || 0
+    const existing = totals.get(key) ?? { amount: 0, currency, fx_rate: fx }
+    existing.amount += native * item.quantity
+    totals.set(key, existing)
+  }
+  return Array.from(totals.values()).map((payment) => ({
+    ...payment,
+    amount: payment.amount.toFixed(2),
+  }))
+})
 
 function selectPaymentMethod(method: PaymentMethod): void {
   selectedMethod.value = method
@@ -116,6 +133,9 @@ async function confirmSale(): Promise<void> {
     product_variant_id: item.product_variant.id,
     quantity: item.quantity,
     unit_price: parseFloat(item.unit_price),
+    operation_currency: item.operation_currency ?? 'UZS',
+    operation_unit_price: item.operation_unit_price ?? item.unit_price,
+    fx_rate: item.fx_rate ?? '1',
     ...(item.lot_id !== null ? { lot_id: item.lot_id } : {}),
     ...(item.discount_reason_id !== null ? { discount_reason_id: item.discount_reason_id } : {}),
   }))
@@ -126,11 +146,12 @@ async function confirmSale(): Promise<void> {
       pos_session_id: sessionStore.currentSession.id,
       ...(selectedCustomer.value ? { customer_id: selectedCustomer.value.id } : {}),
       lines,
-      payments: [{
-        amount: cartStore.total,
-        currency: 'UZS',
+      payments: checkoutPayments.value.map((payment) => ({
+        amount: payment.amount,
+        currency: payment.currency,
+        fx_rate: payment.fx_rate,
         method: selectedMethod.value,
-      }],
+      })),
     })
     completedSaleTotal.value = sale.total_amount
     cartStore.clear()
@@ -189,7 +210,15 @@ function goToHistory(): void {
         <!-- Amount hero -->
         <section class="amount-section" aria-label="Сумма к оплате">
           <p class="amount-label">Сумма к оплате</p>
-          <PriceDisplay :amount="cartStore.total" size="xl" />
+          <div class="amount-totals">
+            <strong
+              v-for="total in checkoutTotals"
+              :key="total.currency"
+              class="amount-total"
+            >
+              {{ formatPrice(total.amount, total.currency) }}
+            </strong>
+          </div>
           <p class="amount-meta">
             {{ cartStore.itemCount }}
             {{
@@ -309,15 +338,26 @@ function goToHistory(): void {
                 </span>
               </div>
               <span class="order-line__qty">× {{ item.quantity }}</span>
-              <PriceDisplay
-                :amount="parseFloat(item.unit_price) * item.quantity"
-                size="sm"
-              />
+              <div class="order-line__amount">
+                <strong>
+                  {{ formatPrice((parseFloat(item.operation_unit_price ?? item.unit_price) * item.quantity).toFixed(2), item.operation_currency ?? 'UZS') }}
+                </strong>
+                <span v-if="item.operation_currency === 'USD'">
+                  {{ formatPrice((parseFloat(item.unit_price) * item.quantity).toFixed(2), 'UZS') }}
+                </span>
+              </div>
             </li>
           </ul>
           <div class="order-total-row">
             <span class="order-total-label">Итого</span>
-            <PriceDisplay :amount="cartStore.total" size="md" />
+            <div class="order-total-values">
+              <strong
+                v-for="total in checkoutTotals"
+                :key="`order-${total.currency}`"
+              >
+                {{ formatPrice(total.amount, total.currency) }}
+              </strong>
+            </div>
           </div>
         </section>
       </main>
@@ -443,6 +483,19 @@ function goToHistory(): void {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 0;
+}
+
+.amount-totals {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.amount-total {
+  color: var(--color-text-primary);
+  font-size: clamp(1.5rem, 8vw, 2.25rem);
+  font-weight: var(--font-bold);
+  line-height: var(--leading-tight);
 }
 
 .amount-meta {
@@ -743,6 +796,20 @@ function goToHistory(): void {
   flex-shrink: 0;
 }
 
+.order-line__amount {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  min-width: 96px;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+}
+
+.order-line__amount span {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
 .order-total-row {
   display: flex;
   align-items: center;
@@ -757,6 +824,14 @@ function goToHistory(): void {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--color-text-secondary);
+}
+
+.order-total-values {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
 }
 
 /* ==============================

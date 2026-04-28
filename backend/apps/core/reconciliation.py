@@ -6,6 +6,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from django.utils import timezone
+from apps.sales.currency import functional_amount_uzs, payment_functional_amount_uzs
 
 
 _ZERO = Decimal('0.00')
@@ -31,6 +32,8 @@ def _build_check(
     mismatch_count: int,
     sample_refs: list[str] | None = None,
     level: str = 'mismatch',
+    actual_by_currency: dict[str, Decimal] | None = None,
+    expected_by_currency: dict[str, Decimal] | None = None,
 ) -> dict:
     actual = _money(actual_amount)
     expected = _money(expected_amount)
@@ -43,7 +46,7 @@ def _build_check(
     else:
         status = 'mismatch'
 
-    return {
+    payload = {
         'code': code,
         'title': title,
         'summary': summary,
@@ -56,6 +59,17 @@ def _build_check(
         'mismatch_count': mismatch_count,
         'sample_refs': _sample_refs(sample_refs or []),
     }
+    if actual_by_currency is not None:
+        payload['actual_by_currency'] = {
+            currency: str(_money(amount))
+            for currency, amount in sorted(actual_by_currency.items())
+        }
+    if expected_by_currency is not None:
+        payload['expected_by_currency'] = {
+            currency: str(_money(amount))
+            for currency, amount in sorted(expected_by_currency.items())
+        }
+    return payload
 
 
 def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
@@ -121,9 +135,13 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
             sale_id = int(str(entry.source_ref).split(':', 1)[1])
         except (IndexError, TypeError, ValueError):
             continue
-        receivable_from_sale[sale_id] += Decimal(str(entry.amount))
+        receivable_from_sale[sale_id] += functional_amount_uzs(
+            amount=entry.amount,
+            currency=entry.currency,
+            fx_rate=entry.fx_rate,
+        )
 
-    cash_incoming_by_session: dict[int, Decimal] = defaultdict(lambda: _ZERO)
+    cash_incoming_by_session: dict[int, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: _ZERO))
     for payment in (
         SalePayment.objects
         .filter(
@@ -135,7 +153,8 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
         .select_related('sale')
         .order_by('id')
     ):
-        cash_incoming_by_session[payment.sale.pos_session_id] += Decimal(str(payment.amount))
+        currency = str(payment.currency or 'UZS').upper()
+        cash_incoming_by_session[payment.sale.pos_session_id][currency] += Decimal(str(payment.amount))
 
     revenue_by_sale: dict[int, Decimal] = defaultdict(lambda: _ZERO)
     cogs_by_sale: dict[int, Decimal] = defaultdict(lambda: _ZERO)
@@ -151,9 +170,9 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
 
             if journal.operation_type == JournalEntry.OperationType.SALE:
                 if line.account.code == '4000':
-                    revenue_by_sale[journal.operation_id] += credit
+                    revenue_by_sale[journal.operation_id] += credit - debit
                 elif line.account.code == '5000':
-                    cogs_by_sale[journal.operation_id] += debit
+                    cogs_by_sale[journal.operation_id] += debit - credit
 
         if _money(total_debit) != _money(total_credit):
             journal_balance_mismatches.append(f'journal:{journal.id}')
@@ -170,7 +189,7 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
     for sale in sales:
         non_credit_incoming = sum(
             (
-                Decimal(str(payment.amount))
+                payment_functional_amount_uzs(payment)
                 for payment in sale.payments.all()
                 if payment.role == SalePayment.Role.INCOMING
                 and payment.method != SalePayment.Method.CREDIT
@@ -210,18 +229,22 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
             receivable_mismatches.append(f'customer:{receivable.customer_id}')
 
     cash_account_total = _ZERO
+    cash_account_totals_by_currency: dict[str, Decimal] = defaultdict(lambda: _ZERO)
     cash_entry_totals_by_account: dict[int, Decimal] = defaultdict(lambda: _ZERO)
+    cash_entry_totals_by_currency: dict[str, Decimal] = defaultdict(lambda: _ZERO)
     for entry in cash_entries:
         signed_amount = Decimal(str(entry.amount))
         if entry.direction == CashEntry.Direction.OUT:
             signed_amount *= Decimal('-1')
         cash_entry_totals_by_account[entry.account_id] += signed_amount
+        cash_entry_totals_by_currency[str(entry.account.currency or 'UZS').upper()] += signed_amount
     cash_entry_total = _money(sum(cash_entry_totals_by_account.values(), _ZERO))
 
     cash_account_mismatches: list[str] = []
     for account in cash_accounts:
         balance = _money(account.balance)
         cash_account_total += balance
+        cash_account_totals_by_currency[str(account.currency or 'UZS').upper()] += balance
         ledger_total = _money(cash_entry_totals_by_account.get(account.id, _ZERO))
         if balance != ledger_total:
             cash_account_mismatches.append(f'cash_account:{account.id}')
@@ -236,25 +259,65 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
     nonzero_cash_difference_total = _ZERO
 
     for session in closed_sessions:
+        opening_by_currency = {
+            str(currency).upper(): Decimal(str(amount))
+            for currency, amount in (session.opening_cash_by_currency or {'UZS': session.opening_cash}).items()
+        }
+        expected_by_currency = dict(opening_by_currency)
+        for currency, amount in cash_incoming_by_session.get(session.id, {}).items():
+            expected_by_currency[currency] = expected_by_currency.get(currency, _ZERO) + amount
+
+        stored_expected_by_currency = {
+            str(currency).upper(): Decimal(str(amount))
+            for currency, amount in (session.expected_cash_by_currency or {'UZS': session.expected_cash or _ZERO}).items()
+        }
+        actual_by_currency = {
+            str(currency).upper(): Decimal(str(amount))
+            for currency, amount in (session.actual_cash_by_currency or {'UZS': session.actual_cash or _ZERO}).items()
+        }
+        stored_difference_by_currency = {
+            str(currency).upper(): Decimal(str(amount))
+            for currency, amount in (session.cash_difference_by_currency or {'UZS': session.cash_difference or _ZERO}).items()
+        }
+        formula_difference_by_currency = {
+            currency: actual_by_currency.get(currency, _ZERO) - stored_expected_by_currency.get(currency, _ZERO)
+            for currency in set(actual_by_currency) | set(stored_expected_by_currency)
+        }
+
         formula_expected = _money(
-            Decimal(str(session.opening_cash)) + cash_incoming_by_session.get(session.id, _ZERO)
+            expected_by_currency.get('UZS', _ZERO)
         )
-        stored_expected = _money(session.expected_cash or _ZERO)
+        stored_expected = _money(stored_expected_by_currency.get('UZS', _ZERO))
         stored_expected_total += stored_expected
         formula_expected_total += formula_expected
-        if stored_expected != formula_expected:
+        if {
+            key: _money(value)
+            for key, value in stored_expected_by_currency.items()
+        } != {
+            key: _money(value)
+            for key, value in expected_by_currency.items()
+        }:
             session_expected_mismatches.append(f'session:{session.id}')
 
-        actual_cash = _money(session.actual_cash or _ZERO)
-        stored_difference = _money(session.cash_difference or _ZERO)
-        formula_difference = _money(actual_cash - stored_expected)
+        stored_difference = _money(stored_difference_by_currency.get('UZS', _ZERO))
+        formula_difference = _money(formula_difference_by_currency.get('UZS', _ZERO))
         stored_difference_total += stored_difference
         formula_difference_total += formula_difference
-        if stored_difference != formula_difference:
+        if {
+            key: _money(value)
+            for key, value in stored_difference_by_currency.items()
+        } != {
+            key: _money(value)
+            for key, value in formula_difference_by_currency.items()
+        }:
             session_difference_mismatches.append(f'session:{session.id}')
-        if stored_difference != _ZERO:
+        session_abs_difference = sum(
+            abs(_money(value))
+            for value in stored_difference_by_currency.values()
+        )
+        if session_abs_difference != _ZERO:
             session_nonzero_differences.append(f'session:{session.id}')
-            nonzero_cash_difference_total += abs(stored_difference)
+            nonzero_cash_difference_total += session_abs_difference
 
     checks = [
         _build_check(
@@ -289,6 +352,8 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
             expected_amount=cash_entry_total,
             mismatch_count=len(cash_account_mismatches),
             sample_refs=cash_account_mismatches,
+            actual_by_currency=cash_account_totals_by_currency,
+            expected_by_currency=cash_entry_totals_by_currency,
         ),
         _build_check(
             code='closed_sessions_expected_cash',
@@ -374,7 +439,15 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
     highlights = [
         {'key': 'sales_total', 'label': 'Продажи', 'value': str(sales_total)},
         {'key': 'receivable_total', 'label': 'Дебиторка', 'value': str(_money(receivable_snapshot_total))},
-        {'key': 'cash_total', 'label': 'Касса и счета', 'value': str(_money(cash_account_total))},
+        *[
+            {
+                'key': f'cash_total_{currency}',
+                'label': f'Касса {currency}',
+                'value': str(_money(amount)),
+                'currency': currency,
+            }
+            for currency, amount in sorted(cash_account_totals_by_currency.items())
+        ],
         {'key': 'payables_total', 'label': 'Кредиторка', 'value': str(supplier_payables_total)},
         {'key': 'journal_entries', 'label': 'Проводки', 'value': str(len(journal_entries))},
         {'key': 'sessions', 'label': 'Смены', 'value': f"{len(closed_sessions)} закрыто / {open_sessions_count} открыто"},

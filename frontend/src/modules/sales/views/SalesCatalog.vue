@@ -40,6 +40,7 @@ const openForm = ref({
 })
 const closeForm = ref({
   actualCash: '',
+  actualCashUsd: '',
 })
 const openFormError = ref('')
 const closeFormError = ref('')
@@ -73,9 +74,31 @@ const locationOptions = computed(() =>
   })),
 )
 const cashSalesTotal = computed(() => Number(activeSession.value?.cash_sales_total ?? 0))
+const cashSalesByCurrency = computed<Record<string, number>>(() => {
+  const source = activeSession.value?.cash_sales_by_currency ?? {}
+  const result: Record<string, number> = {}
+  for (const [currency, amount] of Object.entries(source)) {
+    const parsed = Number(amount)
+    if (Number.isFinite(parsed)) result[currency.toUpperCase()] = parsed
+  }
+  if (!Object.keys(result).length && cashSalesTotal.value) result.UZS = cashSalesTotal.value
+  return result
+})
 const expectedCashPreview = computed(() =>
-  Number(activeSession.value?.opening_cash ?? 0) + cashSalesTotal.value,
+  Number(activeSession.value?.opening_cash ?? 0) + (cashSalesByCurrency.value.UZS || 0),
 )
+const expectedCashByCurrency = computed<Record<string, number>>(() => {
+  const opening = activeSession.value?.opening_cash_by_currency ?? { UZS: activeSession.value?.opening_cash ?? '0' }
+  const result: Record<string, number> = {}
+  for (const [currency, amount] of Object.entries(opening)) {
+    const parsed = Number(amount)
+    result[currency.toUpperCase()] = Number.isFinite(parsed) ? parsed : 0
+  }
+  for (const [currency, amount] of Object.entries(cashSalesByCurrency.value)) {
+    result[currency] = (result[currency] || 0) + amount
+  }
+  return result
+})
 const openedAtLabel = computed(() => {
   if (!activeSession.value?.opened_at) return ''
   return new Intl.DateTimeFormat('ru-RU', {
@@ -89,6 +112,11 @@ const closeDifference = computed(() => {
   const actualCash = Number(closeForm.value.actualCash || '0')
   if (!Number.isFinite(actualCash)) return 0
   return actualCash - expectedCashPreview.value
+})
+const closeUsdDifference = computed(() => {
+  const actualCash = Number(closeForm.value.actualCashUsd || '0')
+  if (!Number.isFinite(actualCash)) return 0
+  return actualCash - (expectedCashByCurrency.value.USD || 0)
 })
 const closeDifferenceMeta = computed(() => {
   if (closeDifference.value === 0) {
@@ -170,6 +198,34 @@ function productTotalStock(product: Product): number {
   if (Number.isFinite(product.total_stock)) return Number(product.total_stock)
   return 0
 }
+
+function productShopStock(product: Product): number {
+  if (activeSession.value && Number.isFinite(product.stock_at_location)) {
+    return Number(product.stock_at_location)
+  }
+  if (Array.isArray(product.stock_by_location)) {
+    return product.stock_by_location
+      .filter((entry) => String(entry.warehouse_kind).toUpperCase() === 'SHOP')
+      .reduce((sum, entry) => sum + Number(entry.quantity || 0), 0)
+  }
+  return activeSession.value ? productStock(product) : 0
+}
+
+function productAvailabilityRank(product: Product): number {
+  if (productShopStock(product) > 0) return 0
+  if (productTotalStock(product) > 0) return 1
+  return 2
+}
+
+const sortedCatalogProducts = computed(() =>
+  productsStore.filteredProducts
+    .map((product, index) => ({ product, index }))
+    .sort((left, right) => {
+      const rankDelta = productAvailabilityRank(left.product) - productAvailabilityRank(right.product)
+      return rankDelta !== 0 ? rankDelta : left.index - right.index
+    })
+    .map((entry) => entry.product),
+)
 
 function productPrice(product: Product): string {
   if (product.base_price) return product.base_price
@@ -290,6 +346,9 @@ async function onAddToCart(product: Product | null | undefined) {
     location_id: activeSession.value.location.id,
     available_stock: availableStock,
     quantity: 1,
+    operation_currency: 'UZS',
+    operation_unit_price: price,
+    fx_rate: '1',
     unit_price: price,
     base_price: price,
     price_changed: false,
@@ -315,6 +374,10 @@ function resetFilters() {
 
 function formatSessionAmount(value: number | string): string {
   return formatPrice(value, 'UZS')
+}
+
+function formatSessionCurrencyAmount(value: number | string, currency: string): string {
+  return formatPrice(value, currency)
 }
 
 function formatInputNumber(value: number): string {
@@ -361,6 +424,7 @@ function openCloseSessionSheet(): void {
   if (!activeSession.value) return
   closeFormError.value = ''
   closeForm.value.actualCash = formatInputNumber(expectedCashPreview.value)
+  closeForm.value.actualCashUsd = formatInputNumber(expectedCashByCurrency.value.USD || 0)
   closeSheetOpen.value = true
 }
 
@@ -402,7 +466,12 @@ async function submitCloseSession(): Promise<void> {
   }
 
   try {
-    await sessionStore.closeSession(actualCash)
+    const actualByCurrency: Record<string, number> = { UZS: actualCash }
+    const actualUsd = Number(closeForm.value.actualCashUsd || '0')
+    if (Number.isFinite(actualUsd) && (actualUsd > 0 || (expectedCashByCurrency.value.USD || 0) > 0)) {
+      actualByCurrency.USD = actualUsd
+    }
+    await sessionStore.closeSession(actualCash, actualByCurrency)
     closeCloseSessionSheet()
     await productsStore.fetchProducts(true)
     toast.success('Смена закрыта')
@@ -676,7 +745,7 @@ onBeforeUnmount(() => {
           aria-label="Список товаров"
         >
           <div
-            v-for="product in productsStore.filteredProducts"
+            v-for="product in sortedCatalogProducts"
             :key="product.id"
             class="product-cell"
             role="listitem"
@@ -722,7 +791,7 @@ onBeforeUnmount(() => {
           aria-label="Компактный список товаров"
         >
           <article
-            v-for="product in productsStore.filteredProducts"
+            v-for="product in sortedCatalogProducts"
             :key="product.id"
             class="compact-product-row"
             role="button"
@@ -844,11 +913,17 @@ onBeforeUnmount(() => {
               <ReceiptText :size="16" :stroke-width="1.8" />
               Наличные продажи
             </span>
-            <span class="close-summary__value">{{ formatSessionAmount(cashSalesTotal) }}</span>
+            <span class="close-summary__value">
+              {{ formatSessionCurrencyAmount(cashSalesByCurrency.UZS || 0, 'UZS') }}
+              <template v-if="cashSalesByCurrency.USD"> · {{ formatSessionCurrencyAmount(cashSalesByCurrency.USD, 'USD') }}</template>
+            </span>
           </div>
           <div class="close-summary__row">
             <span class="close-summary__label">Ожидается в кассе</span>
-            <span class="close-summary__value">{{ formatSessionAmount(expectedCashPreview) }}</span>
+            <span class="close-summary__value">
+              {{ formatSessionCurrencyAmount(expectedCashByCurrency.UZS || 0, 'UZS') }}
+              <template v-if="expectedCashByCurrency.USD"> · {{ formatSessionCurrencyAmount(expectedCashByCurrency.USD, 'USD') }}</template>
+            </span>
           </div>
         </div>
 
@@ -858,9 +933,19 @@ onBeforeUnmount(() => {
           type="number"
           placeholder="0"
         />
+        <BaseInput
+          v-if="expectedCashByCurrency.USD || closeForm.actualCashUsd"
+          v-model="closeForm.actualCashUsd"
+          label="Фактическая наличность, USD"
+          type="number"
+          placeholder="0"
+        />
         <div class="difference-card" :class="`difference-card--${closeDifferenceMeta.tone}`">
           <span class="difference-card__label">{{ closeDifferenceMeta.label }}</span>
-          <span class="difference-card__value">{{ formatSessionAmount(closeDifference) }}</span>
+          <span class="difference-card__value">
+            {{ formatSessionAmount(closeDifference) }}
+            <template v-if="expectedCashByCurrency.USD || closeForm.actualCashUsd"> · {{ formatSessionCurrencyAmount(closeUsdDifference, 'USD') }}</template>
+          </span>
         </div>
         <p v-if="closeFormError" class="session-sheet__error">{{ closeFormError }}</p>
         <BaseButton

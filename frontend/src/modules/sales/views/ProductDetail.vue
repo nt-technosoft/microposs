@@ -3,8 +3,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
+import { useFxRate } from '@/composables/useFxRate'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
+import { useToast } from '@/composables/useToast'
 import type { Product, ProductVariant } from '@/types/models'
 import { PricingMode } from '@/types/enums'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
@@ -18,6 +20,12 @@ const route = useRoute()
 const router = useRouter()
 const cartStore = useCartStore()
 const sessionStore = useSessionStore()
+const toast = useToast()
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadUsdRate,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 
 // ===== State =====
 const product = ref<Product | null>(null)
@@ -30,6 +38,7 @@ const loadError = ref<string | null>(null)
 const selectedAttributes = ref<Record<string, string>>({})
 const quantity = ref(1)
 const unitPriceInput = ref('0')
+const selectedCurrency = ref<'UZS' | 'USD'>('UZS')
 const selectedDiscountReasonId = ref<number | null>(null)
 const variantSheetOpen = ref(false)
 const isAdded = ref(false)
@@ -128,7 +137,10 @@ const lineBasePrice = computed(() => {
 const lineUnitPrice = computed(() => {
   if (!isPriceEditable.value) return lineBasePrice.value
   const parsed = Number.parseFloat(unitPriceInput.value)
-  return Number.isFinite(parsed) ? parsed : 0
+  if (!Number.isFinite(parsed)) return 0
+  if (selectedCurrency.value === 'UZS') return parsed
+  const fx = Number.parseFloat(latestUsdRate.value)
+  return Number.isFinite(fx) && fx > 0 ? parsed * fx : 0
 })
 
 const priceChanged = computed(() => (
@@ -136,6 +148,19 @@ const priceChanged = computed(() => (
 ))
 
 const lineTotal = computed(() => lineUnitPrice.value * quantity.value)
+const operationUnitPrice = computed(() => {
+  const parsed = Number.parseFloat(unitPriceInput.value)
+  return Number.isFinite(parsed) ? parsed : 0
+})
+const fxSnapshot = computed(() => (
+  selectedCurrency.value === 'USD' ? latestUsdRate.value : '1'
+))
+const currencyTrace = computed(() => {
+  if (selectedCurrency.value !== 'USD') return ''
+  const fx = Number.parseFloat(latestUsdRate.value)
+  if (!Number.isFinite(fx) || fx <= 0) return latestUsdRateError.value || 'Курс USD/UZS не загружен'
+  return `${operationUnitPrice.value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} $ · курс ${fx.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}`
+})
 
 const activeLocationId = computed(() => sessionStore.currentSession?.location?.id ?? null)
 
@@ -262,10 +287,14 @@ function chooseVariantFromList(variant: ProductVariant): void {
 watch([matchedVariant, lineBasePrice, isPriceEditable], ([variant, basePrice, editable]) => {
   if (!variant) return
   if (!editable) {
-    unitPriceInput.value = basePrice.toFixed(2)
+    unitPriceInput.value = selectedCurrency.value === 'USD'
+      ? convertFunctionalToSelected(basePrice)
+      : basePrice.toFixed(2)
     return
   }
-  unitPriceInput.value = basePrice.toFixed(2)
+  unitPriceInput.value = selectedCurrency.value === 'USD'
+    ? convertFunctionalToSelected(basePrice)
+    : basePrice.toFixed(2)
 }, { immediate: true })
 
 watch(priceChanged, (changed) => {
@@ -296,6 +325,9 @@ function addToCart() {
     location_id: sessionStore.currentSession?.location?.id ?? null,
     available_stock: stockQuantity.value,
     quantity: quantity.value,
+    operation_currency: selectedCurrency.value,
+    operation_unit_price: operationUnitPrice.value.toFixed(2),
+    fx_rate: fxSnapshot.value,
     unit_price: lineUnitPrice.value.toFixed(2),
     base_price: lineBasePrice.value.toFixed(2),
     price_changed: priceChanged.value,
@@ -309,6 +341,28 @@ function addToCart() {
     addedTimer = null
     router.back()
   }, 900)
+}
+
+function convertFunctionalToSelected(functionalAmount: number): string {
+  if (selectedCurrency.value === 'UZS') return functionalAmount.toFixed(2)
+  const fx = Number.parseFloat(latestUsdRate.value)
+  if (!Number.isFinite(fx) || fx <= 0) return '0'
+  return (functionalAmount / fx).toFixed(2)
+}
+
+async function selectSaleCurrency(currency: 'UZS' | 'USD') {
+  if (selectedCurrency.value === currency) return
+  const currentFunctional = lineUnitPrice.value || lineBasePrice.value
+  if (currency === 'USD' && !latestUsdRate.value) {
+    try {
+      await loadUsdRate()
+    } catch {
+      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      return
+    }
+  }
+  selectedCurrency.value = currency
+  unitPriceInput.value = convertFunctionalToSelected(currentFunctional)
 }
 
 function handlePrimaryAction() {
@@ -526,13 +580,34 @@ onMounted(() => {
             </span>
           </div>
 
+          <div class="currency-row" aria-label="Валюта продажи">
+            <span class="price-label">Валюта</span>
+            <div class="currency-toggle">
+              <button
+                type="button"
+                :class="{ active: selectedCurrency === 'UZS' }"
+                @click="selectSaleCurrency('UZS')"
+              >
+                UZS
+              </button>
+              <button
+                type="button"
+                :class="{ active: selectedCurrency === 'USD' }"
+                @click="selectSaleCurrency('USD')"
+              >
+                USD
+              </button>
+            </div>
+          </div>
+
           <div v-if="isPriceEditable" class="price-input-wrap">
             <BaseInput
               v-model="unitPriceInput"
               type="number"
-              label="Цена продажи"
+              :label="selectedCurrency === 'USD' ? 'Цена продажи, $' : 'Цена продажи, UZS'"
               placeholder="0"
             />
+            <p v-if="currencyTrace" class="currency-trace">{{ currencyTrace }}</p>
           </div>
 
           <div v-if="priceChanged" class="discount-reason-wrap">
@@ -1011,6 +1086,37 @@ onMounted(() => {
   justify-content: space-between;
 }
 
+.currency-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.currency-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.currency-toggle button {
+  min-width: 56px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border-radius: calc(var(--radius-md) - 3px);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.currency-toggle button.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-brand-700);
+  box-shadow: var(--shadow-sm);
+}
+
 .price-label,
 .stock-label {
   font-size: var(--text-sm);
@@ -1038,6 +1144,12 @@ onMounted(() => {
 .price-input-wrap {
   display: grid;
   gap: var(--space-2);
+}
+
+.currency-trace {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
 }
 
 .discount-reason-wrap {

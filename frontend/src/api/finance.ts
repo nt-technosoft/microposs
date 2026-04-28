@@ -110,6 +110,7 @@ export interface SaleProfitabilityRow {
   business_profit: string
   margin_percent: string
   markup_percent: string
+  display?: ReportDisplay
 }
 
 export interface ProductProfitabilityRow {
@@ -130,6 +131,19 @@ export interface ProductProfitabilityRow {
   projected_gross_profit: string
   projected_investor_profit: string
   projected_business_profit: string
+  display?: ReportDisplay
+}
+
+export interface ReportCurrencyMeta {
+  currency: string
+  fx_rate: string
+  rate_date: string
+  source: string
+  policy: string
+}
+
+export interface ReportDisplay extends ReportCurrencyMeta {
+  amounts: Record<string, string>
 }
 
 export interface ProcurementProfitabilityRow {
@@ -154,6 +168,7 @@ export interface ProcurementProfitabilityRow {
   projected_gross_profit: string
   projected_investor_profit: string
   projected_business_profit: string
+  display?: ReportDisplay
   received_landed_cost?: string
   pending_prepaid_cost?: string
   receive_batches_count?: number
@@ -162,6 +177,7 @@ export interface ProcurementProfitabilityRow {
     received_at: string
     items_count: number
     total_inventory_uzs: string
+    display?: ReportDisplay
     capital_allocations: Array<{
       partner_id: number
       partner_name: string
@@ -197,14 +213,17 @@ export interface ProcurementProfitabilityDetailItem {
   projected_gross_profit: string
   projected_investor_profit: string
   projected_business_profit: string
+  display?: ReportDisplay
 }
 
 export interface ProcurementProfitabilityDetail {
+  report_currency?: ReportCurrencyMeta
   procurement: ProcurementProfitabilityRow
   items: ProcurementProfitabilityDetailItem[]
 }
 
 export interface AgreementProfitabilityDetail {
+  report_currency?: ReportCurrencyMeta
   agreement: {
     agreement_id: number
     status: string
@@ -229,6 +248,7 @@ export interface AgreementProfitabilityDetail {
     projected_gross_profit: string
     projected_investor_profit: string
     projected_business_profit: string
+    display?: ReportDisplay
   }
   partners: Array<{
     partner_id: number
@@ -248,6 +268,7 @@ export interface AgreementProfitabilityDetail {
     profit_accrued: string
     dividends_paid: string
     profit_pending_payout: string
+    display?: ReportDisplay
   }>
   procurements: ProcurementProfitabilityRow[]
   current_partner_id?: number
@@ -361,6 +382,7 @@ interface FetchProfitabilityParams {
   date_to?: string
   location?: number
   warehouse?: number
+  report_currency?: string
 }
 
 function extractList<T>(payload: unknown): T[] {
@@ -489,18 +511,22 @@ export async function fetchProcurementProfitability(
 
 export async function fetchProcurementProfitabilityDetail(
   procurementId: number,
+  params?: { report_currency?: string },
 ): Promise<ProcurementProfitabilityDetail> {
   const { data } = await api.get<ProcurementProfitabilityDetail>(
     `/api/v1/finance/procurement-profitability/${procurementId}/`,
+    { params },
   )
   return data
 }
 
 export async function fetchAgreementProfitabilityDetail(
   agreementId: number,
+  params?: { report_currency?: string },
 ): Promise<AgreementProfitabilityDetail> {
   const { data } = await api.get<AgreementProfitabilityDetail>(
     `/api/v1/finance/agreement-profitability/${agreementId}/`,
+    { params },
   )
   return data
 }

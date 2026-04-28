@@ -20,6 +20,7 @@ from apps.partnerships.formulas import (
     calculate_lot_profit_distribution,
     distribute_loss_by_capital_from_snapshot,
 )
+from apps.sales.currency import functional_amount_uzs, money
 
 from .models import (
     Sale, SaleLine, Return, ReturnLine, PosSession,
@@ -27,6 +28,40 @@ from .models import (
 
 if TYPE_CHECKING:
     from apps.inventory.models import Lot
+
+
+def _currency_map(value: dict | None, *, fallback_uzs: Decimal | None = None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if value:
+        for currency, amount in value.items():
+            normalized = str(currency or '').upper()
+            if not normalized:
+                continue
+            result[normalized] = str(money(amount or '0'))
+    if fallback_uzs is not None and 'UZS' not in result:
+        result['UZS'] = str(money(fallback_uzs))
+    return result
+
+
+def _sum_currency_maps(left: dict[str, str], right: dict[str, Decimal | str]) -> dict[str, str]:
+    totals: dict[str, Decimal] = {
+        str(currency).upper(): money(amount)
+        for currency, amount in left.items()
+    }
+    for currency, amount in right.items():
+        normalized = str(currency or '').upper()
+        if not normalized:
+            continue
+        totals[normalized] = money(totals.get(normalized, Decimal('0')) + Decimal(str(amount or '0')))
+    return {currency: str(money(amount)) for currency, amount in sorted(totals.items())}
+
+
+def _diff_currency_maps(actual: dict[str, str], expected: dict[str, str]) -> dict[str, str]:
+    currencies = set(actual.keys()) | set(expected.keys())
+    return {
+        currency: str(money(Decimal(str(actual.get(currency, '0'))) - Decimal(str(expected.get(currency, '0')))))
+        for currency in sorted(currencies)
+    }
 
 
 def _validate_unit_price(unit_price: Decimal) -> None:
@@ -248,7 +283,29 @@ def create_sale(
         for line_data in lines:
             variant_id = line_data['product_variant_id']
             quantity = int(line_data['quantity'])
-            unit_price = Decimal(str(line_data['unit_price']))
+            operation_currency = str(line_data.get('operation_currency') or 'UZS').upper()
+            operation_unit_price_raw = line_data.get('operation_unit_price')
+            has_operation_price = operation_unit_price_raw is not None or operation_currency != 'UZS'
+            operation_unit_price = Decimal(str(
+                operation_unit_price_raw
+                if operation_unit_price_raw is not None
+                else line_data['unit_price']
+            ))
+            line_fx_rate = resolve_fx_rate_snapshot(
+                tenant_id=tenant_id,
+                operation_currency=operation_currency,
+                operation_at=date,
+                fx_rate_snapshot=line_data.get('fx_rate'),
+            )
+            unit_price = (
+                functional_amount_uzs(
+                    amount=operation_unit_price,
+                    currency=operation_currency,
+                    fx_rate=line_fx_rate,
+                )
+                if has_operation_price
+                else Decimal(str(line_data['unit_price'])).quantize(Decimal('0.01'))
+            )
             discount_reason_id = line_data.get('discount_reason_id')
 
             variant = ProductVariant.objects.get(
@@ -303,6 +360,9 @@ def create_sale(
                     quantity=alloc_qty,
                     unit_price=unit_price,
                     base_price=base_price,
+                    operation_currency=operation_currency,
+                    operation_unit_price=operation_unit_price,
+                    fx_rate_snapshot=line_fx_rate,
                     price_changed=price_changed,
                     discount_reason_id=resolved_discount_reason_id,
                     unit_purchase_price=unit_purchase,
@@ -363,7 +423,8 @@ def create_sale(
                         )
 
         # SalePayments
-        credit_amount = Decimal('0')
+        payment_functional_total = Decimal('0')
+        credit_payments: list[dict] = []
         settlement_journals: list[dict] = []
         for pay in payments:
             amount = Decimal(str(pay['amount']))
@@ -392,11 +453,21 @@ def create_sale(
                 role=SalePayment.Role.INCOMING,
                 account_id=account_id,
             )
+            functional_amount = functional_amount_uzs(
+                amount=amount,
+                currency=currency,
+                fx_rate=fx_rate,
+            )
+            payment_functional_total += functional_amount
 
             if payment.method == SalePayment.Method.CREDIT:
-                credit_amount += amount
-                settlement_journals.append({
+                credit_payments.append({
                     'amount': amount,
+                    'currency': currency,
+                    'fx_rate': fx_rate,
+                })
+                settlement_journals.append({
+                    'amount': functional_amount,
                     'payment_method': payment.method,
                     'debit_account_code': None,
                     'description': f'Sale credit #{sale.pk}',
@@ -406,7 +477,7 @@ def create_sale(
             debit_account_code = None
             if payment.account_id is None:
                 settlement_journals.append({
-                    'amount': amount,
+                    'amount': functional_amount,
                     'payment_method': payment.method,
                     'debit_account_code': debit_account_code,
                     'description': f'Sale payment #{payment.pk}',
@@ -437,19 +508,24 @@ def create_sale(
                     debit_account_code = account.linked_account.code
 
             settlement_journals.append({
-                'amount': amount,
+                'amount': functional_amount,
                 'payment_method': payment.method,
                 'debit_account_code': debit_account_code,
                 'description': f'Sale payment #{payment.pk}',
             })
 
-        if credit_amount > 0 and customer_id is not None:
+        if payments and money(payment_functional_total) != money(total_amount):
+            raise ValueError(
+                'Сумма оплат в UZS-эквиваленте не совпадает с суммой продажи.'
+            )
+
+        for credit in credit_payments:
             accrue_debt(
                 tenant_id=tenant_id,
                 customer_id=customer_id,
-                amount=credit_amount,
-                currency='UZS',
-                fx_rate=Decimal('1'),
+                amount=credit['amount'],
+                currency=credit['currency'],
+                fx_rate=credit['fx_rate'],
                 source_ref=f'sale:{sale.pk}',
                 date=date,
             )
@@ -752,6 +828,7 @@ def open_pos_session(
     location_id: int,
     opened_by_id: int,
     opening_cash: Decimal = Decimal('0'),
+    opening_cash_by_currency: dict | None = None,
 ) -> PosSession:
     """Open a new POS session (shift)."""
     from apps.inventory.models import Warehouse
@@ -781,6 +858,10 @@ def open_pos_session(
         location_id=location_id,
         opened_by_id=opened_by_id,
         opening_cash=opening_cash,
+        opening_cash_by_currency=_currency_map(
+            opening_cash_by_currency,
+            fallback_uzs=opening_cash,
+        ),
         status=PosSession.SessionStatus.OPEN,
     )
     publish_event(
@@ -801,6 +882,7 @@ def close_pos_session(
     session: PosSession,
     closed_by_id: int,
     actual_cash: Decimal,
+    actual_cash_by_currency: dict | None = None,
 ) -> PosSession:
     """
     Close a POS session with cash reconciliation.
@@ -816,33 +898,58 @@ def close_pos_session(
         # Calculate expected cash from incoming cash payments.
         from apps.sales.models import SalePayment
 
-        cash_sales_total = SalePayment.objects.filter(
+        cash_payments = SalePayment.objects.filter(
             sale__pos_session=session,
             sale__status=Sale.SaleStatus.COMPLETED,
             role=SalePayment.Role.INCOMING,
             method=SalePayment.Method.CASH,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        )
+        cash_sales_by_currency: dict[str, Decimal] = {}
+        for payment in cash_payments:
+            currency = str(payment.currency or 'UZS').upper()
+            cash_sales_by_currency[currency] = (
+                cash_sales_by_currency.get(currency, Decimal('0'))
+                + Decimal(str(payment.amount))
+            )
 
-        expected_cash = session.opening_cash + cash_sales_total
+        opening_by_currency = _currency_map(
+            session.opening_cash_by_currency or None,
+            fallback_uzs=session.opening_cash,
+        )
+        expected_by_currency = _sum_currency_maps(opening_by_currency, cash_sales_by_currency)
+        actual_by_currency = _currency_map(actual_cash_by_currency, fallback_uzs=actual_cash)
+        difference_by_currency = _diff_currency_maps(actual_by_currency, expected_by_currency)
+
+        expected_cash = Decimal(str(expected_by_currency.get('UZS', '0')))
 
         session.expected_cash = expected_cash
-        session.actual_cash = actual_cash
-        session.cash_difference = actual_cash - expected_cash
+        session.actual_cash = Decimal(str(actual_by_currency.get('UZS', actual_cash)))
+        session.cash_difference = Decimal(str(difference_by_currency.get('UZS', '0')))
+        session.expected_cash_by_currency = expected_by_currency
+        session.actual_cash_by_currency = actual_by_currency
+        session.cash_difference_by_currency = difference_by_currency
         session.closed_by_id = closed_by_id
         session.closed_at = timezone.now()
         session.status = PosSession.SessionStatus.CLOSED
         session.save()
 
         # Log mismatch as risk event
-        if session.cash_difference != 0:
+        if any(Decimal(str(amount)) != 0 for amount in difference_by_currency.values()):
             from apps.risk.models import RiskEvent
+            impact = sum(
+                abs(Decimal(str(amount)))
+                for amount in difference_by_currency.values()
+            )
             RiskEvent.objects.create(
                 tenant_id=session.tenant_id,
                 event_type=RiskEvent.EventType.CASH_MISMATCH,
                 quantity=0,
-                monetary_impact=abs(session.cash_difference),
+                monetary_impact=impact,
                 responsible_user_id=closed_by_id,
-                    reason=f'Cash mismatch at session close: expected {expected_cash}, actual {actual_cash}',
+                reason=(
+                    'Cash mismatch at session close: '
+                    f'expected {expected_by_currency}, actual {actual_by_currency}'
+                ),
             )
 
         publish_event(
@@ -852,8 +959,11 @@ def close_pos_session(
                 'location_id': session.location_id,
                 'closed_by_id': closed_by_id,
                 'expected_cash': str(expected_cash),
-                'actual_cash': str(actual_cash),
+                'actual_cash': str(session.actual_cash),
                 'cash_difference': str(session.cash_difference),
+                'expected_cash_by_currency': expected_by_currency,
+                'actual_cash_by_currency': actual_by_currency,
+                'cash_difference_by_currency': difference_by_currency,
                 'closed_at': session.closed_at.isoformat() if session.closed_at else None,
             },
             tenant_id=session.tenant_id,

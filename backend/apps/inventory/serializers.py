@@ -192,6 +192,16 @@ class StockMovementSerializer(serializers.ModelSerializer):
     to_location_name = serializers.CharField(
         source='to_location.name', read_only=True, default=None,
     )
+    lot_product_name = serializers.SerializerMethodField()
+    lot_procurement_id = serializers.SerializerMethodField()
+    lot_receipt_id = serializers.IntegerField(source='lot.receipt_id', read_only=True)
+    lot_received_at = serializers.DateTimeField(source='lot.received_at', read_only=True)
+    lot_landed_cost_per_unit = serializers.DecimalField(
+        source='lot.landed_cost_per_unit',
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
 
     class Meta:
         model = StockMovement
@@ -199,10 +209,20 @@ class StockMovementSerializer(serializers.ModelSerializer):
             'id', 'lot', 'movement_type', 'quantity',
             'from_location', 'from_location_name',
             'to_location', 'to_location_name',
+            'lot_product_name', 'lot_procurement_id', 'lot_receipt_id',
+            'lot_received_at', 'lot_landed_cost_per_unit',
             'reference_type', 'reference_id',
             'notes', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_lot_product_name(self, obj):
+        return str(obj.lot.product_variant) if obj.lot_id and obj.lot.product_variant_id else ''
+
+    def get_lot_procurement_id(self, obj):
+        if not obj.lot_id or not obj.lot.procurement_item_id:
+            return None
+        return obj.lot.procurement_item.procurement_id
 
 
 # === Transfer ===

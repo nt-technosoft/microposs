@@ -7,6 +7,7 @@ from rest_framework.test import APITestCase
 
 from apps.partnerships.models import Procurement
 from apps.sales.models import SalePayment
+from apps.finance.models import ExchangeRate
 from apps.partnerships.formulas import calculate_profit_distribution
 from apps.sales.services import create_sale
 
@@ -17,6 +18,19 @@ class ProfitabilityReportsTests(APITestCase):
     def setUp(self):
         self.ctx = build_tenant()
         self.procurement, self.lot = seed_received_procurement(self.ctx)
+        ExchangeRate.objects.update_or_create(
+            tenant=self.ctx['business'],
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            defaults={
+                'rate': Decimal('12000.000000'),
+                'source': ExchangeRate.Source.MANUAL,
+                'is_manual': True,
+                'notes': 'Profitability report test rate',
+                'raw_payload': {},
+            },
+        )
         self.session = open_session(self.ctx)
         self.sale = create_sale(
             tenant_id=self.ctx['business'].id,
@@ -82,6 +96,22 @@ class ProfitabilityReportsTests(APITestCase):
             Decimal(row['markup_percent']),
             ((gross_profit / self.sale.total_cogs) * Decimal('100')).quantize(Decimal('0.01')),
         )
+
+    def test_sales_profitability_endpoint_returns_usd_display_without_changing_functional_values(self):
+        self.auth_owner()
+        today = timezone.localdate().isoformat()
+
+        response = self.client.get(
+            '/api/v1/finance/sales-profitability/',
+            {'date_from': today, 'date_to': today, 'report_currency': 'USD'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+        row = response.data[0]
+        self.assertEqual(Decimal(row['revenue']), self.sale.total_amount)
+        self.assertEqual(row['display']['currency'], 'USD')
+        self.assertEqual(Decimal(row['display']['amounts']['revenue']), Decimal('100.00'))
 
     def test_product_profitability_endpoint_includes_remaining_projection(self):
         self.auth_owner()
@@ -254,4 +284,18 @@ class ProfitabilityReportsTests(APITestCase):
         self.assertEqual(
             Decimal(item_row['projected_investor_profit']),
             projected_investor_profit,
+        )
+
+    def test_procurement_profitability_detail_defaults_to_contract_currency_display(self):
+        self.auth_owner()
+
+        response = self.client.get(f'/api/v1/finance/procurement-profitability/{self.procurement.id}/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        payload = response.data
+        self.assertEqual(payload['report_currency']['currency'], 'USD')
+        self.assertEqual(payload['procurement']['display']['currency'], 'USD')
+        self.assertEqual(
+            Decimal(payload['procurement']['display']['amounts']['revenue']),
+            (self.sale.total_amount / Decimal('12000')).quantize(Decimal('0.01')),
         )

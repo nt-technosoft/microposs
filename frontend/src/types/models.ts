@@ -171,6 +171,11 @@ export interface StockMovement extends BaseModel {
   from_location_name?: string | null
   to_location?: number | null
   to_location_name?: string | null
+  lot_product_name?: string
+  lot_procurement_id?: number | null
+  lot_receipt_id?: number | null
+  lot_received_at?: string | null
+  lot_landed_cost_per_unit?: string | null
   reference_type?: string | null
   reference_id?: number | null
   notes?: string
@@ -216,6 +221,9 @@ export interface CartItem {
   location_id?: number | null
   available_stock?: number | null
   quantity: number
+  operation_currency?: 'UZS' | 'USD'
+  operation_unit_price?: string
+  fx_rate?: string
   unit_price: string
   base_price: string
   price_changed?: boolean
@@ -236,6 +244,9 @@ export interface SaleLine extends BaseModel {
   product_name?: string
   quantity: number
   unit_price: string
+  operation_currency?: string
+  operation_unit_price?: string | null
+  fx_rate_snapshot?: string | null
   base_price: string
   price_changed: boolean
   discount_reason: DiscountReason | null
@@ -253,6 +264,7 @@ export interface SalePayment {
   amount: string
   currency: string
   fx_rate: string
+  functional_amount_uzs?: string
   method: PaymentMethod
   role: 'INCOMING' | 'REFUND'
   account_id?: number | null
@@ -404,10 +416,15 @@ export interface PosSession extends BaseModel {
   status: 'open' | 'closed'
   sales_count?: number
   cash_sales_total?: string
+  cash_sales_by_currency?: Record<string, string>
   opening_cash: string
   expected_cash: string | null
   actual_cash: string | null
   cash_difference: string | null
+  opening_cash_by_currency?: Record<string, string>
+  expected_cash_by_currency?: Record<string, string>
+  actual_cash_by_currency?: Record<string, string>
+  cash_difference_by_currency?: Record<string, string>
   opened_at: string
   closed_at: string | null
 }

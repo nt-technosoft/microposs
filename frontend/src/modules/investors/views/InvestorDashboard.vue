@@ -18,15 +18,14 @@ import {
   fetchInvestorProcurements,
   type InvestorAgreementListItem,
 } from '@/api/investors'
+import { useFxRate } from '@/composables/useFxRate'
 import { useToast } from '@/composables/useToast'
 import { useAuthStore } from '@/stores/auth'
 import type { InvestorDashboardAggregate, InvestorProcurementListItem } from '@/types/models'
 import {
   agreementStatusLabel,
   agreementStatusTone,
-  formatAggregateAmount,
   formatBalanceLabel,
-  formatFunctionalAmount,
   formatShortDate,
   procurementStatusLabel,
   procurementStatusTone,
@@ -35,17 +34,24 @@ import {
 import { formatPrice } from '@/utils/currency'
 
 type DashboardMode = 'overview' | 'procurements' | 'agreements'
+type ReportCurrency = 'UZS' | 'USD'
 
 const router = useRouter()
 const route = useRoute()
 const toast = useToast()
 const auth = useAuthStore()
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRate,
+} = useFxRate()
 
 const aggregate = ref<InvestorDashboardAggregate | null>(null)
 const agreements = ref<InvestorAgreementListItem[]>([])
 const procurements = ref<InvestorProcurementListItem[]>([])
 const isLoading = ref(true)
 const errorMessage = ref('')
+const reportCurrency = ref<ReportCurrency>('USD')
 
 const hasActiveBusinessLink = computed(() => auth.tenantId !== null)
 const dashboardMode = computed<DashboardMode>(() => {
@@ -71,8 +77,8 @@ const heroConfig = computed(() => {
     return {
       kicker: 'Связанные инвестдоговоры',
       title: 'Баланс, распределение и остаток по каждому договору.',
-      amount: formatAggregateAmount(aggregate.value, 'capital_net', 'USD'),
-      foot: `${activeAgreementCount.value} активн. · начислено ${formatAggregateAmount(aggregate.value, 'profit_accrued', 'UZS')}`,
+      amount: formatLedgerTotal('capital_net'),
+      foot: `${activeAgreementCount.value} активн. · начислено ${formatLedgerTotal('profit_accrued')}`,
     }
   }
 
@@ -86,39 +92,68 @@ const heroConfig = computed(() => {
   }
 
   return {
-    kicker: 'Общий обзор',
-    title: 'Один экран для капитала, прибыли и всех связанных приходов.',
-    amount: formatFunctionalAmount(aggregate.value, 'profit_pending_payout'),
-    foot: `Начислено ${formatAggregateAmount(aggregate.value, 'profit_accrued', 'UZS')} · выплачено ${formatAggregateAmount(aggregate.value, 'dividends_paid', 'USD')}`,
+      kicker: 'Общий обзор',
+      title: 'Один экран для капитала, прибыли и всех связанных приходов.',
+    amount: formatLedgerTotal('profit_pending_payout'),
+    foot: `Начислено ${formatLedgerTotal('profit_accrued')} · выплачено ${formatLedgerTotal('dividends_paid')}`,
   }
 })
 
 const summaryStats = computed(() => [
   {
     label: 'К выплате',
-    value: formatFunctionalAmount(aggregate.value, 'profit_pending_payout'),
+    value: formatLedgerTotal('profit_pending_payout'),
     hint: 'Что бизнес должен сейчас',
     accent: true,
   },
   {
     label: 'Вложено',
-    value: formatAggregateAmount(aggregate.value, 'capital_in', 'USD'),
+    value: formatLedgerTotal('capital_in'),
     hint: 'Все вносы капитала',
   },
   {
     label: 'В товаре',
     value: formatCapitalState('tracked_cost_uzs'),
-    hint: 'Capital still tracked in stock',
+    hint: 'Капитал, который ещё лежит в остатке',
   },
   {
     label: 'Прогноз инвестора',
     value: formatCapitalState('projected_partner_profit_uzs'),
-    hint: 'Potential profit on remaining goods',
+    hint: 'Ожидаемая прибыль по остатку',
   },
 ])
 
 function formatCapitalState(field: keyof InvestorDashboardAggregate['capital_state']): string {
-  return formatPrice(aggregate.value?.capital_state?.[field] ?? '0', 'UZS')
+  return formatReportPrice(aggregate.value?.capital_state?.[field] ?? '0')
+}
+
+function reportNumberFromUzs(value: string | number | null | undefined): number {
+  const amount = Number.parseFloat(String(value ?? '0'))
+  if (!Number.isFinite(amount)) return 0
+  if (reportCurrency.value === 'UZS') return amount
+  const fx = Number.parseFloat(latestUsdRate.value || '0')
+  return Number.isFinite(fx) && fx > 0 ? amount / fx : amount
+}
+
+function formatReportPrice(value: string | number | null | undefined): string {
+  return formatPrice(reportNumberFromUzs(value), reportCurrency.value)
+}
+
+function formatLedgerTotal(field: keyof InvestorDashboardAggregate['functional_uzs']): string {
+  return formatReportPrice(aggregate.value?.functional_uzs?.[field] ?? '0')
+}
+
+async function setReportCurrency(currency: ReportCurrency): Promise<void> {
+  if (reportCurrency.value === currency) return
+  reportCurrency.value = currency
+  if (currency === 'USD' && !latestUsdRate.value) {
+    try {
+      await loadLatestUsdRate()
+    } catch {
+      reportCurrency.value = 'UZS'
+      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+    }
+  }
 }
 
 function openDashboardMode(mode: DashboardMode): void {
@@ -180,6 +215,13 @@ async function loadDashboard(): Promise<void> {
     aggregate.value = summary
     agreements.value = agreementRows
     procurements.value = procurementRows
+    if (reportCurrency.value === 'USD' && !latestUsdRate.value) {
+      try {
+        await loadLatestUsdRate()
+      } catch {
+        reportCurrency.value = 'UZS'
+      }
+    }
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить кабинет инвестора'
     toast.error('Ошибка загрузки кабинета инвестора')
@@ -246,6 +288,10 @@ onMounted(loadDashboard)
           </div>
 
           <div class="investor-hero__value">
+            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+              <button type="button" :class="{ active: reportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
+              <button type="button" :class="{ active: reportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
+            </div>
             <strong class="investor-hero__amount tabular-nums">{{ heroConfig.amount }}</strong>
             <span class="investor-hero__foot">{{ heroConfig.foot }}</span>
           </div>
@@ -472,22 +518,22 @@ onMounted(loadDashboard)
           <div class="investor-grid-2">
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Чистый капитал</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAggregateAmount(aggregate, 'capital_net', 'USD') }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('capital_net') }}</strong>
               <span class="investor-detail-card__hint">Вносы минус возвраты капитала.</span>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Начисленная прибыль</span>
-              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatAggregateAmount(aggregate, 'profit_accrued', 'UZS') }}</strong>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatLedgerTotal('profit_accrued') }}</strong>
               <span class="investor-detail-card__hint">Прибыль, которую система уже отнесла на вас.</span>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Дивиденды выплачены</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatAggregateAmount(aggregate, 'dividends_paid', 'USD') }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('dividends_paid') }}</strong>
               <span class="investor-detail-card__hint">Фактические выплаты, которые вы уже получили.</span>
             </article>
             <article class="investor-detail-card">
               <span class="investor-detail-card__label">Бизнес должен</span>
-              <strong class="investor-detail-card__value tabular-nums">{{ formatFunctionalAmount(aggregate, 'profit_pending_payout') }}</strong>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('profit_pending_payout') }}</strong>
               <span class="investor-detail-card__hint">Невыплаченная прибыль на текущий момент.</span>
             </article>
           </div>
@@ -534,6 +580,30 @@ onMounted(loadDashboard)
   gap: 4px;
 }
 
+.investor-currency-switch {
+  justify-self: end;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(44px, 1fr));
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, white 18%, transparent);
+  border: 1px solid color-mix(in srgb, white 16%, transparent);
+}
+
+.investor-currency-switch button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  color: color-mix(in srgb, white 78%, transparent);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.investor-currency-switch button.active {
+  background: white;
+  color: var(--color-brand-800);
+}
+
 @media (max-width: 420px) {
   .dashboard-row-side {
     grid-template-columns: 1fr;
@@ -542,6 +612,11 @@ onMounted(loadDashboard)
 
   .dashboard-row-side .investor-list-row__chevron {
     display: none;
+  }
+
+  .investor-currency-switch {
+    justify-self: stretch;
+    width: 100%;
   }
 }
 </style>
