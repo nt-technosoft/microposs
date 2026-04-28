@@ -1,19 +1,43 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Wallet, Landmark, TrendingUp, ChevronRight, RefreshCcw, Settings } from 'lucide-vue-next'
-import { formatPrice } from '@/utils/currency'
-import { useToast } from '@/composables/useToast'
-import { useAuthStore } from '@/stores/auth'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  ChevronRight,
+  Landmark,
+  PackageSearch,
+  RefreshCcw,
+  Scale,
+  ScrollText,
+  Settings,
+  TrendingUp,
+} from 'lucide-vue-next'
+
 import {
   fetchInvestorAgreements,
   fetchInvestorDashboard,
   fetchInvestorProcurements,
   type InvestorAgreementListItem,
 } from '@/api/investors'
-import type { InvestorDashboardAggregate, InvestorLedgerTotals, InvestorProcurementListItem } from '@/types/models'
+import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
+import type { InvestorDashboardAggregate, InvestorProcurementListItem } from '@/types/models'
+import {
+  agreementStatusLabel,
+  agreementStatusTone,
+  formatAggregateAmount,
+  formatBalanceLabel,
+  formatFunctionalAmount,
+  formatShortDate,
+  procurementStatusLabel,
+  procurementStatusTone,
+  procurementTypeLabel,
+} from '@/modules/investors/presentation'
+import { formatPrice } from '@/utils/currency'
+
+type DashboardMode = 'overview' | 'procurements' | 'agreements'
 
 const router = useRouter()
+const route = useRoute()
 const toast = useToast()
 const auth = useAuthStore()
 
@@ -22,77 +46,116 @@ const agreements = ref<InvestorAgreementListItem[]>([])
 const procurements = ref<InvestorProcurementListItem[]>([])
 const isLoading = ref(true)
 const errorMessage = ref('')
+
 const hasActiveBusinessLink = computed(() => auth.tenantId !== null)
+const dashboardMode = computed<DashboardMode>(() => {
+  if (route.name === 'investor-procurements') return 'procurements'
+  if (route.name === 'investor-agreements') return 'agreements'
+  return 'overview'
+})
 
-type LedgerAmountKey = keyof InvestorLedgerTotals
+const activeAgreementCount = computed(() =>
+  agreements.value.filter((agreement) => agreementStatusTone(agreement.status) === 'success').length,
+)
 
-const currencyPriority = ['USD', 'UZS']
+const previewAgreements = computed(() =>
+  dashboardMode.value === 'overview' ? agreements.value.slice(0, 3) : agreements.value,
+)
 
-function nonZero(value: string | undefined): boolean {
-  return Math.abs(Number.parseFloat(value ?? '0')) > 0.000001
-}
+const previewProcurements = computed(() =>
+  dashboardMode.value === 'overview' ? procurements.value.slice(0, 4) : procurements.value,
+)
 
-function formatAggregateAmount(
-  field: LedgerAmountKey,
-  preferredCurrency?: string,
-): string {
-  const summary = aggregate.value
-  if (!summary) return formatPrice('0', 'UZS')
-
-  const currencies = Object.keys(summary.by_currency ?? {}).sort((a, b) => {
-    const aIndex = currencyPriority.indexOf(a)
-    const bIndex = currencyPriority.indexOf(b)
-    return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex)
-  })
-
-  if (preferredCurrency && nonZero(summary.by_currency?.[preferredCurrency]?.[field])) {
-    return formatPrice(summary.by_currency[preferredCurrency][field], preferredCurrency)
+const heroConfig = computed(() => {
+  if (dashboardMode.value === 'agreements') {
+    return {
+      kicker: 'Связанные инвестдоговоры',
+      title: 'Баланс, распределение и остаток по каждому договору.',
+      amount: formatAggregateAmount(aggregate.value, 'capital_net', 'USD'),
+      foot: `${activeAgreementCount.value} активн. · начислено ${formatAggregateAmount(aggregate.value, 'profit_accrued', 'UZS')}`,
+    }
   }
 
-  const parts = currencies
-    .map((currency) => ({ currency, amount: summary.by_currency[currency][field] }))
-    .filter(({ amount }) => nonZero(amount))
-
-  if (parts.length === 0) {
-    return formatPrice(summary.functional_uzs?.[field] ?? '0', 'UZS')
+  if (dashboardMode.value === 'procurements') {
+    return {
+      kicker: 'Связанные приходы',
+      title: 'Смотрите, где ваш капитал уже продан, а где ещё лежит в товаре.',
+      amount: formatCapitalState('tracked_cost_uzs'),
+      foot: `${procurements.value.length} приходов · прогноз ${formatCapitalState('projected_partner_profit_uzs')}`,
+    }
   }
 
-  return parts
-    .map(({ currency, amount }) => formatPrice(amount, currency))
-    .join(' + ')
-}
+  return {
+    kicker: 'Общий обзор',
+    title: 'Один экран для капитала, прибыли и всех связанных приходов.',
+    amount: formatFunctionalAmount(aggregate.value, 'profit_pending_payout'),
+    foot: `Начислено ${formatAggregateAmount(aggregate.value, 'profit_accrued', 'UZS')} · выплачено ${formatAggregateAmount(aggregate.value, 'dividends_paid', 'USD')}`,
+  }
+})
 
-function formatFunctionalAmount(field: LedgerAmountKey): string {
-  return formatPrice(aggregate.value?.functional_uzs?.[field] ?? '0', 'UZS')
-}
+const summaryStats = computed(() => [
+  {
+    label: 'К выплате',
+    value: formatFunctionalAmount(aggregate.value, 'profit_pending_payout'),
+    hint: 'Что бизнес должен сейчас',
+    accent: true,
+  },
+  {
+    label: 'Вложено',
+    value: formatAggregateAmount(aggregate.value, 'capital_in', 'USD'),
+    hint: 'Все вносы капитала',
+  },
+  {
+    label: 'В товаре',
+    value: formatCapitalState('tracked_cost_uzs'),
+    hint: 'Capital still tracked in stock',
+  },
+  {
+    label: 'Прогноз инвестора',
+    value: formatCapitalState('projected_partner_profit_uzs'),
+    hint: 'Potential profit on remaining goods',
+  },
+])
 
 function formatCapitalState(field: keyof InvestorDashboardAggregate['capital_state']): string {
   return formatPrice(aggregate.value?.capital_state?.[field] ?? '0', 'UZS')
 }
 
-function procurementTypeLabel(type: string): string {
-  if (type === 'PARTNERSHIP') return 'Партнёрский'
-  if (type === 'MUSHARAKA') return 'Мушарака'
-  return type
+function openDashboardMode(mode: DashboardMode): void {
+  if (mode === dashboardMode.value) return
+  const name = mode === 'overview'
+    ? 'investor-dashboard'
+    : mode === 'agreements'
+      ? 'investor-agreements'
+      : 'investor-procurements'
+  router.push({ name })
 }
 
-function procurementStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    OPEN: 'Открыт',
-    PARTIALLY_RECEIVED: 'Частично',
-    RECEIVED: 'Завершён',
-    CLOSED: 'Закрыт',
-    CANCELLED: 'Отменён',
-  }
-  return labels[status] ?? status
+function openProcurement(procurementId: number): void {
+  router.push({ name: 'investor-procurement', params: { id: procurementId } })
 }
 
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
+function openAgreement(agreementId: number): void {
+  router.push({ name: 'investor-agreement', params: { id: agreementId } })
+}
+
+function openSettings(): void {
+  router.push({ name: 'settings' })
+}
+
+function agreementMeta(agreement: InvestorAgreementListItem): string {
+  return [
+    agreement.supplier_name || 'Без поставщика',
+    formatShortDate(agreement.opened_at),
+    `${agreement.procurements_count} приход.`,
+  ].join(' · ')
+}
+
+function procurementMeta(procurement: InvestorProcurementListItem): string {
+  return [
+    procurement.supplier_name || 'Без поставщика',
+    procurement.received_at ? `Принят ${formatShortDate(procurement.received_at)}` : `Открыт ${formatShortDate(procurement.opened_at)}`,
+  ].join(' · ')
 }
 
 async function loadDashboard(): Promise<void> {
@@ -107,6 +170,7 @@ async function loadDashboard(): Promise<void> {
 
   isLoading.value = true
   errorMessage.value = ''
+
   try {
     const [summary, agreementRows, procurementRows] = await Promise.all([
       fetchInvestorDashboard(),
@@ -124,181 +188,327 @@ async function loadDashboard(): Promise<void> {
   }
 }
 
-function openProcurement(procurementId: number): void {
-  router.push({ name: 'investor-procurement', params: { id: procurementId } })
-}
-
-function openAgreement(agreementId: number): void {
-  router.push({ name: 'investor-agreement', params: { id: agreementId } })
-}
-
-function agreementBalanceLabel(agreement: InvestorAgreementListItem): string {
-  const parts = Object.entries(agreement.balances ?? {})
-    .filter(([, amount]) => Math.abs(Number(amount || 0)) > 0.000001)
-    .map(([currency, amount]) => formatPrice(amount, currency))
-  return parts.length ? parts.join(' · ') : '0'
-}
-
 onMounted(loadDashboard)
 </script>
 
 <template>
-  <div class="dashboard-page">
-    <header class="page-header">
-      <h1 class="page-title">Кабинет инвестора</h1>
-      <div class="header-actions">
-        <button
-          class="refresh-btn"
-          type="button"
-          aria-label="Настройки"
-          @click="router.push({ name: 'settings' })"
-        >
+  <div class="investor-shell">
+    <header class="investor-header investor-header--actions">
+      <div class="investor-header__copy">
+        <strong class="investor-header__title">Кабинет инвестора</strong>
+        <span class="investor-header__caption">
+          {{ dashboardMode === 'overview' ? 'Общий обзор капитала' : dashboardMode === 'agreements' ? 'Договоры и распределение' : 'Приходы и капитал в товаре' }}
+        </span>
+      </div>
+      <div class="investor-header__actions">
+        <button type="button" aria-label="Настройки" @click="openSettings">
           <Settings :size="16" :stroke-width="1.75" />
         </button>
-        <button class="refresh-btn" type="button" aria-label="Обновить" @click="loadDashboard">
+        <button type="button" aria-label="Обновить" @click="loadDashboard">
           <RefreshCcw :size="16" :stroke-width="1.75" />
         </button>
       </div>
     </header>
 
-    <main class="content">
-      <div v-if="isLoading" class="loading-grid" aria-busy="true">
-        <div class="skeleton-card" />
-        <div class="skeleton-card" />
-        <div class="skeleton-card" />
-      </div>
+    <main class="investor-content">
+      <template v-if="isLoading">
+        <div class="investor-hero investor-skeleton skeleton" aria-hidden="true" />
+        <div class="investor-summary-band">
+          <div class="investor-summary-stat investor-skeleton skeleton" />
+          <div class="investor-summary-stat investor-skeleton skeleton" />
+          <div class="investor-summary-stat investor-skeleton skeleton" />
+          <div class="investor-summary-stat investor-skeleton skeleton" />
+        </div>
+      </template>
 
-      <div v-else-if="errorMessage" class="error-box" role="alert">
-        {{ errorMessage }}
-      </div>
+      <section v-else-if="errorMessage" class="investor-state investor-state--error" role="alert">
+        <p>{{ errorMessage }}</p>
+      </section>
 
-      <section v-else-if="!hasActiveBusinessLink" class="card onboarding-card">
-        <h2 class="section-title">Кабинет пока не подключён</h2>
-        <p class="empty-text">
-          Этот аккаунт инвестора ещё не связан ни с одним бизнесом.
-          Откройте ссылку-приглашение от owner и примите её из текущего аккаунта.
+      <section v-else-if="!hasActiveBusinessLink" class="investor-state">
+        <strong>Кабинет пока не подключён</strong>
+        <p>
+          Этот investor-аккаунт ещё не связан ни с одним бизнесом.
+          Откройте invite-ссылку от owner и примите её из текущего аккаунта.
         </p>
       </section>
 
       <template v-else>
-        <section class="stats-grid">
-          <article class="stat-card">
-            <Wallet :size="18" :stroke-width="1.75" />
-            <span class="stat-label">Инвестировано</span>
-            <strong class="stat-value tabular-nums">{{ formatAggregateAmount('capital_in', 'USD') }}</strong>
-          </article>
-          <article class="stat-card">
-            <TrendingUp :size="18" :stroke-width="1.75" />
-            <span class="stat-label">Накопленная прибыль</span>
-            <strong class="stat-value tabular-nums">{{ formatAggregateAmount('profit_accrued', 'UZS') }}</strong>
-          </article>
-          <article class="stat-card">
-            <Landmark :size="18" :stroke-width="1.75" />
-            <span class="stat-label">Бизнес должен</span>
-            <strong class="stat-value tabular-nums">{{ formatFunctionalAmount('profit_pending_payout') }}</strong>
+        <section class="investor-hero">
+          <div class="investor-hero__copy">
+            <span class="investor-hero__kicker">{{ heroConfig.kicker }}</span>
+            <h1 class="investor-hero__title">{{ heroConfig.title }}</h1>
+            <div class="investor-hero__meta">
+              <span class="investor-chip investor-chip--glass">Связь активна</span>
+              <span class="investor-chip investor-chip--glass">{{ agreements.length }} договоров</span>
+              <span class="investor-chip investor-chip--glass">{{ procurements.length }} приходов</span>
+            </div>
+          </div>
+
+          <div class="investor-hero__value">
+            <strong class="investor-hero__amount tabular-nums">{{ heroConfig.amount }}</strong>
+            <span class="investor-hero__foot">{{ heroConfig.foot }}</span>
+          </div>
+        </section>
+
+        <nav class="investor-segments" aria-label="Разделы кабинета инвестора">
+          <button
+            type="button"
+            class="investor-segment"
+            :class="{ 'is-active': dashboardMode === 'overview' }"
+            @click="openDashboardMode('overview')"
+          >
+            Обзор
+          </button>
+          <button
+            type="button"
+            class="investor-segment"
+            :class="{ 'is-active': dashboardMode === 'agreements' }"
+            @click="openDashboardMode('agreements')"
+          >
+            Договоры
+          </button>
+          <button
+            type="button"
+            class="investor-segment"
+            :class="{ 'is-active': dashboardMode === 'procurements' }"
+            @click="openDashboardMode('procurements')"
+          >
+            Приходы
+          </button>
+        </nav>
+
+        <section class="investor-summary-band">
+          <article
+            v-for="stat in summaryStats"
+            :key="stat.label"
+            class="investor-summary-stat"
+            :class="{ 'investor-summary-stat--accent': stat.accent }"
+          >
+            <span class="investor-summary-stat__label">{{ stat.label }}</span>
+            <strong class="investor-summary-stat__value tabular-nums">{{ stat.value }}</strong>
+            <span class="investor-summary-stat__hint">{{ stat.hint }}</span>
           </article>
         </section>
 
-        <section class="card">
-          <h2 class="section-title">Мои инвестдоговоры</h2>
-          <div v-if="agreements.length === 0" class="empty-text">
+        <section
+          v-if="dashboardMode !== 'procurements'"
+          class="investor-panel"
+        >
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Мои договоры</h2>
+              <p class="investor-panel__hint">
+                Каждый договор показывает общий баланс, поставщика и сколько приходов уже отработало по этой связке.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <ScrollText :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div v-if="previewAgreements.length === 0" class="investor-empty">
             Инвестдоговоров с вашим участием пока нет.
           </div>
+
+          <div v-else class="investor-list">
+            <button
+              v-for="agreement in previewAgreements"
+              :key="agreement.id"
+              type="button"
+              class="investor-list-row"
+              @click="openAgreement(agreement.id)"
+            >
+              <div class="investor-list-row__main">
+                <div class="dashboard-row-head">
+                  <strong class="investor-list-row__title">Договор #{{ agreement.id }}</strong>
+                  <span class="investor-chip" :class="`investor-chip--${agreementStatusTone(agreement.status)}`">
+                    {{ agreementStatusLabel(agreement.status) }}
+                  </span>
+                </div>
+                <span class="investor-list-row__meta">{{ agreementMeta(agreement) }}</span>
+              </div>
+
+              <div class="investor-list-row__side dashboard-row-side">
+                <div class="dashboard-row-side__copy">
+                  <span class="investor-list-row__value tabular-nums">{{ formatBalanceLabel(agreement.balances) }}</span>
+                  <span class="investor-list-row__caption">Баланс договора</span>
+                </div>
+                <ChevronRight class="investor-list-row__chevron" :size="16" :stroke-width="1.9" />
+              </div>
+            </button>
+          </div>
+
           <button
-            v-for="agreement in agreements"
-            v-else
-            :key="agreement.id"
-            class="contract-row"
+            v-if="dashboardMode === 'overview' && agreements.length > previewAgreements.length"
             type="button"
-            @click="openAgreement(agreement.id)"
+            class="investor-inline-button"
+            @click="openDashboardMode('agreements')"
           >
-            <div class="contract-main">
-              <strong class="contract-title">Инвестдоговор #{{ agreement.id }}</strong>
-              <span class="contract-meta">
-                {{ agreement.supplier_name || 'Без поставщика' }} · {{ agreement.procurements_count }} приход.
-              </span>
-            </div>
-            <div class="contract-right">
-              <span class="contract-amount">{{ agreementBalanceLabel(agreement) }}</span>
-              <ChevronRight :size="16" :stroke-width="2" />
-            </div>
+            Все договоры
+            <ChevronRight :size="16" :stroke-width="1.9" />
           </button>
         </section>
 
-        <section class="card">
-          <h2 class="section-title">Мои приходы</h2>
-          <div v-if="procurements.length === 0" class="empty-text">
+        <section
+          v-if="dashboardMode !== 'agreements'"
+          class="investor-panel"
+        >
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Мои приходы</h2>
+              <p class="investor-panel__hint">
+                Здесь видно, в каких приходах сейчас лежит капитал, а какие уже закрыли часть прибыли через продажи.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <PackageSearch :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div v-if="previewProcurements.length === 0" class="investor-empty">
             Приходов с вашим участием пока нет.
           </div>
+
+          <div v-else class="investor-list">
+            <button
+              v-for="procurement in previewProcurements"
+              :key="procurement.id"
+              type="button"
+              class="investor-list-row"
+              @click="openProcurement(procurement.id)"
+            >
+              <div class="investor-list-row__main">
+                <div class="dashboard-row-head">
+                  <strong class="investor-list-row__title">
+                    {{ procurementTypeLabel(procurement.procurement_type) }} #{{ procurement.id }}
+                  </strong>
+                  <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
+                    {{ procurementStatusLabel(procurement.status) }}
+                  </span>
+                </div>
+                <span class="investor-list-row__meta">{{ procurementMeta(procurement) }}</span>
+              </div>
+
+              <div class="investor-list-row__side dashboard-row-side">
+                <div class="dashboard-row-side__copy">
+                  <span class="investor-list-row__value">Открыть</span>
+                  <span class="investor-list-row__caption">
+                    {{ procurement.received_at ? 'Есть движение по товару' : 'В процессе закупки' }}
+                  </span>
+                </div>
+                <ChevronRight class="investor-list-row__chevron" :size="16" :stroke-width="1.9" />
+              </div>
+            </button>
+          </div>
+
           <button
-            v-for="procurement in procurements"
-            v-else
-            :key="procurement.id"
-            class="contract-row"
+            v-if="dashboardMode === 'overview' && procurements.length > previewProcurements.length"
             type="button"
-            @click="openProcurement(procurement.id)"
+            class="investor-inline-button"
+            @click="openDashboardMode('procurements')"
           >
-            <div class="contract-main">
-              <strong class="contract-title">
-                {{ procurementTypeLabel(procurement.procurement_type) }} #{{ procurement.id }}
-              </strong>
-              <span class="contract-meta">
-                {{ procurement.supplier_name || 'Без поставщика' }} · {{ formatDate(procurement.opened_at) }}
-              </span>
-            </div>
-            <div class="contract-right">
-              <span class="contract-amount">{{ procurementStatusLabel(procurement.status) }}</span>
-              <ChevronRight :size="16" :stroke-width="2" />
-            </div>
+            Все приходы
+            <ChevronRight :size="16" :stroke-width="1.9" />
           </button>
         </section>
 
-        <section class="card">
-          <h2 class="section-title">Баланс</h2>
-          <article class="record-row">
-            <div class="record-main">
-              <strong class="record-title">Чистый капитал</strong>
-              <span class="record-date">Внос минус возврат капитала</span>
+        <section
+          v-if="dashboardMode !== 'agreements'"
+          class="investor-panel"
+        >
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Капитал в товаре</h2>
+              <p class="investor-panel__hint">
+                Срез по себестоимости и прогнозной выручке помогает быстро понять, сколько капитала уже вернулось, а сколько ещё работает на полке.
+              </p>
             </div>
-            <span class="record-amount tabular-nums">{{ formatAggregateAmount('capital_net', 'USD') }}</span>
-          </article>
-          <article class="record-row">
-            <div class="record-main">
-              <strong class="record-title">Выплачено дивидендов</strong>
-              <span class="record-date">Фактические выплаты</span>
-            </div>
-            <span class="record-amount tabular-nums">{{ formatAggregateAmount('dividends_paid', 'USD') }}</span>
-          </article>
+            <span class="investor-panel__icon">
+              <Scale :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Продано по себестоимости</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
+              <span class="investor-detail-card__hint">Часть капитала уже прошла через продажи.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
+              <span class="investor-detail-card__hint">Себестоимость товаров, которые ещё лежат в остатке.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Выручка по проданному</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
+              <span class="investor-detail-card__hint">Что продажи уже принесли на этом капитале.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Прогноз выручки</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
+              <span class="investor-detail-card__hint">Потенциальная выручка, если остаток продастся по текущей цене.</span>
+            </article>
+          </div>
         </section>
 
-        <section class="card">
-          <h2 class="section-title">Капитал в товаре</h2>
-          <div class="metrics-grid">
-            <div class="metric">
-              <span>Продано по себестоимости</span>
-              <strong class="tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
+        <section
+          v-if="dashboardMode !== 'procurements'"
+          class="investor-panel"
+        >
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Выплаты и чистый остаток</h2>
+              <p class="investor-panel__hint">
+                Быстрый cash-view по вашему кабинету без перехода в детальные отчёты.
+              </p>
             </div>
-            <div class="metric">
-              <span>Осталось в товаре</span>
-              <strong class="tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Всего отслеживается</span>
-              <strong class="tabular-nums">{{ formatCapitalState('tracked_cost_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Выручка по проданному</span>
-              <strong class="tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Прогноз выручки по остатку</span>
-              <strong class="tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Прогноз прибыли инвестора</span>
-              <strong class="tabular-nums positive">{{ formatCapitalState('projected_partner_profit_uzs') }}</strong>
-            </div>
+            <span class="investor-panel__icon">
+              <Landmark :size="18" :stroke-width="2" />
+            </span>
           </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Чистый капитал</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAggregateAmount(aggregate, 'capital_net', 'USD') }}</strong>
+              <span class="investor-detail-card__hint">Вносы минус возвраты капитала.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Начисленная прибыль</span>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatAggregateAmount(aggregate, 'profit_accrued', 'UZS') }}</strong>
+              <span class="investor-detail-card__hint">Прибыль, которую система уже отнесла на вас.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Дивиденды выплачены</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAggregateAmount(aggregate, 'dividends_paid', 'USD') }}</strong>
+              <span class="investor-detail-card__hint">Фактические выплаты, которые вы уже получили.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Бизнес должен</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatFunctionalAmount(aggregate, 'profit_pending_payout') }}</strong>
+              <span class="investor-detail-card__hint">Невыплаченная прибыль на текущий момент.</span>
+            </article>
+          </div>
+        </section>
+
+        <section v-if="dashboardMode === 'overview'" class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Что смотреть в первую очередь</h2>
+            </div>
+            <span class="investor-panel__icon">
+              <TrendingUp :size="18" :stroke-width="2" />
+            </span>
+          </div>
+          <p class="investor-note">
+            Если нужно понять, сколько можно выводить сейчас, смотрите «К выплате». Если задача понять, где застрял капитал, идите в «Приходы» и откройте конкретный приход. Если нужен контекст по договору и общему балансу, откройте «Договоры».
+          </p>
+          <button type="button" class="investor-link-button" @click="openDashboardMode('procurements')">
+            Перейти в приходы
+            <PackageSearch :size="16" :stroke-width="1.9" />
+          </button>
         </section>
       </template>
     </main>
@@ -306,214 +516,32 @@ onMounted(loadDashboard)
 </template>
 
 <style scoped>
-.dashboard-page {
-  min-height: 100%;
-  background: var(--color-bg-primary);
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
+.dashboard-row-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.header-actions {
-  display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 
-.page-title {
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-}
-
-.refresh-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-default);
-  color: var(--color-text-secondary);
-}
-
-.content {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  padding-bottom: var(--space-8);
-}
-
-.onboarding-card {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.stats-grid {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.stat-card {
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-  padding: var(--space-3);
-  display: grid;
-  gap: var(--space-1);
-  color: var(--color-text-primary);
-}
-
-.stat-label {
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-}
-
-.stat-value {
-  font-size: var(--text-base);
-}
-
-.card {
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-elevated);
-  padding: var(--space-3);
-}
-
-.section-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  margin-bottom: var(--space-2);
-}
-
-.contract-row {
-  width: 100%;
-  min-height: 56px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-  padding: 0 var(--space-3);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-
-.contract-main {
-  display: grid;
-  gap: 2px;
-  text-align: left;
-}
-
-.contract-title {
-  font-size: var(--text-sm);
-  color: var(--color-text-primary);
-}
-
-.contract-meta {
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-}
-
-.contract-right {
-  display: inline-flex;
+.dashboard-row-side {
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
-  color: var(--color-text-secondary);
 }
 
-.contract-amount {
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.record-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--space-2);
-  border-top: 1px solid var(--color-border-subtle);
-  padding-top: var(--space-2);
-  margin-top: var(--space-2);
-}
-
-.record-main {
+.dashboard-row-side__copy {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
-.record-title {
-  font-size: var(--text-sm);
-  color: var(--color-text-primary);
-}
+@media (max-width: 420px) {
+  .dashboard-row-side {
+    grid-template-columns: 1fr;
+    justify-items: end;
+  }
 
-.record-date,
-.record-description {
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-}
-
-.record-amount {
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.record-positive {
-  color: var(--color-success);
-}
-
-.record-negative {
-  color: var(--color-error);
-}
-
-.record-neutral {
-  color: var(--color-info);
-}
-
-.empty-text {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
-.error-box {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-error);
-  background: var(--color-error-bg);
-  color: var(--color-error);
-  padding: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.loading-grid {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.skeleton-card {
-  height: 76px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(
-    90deg,
-    var(--color-bg-secondary) 0%,
-    var(--color-bg-elevated) 50%,
-    var(--color-bg-secondary) 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.1s linear infinite;
-}
-
-@keyframes shimmer {
-  from { background-position: 0 0; }
-  to { background-position: 200% 0; }
+  .dashboard-row-side .investor-list-row__chevron {
+    display: none;
+  }
 }
 </style>

@@ -1,9 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ChevronDown } from 'lucide-vue-next'
+import { ArrowLeft, ChevronDown, ChevronRight, PackageSearch, RefreshCcw, Scale, Wallet } from 'lucide-vue-next'
+
 import { fetchInvestorAgreementDetail } from '@/api/investors'
 import type { AgreementProfitabilityDetail } from '@/api/finance'
+import {
+  agreementStatusLabel,
+  formatBalanceLabel,
+  formatDateTime,
+  formatRatioPercent,
+  procurementStatusLabel,
+  procurementStatusTone,
+  procurementTypeLabel,
+} from '@/modules/investors/presentation'
 import { formatPrice } from '@/utils/currency'
 
 const route = useRoute()
@@ -16,36 +26,29 @@ const expandedProcurementId = ref<number | null>(null)
 
 const agreementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.agreement ?? null)
-const currentPartner = computed(() => report.value?.partners.find((row) => row.partner_id === report.value?.current_partner_id) ?? null)
+const currentPartner = computed(() =>
+  report.value?.partners.find((row) => row.partner_id === report.value?.current_partner_id) ?? null,
+)
 const procurements = computed(() => report.value?.procurements ?? [])
 
-function formatAmount(value: string | number, currency = 'UZS'): string {
-  return formatPrice(value, currency)
-}
-
-function balanceLabel(balances: Record<string, string>): string {
-  const parts = Object.entries(balances)
-    .filter(([, amount]) => Math.abs(Number(amount || 0)) > 0.000001)
-    .map(([currency, amount]) => formatAmount(amount, currency))
-  return parts.length ? parts.join(' · ') : '0'
+function formatAmount(value: string | number | null | undefined, currency = 'UZS'): string {
+  return formatPrice(value ?? '0', currency)
 }
 
 function toggleProcurement(id: number): void {
   expandedProcurementId.value = expandedProcurementId.value === id ? null : id
 }
 
-function procurementStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    OPEN: 'Открыт',
-    PARTIALLY_RECEIVED: 'Частично',
-    RECEIVED: 'Завершён',
-    CLOSED: 'Закрыт',
-    CANCELLED: 'Отменён',
-  }
-  return labels[status] ?? status
+function openProcurement(procurementId: number): void {
+  router.push({ name: 'investor-procurement', params: { id: procurementId } })
 }
 
 async function load(): Promise<void> {
+  if (!Number.isFinite(agreementId.value) || agreementId.value <= 0) {
+    error.value = 'Некорректный ID договора'
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
@@ -61,59 +64,298 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="page">
-    <header class="topbar">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
-        <ArrowLeft :size="18" />
+  <div class="investor-shell">
+    <header class="investor-header">
+      <button class="investor-header__button" type="button" aria-label="Назад" @click="router.back()">
+        <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1>Инвестдоговор #{{ route.params.id }}</h1>
-      <span />
+
+      <div class="investor-header__copy">
+        <strong class="investor-header__title">Деталь договора</strong>
+        <span class="investor-header__caption">Ваш баланс, прибыль и связанные приходы</span>
+      </div>
+
+      <button class="investor-header__button" type="button" aria-label="Обновить" @click="load">
+        <RefreshCcw :size="16" :stroke-width="1.75" />
+      </button>
     </header>
 
-    <main class="content">
-      <section v-if="loading" class="state">Загрузка...</section>
-      <section v-else-if="error" class="state state-error">{{ error }}</section>
+    <main class="investor-content">
+      <template v-if="loading">
+        <div class="investor-hero investor-skeleton skeleton" aria-hidden="true" />
+        <div class="investor-panel investor-skeleton skeleton" />
+      </template>
+
+      <section v-else-if="error" class="investor-state investor-state--error">
+        <p>{{ error }}</p>
+      </section>
 
       <template v-else-if="summary">
-        <section class="hero">
-          <span>Ваш результат</span>
-          <strong>{{ formatAmount(currentPartner?.profit_pending_payout ?? '0') }}</strong>
-          <small>к выплате · прибыль начислена {{ formatAmount(currentPartner?.profit_accrued ?? '0') }}</small>
-        </section>
-
-        <section class="metric-grid">
-          <div><span>Внёс</span><strong>{{ formatAmount(currentPartner?.agreement_contributed ?? '0', currentPartner?.agreement_currency) }}</strong></div>
-          <div><span>Ушло в товар</span><strong>{{ formatAmount(currentPartner?.agreement_allocated ?? '0', currentPartner?.agreement_currency) }}</strong></div>
-          <div><span>Оплачено в пути</span><strong>{{ formatAmount(currentPartner?.pending_prepaid_cost_estimate_uzs ?? '0') }}</strong></div>
-          <div><span>Остаток в договоре</span><strong>{{ formatAmount(currentPartner?.agreement_available ?? '0', currentPartner?.agreement_currency) }}</strong></div>
-          <div><span>Общий баланс</span><strong>{{ balanceLabel(summary.balances) }}</strong></div>
-          <div><span>На складе</span><strong>{{ formatAmount(summary.received_landed_cost) }}</strong></div>
-          <div><span>Продано</span><strong>{{ formatAmount(summary.cogs) }}</strong></div>
-          <div><span>Осталось в товаре</span><strong>{{ formatAmount(summary.remaining_landed_cost) }}</strong></div>
-          <div><span>Факт. прибыль</span><strong>{{ formatAmount(summary.gross_profit) }}</strong></div>
-          <div><span>Ожидаемая прибыль</span><strong>{{ formatAmount(summary.projected_gross_profit) }}</strong></div>
-        </section>
-
-        <section class="section">
-          <h2>Связанные приходы</h2>
-          <article v-for="procurement in procurements" :key="procurement.procurement_id" class="procurement-row">
-            <button type="button" class="procurement-toggle" @click="toggleProcurement(procurement.procurement_id)">
-              <div>
-                <strong>#{{ procurement.procurement_id }} · {{ procurement.supplier_name || 'без поставщика' }}</strong>
-                <span>{{ procurementStatusLabel(procurement.status) }} · прибыль {{ formatAmount(procurement.gross_profit) }}</span>
-              </div>
-              <ChevronDown class="chevron" :class="{ open: expandedProcurementId === procurement.procurement_id }" :size="16" />
-            </button>
-            <div v-if="expandedProcurementId === procurement.procurement_id" class="procurement-detail">
-              <div><span>Продано</span><strong>{{ procurement.quantity_sold }}</strong></div>
-              <div><span>Остаток</span><strong>{{ procurement.remaining_quantity }}</strong></div>
-              <div><span>На складе</span><strong>{{ formatAmount(procurement.received_landed_cost ?? '0') }}</strong></div>
-              <div><span>В пути</span><strong>{{ formatAmount(procurement.pending_prepaid_cost ?? '0') }}</strong></div>
-              <div><span>Себестоимость остатка</span><strong>{{ formatAmount(procurement.remaining_landed_cost) }}</strong></div>
-              <div><span>Прогноз прибыли</span><strong>{{ formatAmount(procurement.projected_gross_profit) }}</strong></div>
+        <section class="investor-hero">
+          <div class="investor-hero__copy">
+            <span class="investor-hero__kicker">Договор #{{ summary.agreement_id }}</span>
+            <h1 class="investor-hero__title">
+              {{ summary.supplier_name || 'Договор без поставщика' }}
+            </h1>
+            <div class="investor-hero__meta">
+              <span class="investor-chip investor-chip--glass">
+                {{ agreementStatusLabel(summary.status) }}
+              </span>
+              <span class="investor-chip investor-chip--glass">
+                Открыт {{ formatDateTime(summary.opened_at) }}
+              </span>
+              <span class="investor-chip investor-chip--glass">
+                {{ summary.procurements_count }} приходов
+              </span>
             </div>
+          </div>
+
+          <div class="investor-hero__value">
+            <strong class="investor-hero__amount tabular-nums">
+              {{ formatAmount(currentPartner?.profit_pending_payout ?? '0') }}
+            </strong>
+            <span class="investor-hero__foot">
+              Начислено {{ formatAmount(currentPartner?.profit_accrued ?? '0') }}
+              · выплачено {{ formatAmount(currentPartner?.dividends_paid ?? '0') }}
+            </span>
+          </div>
+        </section>
+
+        <section class="investor-summary-band">
+          <article class="investor-summary-stat investor-summary-stat--accent">
+            <span class="investor-summary-stat__label">Плановый бюджет</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatAmount(summary.planned_budget, summary.currency) }}
+            </strong>
+            <span class="investor-summary-stat__hint">База всего договора</span>
           </article>
-          <p v-if="procurements.length === 0" class="muted">Связанных приходов пока нет.</p>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Баланс договора</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatBalanceLabel(summary.balances) }}
+            </strong>
+            <span class="investor-summary-stat__hint">Свободный остаток по всем валютам</span>
+          </article>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Ваш остаток</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatAmount(currentPartner?.agreement_available ?? '0', currentPartner?.agreement_currency) }}
+            </strong>
+            <span class="investor-summary-stat__hint">Не распределён в товар или не выведен</span>
+          </article>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Связанных приходов</span>
+            <strong class="investor-summary-stat__value tabular-nums">{{ summary.procurements_count }}</strong>
+            <span class="investor-summary-stat__hint">По ним уже двигается товар и прибыль</span>
+          </article>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Ваше участие в договоре</h2>
+              <p class="investor-panel__hint">
+                Капитал, распределение и прибыль именно по вашей стороне договора.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Wallet :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Плановый вклад</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAmount(currentPartner?.planned_capital_share ?? '0', currentPartner?.agreement_currency) }}
+              </strong>
+              <span class="investor-detail-card__hint">Сумма, на которую вы изначально входили в договор.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Плановая доля прибыли</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatRatioPercent(currentPartner?.planned_profit_share ?? '0') }}
+              </strong>
+              <span class="investor-detail-card__hint">Как договор делит profit между вами и бизнесом.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Фактически внесено</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAmount(currentPartner?.agreement_contributed ?? '0', currentPartner?.agreement_currency) }}
+              </strong>
+              <span class="investor-detail-card__hint">Сколько капитала реально поступило в договор.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Ушло в товар</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAmount(currentPartner?.agreement_allocated ?? '0', currentPartner?.agreement_currency) }}
+              </strong>
+              <span class="investor-detail-card__hint">Часть капитала, уже распределённая по закупкам.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Оплачено, но ещё в пути</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAmount(currentPartner?.pending_prepaid_cost_estimate_uzs ?? '0') }}
+              </strong>
+              <span class="investor-detail-card__hint">Деньги уже ушли, но товар ещё не принят на склад.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">К выплате</span>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">
+                {{ formatAmount(currentPartner?.profit_pending_payout ?? '0') }}
+              </strong>
+              <span class="investor-detail-card__hint">Невыплаченная прибыль по вашей стороне.</span>
+            </article>
+          </div>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Картина по договору</h2>
+              <p class="investor-panel__hint">
+                Общий объём товара, себестоимость и уже заработанная прибыль по всей связке.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Scale :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Выручка</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.revenue) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Себестоимость продаж</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.cogs) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Фактическая прибыль</span>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatAmount(summary.gross_profit) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Ожидаемая прибыль</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.projected_gross_profit) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Уже принято на склад</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.received_landed_cost) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.remaining_landed_cost) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Оплачено в пути</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatAmount(summary.pending_prepaid_cost) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Продано / осталось</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ summary.quantity_sold }} / {{ summary.remaining_quantity }}
+              </strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Связанные приходы</h2>
+              <p class="investor-panel__hint">
+                По каждому приходу можно быстро посмотреть статус, прибыль и перейти в детальный investor-аудит.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <PackageSearch :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div v-if="procurements.length === 0" class="investor-empty">
+            Связанных приходов пока нет.
+          </div>
+
+          <div v-else class="investor-list agreement-list">
+            <article
+              v-for="procurement in procurements"
+              :key="procurement.procurement_id"
+              class="agreement-row"
+            >
+              <button type="button" class="investor-list-row agreement-row__toggle" @click="toggleProcurement(procurement.procurement_id)">
+                <div class="investor-list-row__main">
+                  <div class="agreement-row__head">
+                    <strong class="investor-list-row__title">
+                      {{ procurementTypeLabel(procurement.procurement_type) }} #{{ procurement.procurement_id }}
+                    </strong>
+                    <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
+                      {{ procurementStatusLabel(procurement.status) }}
+                    </span>
+                  </div>
+                  <span class="investor-list-row__meta">
+                    {{ procurement.supplier_name || 'Без поставщика' }}
+                    · {{ formatDateTime(procurement.received_at || procurement.opened_at) }}
+                  </span>
+                </div>
+
+                <div class="investor-list-row__side agreement-row__side">
+                  <div class="agreement-row__side-copy">
+                    <span class="investor-list-row__value tabular-nums">{{ formatAmount(procurement.gross_profit) }}</span>
+                    <span class="investor-list-row__caption">Факт. прибыль</span>
+                  </div>
+                  <ChevronDown
+                    class="agreement-row__chevron"
+                    :class="{ 'is-open': expandedProcurementId === procurement.procurement_id }"
+                    :size="16"
+                    :stroke-width="1.9"
+                  />
+                </div>
+              </button>
+
+              <div v-if="expandedProcurementId === procurement.procurement_id" class="agreement-row__details">
+                <div class="investor-grid-2">
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">Уже на складе</span>
+                    <strong class="investor-detail-card__value tabular-nums">
+                      {{ formatAmount(procurement.received_landed_cost ?? '0') }}
+                    </strong>
+                  </article>
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">В пути</span>
+                    <strong class="investor-detail-card__value tabular-nums">
+                      {{ formatAmount(procurement.pending_prepaid_cost ?? '0') }}
+                    </strong>
+                  </article>
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">Остаток в товаре</span>
+                    <strong class="investor-detail-card__value tabular-nums">
+                      {{ formatAmount(procurement.remaining_landed_cost) }}
+                    </strong>
+                  </article>
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">Ожидаемая прибыль</span>
+                    <strong class="investor-detail-card__value tabular-nums">
+                      {{ formatAmount(procurement.projected_gross_profit) }}
+                    </strong>
+                  </article>
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">Продано</span>
+                    <strong class="investor-detail-card__value tabular-nums">{{ procurement.quantity_sold }}</strong>
+                  </article>
+                  <article class="investor-detail-card">
+                    <span class="investor-detail-card__label">Остаток</span>
+                    <strong class="investor-detail-card__value tabular-nums">{{ procurement.remaining_quantity }}</strong>
+                  </article>
+                </div>
+
+                <button type="button" class="investor-link-button" @click="openProcurement(procurement.procurement_id)">
+                  Открыть деталь прихода
+                  <ChevronRight :size="16" :stroke-width="1.9" />
+                </button>
+              </div>
+            </article>
+          </div>
         </section>
       </template>
     </main>
@@ -121,28 +363,59 @@ onMounted(load)
 </template>
 
 <style scoped>
-.page { min-height:100%; background:var(--color-bg-primary); }
-.topbar { position:sticky; top:0; z-index:var(--z-sticky); min-height:var(--header-height); display:grid; grid-template-columns:40px 1fr 40px; align-items:center; padding:0 var(--space-4); border-bottom:1px solid var(--color-border-subtle); background:var(--color-bg-primary); }
-h1 { margin:0; text-align:center; font-size:var(--text-lg); font-weight:var(--font-semibold); }
-.icon-btn { width:40px; height:40px; display:grid; place-items:center; color:var(--color-text-primary); }
-.content { display:grid; gap:var(--space-3); padding:var(--space-4); padding-bottom:var(--space-8); }
-.hero { display:grid; gap:4px; padding:var(--space-4); border-radius:var(--radius-lg); background:var(--color-brand-800); color:white; }
-.hero span,.hero small { color:color-mix(in srgb, white 72%, transparent); font-size:var(--text-xs); }
-.hero strong { font-size:var(--text-2xl); }
-.metric-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-2); }
-.metric-grid div,.section { border:1px solid var(--color-border-subtle); border-radius:var(--radius-md); background:var(--color-bg-elevated); }
-.metric-grid div { display:grid; gap:3px; padding:var(--space-3); }
-.metric-grid span,.procurement-row span,.muted { color:var(--color-text-secondary); font-size:var(--text-xs); }
-.metric-grid strong,.procurement-row strong { color:var(--color-text-primary); font-size:var(--text-sm); }
-.section { display:grid; gap:0; padding:var(--space-3); }
-h2 { margin:0; padding-bottom:var(--space-2); font-size:var(--text-base); font-weight:var(--font-semibold); }
-.procurement-row { border-top:1px solid var(--color-border-subtle); }
-.procurement-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-3) 0; text-align:left; }
-.procurement-toggle div { min-width:0; display:grid; gap:3px; }
-.chevron { color:var(--color-text-secondary); transition:transform .18s ease; }
-.chevron.open { transform:rotate(180deg); }
-.procurement-detail { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-2); padding-bottom:var(--space-3); }
-.procurement-detail div { display:grid; gap:2px; padding:var(--space-2); border-radius:var(--radius-md); background:var(--color-bg-primary); }
-.state { min-height:180px; display:grid; place-items:center; color:var(--color-text-secondary); }
-.state-error { color:var(--color-error); }
+.agreement-list {
+  gap: var(--space-3);
+}
+
+.agreement-row {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: 20px;
+  background: rgba(250, 250, 248, 0.92);
+  border: 1px solid rgba(12, 69, 51, 0.06);
+}
+
+.agreement-row__toggle {
+  padding: 0;
+  border-top: none;
+}
+
+.agreement-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agreement-row__side {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agreement-row__side-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.agreement-row__chevron {
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.agreement-row__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.agreement-row__details {
+  display: grid;
+  gap: var(--space-3);
+}
+
+@media (max-width: 420px) {
+  .agreement-row__side {
+    grid-template-columns: 1fr auto;
+  }
+}
 </style>

@@ -1,10 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, RefreshCcw } from 'lucide-vue-next'
-import { formatPrice } from '@/utils/currency'
+import { ArrowLeft, RefreshCcw, Scale, ScrollText, Wallet } from 'lucide-vue-next'
+
 import { fetchInvestorProcurementDetail } from '@/api/investors'
-import type { InvestorLedgerEntry, InvestorLedgerTotals, InvestorProcurementDetail } from '@/types/models'
+import type { InvestorLedgerEntry, InvestorProcurementDetail } from '@/types/models'
+import {
+  formatAggregateAmount,
+  formatDateTime,
+  formatFunctionalAmount,
+  ledgerEntryLabel,
+  ledgerEntryTone,
+  procurementStatusLabel,
+  procurementStatusTone,
+  procurementTypeLabel,
+} from '@/modules/investors/presentation'
+import { formatPrice } from '@/utils/currency'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,80 +25,25 @@ const isLoading = ref(true)
 const errorMessage = ref('')
 
 const procurementId = computed(() => Number(route.params.id))
-type LedgerAmountKey = keyof InvestorLedgerTotals
-const currencyPriority = ['USD', 'UZS']
-
-function nonZero(value: string | undefined): boolean {
-  return Math.abs(Number.parseFloat(value ?? '0')) > 0.000001
-}
-
-function formatAggregateAmount(
-  field: LedgerAmountKey,
-  preferredCurrency?: string,
-): string {
-  const aggregate = procurement.value?.investor_aggregate
-  if (!aggregate) return formatPrice('0', 'UZS')
-
-  const currencies = Object.keys(aggregate.by_currency ?? {}).sort((a, b) => {
-    const aIndex = currencyPriority.indexOf(a)
-    const bIndex = currencyPriority.indexOf(b)
-    return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex)
-  })
-
-  if (preferredCurrency && nonZero(aggregate.by_currency?.[preferredCurrency]?.[field])) {
-    return formatPrice(aggregate.by_currency[preferredCurrency][field], preferredCurrency)
-  }
-
-  const parts = currencies
-    .map((currency) => ({ currency, amount: aggregate.by_currency[currency][field] }))
-    .filter(({ amount }) => nonZero(amount))
-
-  if (parts.length === 0) {
-    return formatPrice(aggregate.functional_uzs?.[field] ?? '0', 'UZS')
-  }
-
-  return parts
-    .map(({ currency, amount }) => formatPrice(amount, currency))
-    .join(' + ')
-}
-
-function procurementTypeLabel(type: string): string {
-  if (type === 'PARTNERSHIP') return 'Партнёрский'
-  if (type === 'MUSHARAKA') return 'Мушарака'
-  return type
-}
-
-function entryLabel(entry: InvestorLedgerEntry): string {
-  if (entry.entry_type === 'CAPITAL_IN') return 'Внос капитала'
-  if (entry.entry_type === 'CAPITAL_OUT') return 'Возврат капитала'
-  if (entry.entry_type === 'PROFIT_ACCRUED') return 'Начислена прибыль'
-  if (entry.entry_type === 'DIVIDEND_PAID') return 'Дивиденд выплачен'
-  if (entry.entry_type === 'LOSS_INCURRED') return 'Убыток'
-  return entry.entry_type
-}
-
-function entryClass(entry: InvestorLedgerEntry): string {
-  if (entry.entry_type === 'CAPITAL_IN' || entry.entry_type === 'PROFIT_ACCRUED') return 'positive'
-  if (entry.entry_type === 'LOSS_INCURRED') return 'negative'
-  return 'neutral'
-}
-
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 function formatCapitalState(field: keyof InvestorProcurementDetail['capital_state']): string {
   return formatPrice(procurement.value?.capital_state?.[field] ?? '0', 'UZS')
 }
 
+function entryFunctionalHint(entry: InvestorLedgerEntry): string {
+  if (entry.currency === 'UZS') return ''
+  return `≈ ${formatPrice(entry.functional_amount_uzs, 'UZS')}`
+}
+
+function entryToneClass(entry: InvestorLedgerEntry): string {
+  const tone = ledgerEntryTone(entry.entry_type)
+  if (tone === 'positive') return 'investor-positive'
+  if (tone === 'negative') return 'investor-negative'
+  return 'investor-neutral'
+}
+
 async function loadContract(): Promise<void> {
-  if (!Number.isFinite(procurementId.value)) {
+  if (!Number.isFinite(procurementId.value) || procurementId.value <= 0) {
     errorMessage.value = 'Некорректный ID прихода'
     isLoading.value = false
     return
@@ -109,298 +65,356 @@ onMounted(loadContract)
 </script>
 
 <template>
-  <div class="detail-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+  <div class="investor-shell">
+    <header class="investor-header">
+      <button class="investor-header__button" type="button" aria-label="Назад" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Приход #{{ route.params.id }}</h1>
-      <button class="refresh-btn" type="button" aria-label="Обновить" @click="loadContract">
+
+      <div class="investor-header__copy">
+        <strong class="investor-header__title">Деталь прихода</strong>
+        <span class="investor-header__caption">Капитал, товар и журнал начислений</span>
+      </div>
+
+      <button class="investor-header__button" type="button" aria-label="Обновить" @click="loadContract">
         <RefreshCcw :size="16" :stroke-width="1.75" />
       </button>
     </header>
 
-    <main class="content">
-      <div v-if="isLoading" class="loading-list" aria-busy="true">
-        <div class="skeleton-row" />
-        <div class="skeleton-row" />
-        <div class="skeleton-row" />
-      </div>
+    <main class="investor-content">
+      <template v-if="isLoading">
+        <div class="investor-hero investor-skeleton skeleton" aria-hidden="true" />
+        <div class="investor-panel investor-skeleton skeleton" />
+      </template>
 
-      <div v-else-if="errorMessage" class="error-box" role="alert">
-        {{ errorMessage }}
-      </div>
+      <section v-else-if="errorMessage" class="investor-state investor-state--error" role="alert">
+        <p>{{ errorMessage }}</p>
+      </section>
 
       <template v-else-if="procurement">
-        <section class="card">
-          <h2 class="section-title">{{ procurementTypeLabel(procurement.procurement_type) }}</h2>
-          <div class="meta-grid">
-            <div class="meta-row">
-              <span>Поставщик</span>
-              <strong>{{ procurement.supplier_name || '—' }}</strong>
-            </div>
-            <div class="meta-row">
-              <span>Открыт</span>
-              <strong>{{ formatDateTime(procurement.opened_at) }}</strong>
+        <section class="investor-hero">
+          <div class="investor-hero__copy">
+            <span class="investor-hero__kicker">Приход #{{ procurement.id }}</span>
+            <h1 class="investor-hero__title">
+              {{ procurement.supplier_name || procurementTypeLabel(procurement.procurement_type) }}
+            </h1>
+            <div class="investor-hero__meta">
+              <span class="investor-chip investor-chip--glass">
+                {{ procurementTypeLabel(procurement.procurement_type) }}
+              </span>
+              <span class="investor-chip investor-chip--glass">
+                {{ procurementStatusLabel(procurement.status) }}
+              </span>
+              <span class="investor-chip investor-chip--glass">
+                Открыт {{ formatDateTime(procurement.opened_at) }}
+              </span>
             </div>
           </div>
-        </section>
 
-        <section class="card">
-          <h2 class="section-title">Финансовые показатели</h2>
-          <div class="metrics-grid">
-            <div class="metric">
-              <span>Инвестировано</span>
-              <strong class="tabular-nums">{{ formatAggregateAmount('capital_in', 'USD') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Чистый капитал</span>
-              <strong class="tabular-nums">{{ formatAggregateAmount('capital_net', 'USD') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Прибыль</span>
-              <strong class="tabular-nums positive">{{ formatAggregateAmount('profit_accrued', 'UZS') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Убытки</span>
-              <strong class="tabular-nums negative">{{ formatAggregateAmount('losses_incurred', 'UZS') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Дивиденды</span>
-              <strong class="tabular-nums">{{ formatAggregateAmount('dividends_paid', 'USD') }}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <h2 class="section-title">Капитал по этому приходу</h2>
-          <div class="metrics-grid">
-            <div class="metric">
-              <span>Продано по себестоимости</span>
-              <strong class="tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Осталось в товаре</span>
-              <strong class="tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Всего отслеживается</span>
-              <strong class="tabular-nums">{{ formatCapitalState('tracked_cost_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Выручка по проданному</span>
-              <strong class="tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Прогноз выручки по остатку</span>
-              <strong class="tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
-            </div>
-            <div class="metric">
-              <span>Прогноз прибыли инвестора</span>
-              <strong class="tabular-nums positive">{{ formatCapitalState('projected_partner_profit_uzs') }}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <h2 class="section-title">История записей</h2>
-          <div v-if="procurement.investor_ledger.entries.length === 0" class="empty-text">
-            Записей по договору пока нет.
-          </div>
-          <article v-for="entry in procurement.investor_ledger.entries" :key="entry.id" class="record-row">
-            <div class="record-main">
-              <strong>{{ entryLabel(entry) }}</strong>
-              <span class="record-date">{{ formatDateTime(entry.date) }}</span>
-              <span v-if="entry.source_ref" class="record-description">{{ entry.source_ref }}</span>
-            </div>
-            <span class="record-amount tabular-nums" :class="entryClass(entry)">
-              {{ formatPrice(entry.amount, entry.currency) }}
+          <div class="investor-hero__value">
+            <strong class="investor-hero__amount tabular-nums">
+              {{ formatFunctionalAmount(procurement.investor_aggregate, 'profit_pending_payout') }}
+            </strong>
+            <span class="investor-hero__foot">
+              Начислено {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_accrued', 'UZS') }}
+              · вложено {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_in', 'USD') }}
             </span>
+          </div>
+        </section>
+
+        <section class="investor-summary-band">
+          <article class="investor-summary-stat investor-summary-stat--accent">
+            <span class="investor-summary-stat__label">Вложено в приход</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_in', 'USD') }}
+            </strong>
+            <span class="investor-summary-stat__hint">Ваш capital in по этому приходу</span>
           </article>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Чистый капитал</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_net', 'USD') }}
+            </strong>
+            <span class="investor-summary-stat__hint">Вносы минус возвраты по приходу</span>
+          </article>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Отслеживается в товаре</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatCapitalState('tracked_cost_uzs') }}
+            </strong>
+            <span class="investor-summary-stat__hint">Сколько капитала ещё крутится в stock</span>
+          </article>
+          <article class="investor-summary-stat">
+            <span class="investor-summary-stat__label">Прогноз прибыли</span>
+            <strong class="investor-summary-stat__value tabular-nums">
+              {{ formatCapitalState('projected_partner_profit_uzs') }}
+            </strong>
+            <span class="investor-summary-stat__hint">Potential upside on the remaining goods</span>
+          </article>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Картина прихода</h2>
+              <p class="investor-panel__hint">
+                Базовый статус прихода и текстовый контекст, если owner оставлял заметки.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Wallet :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Поставщик</span>
+              <strong class="investor-detail-card__value">{{ procurement.supplier_name || '—' }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Статус</span>
+              <div class="detail-chip-row">
+                <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
+                  {{ procurementStatusLabel(procurement.status) }}
+                </span>
+              </div>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Открыт</span>
+              <strong class="investor-detail-card__value">{{ formatDateTime(procurement.opened_at) }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Принят</span>
+              <strong class="investor-detail-card__value">{{ formatDateTime(procurement.received_at) }}</strong>
+            </article>
+          </div>
+
+          <p v-if="procurement.notes" class="investor-note procurement-note">
+            {{ procurement.notes }}
+          </p>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Ваш капитал по приходу</h2>
+              <p class="investor-panel__hint">
+                Здесь собраны все начисления, убытки и выплаты только по вашему участию в этом приходе.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Scale :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Начисленная прибыль</span>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">
+                {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_accrued', 'UZS') }}
+              </strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">К выплате</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatFunctionalAmount(procurement.investor_aggregate, 'profit_pending_payout') }}
+              </strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Возврат капитала</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAggregateAmount(procurement.investor_aggregate, 'capital_out', 'USD') }}
+              </strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Дивиденды выплачены</span>
+              <strong class="investor-detail-card__value tabular-nums">
+                {{ formatAggregateAmount(procurement.investor_aggregate, 'dividends_paid', 'USD') }}
+              </strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Убытки</span>
+              <strong class="investor-detail-card__value tabular-nums investor-negative">
+                {{ formatAggregateAmount(procurement.investor_aggregate, 'losses_incurred', 'UZS') }}
+              </strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Корректировки прибыли</span>
+              <strong class="investor-detail-card__value tabular-nums investor-negative">
+                {{ formatAggregateAmount(procurement.investor_aggregate, 'profit_reversed', 'UZS') }}
+              </strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Капитал в товаре</h2>
+              <p class="investor-panel__hint">
+                Отдельно видно, сколько капитала уже вышло через продажи, а сколько ещё лежит в остатке.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Wallet :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-grid-2">
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Продано по себестоимости</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Выручка по проданному</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Прогноз выручки</span>
+              <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
+            </article>
+            <article class="investor-detail-card detail-card--wide">
+              <span class="investor-detail-card__label">Прогноз прибыли инвестора</span>
+              <strong class="investor-detail-card__value tabular-nums investor-positive">
+                {{ formatCapitalState('projected_partner_profit_uzs') }}
+              </strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Журнал операций</h2>
+              <p class="investor-panel__hint">
+                Последовательность проводок, которые меняли ваш капитал или прибыль по этому приходу.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <ScrollText :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div v-if="procurement.investor_ledger.entries.length === 0" class="investor-empty">
+            Записей по приходу пока нет.
+          </div>
+
+          <div v-else class="ledger-stack">
+            <article
+              v-for="entry in procurement.investor_ledger.entries"
+              :key="entry.id"
+              class="ledger-row"
+            >
+              <div class="ledger-row__marker" :class="entryToneClass(entry)" />
+              <div class="ledger-row__main">
+                <strong class="ledger-row__title">{{ ledgerEntryLabel(entry.entry_type) }}</strong>
+                <span class="ledger-row__meta">{{ formatDateTime(entry.date) }}</span>
+                <span v-if="entry.source_ref" class="ledger-row__meta">{{ entry.source_ref }}</span>
+              </div>
+              <div class="ledger-row__side">
+                <strong class="ledger-row__amount tabular-nums" :class="entryToneClass(entry)">
+                  {{ formatPrice(entry.amount, entry.currency) }}
+                </strong>
+                <span v-if="entryFunctionalHint(entry)" class="ledger-row__meta">
+                  {{ entryFunctionalHint(entry) }}
+                </span>
+              </div>
+            </article>
+          </div>
         </section>
       </template>
 
-      <div v-else class="error-box">Приход не найден или недоступен.</div>
+      <section v-else class="investor-state investor-state--error">
+        <p>Приход не найден или недоступен.</p>
+      </section>
     </main>
   </div>
 </template>
 
 <style scoped>
-.detail-page {
-  min-height: 100%;
-  background: var(--color-bg-primary);
+.detail-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  text-align: center;
-  font-size: var(--text-lg);
-  color: var(--color-text-primary);
-  font-weight: var(--font-semibold);
-}
-
-.back-btn,
-.refresh-btn {
-  width: 40px;
-  height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-}
-
-.content {
-  padding: var(--space-4);
-  display: grid;
-  gap: var(--space-3);
-}
-
-.card {
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-elevated);
+.procurement-note {
   padding: var(--space-3);
+  border-radius: 18px;
+  background: rgba(250, 250, 248, 0.9);
+  border: 1px solid rgba(12, 69, 51, 0.06);
 }
 
-.section-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  margin-bottom: var(--space-2);
+.detail-card--wide {
+  grid-column: 1 / -1;
 }
 
-.meta-grid {
+.ledger-stack {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
-.meta-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.meta-row strong {
-  color: var(--color-text-primary);
-}
-
-.metrics-grid {
+.ledger-row {
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+  border-radius: 18px;
+  background: rgba(250, 250, 248, 0.92);
+  border: 1px solid rgba(12, 69, 51, 0.06);
 }
 
-.metric {
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
+.ledger-row__marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--color-info);
 }
 
-.metric strong {
-  color: var(--color-text-primary);
-}
-
-.positive {
-  color: var(--color-success);
-}
-
-.negative {
-  color: var(--color-error);
-}
-
-.record-row {
-  border-top: 1px solid var(--color-border-subtle);
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.record-main {
+.ledger-row__main,
+.ledger-row__side {
+  min-width: 0;
   display: grid;
-  gap: 2px;
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
+  gap: 4px;
 }
 
-.record-date,
-.record-description {
-  color: var(--color-text-secondary);
+.ledger-row__title {
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  color: var(--color-text-primary);
+}
+
+.ledger-row__meta {
   font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.45;
 }
 
-.record-amount {
+.ledger-row__side {
+  justify-items: end;
+  text-align: right;
+}
+
+.ledger-row__amount {
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
 }
 
-.record-amount.positive {
-  color: var(--color-success);
-}
+@media (max-width: 420px) {
+  .ledger-row {
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
 
-.record-amount.negative {
-  color: var(--color-error);
-}
-
-.record-amount.neutral {
-  color: var(--color-info);
-}
-
-.empty-text {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.error-box {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-error);
-  background: var(--color-error-bg);
-  color: var(--color-error);
-  padding: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.loading-list {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.skeleton-row {
-  height: 70px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(
-    90deg,
-    var(--color-bg-secondary) 0%,
-    var(--color-bg-elevated) 50%,
-    var(--color-bg-secondary) 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.1s linear infinite;
-}
-
-@keyframes shimmer {
-  from { background-position: 0 0; }
-  to { background-position: 200% 0; }
+  .ledger-row__side {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
 }
 </style>
