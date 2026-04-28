@@ -28,9 +28,8 @@ class MusharakaMudarabaFormulaTests(TestCase):
             item['role']: item
             for item in lot.contract_snapshot['partners']
         }
-        investor_capital_share = Decimal(str(partners['INVESTOR']['capital_share']))
         investor_expected = (
-            gross * investor_capital_share * Decimal(str(lot.contract_snapshot['mudaraba_ratio']))
+            gross * Decimal(str(partners['INVESTOR']['profit_share']))
         ).quantize(Decimal('0.01'))
 
         investor_actual = Decimal(distribution[str(ctx['investor'].id)])

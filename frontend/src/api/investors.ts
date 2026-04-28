@@ -3,6 +3,7 @@
  */
 
 import api from './client'
+import type { AgreementProfitabilityDetail } from './finance'
 import type {
   InvestorContract,
   InvestorDashboardAggregate,
@@ -58,6 +59,28 @@ export async function fetchInvestorProcurements(): Promise<InvestorProcurementLi
 
 export async function fetchInvestorProcurementDetail(procurementId: number): Promise<InvestorProcurementDetail> {
   const { data } = await api.get<InvestorProcurementDetail>(`/api/v1/investors/procurements/${procurementId}/`)
+  return data
+}
+
+export interface InvestorAgreementListItem {
+  id: number
+  status: string
+  opened_at: string
+  closed_at: string | null
+  supplier_name: string | null
+  planned_budget: string
+  currency: string
+  balances: Record<string, string>
+  procurements_count: number
+}
+
+export async function fetchInvestorAgreements(): Promise<InvestorAgreementListItem[]> {
+  const { data } = await api.get<InvestorAgreementListItem[]>('/api/v1/investors/agreements/')
+  return toList<InvestorAgreementListItem>(data)
+}
+
+export async function fetchInvestorAgreementDetail(agreementId: number): Promise<AgreementProfitabilityDetail> {
+  const { data } = await api.get<AgreementProfitabilityDetail>(`/api/v1/investors/agreements/${agreementId}/`)
   return data
 }
 

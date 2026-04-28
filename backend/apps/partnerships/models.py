@@ -12,6 +12,94 @@ from django.db import models
 from apps.core.models import TenantModel, ImmutableMixin
 
 
+class InvestmentAgreement(TenantModel):
+    """Parent investment agreement that can fund multiple concrete procurements."""
+
+    class Status(models.TextChoices):
+        OPEN = 'OPEN', 'Открыт'
+        ACTIVE = 'ACTIVE', 'Активен'
+        CLOSED = 'CLOSED', 'Закрыт'
+        CANCELLED = 'CANCELLED', 'Отменён'
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    opened_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    supplier = models.ForeignKey(
+        'suppliers.Supplier',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='investment_agreements',
+    )
+    mudaraba_ratio = models.DecimalField(
+        max_digits=8,
+        decimal_places=6,
+        help_text='m in [0..1]; investor profit = capital * m',
+    )
+    loss_rule = models.CharField(
+        max_length=20,
+        choices=[('BY_CAPITAL', 'По доле капитала')],
+        default='BY_CAPITAL',
+    )
+    planned_budget = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    balances = models.JSONField(default=dict, help_text='Map<currency, decimal_string>')
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_investment_agreement'
+        indexes = [
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['tenant', 'opened_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_investment_agreement_idempotent',
+            ),
+        ]
+
+    def __str__(self):
+        return f"InvestmentAgreement#{self.pk} {self.status}"
+
+
+class AgreementPartner(TenantModel):
+    """A partner participating in a parent investment agreement."""
+
+    class Role(models.TextChoices):
+        INVESTOR = 'INVESTOR', 'Инвестор'
+        OPERATOR = 'OPERATOR', 'Оператор'
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='partners',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='agreement_memberships',
+    )
+    role = models.CharField(max_length=20, choices=Role.choices)
+    planned_capital_share = models.DecimalField(max_digits=14, decimal_places=2)
+    profit_share = models.DecimalField(max_digits=7, decimal_places=6, default=Decimal('0'))
+
+    class Meta:
+        db_table = 'partnerships_agreement_partner'
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['partner']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['agreement', 'partner', 'role'],
+                name='uq_agreement_partner_role',
+            ),
+        ]
+
+
 class Procurement(ImmutableMixin, TenantModel):
     """
     A procurement event — umbrella over items, expenses, balance and
@@ -20,6 +108,7 @@ class Procurement(ImmutableMixin, TenantModel):
 
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Открыт'
+        PARTIALLY_RECEIVED = 'PARTIALLY_RECEIVED', 'Частично оприходовано'
         RECEIVED = 'RECEIVED', 'Получен'
         CLOSED = 'CLOSED', 'Закрыт'
         CANCELLED = 'CANCELLED', 'Отменён'
@@ -47,6 +136,13 @@ class Procurement(ImmutableMixin, TenantModel):
         blank=True,
         related_name='procurements',
     )
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='procurements',
+    )
     notes = models.TextField(blank=True, default='')
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
@@ -55,6 +151,7 @@ class Procurement(ImmutableMixin, TenantModel):
         indexes = [
             models.Index(fields=['tenant', 'status']),
             models.Index(fields=['tenant', 'procurement_type']),
+            models.Index(fields=['tenant', 'agreement']),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -74,6 +171,7 @@ class ProcurementItem(TenantModel):
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Черновик'
         PAID = 'PAID', 'Оплачено'
+        RECEIVED = 'RECEIVED', 'Оприходовано'
 
     procurement = models.ForeignKey(
         Procurement,
@@ -86,7 +184,7 @@ class ProcurementItem(TenantModel):
         related_name='procurement_items',
     )
     quantity = models.DecimalField(max_digits=14, decimal_places=3)
-    unit_purchase_price = models.DecimalField(max_digits=14, decimal_places=2)
+    unit_purchase_price = models.DecimalField(max_digits=14, decimal_places=6)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
     status = models.CharField(
@@ -120,6 +218,7 @@ class ProcurementExpense(TenantModel):
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Черновик'
         PAID = 'PAID', 'Оплачено'
+        RECEIVED = 'RECEIVED', 'Оприходовано'
 
     procurement = models.ForeignKey(
         Procurement,
@@ -147,6 +246,147 @@ class ProcurementExpense(TenantModel):
         indexes = [
             models.Index(fields=['procurement']),
             models.Index(fields=['procurement', 'status']),
+        ]
+
+
+class ProcurementExpenseTarget(TenantModel):
+    """Explicit item scope for a procurement expense. Empty target set means all items."""
+
+    expense = models.ForeignKey(
+        ProcurementExpense,
+        on_delete=models.CASCADE,
+        related_name='targets',
+    )
+    item = models.ForeignKey(
+        ProcurementItem,
+        on_delete=models.CASCADE,
+        related_name='expense_targets',
+    )
+
+    class Meta:
+        db_table = 'partnerships_procurement_expense_target'
+        indexes = [
+            models.Index(fields=['expense']),
+            models.Index(fields=['item']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['expense', 'item'],
+                name='uq_procurement_expense_target',
+            ),
+        ]
+
+
+class ProcurementReceiveBatch(TenantModel):
+    """One physical receive operation inside a procurement."""
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='receive_batches',
+    )
+    warehouse = models.ForeignKey(
+        'inventory.Warehouse',
+        on_delete=models.PROTECT,
+        related_name='procurement_receive_batches',
+    )
+    received_at = models.DateTimeField()
+    items_count = models.PositiveIntegerField(default=0)
+    total_inventory_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+
+    class Meta:
+        db_table = 'partnerships_procurement_receive_batch'
+        ordering = ['-received_at', '-id']
+        indexes = [
+            models.Index(fields=['procurement', 'received_at'], name='partnership_procure_f0a2ed_idx'),
+            models.Index(fields=['warehouse'], name='partnership_warehou_3f31c8_idx'),
+        ]
+
+
+class ProcurementReceiveBatchLine(TenantModel):
+    """A received procurement item snapshot inside a receive batch."""
+
+    batch = models.ForeignKey(
+        ProcurementReceiveBatch,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    item = models.ForeignKey(
+        ProcurementItem,
+        on_delete=models.PROTECT,
+        related_name='receive_batch_lines',
+    )
+    lot = models.OneToOneField(
+        'inventory.Lot',
+        on_delete=models.PROTECT,
+        related_name='receive_batch_line',
+    )
+    quantity = models.DecimalField(max_digits=14, decimal_places=3)
+    unit_purchase_price_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    allocated_expense_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    landed_cost_per_unit_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+
+    class Meta:
+        db_table = 'partnerships_procurement_receive_batch_line'
+        indexes = [
+            models.Index(fields=['batch'], name='partnership_batch_i_5e6e1d_idx'),
+            models.Index(fields=['item'], name='partnership_item_id_bf9414_idx'),
+            models.Index(fields=['lot'], name='partnership_lot_id_776a8e_idx'),
+        ]
+
+
+class ProcurementReceiveBatchExpense(TenantModel):
+    """Expense amount fixed into a receive batch."""
+
+    batch = models.ForeignKey(
+        ProcurementReceiveBatch,
+        on_delete=models.CASCADE,
+        related_name='expenses',
+    )
+    expense = models.ForeignKey(
+        ProcurementExpense,
+        on_delete=models.PROTECT,
+        related_name='receive_batch_expenses',
+    )
+    allocated_amount_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+
+    class Meta:
+        db_table = 'partnerships_procurement_receive_batch_expense'
+        indexes = [
+            models.Index(fields=['batch'], name='partnership_batch_i_2b88d7_idx'),
+            models.Index(fields=['expense'], name='partnership_expense_cebc8a_idx'),
+        ]
+
+
+class ProcurementReceiveBatchCapitalAllocation(TenantModel):
+    """Capital/profit snapshot fixed for one receive batch."""
+
+    batch = models.ForeignKey(
+        ProcurementReceiveBatch,
+        on_delete=models.CASCADE,
+        related_name='capital_allocations',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='procurement_receive_batch_allocations',
+    )
+    role = models.CharField(max_length=20, choices=[('INVESTOR', 'Инвестор'), ('OPERATOR', 'Оператор')])
+    amount_contract_currency = models.DecimalField(max_digits=20, decimal_places=2)
+    capital_share = models.DecimalField(max_digits=8, decimal_places=6)
+    profit_share = models.DecimalField(max_digits=8, decimal_places=6)
+
+    class Meta:
+        db_table = 'partnerships_procurement_receive_batch_capital_allocation'
+        indexes = [
+            models.Index(fields=['batch'], name='partnership_batch_i_19d320_idx'),
+            models.Index(fields=['partner'], name='partnership_partner_32d0cb_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['batch', 'partner'],
+                name='uq_receive_batch_capital_partner',
+            ),
         ]
 
 
@@ -325,6 +565,105 @@ class ProcurementBalanceExchange(TenantModel):
         ordering = ['-date', '-id']
         indexes = [
             models.Index(fields=['balance']),
+        ]
+
+
+class AgreementContribution(TenantModel):
+    """A partner adds money into the parent investment agreement balance."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='contributions',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='agreement_contributions',
+    )
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    date = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_agreement_contribution'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['partner']),
+        ]
+
+
+class AgreementWithdrawal(TenantModel):
+    """Money returned from the parent investment agreement to a partner."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='withdrawals',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='agreement_withdrawals',
+    )
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    date = models.DateTimeField()
+    reason = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_agreement_withdrawal'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['partner']),
+        ]
+
+
+class AgreementAllocation(TenantModel):
+    """Capital moved between parent agreement balance and a concrete procurement."""
+
+    class Direction(models.TextChoices):
+        TO_PROCUREMENT = 'TO_PROCUREMENT', 'В приход'
+        FROM_PROCUREMENT = 'FROM_PROCUREMENT', 'Из прихода'
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.PROTECT,
+        related_name='allocations',
+    )
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='agreement_allocations',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='agreement_allocations',
+    )
+    direction = models.CharField(
+        max_length=20,
+        choices=Direction.choices,
+        default=Direction.TO_PROCUREMENT,
+    )
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    date = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_agreement_allocation'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['procurement']),
+            models.Index(fields=['partner']),
         ]
 
 

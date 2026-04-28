@@ -110,7 +110,8 @@
 6. Dev auth stability hardening:
    - incident root cause confirmed: PostgreSQL connection exhaustion (`too many clients already`) caused `500` on `/api/v1/auth/token/`,
    - `development` settings now force non-persistent DB connections (`CONN_MAX_AGE=0`) with health checks enabled,
-   - operational rule fixed: run exactly one backend `runserver` process in local dev.
+   - operational rule fixed: run exactly one backend `runserver` process in local dev,
+   - canonical local backend start: `backend/run_devserver.sh` (with autoreload enabled, never `--noreload` for partial receive checks).
 
 ## Excel Alignment (Iteration 1)
 

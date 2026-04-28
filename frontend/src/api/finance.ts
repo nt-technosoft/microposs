@@ -154,6 +154,25 @@ export interface ProcurementProfitabilityRow {
   projected_gross_profit: string
   projected_investor_profit: string
   projected_business_profit: string
+  received_landed_cost?: string
+  pending_prepaid_cost?: string
+  receive_batches_count?: number
+  receive_batches?: Array<{
+    id: number
+    received_at: string
+    items_count: number
+    total_inventory_uzs: string
+    capital_allocations: Array<{
+      partner_id: number
+      partner_name: string
+      role: string
+      amount_contract_currency: string
+      capital_share: string
+      profit_share: string
+    }>
+  }>
+  pending_paid_items_count?: number
+  draft_items_count?: number
 }
 
 export interface ProcurementProfitabilityDetailItem {
@@ -183,6 +202,55 @@ export interface ProcurementProfitabilityDetailItem {
 export interface ProcurementProfitabilityDetail {
   procurement: ProcurementProfitabilityRow
   items: ProcurementProfitabilityDetailItem[]
+}
+
+export interface AgreementProfitabilityDetail {
+  agreement: {
+    agreement_id: number
+    status: string
+    opened_at: string
+    closed_at: string | null
+    supplier_name: string | null
+    planned_budget: string
+    currency: string
+    balances: Record<string, string>
+    procurements_count: number
+    quantity_sold: number
+    remaining_quantity: number
+    revenue: string
+    cogs: string
+    gross_profit: string
+    investor_profit: string
+    business_profit: string
+    received_landed_cost: string
+    pending_prepaid_cost: string
+    remaining_landed_cost: string
+    projected_revenue: string
+    projected_gross_profit: string
+    projected_investor_profit: string
+    projected_business_profit: string
+  }
+  partners: Array<{
+    partner_id: number
+    partner_name: string
+    role: string
+    agreement_currency: string
+    planned_capital_share: string
+    planned_profit_share: string
+    agreement_contributed: string
+    agreement_withdrawn: string
+    agreement_allocated: string
+    agreement_returned: string
+    agreement_available: string
+    allocated_functional_uzs: string
+    returned_functional_uzs: string
+    pending_prepaid_cost_estimate_uzs: string
+    profit_accrued: string
+    dividends_paid: string
+    profit_pending_payout: string
+  }>
+  procurements: ProcurementProfitabilityRow[]
+  current_partner_id?: number
 }
 
 export interface ExchangeRateItem {
@@ -424,6 +492,15 @@ export async function fetchProcurementProfitabilityDetail(
 ): Promise<ProcurementProfitabilityDetail> {
   const { data } = await api.get<ProcurementProfitabilityDetail>(
     `/api/v1/finance/procurement-profitability/${procurementId}/`,
+  )
+  return data
+}
+
+export async function fetchAgreementProfitabilityDetail(
+  agreementId: number,
+): Promise<AgreementProfitabilityDetail> {
+  const { data } = await api.get<AgreementProfitabilityDetail>(
+    `/api/v1/finance/agreement-profitability/${agreementId}/`,
   )
   return data
 }

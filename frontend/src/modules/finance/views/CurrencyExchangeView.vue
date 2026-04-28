@@ -21,7 +21,7 @@ const accounts = ref<CashAccountRecord[]>([])
 const isLoading = ref(true)
 const isSaving = ref(false)
 const formError = ref<string | null>(null)
-const latestUsdUzsRate = ref('12000')
+const latestUsdUzsRate = ref('12100')
 const topUpSheetOpen = ref(false)
 const topUpAccountId = ref<number | null>(null)
 const topUpAmount = ref('')
@@ -160,7 +160,7 @@ async function loadLatestRate(): Promise<void> {
     })
     latestUsdUzsRate.value = String(latest.rate)
   } catch {
-    latestUsdUzsRate.value = '12000'
+    latestUsdUzsRate.value = '12100'
   }
 }
 

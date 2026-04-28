@@ -409,7 +409,8 @@ function procurementTypeLabel(type: string): string {
 }
 
 function procurementStatusLabel(status: string): string {
-  if (status === 'RECEIVED') return 'Оприходован'
+  if (status === 'PARTIALLY_RECEIVED') return 'Частично оприходован'
+  if (status === 'RECEIVED') return 'Завершён'
   if (status === 'OPEN') return 'Открыт'
   if (status === 'CLOSED') return 'Закрыт'
   if (status === 'CANCELLED') return 'Отменён'

@@ -6,8 +6,10 @@ import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { useAuthStore } from '@/stores/auth'
 import {
+  fetchInvestorAgreements,
   fetchInvestorDashboard,
   fetchInvestorProcurements,
+  type InvestorAgreementListItem,
 } from '@/api/investors'
 import type { InvestorDashboardAggregate, InvestorLedgerTotals, InvestorProcurementListItem } from '@/types/models'
 
@@ -16,6 +18,7 @@ const toast = useToast()
 const auth = useAuthStore()
 
 const aggregate = ref<InvestorDashboardAggregate | null>(null)
+const agreements = ref<InvestorAgreementListItem[]>([])
 const procurements = ref<InvestorProcurementListItem[]>([])
 const isLoading = ref(true)
 const errorMessage = ref('')
@@ -73,6 +76,17 @@ function procurementTypeLabel(type: string): string {
   return type
 }
 
+function procurementStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    OPEN: 'Открыт',
+    PARTIALLY_RECEIVED: 'Частично',
+    RECEIVED: 'Завершён',
+    CLOSED: 'Закрыт',
+    CANCELLED: 'Отменён',
+  }
+  return labels[status] ?? status
+}
+
 function formatDate(value: string): string {
   return new Date(value).toLocaleDateString('ru-RU', {
     day: 'numeric',
@@ -84,6 +98,7 @@ function formatDate(value: string): string {
 async function loadDashboard(): Promise<void> {
   if (!hasActiveBusinessLink.value) {
     aggregate.value = null
+    agreements.value = []
     procurements.value = []
     errorMessage.value = ''
     isLoading.value = false
@@ -93,11 +108,13 @@ async function loadDashboard(): Promise<void> {
   isLoading.value = true
   errorMessage.value = ''
   try {
-    const [summary, procurementRows] = await Promise.all([
+    const [summary, agreementRows, procurementRows] = await Promise.all([
       fetchInvestorDashboard(),
+      fetchInvestorAgreements(),
       fetchInvestorProcurements(),
     ])
     aggregate.value = summary
+    agreements.value = agreementRows
     procurements.value = procurementRows
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить кабинет инвестора'
@@ -109,6 +126,17 @@ async function loadDashboard(): Promise<void> {
 
 function openProcurement(procurementId: number): void {
   router.push({ name: 'investor-procurement', params: { id: procurementId } })
+}
+
+function openAgreement(agreementId: number): void {
+  router.push({ name: 'investor-agreement', params: { id: agreementId } })
+}
+
+function agreementBalanceLabel(agreement: InvestorAgreementListItem): string {
+  const parts = Object.entries(agreement.balances ?? {})
+    .filter(([, amount]) => Math.abs(Number(amount || 0)) > 0.000001)
+    .map(([currency, amount]) => formatPrice(amount, currency))
+  return parts.length ? parts.join(' · ') : '0'
 }
 
 onMounted(loadDashboard)
@@ -172,6 +200,32 @@ onMounted(loadDashboard)
         </section>
 
         <section class="card">
+          <h2 class="section-title">Мои инвестдоговоры</h2>
+          <div v-if="agreements.length === 0" class="empty-text">
+            Инвестдоговоров с вашим участием пока нет.
+          </div>
+          <button
+            v-for="agreement in agreements"
+            v-else
+            :key="agreement.id"
+            class="contract-row"
+            type="button"
+            @click="openAgreement(agreement.id)"
+          >
+            <div class="contract-main">
+              <strong class="contract-title">Инвестдоговор #{{ agreement.id }}</strong>
+              <span class="contract-meta">
+                {{ agreement.supplier_name || 'Без поставщика' }} · {{ agreement.procurements_count }} приход.
+              </span>
+            </div>
+            <div class="contract-right">
+              <span class="contract-amount">{{ agreementBalanceLabel(agreement) }}</span>
+              <ChevronRight :size="16" :stroke-width="2" />
+            </div>
+          </button>
+        </section>
+
+        <section class="card">
           <h2 class="section-title">Мои приходы</h2>
           <div v-if="procurements.length === 0" class="empty-text">
             Приходов с вашим участием пока нет.
@@ -193,7 +247,7 @@ onMounted(loadDashboard)
               </span>
             </div>
             <div class="contract-right">
-              <span class="contract-amount">{{ procurement.status }}</span>
+              <span class="contract-amount">{{ procurementStatusLabel(procurement.status) }}</span>
               <ChevronRight :size="16" :stroke-width="2" />
             </div>
           </button>

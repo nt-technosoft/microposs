@@ -20,16 +20,7 @@ const showCart = computed(() => {
     return false
   }
 
-  if (
-    route.name === 'cart'
-    || route.name === 'checkout'
-    || route.path.startsWith('/sales/cart')
-    || route.path.startsWith('/sales/checkout')
-  ) {
-    return false
-  }
-
-  return true
+  return route.name === 'product-detail'
 })
 </script>
 

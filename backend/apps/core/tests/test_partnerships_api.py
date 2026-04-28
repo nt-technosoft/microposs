@@ -136,6 +136,8 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(receive_response.status_code, status.HTTP_200_OK)
         self.assertEqual(receive_response.data['status'], Procurement.Status.RECEIVED)
         self.assertEqual(receive_response.data['items_count'], 1)
+        self.assertEqual(len(receive_response.data['receive_batches']), 1)
+        self.assertEqual(receive_response.data['receive_plan']['received_items_count'], 1)
 
         receipt_journal = JournalEntry.objects.filter(
             operation_type='receipt',
@@ -182,6 +184,107 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(response.data['items'], [])
         self.assertEqual(response.data['expenses'], [])
         self.assertEqual(response.data['contract']['planned_budget'], '15000.00')
+
+    def test_owner_can_create_agreement_and_allocate_to_linked_procurement(self):
+        self.auth_owner()
+
+        agreement_response = self.client.post(
+            '/api/v1/partnerships/agreements/',
+            {
+                'planned_budget': '200.00',
+                'currency': 'USD',
+                'mudaraba_ratio': '0.571429',
+                'partners': [
+                    {
+                        'partner_id': self.ctx['investor'].id,
+                        'role': 'INVESTOR',
+                        'planned_capital_share': '140.00',
+                        'profit_share': '0.4',
+                    },
+                    {
+                        'partner_id': self.ctx['operator'].id,
+                        'role': 'OPERATOR',
+                        'planned_capital_share': '60.00',
+                        'profit_share': '0.6',
+                    },
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(agreement_response.status_code, status.HTTP_201_CREATED)
+        agreement_id = agreement_response.data['id']
+
+        for partner_id, amount in (
+            (self.ctx['investor'].id, '140.00'),
+            (self.ctx['operator'].id, '60.00'),
+        ):
+            contribution = self.client.post(
+                f'/api/v1/partnerships/agreements/{agreement_id}/contributions/',
+                {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'USD',
+                    'fx_rate': '12000',
+                },
+                format='json',
+            )
+            self.assertEqual(contribution.status_code, status.HTTP_201_CREATED)
+
+        procurement_response = self.client.post(
+            '/api/v1/partnerships/procurements/',
+            {
+                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'supplier_id': self.ctx['supplier'].id,
+                'agreement_id': agreement_id,
+                'items': [{
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': '10',
+                    'unit_purchase_price': '10.00',
+                    'currency': 'USD',
+                    'fx_rate': '12000',
+                }],
+            },
+            format='json',
+        )
+        self.assertEqual(procurement_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(procurement_response.data['agreement'], agreement_id)
+        procurement_id = procurement_response.data['id']
+
+        preview = self.client.get(
+            f'/api/v1/partnerships/agreements/{agreement_id}/allocation-preview/',
+            {'procurement_id': procurement_id},
+        )
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview.data['required'], {'USD': '100.00'})
+
+        allocation = self.client.post(
+            f'/api/v1/partnerships/agreements/{agreement_id}/allocations/',
+            {
+                'procurement_id': procurement_id,
+                'allocations': [
+                    {
+                        'partner_id': row['partner_id'],
+                        'amount': row['amount'],
+                        'currency': row['currency'],
+                        'fx_rate': '12000',
+                    }
+                    for row in preview.data['suggestions']
+                    if Decimal(str(row['amount'])) > 0
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(allocation.status_code, status.HTTP_201_CREATED)
+
+        detail = self.client.get(f'/api/v1/partnerships/agreements/{agreement_id}/')
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(detail.data['procurements']), 1)
+        available = {
+            row['partner_id']: row['available_amount']
+            for row in detail.data['participant_totals']
+        }
+        self.assertEqual(available[self.ctx['investor'].id], '70.00')
+        self.assertEqual(available[self.ctx['operator'].id], '30.00')
 
     def test_owner_can_update_open_procurement_after_opening_it_empty(self):
         self.auth_owner()

@@ -7,6 +7,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
+from apps.partnerships.formulas import distribute_loss_by_capital_from_snapshot
 
 from .models import RiskEvent, InventoryCheck, InventoryCheckLine
 
@@ -109,14 +110,13 @@ def create_writeoff(
             procurement_id = lot.procurement_item.procurement_id
 
         if procurement_id and partners_meta:
-            for meta in partners_meta:
-                partner_id = meta.get('partner_id')
-                if partner_id is None:
-                    continue
-                capital_share = Decimal(str(meta.get('capital_share', '0')))
-                if capital_share <= 0:
-                    continue
-                loss_share = (monetary_impact * capital_share).quantize(Decimal('0.01'))
+            loss_distribution = distribute_loss_by_capital_from_snapshot(
+                contract_snapshot=contract_snapshot,
+                loss_amount=monetary_impact,
+            )
+            for partner_id_str, loss_str in loss_distribution.items():
+                partner_id = int(partner_id_str)
+                loss_share = Decimal(str(loss_str))
                 if loss_share <= 0:
                     continue
                 ledger = get_or_create_ledger(

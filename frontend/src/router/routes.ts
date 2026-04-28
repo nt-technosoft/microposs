@@ -89,6 +89,24 @@ const routes: RouteRecordRaw[] = [
 
   // Procurements (rendered by restored intake views until full slice rewrite)
   {
+    path: '/procurements/agreements',
+    name: 'agreement-list',
+    component: () => import('@/modules/intake/views/AgreementList.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
+    path: '/procurements/agreements/create',
+    name: 'agreement-create',
+    component: () => import('@/modules/intake/views/AgreementCreate.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
+    path: '/procurements/agreements/:id',
+    name: 'agreement-detail',
+    component: () => import('@/modules/intake/views/AgreementDetail.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/procurements',
     name: 'procurement-list',
     component: () => import('@/modules/intake/views/IntakeList.vue'),
@@ -149,6 +167,12 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/reports/agreements/:id',
+    name: 'reports-agreement-profitability',
+    component: () => import('@/modules/reports/views/AgreementProfitabilityView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/reports/audit/sales/:id',
     name: 'reports-sale-explanation',
     component: () => import('@/modules/reports/views/SaleExplanationView.vue'),
@@ -204,6 +228,18 @@ const routes: RouteRecordRaw[] = [
     path: '/investor/procurements',
     name: 'investor-procurements',
     component: () => import('@/modules/investors/views/InvestorDashboard.vue'),
+    meta: { roles: ['investor'], layout: 'investor' },
+  },
+  {
+    path: '/investor/agreements',
+    name: 'investor-agreements',
+    component: () => import('@/modules/investors/views/InvestorDashboard.vue'),
+    meta: { roles: ['investor'], layout: 'investor' },
+  },
+  {
+    path: '/investor/agreements/:id',
+    name: 'investor-agreement',
+    component: () => import('@/modules/investors/views/InvestorAgreementDetail.vue'),
     meta: { roles: ['investor'], layout: 'investor' },
   },
   {

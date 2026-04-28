@@ -4,6 +4,7 @@ Finance API views — accounts, journal entries, summaries.
 
 from datetime import timedelta
 from datetime import date as date_cls
+from decimal import Decimal
 
 from django.core.cache import cache
 from django.db.models import Max, Min
@@ -66,8 +67,28 @@ from .services import (
     get_product_profitability_rows,
     get_procurement_profitability_rows,
     get_procurement_profitability_detail,
+    get_agreement_profitability_detail,
 )
 from .chart_of_accounts import setup_chart_of_accounts
+
+DEFAULT_USD_UZS_RATE = Decimal('12100.000000')
+
+
+def _default_fx_rate_payload(*, base: str, quote: str, rate_date: date_cls) -> dict:
+    now = timezone.now().isoformat()
+    return {
+        'id': 0,
+        'base_currency': base,
+        'quote_currency': quote,
+        'rate_date': rate_date.isoformat(),
+        'rate': f'{DEFAULT_USD_UZS_RATE:.6f}',
+        'source': ExchangeRate.Source.MANUAL,
+        'is_manual': False,
+        'fetched_at': now,
+        'notes': 'Default local fallback rate. Add or refresh an FX rate to replace it.',
+        'created_at': now,
+        'updated_at': now,
+    }
 
 
 def _resolve_operation_window(
@@ -550,6 +571,22 @@ class ProcurementProfitabilityDetailView(APIView):
         return Response(ProcurementProfitabilityDetailSerializer(payload).data)
 
 
+class AgreementProfitabilityDetailView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, agreement_id: int):
+        from apps.partnerships.models import InvestmentAgreement
+
+        try:
+            payload = get_agreement_profitability_detail(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement_id,
+            )
+        except InvestmentAgreement.DoesNotExist:
+            raise NotFound('Инвестдоговор не найден')
+        return Response(payload)
+
+
 class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Tenant FX history with manual override and official refresh action.
@@ -632,6 +669,12 @@ class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):
             rate_date=target_date,
         )
         if row is None:
+            if base == 'USD' and quote == 'UZS':
+                return Response(_default_fx_rate_payload(
+                    base=base,
+                    quote=quote,
+                    rate_date=target_date or timezone.localdate(),
+                ))
             return Response(
                 {'detail': f'Rate not found for {base}/{quote}.'},
                 status=status.HTTP_404_NOT_FOUND,

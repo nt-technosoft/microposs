@@ -22,7 +22,7 @@ function goToCart() {
     <button
       v-if="isVisible"
       class="floating-cart"
-      aria-label="Open cart"
+      aria-label="Открыть корзину"
       @click="goToCart"
     >
       <ShoppingCart :size="20" :stroke-width="1.75" />

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, RotateCcw, PackageOpen } from 'lucide-vue-next'
+import { RefreshCcw, RotateCcw, PackageOpen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import { ProcurementStatus, ProcurementType } from '@/types/enums'
 import { fetchProcurements, type ProcurementListItem } from '@/api/partnerships'
+import ProcurementSectionShell from '@/modules/intake/components/ProcurementSectionShell.vue'
 
 // ── Router & composables ────────────────────────────────────────────────────
 
@@ -24,7 +25,8 @@ interface FilterChip {
 const FILTER_CHIPS: FilterChip[] = [
   { value: 'all', label: 'Все' },
   { value: ProcurementStatus.OPEN, label: 'Открыт' },
-  { value: ProcurementStatus.RECEIVED, label: 'Оприходован' },
+  { value: ProcurementStatus.PARTIALLY_RECEIVED, label: 'Частично' },
+  { value: ProcurementStatus.RECEIVED, label: 'Завершён' },
   { value: ProcurementStatus.CLOSED, label: 'Закрыт' },
 ]
 
@@ -80,7 +82,8 @@ const TYPE_META: Record<ProcurementType, TypeMeta> = {
 
 const STATUS_META: Record<ProcurementStatus, { label: string; colorClass: string }> = {
   [ProcurementStatus.OPEN]: { label: 'Открыт', colorClass: 'badge-status--gray' },
-  [ProcurementStatus.RECEIVED]: { label: 'Оприходован', colorClass: 'badge-status--green' },
+  [ProcurementStatus.PARTIALLY_RECEIVED]: { label: 'Частично', colorClass: 'badge-status--orange' },
+  [ProcurementStatus.RECEIVED]: { label: 'Завершён', colorClass: 'badge-status--green' },
   [ProcurementStatus.CLOSED]: { label: 'Закрыт', colorClass: 'badge-status--blue' },
   [ProcurementStatus.CANCELLED]: { label: 'Отменён', colorClass: 'badge-status--orange' },
 }
@@ -133,38 +136,38 @@ function onFilterChange(value: StatusFilter): void {
 </script>
 
 <template>
-  <div class="list-page">
-    <!-- ── Header ──────────────────────────────────────────────── -->
-    <header class="page-header">
-      <h1 class="page-title">Приходы</h1>
-      <button class="btn-new" aria-label="Новый приход" @click="goToCreate">
-        <Plus :size="18" :stroke-width="2" />
-        <span>Новый</span>
+  <ProcurementSectionShell
+    active-mode="procurements"
+    title="Приходы"
+    primary-label="Новый"
+    primary-aria-label="Новый приход"
+    @primary="goToCreate"
+  >
+    <template #header-actions>
+      <button class="icon-btn" type="button" aria-label="Обновить приходы" @click="loadProcurementList">
+        <RefreshCcw :size="17" />
       </button>
-    </header>
+    </template>
 
-    <!-- ── Status filter chips ───────────────────────────────── -->
-    <div class="filter-row" role="group" aria-label="Фильтр по статусу">
-      <button
-        v-for="chip in FILTER_CHIPS"
-        :key="chip.value"
-        class="filter-chip"
-        :class="{ active: activeFilter === chip.value }"
-        @click="onFilterChange(chip.value)"
-      >
-        {{ chip.label }}
-      </button>
-    </div>
+    <template #summary>
+      <div class="filter-row" role="group" aria-label="Фильтр по статусу">
+        <button
+          v-for="chip in FILTER_CHIPS"
+          :key="chip.value"
+          class="filter-chip"
+          :class="{ active: activeFilter === chip.value }"
+          @click="onFilterChange(chip.value)"
+        >
+          {{ chip.label }}
+        </button>
+      </div>
+    </template>
 
-    <!-- ── Content ───────────────────────────────────────────── -->
     <div class="content">
-
-      <!-- Skeleton loading -->
       <template v-if="isLoading && filteredProcurements.length === 0">
         <div v-for="n in 4" :key="n" class="skeleton-card" />
       </template>
 
-      <!-- Error state -->
       <div v-else-if="error && filteredProcurements.length === 0" class="state-box state-error">
         <RotateCcw :size="28" :stroke-width="1.5" class="state-icon" />
         <p class="state-title">Ошибка загрузки</p>
@@ -172,7 +175,6 @@ function onFilterChange(value: StatusFilter): void {
         <button class="btn-retry" @click="loadProcurementList">Повторить</button>
       </div>
 
-      <!-- Empty state -->
       <div v-else-if="!isLoading && filteredProcurements.length === 0" class="state-box">
         <PackageOpen :size="40" :stroke-width="1.25" class="state-icon-empty" />
         <p class="state-title">Нет приходов</p>
@@ -186,7 +188,6 @@ function onFilterChange(value: StatusFilter): void {
         </button>
       </div>
 
-      <!-- Receipt list -->
       <template v-else>
         <button
           v-for="procurement in filteredProcurements"
@@ -194,7 +195,6 @@ function onFilterChange(value: StatusFilter): void {
           class="receipt-card"
           @click="goToDetail(procurement.id)"
         >
-          <!-- Top row: ID + date + type badge -->
           <div class="card-top">
             <div class="card-id-row">
               <span class="card-id">#{{ procurement.id }}</span>
@@ -205,97 +205,48 @@ function onFilterChange(value: StatusFilter): void {
             </span>
           </div>
 
-          <!-- Bottom row: lines count + total + status -->
-          <div class="card-bottom">
-              <span class="card-lines">{{ linesLabel(procurement.items_count) }}</span>
-              <div class="card-right">
-                <span class="card-total tabular-nums">{{ totalCost(procurement.total_amount) }}</span>
-                <span v-if="procurement.supplier_name" class="card-trace">{{ procurement.supplier_name }}</span>
-                <span
-                  class="badge-status"
-                  :class="getStatusMeta(procurement.status as ProcurementStatus).colorClass"
+          <div class="card-main">
+            <div class="card-value">
+              <span class="card-total tabular-nums">{{ totalCost(procurement.total_amount) }}</span>
+            </div>
+            <div class="card-meta-line">
+              <span class="card-trace">
+                {{ linesLabel(procurement.items_count) }}
+                <template v-if="procurement.supplier_name"> · {{ procurement.supplier_name }}</template>
+              </span>
+              <span
+                class="badge-status"
+                :class="getStatusMeta(procurement.status as ProcurementStatus).colorClass"
               >
                 {{ getStatusMeta(procurement.status as ProcurementStatus).label }}
               </span>
             </div>
           </div>
-
-          <p v-if="procurement.status === ProcurementStatus.OPEN" class="card-hint">
-            {{ procurement.receive_status === 'READY' || procurement.receive_status === 'AUTO_SURPLUS'
-              ? 'Готово к следующему шагу receive'
-              : procurement.receive_message }}
-          </p>
         </button>
       </template>
     </div>
-  </div>
+  </ProcurementSectionShell>
 </template>
 
 <style scoped>
-/* ── Layout ──────────────────────────────────────────────────────────────── */
-
-.list-page {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-  background: var(--color-bg-primary);
-}
-
-/* ── Header ─────────────────────────────────────────────────────────────── */
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  background: var(--color-bg-primary);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  line-height: var(--leading-tight);
-}
-
-.btn-new {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 36px;
-  padding: 0 var(--space-4);
+.icon-btn {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-full);
-  background: var(--color-brand-500);
-  color: var(--color-text-inverse);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  white-space: nowrap;
-  transition: background var(--duration-fast) var(--ease-out),
-              transform var(--duration-fast) var(--ease-out);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  flex-shrink: 0;
 }
-
-.btn-new:hover {
-  background: var(--color-brand-600);
-}
-
-.btn-new:active {
-  transform: scale(0.97);
-}
-
-/* ── Filter chips ───────────────────────────────────────────────────────── */
 
 .filter-row {
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  background: var(--color-bg-primary);
 }
 
 .filter-row::-webkit-scrollbar {
@@ -326,22 +277,15 @@ function onFilterChange(value: StatusFilter): void {
   transform: scale(0.96);
 }
 
-/* ── Content ────────────────────────────────────────────────────────────── */
-
 .content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) var(--space-8);
 }
-
-/* ── Receipt card ────────────────────────────────────────────────────────── */
 
 .receipt-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: var(--space-4);
   background: var(--color-bg-elevated);
   border-radius: var(--radius-lg);
@@ -389,42 +333,27 @@ function onFilterChange(value: StatusFilter): void {
   color: var(--color-text-tertiary);
 }
 
-.card-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+.card-main {
+  display: grid;
+  gap: 10px;
 }
 
-.card-lines {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
-.card-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-1);
-}
+.card-value { display: grid; gap: 0; }
 
 .card-total {
-  font-size: var(--text-base);
+  font-size: var(--text-xl);
   font-weight: var(--font-bold);
   color: var(--color-text-primary);
+  line-height: 1.15;
 }
 
-.card-trace {
-  max-width: 220px;
-  text-align: right;
-  font-size: var(--text-2xs);
-  color: var(--color-text-tertiary);
-  line-height: var(--leading-snug);
-}
-.card-hint {
-  font-size: var(--text-xs);
-  color: var(--color-text-secondary);
-  line-height: 1.4;
+.card-trace { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+
+.card-meta-line {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
 /* ── Type badges ────────────────────────────────────────────────────────── */

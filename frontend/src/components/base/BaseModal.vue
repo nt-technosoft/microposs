@@ -2,6 +2,8 @@
 import { watch, onBeforeUnmount, ref, nextTick } from 'vue'
 import { X } from 'lucide-vue-next'
 
+let activeBodyLocks = 0
+
 interface Props {
   open: boolean
   title: string
@@ -19,6 +21,7 @@ const emit = defineEmits<{
 const modalRef = ref<HTMLElement | null>(null)
 const firstFocusable = ref<HTMLElement | null>(null)
 const lastFocusable = ref<HTMLElement | null>(null)
+let bodyLockedByThisModal = false
 
 const focusableSelectors = [
   'a[href]',
@@ -65,19 +68,35 @@ async function setupFocusTrap() {
   firstFocusable.value?.focus()
 }
 
+function lockBodyScroll(): void {
+  if (bodyLockedByThisModal) return
+  activeBodyLocks += 1
+  bodyLockedByThisModal = true
+  document.body.style.overflow = 'hidden'
+}
+
+function unlockBodyScroll(): void {
+  if (!bodyLockedByThisModal) return
+  activeBodyLocks = Math.max(0, activeBodyLocks - 1)
+  bodyLockedByThisModal = false
+  if (activeBodyLocks === 0) {
+    document.body.style.overflow = ''
+  }
+}
+
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
-    document.body.style.overflow = 'hidden'
+    lockBodyScroll()
     document.addEventListener('keydown', onKeyDown)
-    setupFocusTrap()
+    void setupFocusTrap()
   } else {
-    document.body.style.overflow = ''
+    unlockBodyScroll()
     document.removeEventListener('keydown', onKeyDown)
   }
-})
+}, { immediate: true })
 
 onBeforeUnmount(() => {
-  document.body.style.overflow = ''
+  unlockBodyScroll()
   document.removeEventListener('keydown', onKeyDown)
 })
 </script>

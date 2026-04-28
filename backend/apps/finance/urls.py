@@ -19,6 +19,7 @@ from .views import (
     ProductProfitabilityView,
     ProcurementProfitabilityView,
     ProcurementProfitabilityDetailView,
+    AgreementProfitabilityDetailView,
 )
 
 router = DefaultRouter()
@@ -39,5 +40,6 @@ urlpatterns = [
     path('product-profitability/', ProductProfitabilityView.as_view()),
     path('procurement-profitability/', ProcurementProfitabilityView.as_view()),
     path('procurement-profitability/<int:procurement_id>/', ProcurementProfitabilityDetailView.as_view()),
+    path('agreement-profitability/<int:agreement_id>/', AgreementProfitabilityDetailView.as_view()),
     path('', include(router.urls)),
 ]

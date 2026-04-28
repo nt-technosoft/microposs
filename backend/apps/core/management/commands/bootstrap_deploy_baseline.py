@@ -197,7 +197,7 @@ class Command(BaseCommand):
 
         storage, _ = Warehouse.objects.update_or_create(
             tenant=business,
-            name='ASOSIY',
+            name='Основной склад',
             defaults={
                 'kind': Warehouse.WarehouseKind.STORAGE,
                 'is_active': True,
@@ -205,7 +205,7 @@ class Command(BaseCommand):
         )
         store, _ = Warehouse.objects.update_or_create(
             tenant=business,
-            name='DOKON',
+            name='Основной магазин',
             defaults={
                 'kind': Warehouse.WarehouseKind.SHOP,
                 'is_active': True,
@@ -418,13 +418,13 @@ class Command(BaseCommand):
                     'quantity': Decimal('50'),
                     'unit_purchase_price': Decimal('10'),
                     'currency': 'USD',
-                    'fx_rate': Decimal('12000'),
+                    'fx_rate': Decimal('12100'),
                 }],
                 expenses=[{
                     'expense_type': 'CUSTOMS',
                     'amount': Decimal('50'),
                     'currency': 'USD',
-                    'fx_rate': Decimal('12000'),
+                    'fx_rate': Decimal('12100'),
                     'notes': 'Baseline customs allocation',
                 }],
             )
@@ -434,7 +434,7 @@ class Command(BaseCommand):
                 partner_id=baseline['investor_partner'].id,
                 amount=Decimal('385'),
                 currency='USD',
-                fx_rate=Decimal('12000'),
+                fx_rate=Decimal('12100'),
                 notes='Baseline investor capital',
             )
             add_contribution(
@@ -443,7 +443,7 @@ class Command(BaseCommand):
                 partner_id=baseline['operator'].id,
                 amount=Decimal('165'),
                 currency='USD',
-                fx_rate=Decimal('12000'),
+                fx_rate=Decimal('12100'),
                 notes='Baseline operator capital',
             )
             pay_procurement_items(

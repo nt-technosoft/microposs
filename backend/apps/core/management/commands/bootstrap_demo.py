@@ -83,9 +83,9 @@ class Command(BaseCommand):
         """
         Musharaka+Mudaraba demo: investor 70% / operator 30% capital,
         mudaraba_ratio = 4/7 → profit 40/60 investor/operator.
-        All amounts in USD (fx_rate=12000 UZS/USD). Plan uses 550 USD total.
+        All amounts in USD (fx_rate=12100 UZS/USD). Plan uses 550 USD total.
         """
-        fx = Decimal('12000')
+        fx = Decimal('12100')
         usd = 'USD'
 
         procurement = open_procurement(
@@ -165,7 +165,7 @@ class Command(BaseCommand):
             destination_warehouse_id=store.id,
         )
 
-        # ─── Sale: 5 units @ 20 USD (cash, UZS at 12000) ──────────────────────
+        # ─── Sale: 5 units @ 20 USD (cash, UZS at 12100) ──────────────────────
         session = open_pos_session(
             tenant_id=business.id,
             location_id=store.id,
@@ -250,19 +250,19 @@ class Command(BaseCommand):
 
             store, _ = Warehouse.objects.get_or_create(
                 tenant=business,
-                name='Main Store',
+                name='Основной магазин',
                 defaults={
                     'kind': Warehouse.WarehouseKind.SHOP,
-                    'address': 'Demo storefront',
+                    'address': 'Торговая точка',
                     'is_active': True,
                 },
             )
             warehouse, _ = Warehouse.objects.get_or_create(
                 tenant=business,
-                name='Main Warehouse',
+                name='Основной склад',
                 defaults={
                     'kind': Warehouse.WarehouseKind.STORAGE,
-                    'address': 'Demo warehouse',
+                    'address': 'Склад',
                     'is_active': True,
                 },
             )

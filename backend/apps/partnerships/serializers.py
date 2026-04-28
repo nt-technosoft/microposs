@@ -3,7 +3,12 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from .models import (
+    AgreementAllocation,
+    AgreementContribution,
+    AgreementPartner,
+    AgreementWithdrawal,
     BalanceContribution,
+    InvestmentAgreement,
     ProcurementBalanceExchange,
     BalanceWithdrawal,
     ContractPartner,
@@ -13,8 +18,13 @@ from .models import (
     Procurement,
     ProcurementBalance,
     ProcurementExpense,
+    ProcurementExpenseTarget,
     ProcurementItem,
     ProcurementPartnerLedger,
+    ProcurementReceiveBatch,
+    ProcurementReceiveBatchCapitalAllocation,
+    ProcurementReceiveBatchExpense,
+    ProcurementReceiveBatchLine,
 )
 from .services import build_procurement_cost_preview, build_receive_plan
 
@@ -56,14 +66,251 @@ class ProcurementItemSerializer(serializers.ModelSerializer):
 
 
 class ProcurementExpenseSerializer(serializers.ModelSerializer):
+    target_item_ids = serializers.SerializerMethodField()
+
     class Meta:
         model = ProcurementExpense
         fields = [
             'id', 'expense_type', 'amount', 'currency', 'fx_rate',
-            'allocation_method', 'notes', 'status',
+            'allocation_method', 'notes', 'status', 'target_item_ids',
         ]
         read_only_fields = ['id']
 
+    def get_target_item_ids(self, obj):
+        return list(obj.targets.values_list('item_id', flat=True))
+
+
+class ProcurementReceiveBatchLineSerializer(serializers.ModelSerializer):
+    product_variant_name = serializers.CharField(source='item.product_variant.__str__', read_only=True)
+
+    class Meta:
+        model = ProcurementReceiveBatchLine
+        fields = [
+            'id', 'item', 'lot', 'product_variant_name', 'quantity',
+            'unit_purchase_price_uzs', 'allocated_expense_uzs', 'landed_cost_per_unit_uzs',
+        ]
+        read_only_fields = ['id']
+
+
+class ProcurementReceiveBatchExpenseSerializer(serializers.ModelSerializer):
+    expense_type = serializers.CharField(source='expense.expense_type', read_only=True)
+
+    class Meta:
+        model = ProcurementReceiveBatchExpense
+        fields = ['id', 'expense', 'expense_type', 'allocated_amount_uzs']
+        read_only_fields = ['id']
+
+
+class ProcurementReceiveBatchCapitalAllocationSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+
+    class Meta:
+        model = ProcurementReceiveBatchCapitalAllocation
+        fields = [
+            'id', 'partner', 'partner_name', 'role',
+            'amount_contract_currency', 'capital_share', 'profit_share',
+        ]
+        read_only_fields = ['id']
+
+
+class ProcurementReceiveBatchSerializer(serializers.ModelSerializer):
+    warehouse_name = serializers.CharField(source='warehouse.name', read_only=True)
+    lines = ProcurementReceiveBatchLineSerializer(many=True, read_only=True)
+    expenses = ProcurementReceiveBatchExpenseSerializer(many=True, read_only=True)
+    capital_allocations = ProcurementReceiveBatchCapitalAllocationSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ProcurementReceiveBatch
+        fields = [
+            'id', 'warehouse', 'warehouse_name', 'received_at',
+            'items_count', 'total_inventory_uzs', 'lines', 'expenses',
+            'capital_allocations',
+        ]
+        read_only_fields = ['id']
+
+
+class AgreementPartnerSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+
+    class Meta:
+        model = AgreementPartner
+        fields = [
+            'id', 'partner', 'partner_name', 'role',
+            'planned_capital_share', 'profit_share',
+        ]
+        read_only_fields = ['id']
+
+
+class AgreementContributionSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    partner_role = serializers.CharField(source='partner.role', read_only=True)
+
+    class Meta:
+        model = AgreementContribution
+        fields = ['id', 'partner', 'partner_name', 'partner_role', 'amount', 'currency', 'fx_rate', 'date', 'notes']
+        read_only_fields = ['id', 'date']
+
+
+class AgreementWithdrawalSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    partner_role = serializers.CharField(source='partner.role', read_only=True)
+
+    class Meta:
+        model = AgreementWithdrawal
+        fields = ['id', 'partner', 'partner_name', 'partner_role', 'amount', 'currency', 'fx_rate', 'date', 'reason']
+        read_only_fields = ['id', 'date']
+
+
+class AgreementAllocationSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    partner_role = serializers.CharField(source='partner.role', read_only=True)
+
+    class Meta:
+        model = AgreementAllocation
+        fields = [
+            'id', 'procurement', 'partner', 'partner_name', 'partner_role',
+            'direction', 'amount', 'currency', 'fx_rate', 'date', 'notes',
+        ]
+        read_only_fields = ['id', 'date']
+
+
+class InvestmentAgreementListSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    partners_count = serializers.SerializerMethodField()
+    procurements_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvestmentAgreement
+        fields = [
+            'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
+            'planned_budget', 'currency', 'mudaraba_ratio', 'balances',
+            'partners_count', 'procurements_count', 'notes',
+        ]
+        read_only_fields = ['id']
+
+    def get_partners_count(self, obj):
+        return obj.partners.count()
+
+    def get_procurements_count(self, obj):
+        return obj.procurements.count()
+
+
+class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    partners = AgreementPartnerSerializer(many=True, read_only=True)
+    contributions = AgreementContributionSerializer(many=True, read_only=True)
+    withdrawals = AgreementWithdrawalSerializer(many=True, read_only=True)
+    allocations = AgreementAllocationSerializer(many=True, read_only=True)
+    procurements = serializers.SerializerMethodField()
+    participant_totals = serializers.SerializerMethodField()
+    history = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvestmentAgreement
+        fields = [
+            'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
+            'mudaraba_ratio', 'loss_rule', 'planned_budget', 'currency',
+            'balances', 'notes', 'client_request_id', 'partners',
+            'contributions', 'withdrawals', 'allocations', 'procurements',
+            'participant_totals', 'history',
+        ]
+        read_only_fields = ['id']
+
+    def get_procurements(self, obj):
+        return ProcurementListSerializer(obj.procurements.all(), many=True, context=self.context).data
+
+    def get_participant_totals(self, obj):
+        rows = {
+            partner.partner_id: {
+                'partner_id': partner.partner_id,
+                'partner_name': partner.partner.display_name,
+                'role': partner.role,
+                'planned_capital_share': str(_money(partner.planned_capital_share)),
+                'planned_profit_share': str(_ratio(partner.profit_share)),
+                'contributed_amount': Decimal('0.00'),
+                'withdrawn_amount': Decimal('0.00'),
+                'allocated_amount': Decimal('0.00'),
+                'returned_amount': Decimal('0.00'),
+            }
+            for partner in obj.partners.all()
+        }
+        target_currency = str(obj.currency or 'UZS').upper()
+        for contribution in obj.contributions.all():
+            if contribution.partner_id in rows:
+                rows[contribution.partner_id]['contributed_amount'] += _to_contract_currency(
+                    contribution.amount, contribution.currency, contribution.fx_rate, target_currency,
+                )
+        for withdrawal in obj.withdrawals.all():
+            if withdrawal.partner_id in rows:
+                rows[withdrawal.partner_id]['withdrawn_amount'] += _to_contract_currency(
+                    withdrawal.amount, withdrawal.currency, withdrawal.fx_rate, target_currency,
+                )
+        for allocation in obj.allocations.all():
+            if allocation.partner_id not in rows:
+                continue
+            amount = _to_contract_currency(allocation.amount, allocation.currency, allocation.fx_rate, target_currency)
+            if allocation.direction == AgreementAllocation.Direction.TO_PROCUREMENT:
+                rows[allocation.partner_id]['allocated_amount'] += amount
+            else:
+                rows[allocation.partner_id]['returned_amount'] += amount
+        result = []
+        for row in rows.values():
+            row['available_amount'] = (
+                row['contributed_amount']
+                - row['withdrawn_amount']
+                - row['allocated_amount']
+                + row['returned_amount']
+            )
+            for key in ['contributed_amount', 'withdrawn_amount', 'allocated_amount', 'returned_amount', 'available_amount']:
+                row[key] = str(_money(row[key]))
+            result.append(row)
+        return sorted(result, key=lambda item: (item['role'], item['partner_id']))
+
+    def get_history(self, obj):
+        entries = []
+        for contribution in obj.contributions.all():
+            entries.append({
+                'id': f'contribution-{contribution.id}',
+                'kind': 'CONTRIBUTION',
+                'date': contribution.date,
+                'title': 'Пополнение договора',
+                'partner_id': contribution.partner_id,
+                'partner_name': contribution.partner.display_name,
+                'partner_role': contribution.partner.role,
+                'amount': str(_money(contribution.amount)),
+                'currency': str(contribution.currency).upper(),
+                'procurement_id': None,
+                'note': contribution.notes,
+            })
+        for withdrawal in obj.withdrawals.all():
+            entries.append({
+                'id': f'withdrawal-{withdrawal.id}',
+                'kind': 'WITHDRAWAL',
+                'date': withdrawal.date,
+                'title': 'Возврат из договора',
+                'partner_id': withdrawal.partner_id,
+                'partner_name': withdrawal.partner.display_name,
+                'partner_role': withdrawal.partner.role,
+                'amount': str(_money(withdrawal.amount)),
+                'currency': str(withdrawal.currency).upper(),
+                'procurement_id': None,
+                'note': withdrawal.reason,
+            })
+        for allocation in obj.allocations.all():
+            entries.append({
+                'id': f'allocation-{allocation.id}',
+                'kind': allocation.direction,
+                'date': allocation.date,
+                'title': 'В приход' if allocation.direction == AgreementAllocation.Direction.TO_PROCUREMENT else 'Возврат из прихода',
+                'partner_id': allocation.partner_id,
+                'partner_name': allocation.partner.display_name,
+                'partner_role': allocation.partner.role,
+                'amount': str(_money(allocation.amount)),
+                'currency': str(allocation.currency).upper(),
+                'procurement_id': allocation.procurement_id,
+                'note': allocation.notes,
+            })
+        return sorted(entries, key=lambda item: (item['date'], item['id']), reverse=True)
 
 class ContractPartnerSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
@@ -283,6 +530,7 @@ class ProcurementLedgerSerializer(serializers.ModelSerializer):
 
 class ProcurementListSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    agreement_label = serializers.SerializerMethodField()
     items_count = serializers.SerializerMethodField()
     is_receive_ready = serializers.SerializerMethodField()
     total_amount = serializers.SerializerMethodField()
@@ -293,13 +541,19 @@ class ProcurementListSerializer(serializers.ModelSerializer):
         model = Procurement
         fields = [
             'id', 'procurement_type', 'status', 'opened_at', 'received_at',
-            'supplier', 'supplier_name', 'items_count', 'is_receive_ready',
+            'supplier', 'supplier_name', 'agreement', 'agreement_label',
+            'items_count', 'is_receive_ready',
             'total_amount', 'notes', 'receive_status', 'receive_message',
         ]
         read_only_fields = ['id']
 
     def get_items_count(self, obj):
         return obj.items.count()
+
+    def get_agreement_label(self, obj):
+        if not obj.agreement_id:
+            return None
+        return f'Инвестдоговор #{obj.agreement_id}'
 
     def _receive_plan(self, obj):
         cache = self.context.setdefault('_receive_plan_cache', {})
@@ -328,7 +582,7 @@ class ProcurementListSerializer(serializers.ModelSerializer):
         return str((item_total + expense_total).quantize(Decimal('0.01')))
 
     def get_is_receive_ready(self, obj):
-        return self._receive_plan(obj)['status'] in ('READY', 'AUTO_SURPLUS')
+        return self._receive_plan(obj)['status'] in ('READY', 'AUTO_SURPLUS', 'AGREEMENT_SURPLUS')
 
     def get_receive_status(self, obj):
         return self._receive_plan(obj)['status']
@@ -339,10 +593,12 @@ class ProcurementListSerializer(serializers.ModelSerializer):
 
 class ProcurementDetailSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    agreement_label = serializers.SerializerMethodField()
     items = ProcurementItemSerializer(many=True, read_only=True)
     expenses = ProcurementExpenseSerializer(many=True, read_only=True)
     contract = InvestmentContractSerializer(read_only=True)
     balance = ProcurementBalanceSerializer(read_only=True)
+    receive_batches = ProcurementReceiveBatchSerializer(many=True, read_only=True)
     receive_plan = serializers.SerializerMethodField()
     cost_preview = serializers.SerializerMethodField()
 
@@ -350,10 +606,17 @@ class ProcurementDetailSerializer(serializers.ModelSerializer):
         model = Procurement
         fields = [
             'id', 'procurement_type', 'status', 'opened_at', 'received_at', 'closed_at',
-            'supplier', 'supplier_name', 'notes', 'client_request_id',
-            'items', 'expenses', 'contract', 'balance', 'receive_plan', 'cost_preview',
+            'supplier', 'supplier_name', 'agreement', 'agreement_label',
+            'notes', 'client_request_id',
+            'items', 'expenses', 'contract', 'balance',
+            'receive_batches', 'receive_plan', 'cost_preview',
         ]
         read_only_fields = ['id']
+
+    def get_agreement_label(self, obj):
+        if not obj.agreement_id:
+            return None
+        return f'Инвестдоговор #{obj.agreement_id}'
 
     def get_receive_plan(self, obj):
         return build_receive_plan(obj)
@@ -376,15 +639,40 @@ class InvestmentContractInputSerializer(serializers.Serializer):
     partners = ContractPartnerInputSerializer(many=True)
 
 
+class InvestmentAgreementCreateSerializer(serializers.Serializer):
+    client_request_id = serializers.UUIDField(required=False)
+    supplier_id = serializers.IntegerField(required=False, allow_null=True)
+    mudaraba_ratio = serializers.DecimalField(max_digits=7, decimal_places=6)
+    planned_budget = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    partners = ContractPartnerInputSerializer(many=True)
+
+
+class AgreementAllocationRowSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class AgreementAllocationCreateSerializer(serializers.Serializer):
+    procurement_id = serializers.IntegerField()
+    allocations = AgreementAllocationRowSerializer(many=True)
+
+
 class ProcurementItemInputSerializer(serializers.Serializer):
+    id = serializers.IntegerField(required=False)
     product_variant_id = serializers.IntegerField()
     quantity = serializers.DecimalField(max_digits=14, decimal_places=3)
-    unit_purchase_price = serializers.DecimalField(max_digits=14, decimal_places=2)
+    unit_purchase_price = serializers.DecimalField(max_digits=14, decimal_places=6)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
 
 
 class ProcurementExpenseInputSerializer(serializers.Serializer):
+    id = serializers.IntegerField(required=False)
     expense_type = serializers.ChoiceField(choices=ProcurementExpense.ExpenseType.choices)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
@@ -395,12 +683,34 @@ class ProcurementExpenseInputSerializer(serializers.Serializer):
         default=ProcurementExpense.AllocationMethod.BY_VALUE,
     )
     notes = serializers.CharField(required=False, default='', allow_blank=True)
+    target_item_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+
+
+class ProcurementItemSplitSerializer(serializers.Serializer):
+    item_id = serializers.IntegerField()
+    quantity = serializers.DecimalField(max_digits=14, decimal_places=3)
+
+
+class ProcurementExpenseTargetsSerializer(serializers.Serializer):
+    expense_id = serializers.IntegerField()
+    target_item_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
 
 
 class ProcurementCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     procurement_type = serializers.ChoiceField(choices=Procurement.Type.choices)
     supplier_id = serializers.IntegerField(required=False, allow_null=True)
+    agreement_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     contract = InvestmentContractInputSerializer(required=False, allow_null=True)
     items = ProcurementItemInputSerializer(many=True, required=False, default=list)
@@ -459,9 +769,24 @@ class BalanceExchangeCreateSerializer(serializers.Serializer):
 
 class ReceiveProcurementSerializer(serializers.Serializer):
     destination_warehouse_id = serializers.IntegerField()
+    item_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=False,
+    )
+    capital_allocations = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+    )
 
 
 class PayProcurementItemsSerializer(serializers.Serializer):
+    item_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+    )
     reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 

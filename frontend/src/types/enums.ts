@@ -56,6 +56,7 @@ export enum ProcurementType {
 
 export enum ProcurementStatus {
   OPEN = 'OPEN',
+  PARTIALLY_RECEIVED = 'PARTIALLY_RECEIVED',
   RECEIVED = 'RECEIVED',
   CLOSED = 'CLOSED',
   CANCELLED = 'CANCELLED',

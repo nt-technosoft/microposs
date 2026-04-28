@@ -141,13 +141,13 @@ class Command(BaseCommand):
 
         Warehouse.objects.create(
             tenant=business,
-            name='ASOSIY',
+            name='Основной склад',
             kind=Warehouse.WarehouseKind.STORAGE,
             is_active=True,
         )
         Warehouse.objects.create(
             tenant=business,
-            name='DOKON',
+            name='Основной магазин',
             kind=Warehouse.WarehouseKind.SHOP,
             is_active=True,
         )

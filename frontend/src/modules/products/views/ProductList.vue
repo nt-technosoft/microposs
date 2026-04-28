@@ -59,6 +59,18 @@ function getDisplaySku(product: Product): string {
   return `P-${product.id}`
 }
 
+function productTrace(product: Product): string {
+  const parts: string[] = []
+  const categoryName = getCategoryName(product)
+  if (categoryName) parts.push(categoryName)
+  if (product.has_variants) {
+    const count = getVariantCount(product)
+    parts.push(`${count} ${count === 1 ? 'вариант' : count < 5 ? 'варианта' : 'вариантов'}`)
+  }
+  parts.push(`SKU ${getDisplaySku(product)}`)
+  return parts.join(' · ')
+}
+
 function stockBadgeVariant(stock: number): 'error' | 'warning' | null {
   if (stock === 0) return 'error'
   if (stock < 5) return 'warning'
@@ -273,22 +285,10 @@ onMounted(async () => {
         <!-- Info -->
         <div class="product-info">
           <div class="product-name">{{ product.name }}</div>
-          <div class="product-meta">
-            <span v-if="getCategoryName(product)" class="product-category">
-              {{ getCategoryName(product) }}
-            </span>
-            <span v-if="getCategoryName(product) && product.has_variants" class="meta-sep">•</span>
-            <span v-if="product.has_variants" class="product-variants">
-              {{ getVariantCount(product) }}
-              {{ getVariantCount(product) === 1 ? 'вариант' : getVariantCount(product) < 5 ? 'варианта' : 'вариантов' }}
-            </span>
-            <span v-if="!product.has_variants && !getCategoryName(product)" class="product-no-variants">
-              нет вариантов
-            </span>
-          </div>
+          <div class="product-trace">{{ productTrace(product) }}</div>
           <div class="product-bottom">
             <span class="product-price">{{ formatPrice(product.base_price) }}</span>
-            <span class="product-stock">
+            <span v-if="productStock(product) > 0" class="product-stock">
               {{ productStock(product) }} в наличии
             </span>
             <BaseBadge
@@ -299,7 +299,6 @@ onMounted(async () => {
               {{ stockBadgeLabel(productStock(product)) }}
             </BaseBadge>
           </div>
-          <div class="product-sku">SKU: {{ getDisplaySku(product) }}</div>
         </div>
 
         <!-- Chevron -->
@@ -553,16 +552,13 @@ onMounted(async () => {
   line-height: var(--leading-tight);
 }
 
-.product-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
+.product-trace {
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
-}
-
-.meta-sep {
-  color: var(--color-text-tertiary);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .product-bottom {
@@ -571,13 +567,6 @@ onMounted(async () => {
   gap: var(--space-2);
   flex-wrap: wrap;
   margin-top: var(--space-1);
-}
-
-.product-sku {
-  margin-top: 2px;
-  font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-mono);
 }
 
 .product-price {

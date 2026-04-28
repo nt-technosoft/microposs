@@ -73,8 +73,11 @@ const sections: PageMapSection[] = [
     primaryRouteName: 'procurement-list',
     items: [
       { title: 'Список приходов', description: 'Все закупки и их текущий статус.', routeName: 'procurement-list', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: 'Инвестдоговоры', description: 'Общий бюджет, взносы и несколько связанных приходов.', routeName: 'agreement-list', roles: [UserRole.OWNER] },
       { title: 'Создание прихода', description: 'Новый приход, договор и строки закупки.', routeName: 'procurement-create', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: 'Создание инвестдоговора', description: 'Плановый бюджет и участники партнёрской сделки.', routeName: 'agreement-create', roles: [UserRole.OWNER] },
       { title: 'Карточка прихода', description: 'Открывается из списка приходов.', contextual: true, roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: 'Карточка инвестдоговора', description: 'Открывается из списка инвестдоговоров.', contextual: true, roles: [UserRole.OWNER] },
       { title: 'Аудит закупки', description: 'Прибыль, остаток, прогноз и распределение.', contextual: true, roles: [UserRole.OWNER] },
     ],
   },
@@ -87,6 +90,7 @@ const sections: PageMapSection[] = [
       { title: 'Панель отчётов', description: 'Финансы, прибыльность продаж, товаров и закупок.', routeName: 'reports', roles: [UserRole.OWNER] },
       { title: 'Сверка', description: 'Контроль структурных и операционных расхождений.', routeName: 'reports-reconciliation', roles: [UserRole.OWNER] },
       { title: 'Обмен валют', description: 'Кассовые операции и FX-обмен.', routeName: 'finance-exchange', roles: [UserRole.OWNER] },
+      { title: 'Отчёт инвестдоговора', description: 'Агрегация связанных приходов, капитала и прибыли.', contextual: true, roles: [UserRole.OWNER] },
       { title: 'Drill-down отчёты', description: 'Открываются из строк продаж и закупок.', contextual: true, roles: [UserRole.OWNER] },
     ],
   },
@@ -108,6 +112,8 @@ const sections: PageMapSection[] = [
     primaryRouteName: 'investor-dashboard',
     items: [
       { title: 'Сводка инвестора', description: 'Капитал, прибыль, выплаты и остаток в товаре.', routeName: 'investor-dashboard', roles: [UserRole.INVESTOR] },
+      { title: 'Мои инвестдоговоры', description: 'Договоры, остаток в бюджете, товар и прибыль.', routeName: 'investor-agreements', roles: [UserRole.INVESTOR] },
+      { title: 'Инвесторский договор', description: 'Открывается из сводки инвестора.', contextual: true, roles: [UserRole.INVESTOR] },
       { title: 'Инвесторский приход', description: 'Открывается из сводки инвестора.', contextual: true, roles: [UserRole.INVESTOR] },
     ],
   },

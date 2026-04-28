@@ -16,6 +16,10 @@ from apps.core.exceptions import (
     PricingModeViolationError,
 )
 from apps.finance.services import resolve_fx_rate_snapshot
+from apps.partnerships.formulas import (
+    distribute_loss_by_capital_from_snapshot,
+    distribute_profit_from_snapshot,
+)
 
 from .models import (
     Sale, SaleLine, Return, ReturnLine, PosSession,
@@ -524,57 +528,10 @@ def calculate_profit_distribution(
     unit_price = Decimal(str(unit_price))
     unit_landed_cost = Decimal(str(unit_landed_cost))
     gross = (unit_price - unit_landed_cost) * Decimal(quantity)
-    if gross <= 0:
-        return {}
-
-    snapshot = lot.contract_snapshot or {}
-    partners = snapshot.get('partners') or []
-    if not partners:
-        return {}
-
-    mudaraba_ratio = Decimal(str(snapshot.get('mudaraba_ratio', '0')))
-    operator_entry = next(
-        (p for p in partners if p.get('role') == 'OPERATOR'), None,
+    return distribute_profit_from_snapshot(
+        contract_snapshot=lot.contract_snapshot,
+        gross_profit=gross,
     )
-    result: dict[str, str] = {}
-
-    investor_capital_total = sum(
-        (Decimal(str(p.get('capital_share', '0')))
-         for p in partners if p.get('role') == 'INVESTOR'),
-        Decimal('0'),
-    )
-
-    for partner in partners:
-        partner_id = partner.get('partner_id')
-        if partner_id is None:
-            continue
-        capital_share = Decimal(str(partner.get('capital_share', '0')))
-        role = partner.get('role')
-        if role == 'INVESTOR':
-            share = gross * capital_share * mudaraba_ratio
-        elif role == 'OPERATOR':
-            share = (
-                gross * capital_share
-                + gross * (Decimal('1') - mudaraba_ratio) * investor_capital_total
-            )
-        else:
-            share = Decimal('0')
-        share = share.quantize(Decimal('0.01'))
-        if share != 0:
-            result[str(partner_id)] = str(share)
-
-    # Rounding residue → operator (shariah-neutral: operator bears residue).
-    if operator_entry is not None:
-        distributed = sum(
-            (Decimal(v) for v in result.values()), Decimal('0'),
-        )
-        residue = (gross.quantize(Decimal('0.01')) - distributed)
-        if residue != 0:
-            op_id = str(operator_entry['partner_id'])
-            current = Decimal(result.get(op_id, '0'))
-            result[op_id] = str((current + residue).quantize(Decimal('0.01')))
-
-    return result
 
 
 def process_return(
@@ -670,11 +627,6 @@ def process_return(
             # Proportional PROFIT_REVERSED per partner
             distribution = sale_line.profit_distribution_snapshot or {}
             contract_snapshot = lot.contract_snapshot or {}
-            partners_meta = {
-                str(p.get('partner_id')): p
-                for p in contract_snapshot.get('partners', [])
-                if p.get('partner_id') is not None
-            }
             procurement_id = None
             if lot.procurement_item_id:
                 procurement_id = lot.procurement_item.procurement_id
@@ -732,17 +684,17 @@ def process_return(
                 )
                 total_loss += line_loss
 
-                # LOSS_INCURRED per partner by capital_share
-                if procurement_id and partners_meta:
-                    for partner_id_str, meta in partners_meta.items():
+                if procurement_id:
+                    loss_distribution = distribute_loss_by_capital_from_snapshot(
+                        contract_snapshot=contract_snapshot,
+                        loss_amount=line_loss,
+                    )
+                    for partner_id_str, loss_str in loss_distribution.items():
                         try:
                             partner_id = int(partner_id_str)
                         except (TypeError, ValueError):
                             continue
-                        capital_share = Decimal(str(meta.get('capital_share', '0')))
-                        if capital_share <= 0:
-                            continue
-                        loss_share = (line_loss * capital_share).quantize(Decimal('0.01'))
+                        loss_share = Decimal(str(loss_str))
                         if loss_share <= 0:
                             continue
                         ledger = get_or_create_ledger(

@@ -50,6 +50,19 @@ class FxRateApiTests(APITestCase):
         self.assertEqual(latest_response.status_code, status.HTTP_200_OK)
         self.assertEqual(latest_response.data['rate'], '12650.000000')
 
+    def test_latest_usd_uzs_returns_default_when_history_is_empty(self):
+        self._auth_owner()
+        ExchangeRate.objects.filter(tenant=self.tenant, base_currency='USD', quote_currency='UZS').delete()
+
+        response = self.client.get('/api/v1/finance/fx-rates/latest/', {
+            'base_currency': 'USD',
+            'quote_currency': 'UZS',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['rate'], '12100.000000')
+        self.assertEqual(response.data['id'], 0)
+
     def test_expense_uses_stored_rate_when_fx_not_passed(self):
         self._auth_owner()
 

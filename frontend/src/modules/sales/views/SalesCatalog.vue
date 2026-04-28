@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ShoppingCart, Package, Store, Wallet, ReceiptText, Clock3 } from 'lucide-vue-next'
+import { ShoppingCart, Package, Store, Wallet, ReceiptText, Clock3, LayoutGrid, Rows3, ChevronRight, Search, ChevronDown } from 'lucide-vue-next'
 import { fetchProductVariants } from '@/api/catalog'
 import { fetchLocations } from '@/api/inventory'
 import { useProductsStore } from '@/stores/products'
@@ -43,6 +43,13 @@ const closeForm = ref({
 })
 const openFormError = ref('')
 const closeFormError = ref('')
+const searchExpanded = ref(false)
+const sessionDetailsExpanded = ref(false)
+const catalogViewMode = ref<'grid' | 'list'>(
+  typeof window !== 'undefined' && window.localStorage.getItem('sales-catalog-view') === 'list'
+    ? 'list'
+    : 'grid',
+)
 
 // Map of product id → boolean flash for "added" overlay
 const flashMap = ref<Record<number, boolean>>({})
@@ -115,6 +122,92 @@ function onSearch(query: string) {
 function onCategorySelect(categoryId: number | null) {
   productsStore.setCategory(categoryId)
 }
+
+function toggleSearch(): void {
+  if (searchExpanded.value && !searchQuery.value.trim()) {
+    searchExpanded.value = false
+    return
+  }
+  searchExpanded.value = !searchExpanded.value
+}
+
+function setCatalogViewMode(mode: 'grid' | 'list') {
+  catalogViewMode.value = mode
+}
+
+function toggleCatalogViewMode() {
+  setCatalogViewMode(catalogViewMode.value === 'grid' ? 'list' : 'grid')
+}
+
+function getCategoryName(product: Product): string | null {
+  if (product.category && typeof product.category === 'object' && 'name' in product.category) {
+    return product.category.name
+  }
+  return product.category_name ?? null
+}
+
+function getDisplaySku(product: Product): string {
+  if (product.display_sku && product.display_sku.trim()) return product.display_sku
+  if (Array.isArray(product.variants) && product.variants.length > 0) {
+    const sku = product.variants[0].display_sku || product.variants[0].sku
+    if (sku && sku.trim()) return sku
+  }
+  return `P-${product.id}`
+}
+
+function productStock(product: Product): number {
+  if (Number.isFinite(product.total_stock)) return Number(product.total_stock)
+  if (Array.isArray(product.variants) && product.variants.length > 0) {
+    return product.variants.reduce((sum, variant) => sum + (variant.stock_quantity ?? 0), 0)
+  }
+  return 0
+}
+
+function productPrice(product: Product): string {
+  if (product.base_price) return product.base_price
+  if (Array.isArray(product.variants) && product.variants.length > 0) {
+    return product.variants[0].effective_price
+  }
+  return '0'
+}
+
+function productTrace(product: Product): string {
+  const parts: string[] = []
+  const categoryName = getCategoryName(product)
+  if (categoryName) parts.push(categoryName)
+  parts.push(`SKU ${getDisplaySku(product)}`)
+  return parts.join(' · ')
+}
+
+function stockLabel(product: Product): string {
+  const stock = productStock(product)
+  return stock > 0 ? `${stock} в наличии` : 'Нет в наличии'
+}
+
+const viewModeButtonLabel = computed(() =>
+  catalogViewMode.value === 'grid' ? 'Переключить на список' : 'Переключить на сетку',
+)
+
+const viewModeButtonIcon = computed(() =>
+  catalogViewMode.value === 'grid' ? Rows3 : LayoutGrid,
+)
+
+const searchVisible = computed(() => searchExpanded.value || searchQuery.value.trim().length > 0)
+
+const sessionCompactNote = computed(() => {
+  if (activeSession.value) {
+    const parts = [
+      sessionStore.location?.name || 'Точка продаж',
+      openedAtLabel.value,
+    ].filter(Boolean)
+    return parts.join(' · ')
+  }
+  return 'Открой смену, чтобы начать продажи.'
+})
+
+const sessionToggleLabel = computed(() =>
+  sessionDetailsExpanded.value ? 'Скрыть детали смены' : 'Показать детали смены',
+)
 
 function triggerFlash(productId: number) {
   if (flashTimers[productId] !== undefined) {
@@ -305,6 +398,17 @@ watch(
   { immediate: true },
 )
 
+watch(catalogViewMode, (value) => {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem('sales-catalog-view', value)
+})
+
+watch(searchQuery, (value) => {
+  if (value.trim()) {
+    searchExpanded.value = true
+  }
+})
+
 function setupInfiniteScroll() {
   if (!sentinelRef.value) return
 
@@ -360,20 +464,47 @@ onBeforeUnmount(() => {
 
     <!-- ===== Sticky search + category chips ===== -->
     <div class="sticky-filters">
-      <div class="search-row">
-        <BaseSearch
-          v-model="searchQuery"
-          placeholder="Поиск товаров..."
-          :debounce="300"
-          @search="onSearch"
-        />
+      <div class="toolbar-row">
+        <div class="toolbar-chips">
+          <CategoryChips
+            :categories="productsStore.categories"
+            :selected="productsStore.selectedCategory"
+            @select="onCategorySelect"
+          />
+        </div>
+
+        <div class="toolbar-actions">
+          <button
+            class="toolbar-icon-btn"
+            :class="{ 'toolbar-icon-btn--active': searchVisible }"
+            type="button"
+            aria-label="Поиск товаров"
+            @click="toggleSearch"
+          >
+            <Search :size="16" :stroke-width="2" />
+          </button>
+          <button
+            class="toolbar-icon-btn"
+            :class="{ 'toolbar-icon-btn--active': catalogViewMode === 'list' }"
+            type="button"
+            :aria-label="viewModeButtonLabel"
+            @click="toggleCatalogViewMode"
+          >
+            <component :is="viewModeButtonIcon" :size="16" :stroke-width="2" />
+          </button>
+        </div>
       </div>
 
-      <CategoryChips
-        :categories="productsStore.categories"
-        :selected="productsStore.selectedCategory"
-        @select="onCategorySelect"
-      />
+      <Transition name="toolbar-reveal">
+        <div v-if="searchVisible" class="search-panel">
+          <BaseSearch
+            v-model="searchQuery"
+            placeholder="Поиск товаров..."
+            :debounce="300"
+            @search="onSearch"
+          />
+        </div>
+      </Transition>
     </div>
 
     <!-- ===== Main content ===== -->
@@ -381,73 +512,97 @@ onBeforeUnmount(() => {
       <section class="session-card" aria-labelledby="session-heading">
         <div class="session-card__header">
           <div class="session-card__title-wrap">
-            <p class="session-card__eyebrow">Смена</p>
             <h2 id="session-heading" class="session-card__title">
               {{ activeSession ? 'Смена открыта' : 'Смена не открыта' }}
             </h2>
+            <p class="session-card__compact-note">{{ sessionCompactNote }}</p>
           </div>
-          <span class="session-badge" :class="{ 'session-badge--open': !!activeSession }">
-            {{ activeSession ? 'Открыта' : 'Закрыта' }}
-          </span>
+          <div class="session-card__header-actions">
+            <span class="session-badge" :class="{ 'session-badge--open': !!activeSession }">
+              {{ activeSession ? 'Открыта' : 'Закрыта' }}
+            </span>
+            <button
+              class="session-toggle-btn"
+              type="button"
+              :aria-expanded="sessionDetailsExpanded"
+              :aria-label="sessionToggleLabel"
+              @click="sessionDetailsExpanded = !sessionDetailsExpanded"
+            >
+              <ChevronDown :size="16" :stroke-width="2" :class="{ 'session-toggle-btn__icon--open': sessionDetailsExpanded }" />
+            </button>
+          </div>
         </div>
 
         <template v-if="activeSession">
-          <div class="session-meta">
-            <span class="session-meta__item">
-              <Store :size="16" :stroke-width="1.8" />
-              {{ sessionStore.location?.name || 'Точка продаж' }}
-            </span>
-            <span class="session-meta__item">
-              <Clock3 :size="16" :stroke-width="1.8" />
-              {{ openedAtLabel }}
-            </span>
+          <div class="session-action-row">
+            <BaseButton
+              variant="secondary"
+              size="md"
+              :full-width="true"
+              @click="openCloseSessionSheet"
+            >
+              Закрыть смену
+            </BaseButton>
           </div>
 
-          <div class="session-stats">
-            <div class="session-stat">
-              <span class="session-stat__label">Старт</span>
-              <span class="session-stat__value">{{ formatSessionAmount(activeSession.opening_cash) }}</span>
-            </div>
-            <div class="session-stat">
-              <span class="session-stat__label">Наличные продажи</span>
-              <span class="session-stat__value">{{ formatSessionAmount(cashSalesTotal) }}</span>
-            </div>
-            <div class="session-stat">
-              <span class="session-stat__label">Ожидается в кассе</span>
-              <span class="session-stat__value">{{ formatSessionAmount(expectedCashPreview) }}</span>
-            </div>
-            <div class="session-stat">
-              <span class="session-stat__label">Продаж</span>
-              <span class="session-stat__value">{{ activeSession.sales_count ?? 0 }}</span>
-            </div>
-          </div>
+          <Transition name="session-collapse">
+            <div v-if="sessionDetailsExpanded" class="session-details">
+              <div class="session-meta">
+                <span class="session-meta__item">
+                  <Store :size="16" :stroke-width="1.8" />
+                  {{ sessionStore.location?.name || 'Точка продаж' }}
+                </span>
+                <span class="session-meta__item">
+                  <Clock3 :size="16" :stroke-width="1.8" />
+                  {{ openedAtLabel }}
+                </span>
+              </div>
 
-          <BaseButton
-            variant="secondary"
-            size="md"
-            :full-width="true"
-            @click="openCloseSessionSheet"
-          >
-            Закрыть смену
-          </BaseButton>
+              <div class="session-stats">
+                <div class="session-stat">
+                  <span class="session-stat__label">Старт</span>
+                  <span class="session-stat__value">{{ formatSessionAmount(activeSession.opening_cash) }}</span>
+                </div>
+                <div class="session-stat">
+                  <span class="session-stat__label">Наличные продажи</span>
+                  <span class="session-stat__value">{{ formatSessionAmount(cashSalesTotal) }}</span>
+                </div>
+                <div class="session-stat">
+                  <span class="session-stat__label">Ожидается в кассе</span>
+                  <span class="session-stat__value">{{ formatSessionAmount(expectedCashPreview) }}</span>
+                </div>
+                <div class="session-stat">
+                  <span class="session-stat__label">Продаж</span>
+                  <span class="session-stat__value">{{ activeSession.sales_count ?? 0 }}</span>
+                </div>
+              </div>
+            </div>
+          </Transition>
         </template>
 
         <template v-else>
-          <p class="session-card__description">
-            Открой кассовую смену, чтобы оформлять продажи и видеть сверку по кассе.
-          </p>
-          <p v-if="!isLoadingLocations && shopLocations.length === 0" class="session-card__hint">
-            Нет активной точки продаж. Сначала создай или включи магазин в локациях.
-          </p>
-          <BaseButton
-            variant="primary"
-            size="md"
-            :full-width="true"
-            :disabled="isLoadingLocations || shopLocations.length === 0"
-            @click="openSessionSheet"
-          >
-            Открыть смену
-          </BaseButton>
+          <div class="session-action-row">
+            <BaseButton
+              variant="primary"
+              size="md"
+              :full-width="true"
+              :disabled="isLoadingLocations || shopLocations.length === 0"
+              @click="openSessionSheet"
+            >
+              Открыть смену
+            </BaseButton>
+          </div>
+
+          <Transition name="session-collapse">
+            <div v-if="sessionDetailsExpanded" class="session-details">
+              <p class="session-card__description">
+                Открой кассовую смену, чтобы оформлять продажи и видеть сверку по кассе.
+              </p>
+              <p v-if="!isLoadingLocations && shopLocations.length === 0" class="session-card__hint">
+                Нет активной точки продаж. Сначала создай или включи магазин в локациях.
+              </p>
+            </div>
+          </Transition>
         </template>
       </section>
 
@@ -478,7 +633,12 @@ onBeforeUnmount(() => {
 
       <!-- Product grid -->
       <template v-else>
-        <div class="product-grid" role="list" aria-label="Список товаров">
+        <div
+          v-if="catalogViewMode === 'grid'"
+          class="product-grid"
+          role="list"
+          aria-label="Список товаров"
+        >
           <div
             v-for="product in productsStore.filteredProducts"
             :key="product.id"
@@ -518,10 +678,74 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div
+          v-else
+          class="product-compact-list"
+          role="list"
+          aria-label="Компактный список товаров"
+        >
+          <article
+            v-for="product in productsStore.filteredProducts"
+            :key="product.id"
+            class="compact-product-row"
+            role="button"
+            tabindex="0"
+            @click="onViewDetail(product)"
+            @keydown.enter="onViewDetail(product)"
+            @keydown.space.prevent="onViewDetail(product)"
+          >
+            <div class="compact-product-media">
+              <img
+                v-if="product.photo_url"
+                :src="product.photo_url"
+                :alt="product.name"
+                loading="lazy"
+              >
+              <div v-else class="compact-product-placeholder">
+                <Package :size="20" :stroke-width="1.5" />
+              </div>
+            </div>
+
+            <div class="compact-product-main">
+              <div class="compact-product-topline">
+                <strong class="compact-product-name">{{ product.name }}</strong>
+                <span
+                  class="compact-stock-badge"
+                  :class="{ 'compact-stock-badge--empty': productStock(product) <= 0 }"
+                >
+                  {{ stockLabel(product) }}
+                </span>
+              </div>
+              <span class="compact-product-trace">{{ productTrace(product) }}</span>
+              <div class="compact-product-bottomline">
+                <strong class="compact-product-price">{{ formatPrice(productPrice(product), 'UZS') }}</strong>
+                <span v-if="inCartQuantity(product) > 0" class="compact-cart-badge">
+                  В корзине {{ inCartQuantity(product) }}
+                </span>
+              </div>
+            </div>
+
+            <button
+              class="compact-product-action"
+              :class="{ 'compact-product-action--select': product.has_variants }"
+              :aria-label="product.has_variants ? `Выбрать ${product.name}` : `Добавить ${product.name}`"
+              @click.stop="product.has_variants ? onViewDetail(product) : onAddToCart(product)"
+            >
+              <template v-if="product.has_variants">
+                <ChevronRight :size="16" :stroke-width="2" />
+              </template>
+              <template v-else>
+                <ShoppingCart :size="16" :stroke-width="1.8" />
+                <span>+</span>
+              </template>
+            </button>
+          </article>
+        </div>
+
         <!-- Skeleton rows while loading more (infinite scroll) -->
         <div
           v-if="productsStore.isLoading"
-          class="product-grid load-more-grid"
+          :class="catalogViewMode === 'grid' ? 'product-grid load-more-grid' : 'product-compact-list load-more-grid'"
           aria-label="Загрузка ещё товаров"
           aria-busy="true"
         >
@@ -697,25 +921,107 @@ onBeforeUnmount(() => {
   position: sticky;
   top: var(--header-height);
   z-index: calc(var(--z-sticky) - 1);
+  display: grid;
+  gap: var(--space-2);
   background: var(--color-bg-elevated);
   border-bottom: 1px solid var(--color-border-subtle);
-  padding-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-4) var(--space-3);
 }
 
-.search-row {
-  padding: var(--space-3) var(--space-4) var(--space-2);
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.toolbar-chips {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.toolbar-chips :deep(.chips-scroll-area) {
+  width: 100%;
+}
+
+.toolbar-chips :deep(.chips-track) {
+  min-width: max-content;
+  width: max-content;
+  gap: var(--space-2);
+  padding: 0;
+}
+
+.toolbar-chips :deep(.chip) {
+  height: 34px;
+  padding: 0 var(--space-3);
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.toolbar-icon-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.toolbar-icon-btn:hover {
+  border-color: var(--color-border-default);
+  color: var(--color-text-primary);
+}
+
+.toolbar-icon-btn:active {
+  transform: scale(0.96);
+}
+
+.toolbar-icon-btn--active {
+  border-color: var(--color-brand-200);
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+}
+
+.search-panel {
+  overflow: hidden;
+}
+
+.toolbar-reveal-enter-active,
+.toolbar-reveal-leave-active {
+  transition: max-height var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.toolbar-reveal-enter-from,
+.toolbar-reveal-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 /* ===== Main content ===== */
 .catalog-content {
   flex: 1;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .session-card {
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-4);
+  padding: var(--space-3);
   margin-bottom: var(--space-4);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
@@ -725,28 +1031,28 @@ onBeforeUnmount(() => {
 
 .session-card__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
 .session-card__title-wrap {
   display: grid;
-  gap: 2px;
-}
-
-.session-card__eyebrow {
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
+  gap: 4px;
+  min-width: 0;
 }
 
 .session-card__title {
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
-  line-height: 1.2;
+  line-height: 1.25;
+}
+
+.session-card__compact-note {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.35;
 }
 
 .session-card__description {
@@ -780,6 +1086,51 @@ onBeforeUnmount(() => {
   color: var(--color-brand-600);
 }
 
+.session-card__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.session-toggle-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  transition: border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.session-toggle-btn:hover {
+  border-color: var(--color-border-default);
+  color: var(--color-text-primary);
+}
+
+.session-toggle-btn:active {
+  transform: scale(0.96);
+}
+
+.session-toggle-btn__icon--open {
+  transform: rotate(180deg);
+}
+
+.session-action-row {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.session-details {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}
+
 .session-meta {
   display: flex;
   flex-wrap: wrap;
@@ -797,13 +1148,13 @@ onBeforeUnmount(() => {
 .session-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .session-stat {
   display: grid;
   gap: 4px;
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--color-bg-secondary);
 }
@@ -818,6 +1169,19 @@ onBeforeUnmount(() => {
   font-weight: var(--font-semibold);
   color: var(--color-text-primary);
   line-height: 1.25;
+}
+
+.session-collapse-enter-active,
+.session-collapse-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    max-height var(--duration-fast) var(--ease-out);
+}
+
+.session-collapse-enter-from,
+.session-collapse-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 /* ===== Product grid — 2 col mobile → 3 tablet → 4 desktop ===== */
@@ -847,6 +1211,131 @@ onBeforeUnmount(() => {
 /* ===== Product cell (positions the overlay) ===== */
 .product-cell {
   position: relative;
+}
+
+.product-compact-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.compact-product-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.compact-product-media {
+  width: 52px;
+  height: 52px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  flex-shrink: 0;
+}
+
+.compact-product-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.compact-product-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+}
+
+.compact-product-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.compact-product-topline,
+.compact-product-bottomline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.compact-product-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.compact-product-trace {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.compact-product-price {
+  color: var(--color-brand-600);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.compact-stock-badge,
+.compact-cart-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+}
+
+.compact-stock-badge--empty {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.compact-cart-badge {
+  color: var(--color-brand-700);
+  background: var(--color-brand-50);
+}
+
+.compact-product-action {
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-500);
+  color: var(--color-text-inverse);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.compact-product-action--select {
+  background: var(--color-bg-primary);
+  color: var(--color-brand-700);
+  border: 1px solid var(--color-border-subtle);
 }
 
 /* ===== "Added to cart" flash overlay ===== */

@@ -11,6 +11,7 @@ from apps.finance.services import create_cash_entry, create_journal_entry, recor
 
 from apps.core.services import publish_event
 from apps.core.exceptions import ImmutableRecordError
+from apps.partnerships.formulas import profit_shares_from_capital
 
 
 _PARTNERSHIP_TYPES = ('PARTNERSHIP', 'MUSHARAKA')
@@ -119,6 +120,38 @@ def _entry_amount_in_currency(
     )
 
 
+def _amount_to_currency(
+    *,
+    tenant_id: int,
+    amount: Decimal,
+    currency: str,
+    fx_rate: Decimal,
+    target_currency: str,
+    rate_date,
+) -> Decimal:
+    source = str(currency or 'UZS').upper()
+    target = str(target_currency or 'UZS').upper()
+    amount = Decimal(str(amount))
+    fx_rate = Decimal(str(fx_rate or Decimal('1')))
+
+    if source == target:
+        return _q(amount)
+
+    functional_uzs = _functional_uzs(amount, source, fx_rate)
+    if target == 'UZS':
+        return _q(functional_uzs)
+
+    if source == 'UZS' and fx_rate > 1:
+        return _q(amount / fx_rate)
+
+    return _functional_uzs_to_currency(
+        tenant_id=tenant_id,
+        functional_amount_uzs=functional_uzs,
+        target_currency=target,
+        rate_date=rate_date,
+    )
+
+
 def _allocate_amount(amount: Decimal, bases: list[Decimal]) -> list[Decimal]:
     amount = _q(amount)
     if not bases:
@@ -151,11 +184,138 @@ def _required_spend_by_currency(items: list, expenses: list) -> dict[str, Decima
     return required
 
 
+def _partner_amounts_by_currency(entries) -> dict[int, dict[str, Decimal]]:
+    result: dict[int, dict[str, Decimal]] = {}
+    for entry in entries:
+        partner_id = int(entry.partner_id)
+        currency = str(entry.currency or 'UZS').upper()
+        bucket = result.setdefault(partner_id, {})
+        bucket[currency] = _q(bucket.get(currency, _ZERO) + Decimal(str(entry.amount)))
+    return result
+
+
+def _agreement_partner_available(agreement) -> dict[int, dict[str, Decimal]]:
+    """Native per-currency available balance by partner inside a parent agreement."""
+    from .models import AgreementAllocation
+
+    available: dict[int, dict[str, Decimal]] = {}
+    for source in (agreement.contributions.all(),):
+        for partner_id, amounts in _partner_amounts_by_currency(source).items():
+            bucket = available.setdefault(partner_id, {})
+            for currency, amount in amounts.items():
+                bucket[currency] = _q(bucket.get(currency, _ZERO) + amount)
+
+    for source in (agreement.withdrawals.all(),):
+        for partner_id, amounts in _partner_amounts_by_currency(source).items():
+            bucket = available.setdefault(partner_id, {})
+            for currency, amount in amounts.items():
+                bucket[currency] = _q(bucket.get(currency, _ZERO) - amount)
+
+    outgoing = agreement.allocations.filter(direction=AgreementAllocation.Direction.TO_PROCUREMENT)
+    for partner_id, amounts in _partner_amounts_by_currency(outgoing).items():
+        bucket = available.setdefault(partner_id, {})
+        for currency, amount in amounts.items():
+            bucket[currency] = _q(bucket.get(currency, _ZERO) - amount)
+
+    incoming = agreement.allocations.filter(direction=AgreementAllocation.Direction.FROM_PROCUREMENT)
+    for partner_id, amounts in _partner_amounts_by_currency(incoming).items():
+        bucket = available.setdefault(partner_id, {})
+        for currency, amount in amounts.items():
+            bucket[currency] = _q(bucket.get(currency, _ZERO) + amount)
+
+    return available
+
+
+def _agreement_contract_payload(agreement) -> dict:
+    partners = [
+        {
+            'partner_id': member.partner_id,
+            'role': member.role,
+            'planned_capital_share': Decimal(str(member.planned_capital_share)),
+            'profit_share': Decimal(str(member.profit_share)),
+        }
+        for member in agreement.partners.all()
+    ]
+    return {
+        'mudaraba_ratio': Decimal(str(agreement.mudaraba_ratio)),
+        'loss_rule': agreement.loss_rule,
+        'planned_budget': Decimal(str(agreement.planned_budget)),
+        'currency': str(agreement.currency or 'UZS').upper(),
+        'partners': partners,
+    }
+
+
 def _procurement_spend_by_currency(balance) -> dict[str, Decimal]:
     spent: dict[str, Decimal] = {}
     for withdrawal in balance.withdrawals.filter(partner_id__isnull=True):
         _money_by_currency_add(spent, withdrawal.currency, Decimal(str(withdrawal.amount)))
     return spent
+
+
+def _receive_batches_payload(procurement) -> list[dict]:
+    from .models import ProcurementReceiveBatch
+
+    batches = (
+        ProcurementReceiveBatch.objects
+        .filter(procurement=procurement)
+        .select_related('warehouse')
+        .prefetch_related(
+            'lines__item__product_variant',
+            'lines__lot',
+            'expenses__expense',
+            'capital_allocations__partner',
+        )
+        .order_by('-received_at', '-id')
+    )
+    payload = []
+    for batch in batches:
+        lines = [
+            {
+                'id': line.id,
+                'item_id': line.item_id,
+                'lot_id': line.lot_id,
+                'product_variant_id': line.item.product_variant_id,
+                'product_variant_name': str(line.item.product_variant),
+                'quantity': str(line.quantity),
+                'unit_purchase_price_uzs': str(_q(line.unit_purchase_price_uzs)),
+                'allocated_expense_uzs': str(_q(line.allocated_expense_uzs)),
+                'landed_cost_per_unit_uzs': str(_q(line.landed_cost_per_unit_uzs)),
+            }
+            for line in batch.lines.all()
+        ]
+        expenses = [
+            {
+                'id': row.id,
+                'expense_id': row.expense_id,
+                'expense_type': row.expense.expense_type,
+                'allocated_amount_uzs': str(_q(row.allocated_amount_uzs)),
+            }
+            for row in batch.expenses.all()
+        ]
+        capital_allocations = [
+            {
+                'id': row.id,
+                'partner': row.partner_id,
+                'partner_name': row.partner.display_name,
+                'role': row.role,
+                'amount_contract_currency': str(_q(row.amount_contract_currency)),
+                'capital_share': str(_q_ratio(row.capital_share)),
+                'profit_share': str(_q_ratio(row.profit_share)),
+            }
+            for row in batch.capital_allocations.all()
+        ]
+        payload.append({
+            'id': batch.id,
+            'warehouse_id': batch.warehouse_id,
+            'warehouse_name': batch.warehouse.name,
+            'received_at': batch.received_at,
+            'items_count': batch.items_count,
+            'total_inventory_uzs': str(_q(batch.total_inventory_uzs)),
+            'lines': lines,
+            'expenses': expenses,
+            'capital_allocations': capital_allocations,
+        })
+    return payload
 
 
 def _landed_expense_allocations(items: list, expenses: list) -> list[Decimal]:
@@ -165,25 +325,42 @@ def _landed_expense_allocations(items: list, expenses: list) -> list[Decimal]:
 
     item_values = [_item_value_uzs(item) for item in items]
     item_quantities = [Decimal(str(item.quantity)) for item in items]
+    item_indexes = {item.id: index for index, item in enumerate(items)}
 
     for expense in expenses:
+        target_ids = {
+            target.item_id
+            for target in getattr(expense, 'targets', []).all()
+        }
+        if target_ids:
+            target_indexes = [
+                item_indexes[item_id]
+                for item_id in target_ids
+                if item_id in item_indexes
+            ]
+            if not target_indexes:
+                continue
+        else:
+            target_indexes = list(range(len(items)))
+
         amount_uzs = _expense_value_uzs(expense)
         method = str(expense.allocation_method)
         if method == 'BY_VALUE':
-            bases = item_values
+            bases = [item_values[index] for index in target_indexes]
         else:
             # BY_WEIGHT falls back to quantity until item weights exist.
-            bases = item_quantities
+            bases = [item_quantities[index] for index in target_indexes]
 
-        for index, allocation in enumerate(_allocate_amount(amount_uzs, bases)):
-            allocations[index] = _q(allocations[index] + allocation)
+        for local_index, allocation in enumerate(_allocate_amount(amount_uzs, bases)):
+            item_index = target_indexes[local_index]
+            allocations[item_index] = _q(allocations[item_index] + allocation)
     return allocations
 
 
 def _landed_cost_preview_block(items: list, expenses: list) -> dict:
     allocations = _landed_expense_allocations(items, expenses)
     lines: list[dict] = []
-    total_expenses_uzs = sum((_expense_value_uzs(expense) for expense in expenses), _ZERO)
+    total_expenses_uzs = sum(allocations, _ZERO)
     for item, allocated_expense_uzs in zip(items, allocations):
         qty = Decimal(str(item.quantity))
         if qty <= 0:
@@ -212,17 +389,307 @@ def _landed_cost_preview_block(items: list, expenses: list) -> dict:
     }
 
 
+def _batch_value_in_contract_currency(
+    *,
+    tenant_id: int,
+    items: list,
+    expenses: list,
+    contract_currency: str,
+    rate_date,
+) -> Decimal:
+    total = _ZERO
+    target = str(contract_currency or 'UZS').upper()
+    for item in items:
+        total += _amount_to_currency(
+            tenant_id=tenant_id,
+            amount=_item_native_total(item),
+            currency=item.currency,
+            fx_rate=item.fx_rate,
+            target_currency=target,
+            rate_date=rate_date,
+        )
+    for expense in expenses:
+        total += _amount_to_currency(
+            tenant_id=tenant_id,
+            amount=Decimal(str(expense.amount)),
+            currency=expense.currency,
+            fx_rate=expense.fx_rate,
+            target_currency=target,
+            rate_date=rate_date,
+        )
+    return _q(total)
+
+
+def _allocated_batch_capital_by_partner(procurement, contract_currency: str) -> dict[int, Decimal]:
+    from .models import ProcurementReceiveBatchCapitalAllocation
+
+    allocated: dict[int, Decimal] = {}
+    rows = ProcurementReceiveBatchCapitalAllocation.objects.filter(
+        tenant_id=procurement.tenant_id,
+        batch__procurement=procurement,
+    ).values('partner_id').annotate(total=models.Sum('amount_contract_currency'))
+    for row in rows:
+        allocated[int(row['partner_id'])] = _q(Decimal(str(row['total'] or '0')))
+    return allocated
+
+
+def _batch_capital_preview(
+    *,
+    procurement,
+    items: list,
+    expenses: list,
+    rate_date,
+) -> dict | None:
+    if procurement.procurement_type not in _PARTNERSHIP_TYPES:
+        return None
+
+    from .models import ContractPartner, InvestmentContract, PartnerLedgerEntry, ProcurementPartnerLedger
+
+    try:
+        contract = procurement.contract
+    except InvestmentContract.DoesNotExist:
+        return None
+
+    contract_currency = str(contract.currency or 'UZS').upper()
+    required = _batch_value_in_contract_currency(
+        tenant_id=procurement.tenant_id,
+        items=items,
+        expenses=expenses,
+        contract_currency=contract_currency,
+        rate_date=rate_date,
+    )
+    partners = list(
+        ContractPartner.objects
+        .filter(contract=contract)
+        .select_related('partner')
+        .order_by('id')
+    )
+    ledgers = (
+        ProcurementPartnerLedger.objects
+        .filter(procurement=procurement, tenant_id=procurement.tenant_id)
+        .prefetch_related('entries')
+    )
+    actual_capital = _capital_by_partner(
+        ledgers,
+        PartnerLedgerEntry,
+        tenant_id=procurement.tenant_id,
+        target_currency=contract_currency,
+    )
+    already_allocated = _allocated_batch_capital_by_partner(procurement, contract_currency)
+    available = {
+        partner.partner_id: _q(actual_capital.get(partner.partner_id, _ZERO) - already_allocated.get(partner.partner_id, _ZERO))
+        for partner in partners
+    }
+
+    if required <= 0:
+        return {
+            'currency': contract_currency,
+            'required_amount': '0.00',
+            'status': 'NO_CAPITAL_REQUIRED',
+            'message': 'Стоимость партии не рассчитана.',
+            'partners': [],
+        }
+
+    planned_total = sum((Decimal(str(partner.planned_capital_share)) for partner in partners), _ZERO)
+    suggested: dict[int, Decimal] = {}
+    remaining = required
+    for partner in partners:
+        planned_share = (
+            Decimal(str(partner.planned_capital_share)) / planned_total
+            if planned_total > 0 else Decimal('0')
+        )
+        amount = _q(min(required * planned_share, max(available.get(partner.partner_id, _ZERO), _ZERO)))
+        suggested[partner.partner_id] = amount
+        remaining = _q(remaining - amount)
+
+    if remaining > 0:
+        for partner in partners:
+            headroom = _q(max(available.get(partner.partner_id, _ZERO), _ZERO) - suggested.get(partner.partner_id, _ZERO))
+            if headroom <= 0:
+                continue
+            top_up = min(headroom, remaining)
+            suggested[partner.partner_id] = _q(suggested.get(partner.partner_id, _ZERO) + top_up)
+            remaining = _q(remaining - top_up)
+            if remaining <= 0:
+                break
+
+    suggested_total = sum(suggested.values(), _ZERO)
+    if abs(suggested_total - required) <= Decimal('0.01') and partners:
+        last_partner = partners[-1]
+        suggested[last_partner.partner_id] = _q(
+            suggested.get(last_partner.partner_id, _ZERO) + (required - suggested_total),
+        )
+        suggested_total = required
+
+    partners_meta = []
+    for partner in partners:
+        amount = _q(suggested.get(partner.partner_id, _ZERO))
+        capital_share = _q_ratio(amount / required) if required > 0 else _ZERO
+        partners_meta.append({
+            'partner_id': partner.partner_id,
+            'partner_name': partner.partner.display_name,
+            'role': partner.role,
+            'amount': amount,
+            'available_amount': available.get(partner.partner_id, _ZERO),
+            'capital_share': capital_share,
+        })
+    profit_shares = _profit_shares_from_capital(partners_meta, contract.mudaraba_ratio)
+
+    rows = []
+    for meta in partners_meta:
+        partner_id = int(meta['partner_id'])
+        rows.append({
+            'partner_id': partner_id,
+            'partner_name': meta['partner_name'],
+            'role': meta['role'],
+            'available_amount': str(_q(meta['available_amount'])),
+            'amount': str(_q(meta['amount'])),
+            'capital_share': str(_q_ratio(meta['capital_share'])),
+            'profit_share': str(profit_shares.get(partner_id, _ZERO)),
+        })
+
+    return {
+        'currency': contract_currency,
+        'required_amount': str(_q(required)),
+        'status': 'READY' if remaining <= Decimal('0.01') else 'CAPITAL_SHORTAGE',
+        'message': (
+            'Распределение партии рассчитано.'
+            if remaining <= Decimal('0.01')
+            else 'Недостаточно доступного капитала для выбранной партии.'
+        ),
+        'partners': rows,
+    }
+
+
+def _resolve_batch_capital_snapshot(
+    *,
+    procurement,
+    items: list,
+    expenses: list,
+    raw_allocations: list[dict] | None,
+    is_partial_receive: bool,
+    received_at,
+) -> tuple[dict, list[dict]]:
+    from .models import ContractPartner, InvestmentContract, PartnerLedgerEntry, ProcurementPartnerLedger
+
+    contract = InvestmentContract.objects.get(procurement=procurement)
+    partners = list(
+        ContractPartner.objects
+        .filter(contract=contract)
+        .select_related('partner')
+        .order_by('id')
+    )
+    contract_currency = str(contract.currency or 'UZS').upper()
+    required = _batch_value_in_contract_currency(
+        tenant_id=procurement.tenant_id,
+        items=items,
+        expenses=expenses,
+        contract_currency=contract_currency,
+        rate_date=received_at.date(),
+    )
+
+    ledgers = (
+        ProcurementPartnerLedger.objects
+        .filter(procurement=procurement, tenant_id=procurement.tenant_id)
+        .prefetch_related('entries')
+    )
+    actual_capital = _capital_by_partner(
+        ledgers,
+        PartnerLedgerEntry,
+        tenant_id=procurement.tenant_id,
+        target_currency=contract_currency,
+    )
+    already_allocated = _allocated_batch_capital_by_partner(procurement, contract_currency)
+    available = {
+        partner.partner_id: _q(actual_capital.get(partner.partner_id, _ZERO) - already_allocated.get(partner.partner_id, _ZERO))
+        for partner in partners
+    }
+    partner_by_id = {partner.partner_id: partner for partner in partners}
+
+    if raw_allocations:
+        amounts: dict[int, Decimal] = {}
+        for item in raw_allocations:
+            partner_id = int(item.get('partner_id') or item.get('partner') or 0)
+            if partner_id not in partner_by_id:
+                raise ValueError('Capital allocation contains an unknown partner.')
+            amount = _q(Decimal(str(item.get('amount', '0'))))
+            if amount < 0:
+                raise ValueError('Capital allocation amount cannot be negative.')
+            amounts[partner_id] = _q(amounts.get(partner_id, _ZERO) + amount)
+    else:
+        if is_partial_receive:
+            raise ValueError('Для частичного оприходования укажите доли капитала партии.')
+        preview = _batch_capital_preview(
+            procurement=procurement,
+            items=items,
+            expenses=expenses,
+            rate_date=received_at.date(),
+        )
+        if not preview or preview.get('status') != 'READY':
+            raise ValueError('Не удалось автоматически рассчитать доли капитала партии.')
+        amounts = {
+            int(row['partner_id']): _q(Decimal(str(row['amount'])))
+            for row in preview.get('partners', [])
+        }
+
+    total = _q(sum(amounts.values(), _ZERO))
+    if abs(total - required) > Decimal('0.01'):
+        raise ValueError(
+            f'Сумма долей партии должна быть {required} {contract_currency}.'
+        )
+    for partner_id, amount in amounts.items():
+        if amount - available.get(partner_id, _ZERO) > Decimal('0.01'):
+            partner = partner_by_id[partner_id]
+            raise ValueError(
+                f'Недостаточно капитала у {partner.partner.display_name}: '
+                f'доступно {available.get(partner_id, _ZERO)} {contract_currency}.'
+            )
+
+    partners_meta = []
+    for partner in partners:
+        amount = _q(amounts.get(partner.partner_id, _ZERO))
+        capital_share = _q_ratio(amount / required) if required > 0 else _ZERO
+        partners_meta.append({
+            'partner_id': partner.partner_id,
+            'role': partner.role,
+            'capital_amount_contract_currency': str(amount),
+            'capital_share': str(capital_share),
+        })
+    profit_shares = _profit_shares_from_capital(partners_meta, contract.mudaraba_ratio)
+    allocation_rows: list[dict] = []
+    for meta in partners_meta:
+        partner_id = int(meta['partner_id'])
+        profit_share = profit_shares.get(partner_id, _ZERO)
+        meta['profit_share'] = str(profit_share)
+        allocation_rows.append({
+            'partner_id': partner_id,
+            'role': meta['role'],
+            'amount_contract_currency': Decimal(str(meta['capital_amount_contract_currency'])),
+            'capital_share': Decimal(str(meta['capital_share'])),
+            'profit_share': profit_share,
+        })
+
+    return {
+        'contract_currency': contract_currency,
+        'mudaraba_ratio': str(_q_ratio(contract.mudaraba_ratio)),
+        'loss_rule': contract.loss_rule,
+        'partners': partners_meta,
+    }, allocation_rows
+
+
 def build_procurement_cost_preview(procurement) -> dict:
     all_items = list(procurement.items.all())
     all_expenses = list(procurement.expenses.all())
-    paid_items = [item for item in all_items if item.status == item.Status.PAID]
-    paid_expenses = [expense for expense in all_expenses if expense.status == expense.Status.PAID]
-    draft_items = [item for item in all_items if item.status == item.Status.DRAFT]
-    draft_expenses = [expense for expense in all_expenses if expense.status == expense.Status.DRAFT]
+    open_items = [item for item in all_items if item.status != item.Status.RECEIVED]
+    open_expenses = [expense for expense in all_expenses if expense.status != expense.Status.RECEIVED]
+    paid_items = [item for item in open_items if item.status == item.Status.PAID]
+    paid_expenses = [expense for expense in open_expenses if expense.status == expense.Status.PAID]
+    draft_items = [item for item in open_items if item.status == item.Status.DRAFT]
+    draft_expenses = [expense for expense in open_expenses if expense.status == expense.Status.DRAFT]
 
     preview = {
         'receive_basis': _landed_cost_preview_block(paid_items, paid_expenses),
-        'if_all_current_lines_paid': _landed_cost_preview_block(all_items, all_expenses),
+        'if_all_current_lines_paid': _landed_cost_preview_block(open_items, open_expenses),
         'reallocation_pending': bool(paid_expenses and draft_items),
         'message': '',
     }
@@ -238,40 +705,7 @@ def build_procurement_cost_preview(procurement) -> dict:
 
 
 def _profit_shares_from_capital(partners_meta: list[dict], mudaraba_ratio: Decimal) -> dict[int, Decimal]:
-    mudaraba_ratio = Decimal(str(mudaraba_ratio))
-    investor_capital_total = sum(
-        (
-            Decimal(str(partner.get('capital_share', '0')))
-            for partner in partners_meta
-            if partner.get('role') == 'INVESTOR'
-        ),
-        _ZERO,
-    )
-    operator = next(
-        (partner for partner in partners_meta if partner.get('role') == 'OPERATOR'),
-        None,
-    )
-
-    result: dict[int, Decimal] = {}
-    for partner in partners_meta:
-        partner_id = int(partner['partner_id'])
-        capital_share = Decimal(str(partner.get('capital_share', '0')))
-        role = partner.get('role')
-        if role == 'INVESTOR':
-            share = capital_share * mudaraba_ratio
-        elif role == 'OPERATOR':
-            share = capital_share + ((Decimal('1') - mudaraba_ratio) * investor_capital_total)
-        else:
-            share = _ZERO
-        result[partner_id] = _q_ratio(share)
-
-    if operator is not None:
-        distributed = sum(result.values(), _ZERO)
-        residue = _q_ratio(Decimal('1') - distributed)
-        if residue:
-            operator_id = int(operator['partner_id'])
-            result[operator_id] = _q_ratio(result.get(operator_id, _ZERO) + residue)
-    return result
+    return profit_shares_from_capital(partners_meta, mudaraba_ratio)
 
 
 def _validate_contract_formula(partners: list[dict], mudaraba_ratio: Decimal) -> None:
@@ -378,7 +812,7 @@ def _replace_procurement_items_and_expenses(
     expenses: list[dict] | None,
     draft_only: bool = False,
 ) -> None:
-    from .models import ProcurementExpense, ProcurementItem
+    from .models import ProcurementExpense, ProcurementExpenseTarget, ProcurementItem
 
     item_queryset = procurement.items.all()
     expense_queryset = procurement.expenses.all()
@@ -386,11 +820,29 @@ def _replace_procurement_items_and_expenses(
         item_queryset = item_queryset.filter(status=ProcurementItem.Status.DRAFT)
         expense_queryset = expense_queryset.filter(status=ProcurementExpense.Status.DRAFT)
 
-    item_queryset.delete()
-    expense_queryset.delete()
+    existing_items = {item.pk: item for item in item_queryset.select_for_update()}
+    seen_item_ids: set[int] = set()
 
     for item in items or []:
-        ProcurementItem.objects.create(
+        item_id = item.get('id')
+        if item_id is not None:
+            item_id = int(item_id)
+            item_obj = existing_items.get(item_id)
+            if item_obj is None:
+                raise ValueError('Only draft procurement items can be edited here.')
+            item_obj.product_variant_id = item['product_variant_id']
+            item_obj.quantity = Decimal(str(item['quantity']))
+            item_obj.unit_purchase_price = Decimal(str(item['unit_purchase_price']))
+            item_obj.currency = str(item.get('currency', 'UZS')).upper()
+            item_obj.fx_rate = Decimal(str(item.get('fx_rate', '1')))
+            item_obj.save(update_fields=[
+                'product_variant', 'quantity', 'unit_purchase_price',
+                'currency', 'fx_rate', 'updated_at',
+            ])
+            seen_item_ids.add(item_id)
+            continue
+
+        item_obj = ProcurementItem.objects.create(
             tenant_id=tenant_id,
             procurement=procurement,
             product_variant_id=item['product_variant_id'],
@@ -400,22 +852,79 @@ def _replace_procurement_items_and_expenses(
             fx_rate=Decimal(str(item.get('fx_rate', '1'))),
             status=ProcurementItem.Status.DRAFT,
         )
+        seen_item_ids.add(item_obj.pk)
 
+    stale_item_ids = set(existing_items) - seen_item_ids
+    if stale_item_ids:
+        ProcurementItem.objects.filter(pk__in=stale_item_ids).delete()
+
+    existing_expenses = {expense.pk: expense for expense in expense_queryset.select_for_update()}
+    seen_expense_ids: set[int] = set()
+    valid_item_ids = set(
+        procurement.items
+        .exclude(status=ProcurementItem.Status.RECEIVED)
+        .values_list('id', flat=True)
+    )
     for expense in expenses or []:
-        ProcurementExpense.objects.create(
-            tenant_id=tenant_id,
-            procurement=procurement,
-            expense_type=expense['expense_type'],
-            amount=Decimal(str(expense['amount'])),
-            currency=str(expense.get('currency', 'UZS')).upper(),
-            fx_rate=Decimal(str(expense.get('fx_rate', '1'))),
-            allocation_method=expense.get(
+        requested_target_ids = {
+            int(item_id)
+            for item_id in expense.get('target_item_ids', []) or []
+        }
+        invalid_target_ids = requested_target_ids - valid_item_ids
+        if invalid_target_ids:
+            raise ValueError('Expense targets must belong to pending items in this procurement.')
+        target_ids = {
+            int(item_id)
+            for item_id in requested_target_ids
+        }
+        expense_id = expense.get('id')
+        if expense_id is not None:
+            expense_id = int(expense_id)
+            expense_obj = existing_expenses.get(expense_id)
+            if expense_obj is None:
+                raise ValueError('Only draft procurement expenses can be edited here.')
+            expense_obj.expense_type = expense['expense_type']
+            expense_obj.amount = Decimal(str(expense['amount']))
+            expense_obj.currency = str(expense.get('currency', 'UZS')).upper()
+            expense_obj.fx_rate = Decimal(str(expense.get('fx_rate', '1')))
+            expense_obj.allocation_method = expense.get(
                 'allocation_method',
                 ProcurementExpense.AllocationMethod.BY_VALUE,
-            ),
-            notes=expense.get('notes', ''),
-            status=ProcurementExpense.Status.DRAFT,
-        )
+            )
+            expense_obj.notes = expense.get('notes', '')
+            expense_obj.save(update_fields=[
+                'expense_type', 'amount', 'currency', 'fx_rate',
+                'allocation_method', 'notes', 'updated_at',
+            ])
+            seen_expense_ids.add(expense_id)
+        else:
+            expense_obj = ProcurementExpense.objects.create(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                expense_type=expense['expense_type'],
+                amount=Decimal(str(expense['amount'])),
+                currency=str(expense.get('currency', 'UZS')).upper(),
+                fx_rate=Decimal(str(expense.get('fx_rate', '1'))),
+                allocation_method=expense.get(
+                    'allocation_method',
+                    ProcurementExpense.AllocationMethod.BY_VALUE,
+                ),
+                notes=expense.get('notes', ''),
+                status=ProcurementExpense.Status.DRAFT,
+            )
+            seen_expense_ids.add(expense_obj.pk)
+
+        ProcurementExpenseTarget.objects.filter(expense=expense_obj).delete()
+        for item_id in target_ids:
+            ProcurementExpenseTarget.objects.create(
+                tenant_id=tenant_id,
+                expense=expense_obj,
+                item_id=item_id,
+            )
+
+    stale_expense_ids = set(existing_expenses) - seen_expense_ids
+    if stale_expense_ids:
+        ProcurementExpense.objects.filter(pk__in=stale_expense_ids).delete()
 
 
 def _replace_procurement_contract(
@@ -511,6 +1020,195 @@ def _has_balance_activity(procurement) -> bool:
     )
 
 
+def _mutate_agreement_balance(agreement, currency: str, delta: Decimal) -> None:
+    currency = str(currency or 'UZS').upper()
+    balances = dict(agreement.balances or {})
+    next_value = _balance_get(balances, currency) + Decimal(str(delta))
+    if next_value < 0:
+        raise ValueError(
+            f'Insufficient agreement balance for {currency}: have {_balance_get(balances, currency)}, need {abs(delta)}.'
+        )
+    _balance_set(balances, currency, next_value)
+    agreement.balances = balances
+    agreement.save(update_fields=['balances', 'updated_at'])
+
+
+def create_investment_agreement(
+    *,
+    tenant_id: int,
+    opened_at=None,
+    supplier_id: int | None = None,
+    mudaraba_ratio: Decimal,
+    planned_budget: Decimal,
+    currency: str = 'UZS',
+    notes: str = '',
+    client_request_id: str | None = None,
+    partners: list[dict],
+):
+    from .models import AgreementPartner, InvestmentAgreement
+
+    if opened_at is None:
+        opened_at = timezone.now()
+    currency = str(currency or 'UZS').upper()
+    payload = {
+        'mudaraba_ratio': Decimal(str(mudaraba_ratio)),
+        'planned_budget': Decimal(str(planned_budget)),
+        'currency': currency,
+        'partners': partners,
+    }
+    _validate_contract_payload(
+        tenant_id=tenant_id,
+        procurement_type='PARTNERSHIP',
+        contract=payload,
+    )
+
+    with transaction.atomic():
+        if client_request_id:
+            existing = InvestmentAgreement.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ).first()
+            if existing:
+                return existing
+
+        agreement = InvestmentAgreement.objects.create(
+            tenant_id=tenant_id,
+            status=InvestmentAgreement.Status.OPEN,
+            opened_at=opened_at,
+            supplier_id=supplier_id,
+            mudaraba_ratio=Decimal(str(mudaraba_ratio)),
+            planned_budget=Decimal(str(planned_budget)),
+            currency=currency,
+            notes=notes,
+            client_request_id=client_request_id,
+            balances={},
+        )
+        for partner in partners:
+            AgreementPartner.objects.create(
+                tenant_id=tenant_id,
+                agreement=agreement,
+                partner_id=partner['partner_id'],
+                role=partner['role'],
+                planned_capital_share=Decimal(str(partner['planned_capital_share'])),
+                profit_share=Decimal(str(partner.get('profit_share', '0'))),
+            )
+        publish_event(
+            event_type='investment_agreement.opened',
+            payload={'agreement_id': agreement.pk},
+            tenant_id=tenant_id,
+        )
+    return agreement
+
+
+def add_agreement_contribution(
+    *,
+    tenant_id: int,
+    agreement_id: int,
+    partner_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    fx_rate: Decimal = Decimal('1'),
+    date=None,
+    notes: str = '',
+):
+    from .models import AgreementContribution, AgreementPartner, InvestmentAgreement
+
+    amount = _q(Decimal(str(amount)))
+    currency = str(currency or 'UZS').upper()
+    if amount <= 0:
+        raise ValueError('Contribution amount must be > 0.')
+    if date is None:
+        date = timezone.now()
+
+    with transaction.atomic():
+        agreement = InvestmentAgreement.objects.select_for_update().get(
+            pk=agreement_id,
+            tenant_id=tenant_id,
+        )
+        if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
+            raise ValueError('Cannot contribute to closed agreement.')
+        if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
+            raise ValueError('Selected partner is not part of this agreement.')
+        contribution = AgreementContribution.objects.create(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            partner_id=partner_id,
+            amount=amount,
+            currency=currency,
+            fx_rate=Decimal(str(fx_rate)),
+            date=date,
+            notes=notes,
+        )
+        _mutate_agreement_balance(agreement, currency, amount)
+        if agreement.status == InvestmentAgreement.Status.OPEN:
+            agreement.status = InvestmentAgreement.Status.ACTIVE
+            agreement.save(update_fields=['status', 'updated_at'])
+        publish_event(
+            event_type='investment_agreement.contribution_added',
+            payload={
+                'agreement_id': agreement.pk,
+                'partner_id': partner_id,
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+    return contribution
+
+
+def add_agreement_withdrawal(
+    *,
+    tenant_id: int,
+    agreement_id: int,
+    partner_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    fx_rate: Decimal = Decimal('1'),
+    date=None,
+    reason: str = '',
+):
+    from .models import AgreementPartner, AgreementWithdrawal, InvestmentAgreement
+
+    amount = _q(Decimal(str(amount)))
+    currency = str(currency or 'UZS').upper()
+    if amount <= 0:
+        raise ValueError('Withdrawal amount must be > 0.')
+    if date is None:
+        date = timezone.now()
+
+    with transaction.atomic():
+        agreement = InvestmentAgreement.objects.select_for_update().get(
+            pk=agreement_id,
+            tenant_id=tenant_id,
+        )
+        if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
+            raise ValueError('Cannot withdraw from closed agreement.')
+        if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
+            raise ValueError('Selected partner is not part of this agreement.')
+        _mutate_agreement_balance(agreement, currency, -amount)
+        withdrawal = AgreementWithdrawal.objects.create(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            partner_id=partner_id,
+            amount=amount,
+            currency=currency,
+            fx_rate=Decimal(str(fx_rate)),
+            date=date,
+            reason=reason,
+        )
+        publish_event(
+            event_type='investment_agreement.withdrawal_added',
+            payload={
+                'agreement_id': agreement.pk,
+                'partner_id': partner_id,
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+    return withdrawal
+
+
 def open_procurement(
     *,
     tenant_id: int,
@@ -519,6 +1217,7 @@ def open_procurement(
     supplier_id: int | None = None,
     notes: str = '',
     client_request_id: str | None = None,
+    agreement_id: int | None = None,
     contract: dict | None = None,
     items: list[dict] | None = None,
     expenses: list[dict] | None = None,
@@ -534,11 +1233,25 @@ def open_procurement(
     """
     from .models import (
         Procurement, ProcurementItem, ProcurementExpense,
-        InvestmentContract, ContractPartner, ProcurementBalance,
+        InvestmentAgreement, InvestmentContract, ContractPartner, ProcurementBalance,
     )
 
     if opened_at is None:
         opened_at = timezone.now()
+    agreement = None
+    if agreement_id is not None:
+        agreement = (
+            InvestmentAgreement.objects
+            .prefetch_related('partners')
+            .filter(tenant_id=tenant_id, pk=agreement_id)
+            .first()
+        )
+        if agreement is None:
+            raise ValueError('Investment agreement not found.')
+        if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
+            raise ValueError('Investment agreement is not open.')
+        if contract is None:
+            contract = _agreement_contract_payload(agreement)
     is_partnership = procurement_type in _PARTNERSHIP_TYPES
     _validate_contract_payload(
         tenant_id=tenant_id,
@@ -561,6 +1274,7 @@ def open_procurement(
             status=Procurement.Status.OPEN,
             opened_at=opened_at,
             supplier_id=supplier_id,
+            agreement=agreement,
             notes=notes,
             client_request_id=client_request_id,
         )
@@ -606,12 +1320,26 @@ def update_open_procurement(
     procurement_id: int,
     procurement_type: str,
     supplier_id: int | None = None,
+    agreement_id: int | None = None,
     notes: str = '',
     contract: dict | None = None,
     items: list[dict] | None = None,
     expenses: list[dict] | None = None,
 ):
-    from .models import InvestmentContract, Procurement
+    from .models import InvestmentAgreement, InvestmentContract, Procurement
+
+    agreement = None
+    if agreement_id is not None:
+        agreement = (
+            InvestmentAgreement.objects
+            .prefetch_related('partners')
+            .filter(tenant_id=tenant_id, pk=agreement_id)
+            .first()
+        )
+        if agreement is None:
+            raise ValueError('Investment agreement not found.')
+        if contract is None:
+            contract = _agreement_contract_payload(agreement)
 
     _validate_contract_payload(
         tenant_id=tenant_id,
@@ -624,7 +1352,7 @@ def update_open_procurement(
             pk=procurement_id,
             tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot edit procurement in status {procurement.status}.'
             )
@@ -638,6 +1366,7 @@ def update_open_procurement(
         current_contract = _contract_snapshot(current_contract_obj)
         contract_changed = (
             procurement.procurement_type != procurement_type
+            or procurement.agreement_id != agreement_id
             or incoming_contract != current_contract
         )
         if contract_changed and _has_balance_activity(procurement):
@@ -646,9 +1375,10 @@ def update_open_procurement(
             )
 
         procurement.procurement_type = procurement_type
+        procurement.agreement = agreement
         procurement.supplier_id = supplier_id
         procurement.notes = notes
-        procurement.save(update_fields=['procurement_type', 'supplier', 'notes', 'updated_at'])
+        procurement.save(update_fields=['procurement_type', 'agreement', 'supplier', 'notes', 'updated_at'])
 
         _replace_procurement_items_and_expenses(
             tenant_id=tenant_id,
@@ -714,7 +1444,7 @@ def add_contribution(
         procurement = Procurement.objects.select_for_update().get(
             pk=procurement_id, tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot contribute to procurement in status {procurement.status}.'
             )
@@ -809,7 +1539,7 @@ def add_withdrawal(
         procurement = Procurement.objects.select_for_update().get(
             pk=procurement_id, tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot withdraw from procurement in status {procurement.status}.'
             )
@@ -904,7 +1634,7 @@ def exchange_procurement_balance(
             pk=procurement_id,
             tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot exchange procurement balance in status {procurement.status}.'
             )
@@ -1010,6 +1740,7 @@ def pay_procurement_items(
     *,
     tenant_id: int,
     procurement_id: int,
+    item_ids: list[int] | None = None,
     reason: str = '',
 ):
     from .models import Procurement, ProcurementBalance, ProcurementItem
@@ -1021,18 +1752,25 @@ def pay_procurement_items(
             pk=procurement_id,
             tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot pay procurement items in status {procurement.status}.'
             )
 
-        draft_items = list(
-            ProcurementItem.objects.select_for_update().filter(
-                tenant_id=tenant_id,
-                procurement=procurement,
-                status=ProcurementItem.Status.DRAFT,
-            )
+        queryset = ProcurementItem.objects.select_for_update().filter(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            status=ProcurementItem.Status.DRAFT,
         )
+        requested_item_ids = {int(item_id) for item_id in item_ids or []}
+        if requested_item_ids:
+            queryset = queryset.filter(pk__in=requested_item_ids)
+        draft_items = list(queryset)
+        if requested_item_ids:
+            found_item_ids = {item.pk for item in draft_items}
+            missing_item_ids = requested_item_ids - found_item_ids
+            if missing_item_ids:
+                raise ValueError('Some selected items are not draft or do not belong to this procurement.')
         if not draft_items:
             raise ValueError('No draft items to pay.')
 
@@ -1076,6 +1814,68 @@ def pay_procurement_items(
     return draft_items
 
 
+def update_procurement_expense_targets(
+    *,
+    tenant_id: int,
+    procurement_id: int,
+    expense_id: int,
+    target_item_ids: list[int] | None = None,
+):
+    from .models import Procurement, ProcurementExpense, ProcurementExpenseTarget, ProcurementItem
+
+    requested_target_ids = {int(item_id) for item_id in target_item_ids or []}
+
+    with transaction.atomic():
+        procurement = Procurement.objects.select_for_update().get(
+            pk=procurement_id,
+            tenant_id=tenant_id,
+        )
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
+            raise ValueError(
+                f'Cannot edit expense targets in status {procurement.status}.'
+            )
+        expense = ProcurementExpense.objects.select_for_update().get(
+            pk=expense_id,
+            tenant_id=tenant_id,
+            procurement=procurement,
+        )
+        if expense.status == ProcurementExpense.Status.RECEIVED:
+            raise ValueError('Cannot edit targets for an already received expense.')
+
+        valid_item_ids = set(
+            ProcurementItem.objects
+            .filter(
+                tenant_id=tenant_id,
+                procurement=procurement,
+            )
+            .exclude(status=ProcurementItem.Status.RECEIVED)
+            .values_list('id', flat=True)
+        )
+        invalid_target_ids = requested_target_ids - valid_item_ids
+        if invalid_target_ids:
+            raise ValueError('Expense targets must belong to pending items in this procurement.')
+
+        ProcurementExpenseTarget.objects.filter(expense=expense).delete()
+        for item_id in sorted(requested_target_ids):
+            ProcurementExpenseTarget.objects.create(
+                tenant_id=tenant_id,
+                expense=expense,
+                item_id=item_id,
+            )
+
+        publish_event(
+            event_type='procurement.expense_targets_updated',
+            payload={
+                'procurement_id': procurement.pk,
+                'expense_id': expense.pk,
+                'target_item_ids': sorted(requested_target_ids),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return expense
+
+
 def pay_procurement_expenses(
     *,
     tenant_id: int,
@@ -1092,7 +1892,7 @@ def pay_procurement_expenses(
             pk=procurement_id,
             tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot pay procurement expenses in status {procurement.status}.'
             )
@@ -1146,6 +1946,254 @@ def pay_procurement_expenses(
         )
 
     return draft_expenses
+
+
+def split_procurement_item(
+    *,
+    tenant_id: int,
+    procurement_id: int,
+    item_id: int,
+    quantity: Decimal,
+):
+    from .models import Procurement, ProcurementExpenseTarget, ProcurementItem
+
+    split_quantity = Decimal(str(quantity))
+    if split_quantity <= 0:
+        raise ValueError('Split quantity must be > 0.')
+
+    with transaction.atomic():
+        procurement = Procurement.objects.select_for_update().get(
+            pk=procurement_id,
+            tenant_id=tenant_id,
+        )
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
+            raise ValueError(
+                f'Cannot split item in status {procurement.status}.'
+            )
+        item = ProcurementItem.objects.select_for_update().get(
+            pk=item_id,
+            tenant_id=tenant_id,
+            procurement=procurement,
+        )
+        if item.status == ProcurementItem.Status.RECEIVED:
+            raise ValueError('Cannot split an already received item.')
+        current_quantity = Decimal(str(item.quantity))
+        if split_quantity >= current_quantity:
+            raise ValueError('Split quantity must be less than current item quantity.')
+
+        remaining_quantity = current_quantity - split_quantity
+        item.quantity = split_quantity
+        item.save(update_fields=['quantity', 'updated_at'])
+        new_item = ProcurementItem.objects.create(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            product_variant_id=item.product_variant_id,
+            quantity=remaining_quantity,
+            unit_purchase_price=item.unit_purchase_price,
+            currency=item.currency,
+            fx_rate=item.fx_rate,
+            status=item.status,
+        )
+        for target in ProcurementExpenseTarget.objects.filter(item=item):
+            ProcurementExpenseTarget.objects.get_or_create(
+                tenant_id=tenant_id,
+                expense_id=target.expense_id,
+                item=new_item,
+            )
+
+        publish_event(
+            event_type='procurement.item_split',
+            payload={
+                'procurement_id': procurement.pk,
+                'source_item_id': item.pk,
+                'new_item_id': new_item.pk,
+                'source_quantity': str(split_quantity),
+                'new_quantity': str(remaining_quantity),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return item, new_item
+
+
+def _draft_requirement_by_currency(procurement) -> dict[str, Decimal]:
+    required: dict[str, Decimal] = {}
+    for item in procurement.items.filter(status='DRAFT'):
+        _money_by_currency_add(required, item.currency, _item_native_total(item))
+    for expense in procurement.expenses.filter(status='DRAFT'):
+        _money_by_currency_add(required, expense.currency, Decimal(str(expense.amount)))
+    return required
+
+
+def get_agreement_allocation_preview(
+    *,
+    tenant_id: int,
+    agreement_id: int,
+    procurement_id: int,
+) -> dict:
+    from .models import InvestmentAgreement, Procurement
+
+    agreement = (
+        InvestmentAgreement.objects
+        .filter(pk=agreement_id, tenant_id=tenant_id)
+        .prefetch_related('partners__partner', 'contributions', 'withdrawals', 'allocations')
+        .get()
+    )
+    procurement = (
+        Procurement.objects
+        .filter(pk=procurement_id, tenant_id=tenant_id)
+        .prefetch_related('items', 'expenses')
+        .get()
+    )
+    if procurement.agreement_id != agreement.id:
+        raise ValueError('Procurement is not linked to this agreement.')
+
+    required = _draft_requirement_by_currency(procurement)
+    available_by_partner = _agreement_partner_available(agreement)
+    partners = list(agreement.partners.select_related('partner').all())
+    planned_total = sum((Decimal(str(partner.planned_capital_share)) for partner in partners), _ZERO)
+
+    suggestions: list[dict] = []
+    for currency, required_amount in required.items():
+        remaining = _q(required_amount)
+        raw_rows: list[dict] = []
+        for member in partners:
+            planned_ratio = (
+                Decimal(str(member.planned_capital_share)) / planned_total
+                if planned_total > 0 else Decimal('0')
+            )
+            available = _q(available_by_partner.get(member.partner_id, {}).get(currency, _ZERO))
+            target = _q(required_amount * planned_ratio)
+            amount = min(target, available)
+            raw_rows.append({
+                'partner_id': member.partner_id,
+                'partner_name': member.partner.display_name,
+                'role': member.role,
+                'currency': currency,
+                'available': available,
+                'target_amount': target,
+                'amount': amount,
+            })
+            remaining = _q(remaining - amount)
+
+        if remaining > 0:
+            for row in raw_rows:
+                spare = _q(row['available'] - row['amount'])
+                if spare <= 0:
+                    continue
+                top_up = min(spare, remaining)
+                row['amount'] = _q(row['amount'] + top_up)
+                remaining = _q(remaining - top_up)
+                if remaining <= 0:
+                    break
+
+        for row in raw_rows:
+            suggestions.append({
+                **row,
+                'available': str(row['available']),
+                'target_amount': str(row['target_amount']),
+                'amount': str(row['amount']),
+            })
+
+    return {
+        'agreement_id': agreement.id,
+        'procurement_id': procurement.id,
+        'required': {key: str(value) for key, value in required.items()},
+        'agreement_balances': agreement.balances or {},
+        'suggestions': suggestions,
+    }
+
+
+def allocate_agreement_to_procurement(
+    *,
+    tenant_id: int,
+    agreement_id: int,
+    procurement_id: int,
+    allocations: list[dict],
+    date=None,
+):
+    from .models import AgreementAllocation, AgreementPartner, InvestmentAgreement, Procurement
+
+    if date is None:
+        date = timezone.now()
+    if not allocations:
+        raise ValueError('At least one allocation row is required.')
+
+    with transaction.atomic():
+        agreement = (
+            InvestmentAgreement.objects
+            .select_for_update()
+            .filter(pk=agreement_id, tenant_id=tenant_id)
+            .prefetch_related('partners', 'contributions', 'withdrawals', 'allocations')
+            .get()
+        )
+        procurement = Procurement.objects.select_for_update().get(
+            pk=procurement_id,
+            tenant_id=tenant_id,
+        )
+        if procurement.agreement_id != agreement.id:
+            raise ValueError('Procurement is not linked to this agreement.')
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
+            raise ValueError('Cannot allocate to non-open procurement.')
+        if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
+            raise ValueError('Cannot allocate from closed agreement.')
+
+        agreement_partner_ids = set(
+            AgreementPartner.objects.filter(agreement=agreement).values_list('partner_id', flat=True)
+        )
+        available_by_partner = _agreement_partner_available(agreement)
+        created = []
+        for row in allocations:
+            partner_id = int(row['partner_id'])
+            if partner_id not in agreement_partner_ids:
+                raise ValueError('Selected partner is not part of this agreement.')
+            amount = _q(Decimal(str(row['amount'])))
+            currency = str(row.get('currency') or agreement.currency or 'UZS').upper()
+            fx_rate = Decimal(str(row.get('fx_rate') or Decimal('1')))
+            if amount <= 0:
+                continue
+            available = _q(available_by_partner.get(partner_id, {}).get(currency, _ZERO))
+            if available < amount:
+                raise ValueError(
+                    f'Partner balance is insufficient for {currency}: have {available}, need {amount}.'
+                )
+
+            _mutate_agreement_balance(agreement, currency, -amount)
+            allocation = AgreementAllocation.objects.create(
+                tenant_id=tenant_id,
+                agreement=agreement,
+                procurement=procurement,
+                partner_id=partner_id,
+                direction=AgreementAllocation.Direction.TO_PROCUREMENT,
+                amount=amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                date=date,
+                notes=row.get('notes', ''),
+            )
+            add_contribution(
+                tenant_id=tenant_id,
+                procurement_id=procurement.id,
+                partner_id=partner_id,
+                amount=amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                date=date,
+                notes=f'agreement_allocation:{allocation.pk}',
+            )
+            available_by_partner.setdefault(partner_id, {})[currency] = _q(available - amount)
+            created.append(allocation)
+
+        publish_event(
+            event_type='investment_agreement.allocated_to_procurement',
+            payload={
+                'agreement_id': agreement.pk,
+                'procurement_id': procurement.pk,
+                'allocations_count': len(created),
+            },
+            tenant_id=tenant_id,
+        )
+    return created
 
 
 def _capital_by_partner(
@@ -1295,49 +2343,193 @@ def _surplus_withdrawal_plan(
     }
 
 
-def build_receive_plan(procurement) -> dict:
+def _agreement_surplus_return_plan(*, procurement, balances: dict[str, Decimal]) -> dict:
+    from .models import InvestmentContract, PartnerLedgerEntry, ProcurementPartnerLedger
+
+    contract = InvestmentContract.objects.get(procurement=procurement)
+    partners = list(contract.contract_partners.select_related('partner').all())
+    ledgers = (
+        ProcurementPartnerLedger.objects
+        .filter(procurement=procurement, tenant_id=procurement.tenant_id)
+        .prefetch_related('entries')
+    )
+
+    suggestions: list[dict] = []
+    for currency, balance_amount in balances.items():
+        actual_capital = _capital_by_partner(
+            ledgers,
+            PartnerLedgerEntry,
+            tenant_id=procurement.tenant_id,
+            target_currency=currency,
+        )
+        total_capital = sum((amount for amount in actual_capital.values() if amount > 0), _ZERO)
+        if total_capital <= 0:
+            continue
+        remaining = _q(balance_amount)
+        positive_partners = [member for member in partners if actual_capital.get(member.partner_id, _ZERO) > 0]
+        for index, member in enumerate(positive_partners):
+            if index == len(positive_partners) - 1:
+                amount = remaining
+            else:
+                amount = _q(balance_amount * actual_capital[member.partner_id] / total_capital)
+                remaining = _q(remaining - amount)
+            if amount <= 0:
+                continue
+            suggestions.append({
+                'partner_id': member.partner_id,
+                'partner_name': member.partner.display_name,
+                'currency': currency,
+                'amount': amount,
+                'target_net_capital': Decimal('0'),
+                'actual_net_capital': actual_capital[member.partner_id],
+            })
+
+    return {
+        'status': 'AGREEMENT_SURPLUS',
+        'message': 'Surplus can be returned to the parent investment agreement before receive.',
+        'suggested_withdrawals': suggestions,
+    }
+
+
+def build_receive_plan(procurement, item_ids: list[int] | None = None) -> dict:
     """
     Explain whether a procurement can be received and which balancing action is needed.
     """
     from .models import ProcurementBalance
 
-    if procurement.status != procurement.Status.OPEN:
+    def blocked_batch_capital_preview(message: str) -> dict:
+        contract_currency = getattr(procurement.contract, 'currency', '') if getattr(procurement, 'contract', None) else ''
         return {
-            'status': 'NOT_OPEN',
-            'message': f'Procurement is already {procurement.status}.',
-            'balances': {},
-            'missing_spend': {},
-            'suggested_withdrawals': [],
+            'currency': str(contract_currency or '').upper(),
+            'required_amount': '0.00',
+            'status': 'BLOCKED',
+            'message': message,
+            'partners': [],
         }
 
     all_items = list(procurement.items.all())
     all_expenses = list(procurement.expenses.all())
     paid_items = [item for item in all_items if item.status == item.Status.PAID]
     paid_expenses = [expense for expense in all_expenses if expense.status == expense.Status.PAID]
+    received_items_count = sum(1 for item in all_items if item.status == item.Status.RECEIVED)
+    received_expenses_count = sum(1 for expense in all_expenses if expense.status == expense.Status.RECEIVED)
     draft_items_count = sum(1 for item in all_items if item.status == item.Status.DRAFT)
     draft_expenses_count = sum(1 for expense in all_expenses if expense.status == expense.Status.DRAFT)
+    requested_item_ids = {int(item_id) for item_id in item_ids or []}
+    selected_paid_items = [
+        item for item in paid_items
+        if not requested_item_ids or item.id in requested_item_ids
+    ]
+    selected_item_ids = {item.id for item in selected_paid_items}
+    delayed_item_ids_for_preview = (
+        ({item.id for item in paid_items} | {item.id for item in all_items if item.status == item.Status.DRAFT})
+        - selected_item_ids
+    )
+    selected_paid_expenses = paid_expenses
+    if requested_item_ids and delayed_item_ids_for_preview:
+        selected_paid_expenses = []
+        for expense in paid_expenses:
+            target_ids = {target.item_id for target in expense.targets.all()}
+            if target_ids and target_ids & selected_item_ids and not (target_ids & delayed_item_ids_for_preview):
+                selected_paid_expenses.append(expense)
+    try:
+        batch_capital_preview = _batch_capital_preview(
+            procurement=procurement,
+            items=selected_paid_items,
+            expenses=selected_paid_expenses,
+            rate_date=timezone.now().date(),
+        )
+    except ValueError as error:
+        batch_capital_preview = blocked_batch_capital_preview(str(error))
+    if (
+        procurement.procurement_type in _PARTNERSHIP_TYPES
+        and selected_paid_items
+        and batch_capital_preview is None
+    ):
+        batch_capital_preview = blocked_batch_capital_preview(
+            'Не удалось сформировать доли партии. Повторите расчёт перед оприходованием.'
+        )
+
+    def pending_item_payload(item) -> dict:
+        return {
+            'id': item.id,
+            'product_variant_id': item.product_variant_id,
+            'product_variant_name': str(item.product_variant),
+            'quantity': str(item.quantity),
+            'unit_purchase_price': str(item.unit_purchase_price),
+            'currency': str(item.currency).upper(),
+            'fx_rate': str(item.fx_rate),
+            'status': item.status,
+        }
+
+    def with_receive_context(payload: dict, *, will_finish: bool = False) -> dict:
+        payload.setdefault('balances', {})
+        payload.setdefault('missing_spend', {})
+        payload.setdefault('suggested_withdrawals', [])
+        payload['received_items_count'] = received_items_count
+        payload['received_expenses_count'] = received_expenses_count
+        payload['pending_paid_items_count'] = len(paid_items)
+        payload['pending_paid_expenses_count'] = len(paid_expenses)
+        payload['draft_items_count'] = draft_items_count
+        payload['draft_expenses_count'] = draft_expenses_count
+        payload['pending_paid_items'] = [pending_item_payload(item) for item in paid_items]
+        payload['receive_batches'] = _receive_batches_payload(procurement)
+        payload['will_finish_procurement'] = bool(will_finish)
+        payload['batch_capital_preview'] = batch_capital_preview
+        if (
+            procurement.procurement_type in _PARTNERSHIP_TYPES
+            and selected_paid_items
+            and payload.get('status') == 'READY'
+            and batch_capital_preview
+            and batch_capital_preview.get('status') != 'READY'
+        ):
+            payload['status'] = 'BLOCKED'
+            payload['message'] = batch_capital_preview.get('message') or payload.get('message') or ''
+        return payload
+
+    if procurement.status == procurement.Status.RECEIVED:
+        return with_receive_context({
+            'status': 'COMPLETE',
+            'message': 'Приход полностью оприходован.',
+        }, will_finish=True)
+
+    if procurement.status not in (procurement.Status.OPEN, procurement.Status.PARTIALLY_RECEIVED):
+        return with_receive_context({
+            'status': 'NOT_OPEN',
+            'message': f'Procurement is already {procurement.status}.',
+            'balances': {},
+            'missing_spend': {},
+            'suggested_withdrawals': [],
+        })
 
     if not paid_items and not draft_items_count:
-        return {
+        return with_receive_context({
             'status': 'NO_ITEMS',
             'message': 'Procurement has no items.',
             'balances': {},
             'missing_spend': {},
             'suggested_withdrawals': [],
-            'draft_items_count': 0,
-            'draft_expenses_count': draft_expenses_count,
-        }
+        })
+
+    if not paid_items:
+        return with_receive_context({
+            'status': 'DRAFT_PENDING',
+            'message': 'Есть строки, но ещё нет оплаченных товаров для оприходования.',
+            'balances': {},
+            'missing_spend': {},
+            'suggested_withdrawals': [],
+        })
 
     try:
         balance = procurement.balance
     except ProcurementBalance.DoesNotExist:
-        return {
+        return with_receive_context({
             'status': 'NO_BALANCE',
             'message': 'Procurement balance is missing.',
             'balances': {},
             'missing_spend': {},
             'suggested_withdrawals': [],
-        }
+        })
 
     required = _required_spend_by_currency(paid_items, paid_expenses)
     spent = _procurement_spend_by_currency(balance)
@@ -1352,52 +2544,62 @@ def build_receive_plan(procurement) -> dict:
     }
 
     if missing:
-        return {
+        return with_receive_context({
             'status': 'COSTS_UNPAID',
             'message': 'Оплаченные позиции ещё не полностью списаны с баланса.',
             'balances': {key: str(value) for key, value in balances.items()},
             'missing_spend': {key: str(value) for key, value in missing.items()},
             'suggested_withdrawals': [],
-            'draft_items_count': draft_items_count,
-            'draft_expenses_count': draft_expenses_count,
-        }
-
-    if draft_items_count or draft_expenses_count:
-        return {
-            'status': 'DRAFT_PENDING',
-            'message': 'Есть неоплаченные черновики товаров или расходов.',
-            'balances': {key: str(value) for key, value in balances.items()},
-            'missing_spend': {},
-            'suggested_withdrawals': [],
-            'draft_items_count': draft_items_count,
-            'draft_expenses_count': draft_expenses_count,
-        }
+        })
 
     non_zero = {
         currency: amount for currency, amount in balances.items()
         if amount != 0
     }
     if not non_zero:
-        return {
+        return with_receive_context({
             'status': 'READY',
             'message': 'Ready to receive.',
             'balances': {key: str(value) for key, value in balances.items()},
             'missing_spend': {},
             'suggested_withdrawals': [],
-            'draft_items_count': 0,
-            'draft_expenses_count': 0,
-        }
+        }, will_finish=bool(paid_items and not draft_items_count and not draft_expenses_count))
 
     if any(amount < 0 for amount in non_zero.values()):
-        return {
+        return with_receive_context({
             'status': 'CONTRIBUTION_REQUIRED',
             'message': 'Balance is negative; add contribution before receive.',
             'balances': {key: str(value) for key, value in balances.items()},
             'missing_spend': {},
             'suggested_withdrawals': [],
-            'draft_items_count': 0,
-            'draft_expenses_count': 0,
-        }
+        })
+
+    if draft_items_count or draft_expenses_count:
+        return with_receive_context({
+            'status': 'READY',
+            'message': 'Можно оприходовать оплаченную партию. Остаток баланса останется в приходе для следующих строк.',
+            'balances': {key: str(value) for key, value in balances.items()},
+            'missing_spend': {},
+            'suggested_withdrawals': [],
+        }, will_finish=False)
+
+    if procurement.agreement_id:
+        plan = _agreement_surplus_return_plan(procurement=procurement, balances=non_zero)
+        plan['balances'] = {key: str(value) for key, value in balances.items()}
+        plan['missing_spend'] = {}
+        plan['suggested_withdrawals'] = [
+            {
+                **item,
+                'amount': str(_q(item['amount'])),
+                'target_net_capital': str(_q(item['target_net_capital'])),
+                'actual_net_capital': str(_q(item['actual_net_capital'])),
+            }
+            for item in plan.get('suggested_withdrawals', [])
+        ]
+        return with_receive_context(
+            plan,
+            will_finish=bool(paid_items and not draft_items_count and not draft_expenses_count),
+        )
 
     plan = _surplus_withdrawal_plan(
         procurement=procurement,
@@ -1408,8 +2610,6 @@ def build_receive_plan(procurement) -> dict:
     )
     plan['balances'] = {key: str(value) for key, value in balances.items()}
     plan['missing_spend'] = {}
-    plan['draft_items_count'] = 0
-    plan['draft_expenses_count'] = 0
     plan['suggested_withdrawals'] = [
         {
             **item,
@@ -1419,20 +2619,23 @@ def build_receive_plan(procurement) -> dict:
         }
         for item in plan.get('suggested_withdrawals', [])
     ]
-    return plan
+    return with_receive_context(
+        plan,
+        will_finish=bool(paid_items and not draft_items_count and not draft_expenses_count),
+    )
 
 
-def get_procurement_receive_plan(*, tenant_id: int, procurement_id: int) -> dict:
+def get_procurement_receive_plan(*, tenant_id: int, procurement_id: int, item_ids: list[int] | None = None) -> dict:
     from .models import Procurement
 
     procurement = (
         Procurement.objects
         .filter(tenant_id=tenant_id, pk=procurement_id)
         .select_related('balance', 'contract')
-        .prefetch_related('items', 'expenses', 'balance__withdrawals')
+        .prefetch_related('items', 'expenses__targets', 'balance__withdrawals')
         .get()
     )
-    return build_receive_plan(procurement)
+    return build_receive_plan(procurement, item_ids=item_ids)
 
 
 def receive_procurement(
@@ -1440,6 +2643,8 @@ def receive_procurement(
     tenant_id: int,
     procurement_id: int,
     destination_warehouse_id: int,
+    item_ids: list[int] | None = None,
+    capital_allocations: list[dict] | None = None,
     received_at=None,
 ):
     """
@@ -1450,7 +2655,8 @@ def receive_procurement(
     from .models import (
         Procurement, ProcurementExpense, ProcurementItem, ProcurementBalance, BalanceWithdrawal,
         InvestmentContract, ContractPartner, PartnerLedgerEntry,
-        ProcurementPartnerLedger,
+        ProcurementPartnerLedger, ProcurementReceiveBatch, ProcurementReceiveBatchLine,
+        ProcurementReceiveBatchExpense, ProcurementReceiveBatchCapitalAllocation,
     )
 
     if received_at is None:
@@ -1460,7 +2666,7 @@ def receive_procurement(
         procurement = Procurement.objects.select_for_update().get(
             pk=procurement_id, tenant_id=tenant_id,
         )
-        if procurement.status != Procurement.Status.OPEN:
+        if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError(
                 f'Cannot receive procurement in status {procurement.status}.'
             )
@@ -1518,13 +2724,81 @@ def receive_procurement(
                 balance.save(update_fields=['balances', 'updated_at'])
                 procurement._state.fields_cache.pop('balance', None)
                 receive_plan = build_receive_plan(procurement)
+            elif receive_plan['status'] == 'AGREEMENT_SURPLUS':
+                from apps.finance.services import resolve_fx_rate_snapshot
+                from .models import AgreementAllocation, InvestmentAgreement
+
+                if not procurement.agreement_id:
+                    raise ValueError('Linked agreement is missing for surplus return.')
+                agreement = InvestmentAgreement.objects.select_for_update().get(
+                    pk=procurement.agreement_id,
+                    tenant_id=tenant_id,
+                )
+                balances = dict(balance.balances or {})
+                for suggestion in receive_plan['suggested_withdrawals']:
+                    amount = _q(Decimal(str(suggestion['amount'])))
+                    if amount <= 0:
+                        continue
+                    currency = str(suggestion['currency']).upper()
+                    current = _balance_get(balances, currency)
+                    if current < amount:
+                        raise ValueError(
+                            f'Cannot return {currency}: have {current}, need {amount}.'
+                        )
+                    fx_rate = resolve_fx_rate_snapshot(
+                        tenant_id=tenant_id,
+                        operation_currency=currency,
+                        operation_at=received_at,
+                    )
+                    _balance_set(balances, currency, current - amount)
+                    withdrawal = BalanceWithdrawal.objects.create(
+                        tenant_id=tenant_id,
+                        balance=balance,
+                        partner_id=suggestion['partner_id'],
+                        amount=amount,
+                        currency=currency,
+                        fx_rate=fx_rate,
+                        date=received_at,
+                        reason='Return surplus to parent investment agreement before receive',
+                    )
+                    AgreementAllocation.objects.create(
+                        tenant_id=tenant_id,
+                        agreement=agreement,
+                        procurement=procurement,
+                        partner_id=suggestion['partner_id'],
+                        direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+                        amount=amount,
+                        currency=currency,
+                        fx_rate=fx_rate,
+                        date=received_at,
+                        notes=f'withdrawal:{withdrawal.pk}',
+                    )
+                    _mutate_agreement_balance(agreement, currency, amount)
+                    ledger = get_or_create_ledger(
+                        procurement_id=procurement.pk,
+                        partner_id=suggestion['partner_id'],
+                        tenant_id=tenant_id,
+                    )
+                    append_ledger_entry(
+                        ledger=ledger,
+                        entry_type=PartnerLedgerEntry.EntryType.CAPITAL_OUT,
+                        amount=amount,
+                        currency=currency,
+                        fx_rate=fx_rate,
+                        source_ref=f'withdrawal:{withdrawal.pk}',
+                        date=received_at,
+                    )
+                balance.balances = balances
+                balance.save(update_fields=['balances', 'updated_at'])
+                procurement._state.fields_cache.pop('balance', None)
+                receive_plan = build_receive_plan(procurement)
 
             if receive_plan['status'] != 'READY':
                 raise ValueError(
                     f"Cannot receive: {receive_plan['message']}"
                 )
 
-        items = list(
+        paid_items = list(
             ProcurementItem.objects
             .filter(
                 tenant_id=tenant_id,
@@ -1533,8 +2807,80 @@ def receive_procurement(
             )
             .select_for_update()
         )
+        requested_item_ids = {int(item_id) for item_id in item_ids or []}
+        if requested_item_ids:
+            items = [item for item in paid_items if item.pk in requested_item_ids]
+            found_item_ids = {item.pk for item in items}
+            missing_item_ids = requested_item_ids - found_item_ids
+            if missing_item_ids:
+                raise ValueError(
+                    'Some selected items are not paid or do not belong to this procurement.'
+                )
+        else:
+            items = paid_items
+
         if not items:
             raise ValueError('Procurement has no paid items.')
+
+        selected_item_ids = {item.pk for item in items}
+        draft_item_ids = set(
+            ProcurementItem.objects
+            .filter(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                status=ProcurementItem.Status.DRAFT,
+            )
+            .values_list('pk', flat=True)
+        )
+        delayed_item_ids = ({item.pk for item in paid_items} | draft_item_ids) - selected_item_ids
+        is_partial_receive = bool(delayed_item_ids)
+        paid_expenses = list(
+            procurement.expenses
+            .filter(status=ProcurementExpense.Status.PAID)
+            .prefetch_related('targets')
+        )
+        expenses_for_receive = paid_expenses
+        if is_partial_receive:
+            expenses_for_receive = []
+            for expense in paid_expenses:
+                target_ids = {target.item_id for target in expense.targets.all()}
+                if not target_ids:
+                    raise ValueError(
+                        'Для частичного оприходования у каждого оплаченного расхода должны быть выбраны товары.'
+                    )
+                touches_selected = bool(target_ids & selected_item_ids)
+                touches_delayed = bool(target_ids & delayed_item_ids)
+                if touches_selected and touches_delayed:
+                    raise ValueError(
+                        'Расход привязан и к выбранным, и к отложенным товарам. Разделите расход или уточните позиции расхода.'
+                    )
+                if touches_selected:
+                    expenses_for_receive.append(expense)
+            draft_expenses = list(
+                procurement.expenses
+                .filter(status=ProcurementExpense.Status.DRAFT)
+                .prefetch_related('targets')
+            )
+            for expense in draft_expenses:
+                target_ids = {target.item_id for target in expense.targets.all()}
+                if not target_ids:
+                    raise ValueError(
+                        'Для частичного оприходования у каждого неоплаченного расхода тоже должны быть выбраны товары.'
+                    )
+                if target_ids & selected_item_ids:
+                    raise ValueError(
+                        'Есть неоплаченный расход для выбранных товаров. Сначала оплатите расход или перенесите его на отложенные позиции.'
+                    )
+        else:
+            has_draft_expenses = ProcurementExpense.objects.filter(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                status=ProcurementExpense.Status.DRAFT,
+            ).exists()
+            if has_draft_expenses:
+                raise ValueError(
+                    'Перед завершением прихода оплатите или удалите черновики расходов.'
+                )
 
         items_value_uzs = [
             _item_value_uzs(item)
@@ -1542,52 +2888,41 @@ def receive_procurement(
         ]
         expense_allocations_uzs = _landed_expense_allocations(
             items,
-            list(procurement.expenses.filter(status=ProcurementExpense.Status.PAID)),
+            expenses_for_receive,
         )
         expenses_total_uzs = sum(expense_allocations_uzs, _ZERO)
+        total_inventory_uzs = sum(items_value_uzs) + expenses_total_uzs
 
-        # Build contract snapshot from actual CAPITAL_IN (not planned).
         contract_snapshot = {}
+        batch_allocation_rows: list[dict] = []
         if is_partnership:
-            contract = InvestmentContract.objects.get(procurement=procurement)
-            mudaraba_ratio = Decimal(str(contract.mudaraba_ratio))
-            partners = list(ContractPartner.objects.filter(contract=contract))
-
-            ledgers = (
-                ProcurementPartnerLedger.objects
-                .filter(procurement=procurement, tenant_id=tenant_id)
-                .prefetch_related('entries')
+            contract_snapshot, batch_allocation_rows = _resolve_batch_capital_snapshot(
+                procurement=procurement,
+                items=items,
+                expenses=expenses_for_receive,
+                raw_allocations=capital_allocations,
+                is_partial_receive=is_partial_receive,
+                received_at=received_at,
             )
-            contract_currency = str(contract.currency or 'UZS').upper()
-            actual_capital = _capital_by_partner(
-                ledgers,
-                PartnerLedgerEntry,
+
+        receive_batch = ProcurementReceiveBatch.objects.create(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            warehouse_id=destination_warehouse_id,
+            received_at=received_at,
+            items_count=len(items),
+            total_inventory_uzs=total_inventory_uzs,
+        )
+        for row in batch_allocation_rows:
+            ProcurementReceiveBatchCapitalAllocation.objects.create(
                 tenant_id=tenant_id,
-                target_currency=contract_currency,
+                batch=receive_batch,
+                partner_id=row['partner_id'],
+                role=row['role'],
+                amount_contract_currency=row['amount_contract_currency'],
+                capital_share=row['capital_share'],
+                profit_share=row['profit_share'],
             )
-
-            total_capital = sum(actual_capital.values()) or Decimal('1')
-
-            partners_meta = []
-            for cp in partners:
-                cap = actual_capital.get(cp.partner_id, Decimal('0'))
-                capital_share = _q_ratio(cap / total_capital)
-                partners_meta.append({
-                    'partner_id': cp.partner_id,
-                    'role': cp.role,
-                    'capital_amount_contract_currency': str(_q(cap)),
-                    'capital_share': str(capital_share),
-                })
-            profit_shares = _profit_shares_from_capital(partners_meta, mudaraba_ratio)
-            for item in partners_meta:
-                item['profit_share'] = str(profit_shares[int(item['partner_id'])])
-
-            contract_snapshot = {
-                'contract_currency': contract_currency,
-                'mudaraba_ratio': str(_q_ratio(mudaraba_ratio)),
-                'loss_rule': contract.loss_rule,
-                'partners': partners_meta,
-            }
 
         # Create Lot + LotStock per item.
         for item, allocated_expense_uzs in zip(items, expense_allocations_uzs):
@@ -1627,12 +2962,53 @@ def receive_procurement(
                 reference_type='procurement',
                 reference_id=procurement.pk,
             )
+            ProcurementReceiveBatchLine.objects.create(
+                tenant_id=tenant_id,
+                batch=receive_batch,
+                item=item,
+                lot=lot,
+                quantity=item.quantity,
+                unit_purchase_price_uzs=item_unit_price_uzs,
+                allocated_expense_uzs=_q(allocated_expense_uzs),
+                landed_cost_per_unit_uzs=landed_per_unit,
+            )
 
-        procurement.status = Procurement.Status.RECEIVED
-        procurement.received_at = received_at
-        procurement.save(update_fields=['status', 'received_at', 'updated_at'])
+        for expense in expenses_for_receive:
+            amount_uzs = _expense_value_uzs(expense)
+            ProcurementReceiveBatchExpense.objects.create(
+                tenant_id=tenant_id,
+                batch=receive_batch,
+                expense=expense,
+                allocated_amount_uzs=amount_uzs,
+            )
 
-        total_inventory_uzs = sum(items_value_uzs) + expenses_total_uzs
+        ProcurementItem.objects.filter(pk__in=[item.pk for item in items]).update(
+            status=ProcurementItem.Status.RECEIVED,
+            updated_at=received_at,
+        )
+        if expenses_for_receive:
+            ProcurementExpense.objects.filter(
+                pk__in=[expense.pk for expense in expenses_for_receive],
+            ).update(status=ProcurementExpense.Status.RECEIVED, updated_at=received_at)
+
+        has_pending_items = ProcurementItem.objects.filter(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            status__in=[ProcurementItem.Status.DRAFT, ProcurementItem.Status.PAID],
+        ).exists()
+        has_pending_expenses = ProcurementExpense.objects.filter(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            status__in=[ProcurementExpense.Status.DRAFT, ProcurementExpense.Status.PAID],
+        ).exists()
+        if has_pending_items or has_pending_expenses:
+            procurement.status = Procurement.Status.PARTIALLY_RECEIVED
+            procurement.save(update_fields=['status', 'updated_at'])
+        else:
+            procurement.status = Procurement.Status.RECEIVED
+            procurement.received_at = received_at
+            procurement.save(update_fields=['status', 'received_at', 'updated_at'])
+
         if total_inventory_uzs > 0:
             create_journal_entry(
                 tenant_id=tenant_id,
@@ -1652,7 +3028,7 @@ def receive_procurement(
                         'description': f'Procurement #{procurement.pk} funding source',
                     },
                 ],
-                description=f'Procurement #{procurement.pk} received',
+                description=f'Procurement #{procurement.pk} batch #{receive_batch.pk} received',
                 date=received_at,
             )
 
@@ -1660,6 +3036,7 @@ def receive_procurement(
             event_type='procurement.received',
             payload={
                 'procurement_id': procurement.pk,
+                'receive_batch_id': receive_batch.pk,
                 'destination_warehouse_id': destination_warehouse_id,
                 'items_count': len(items),
             },

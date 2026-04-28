@@ -9,7 +9,14 @@ import { PricingMode, ProcurementType } from '@/types/enums'
 import type { Category, Product, ProductVariant, Supplier } from '@/types/models'
 import { createSupplier, fetchSuppliers } from '@/api/suppliers'
 import { createProduct, fetchCategories, fetchProductVariants, fetchVariantsPaginated } from '@/api/catalog'
-import { createProcurement, fetchProcurement, updateProcurement, type ProcurementDetail } from '@/api/partnerships'
+import {
+  createProcurement,
+  fetchInvestmentAgreement,
+  fetchProcurement,
+  updateProcurement,
+  type InvestmentAgreementDetail,
+  type ProcurementDetail,
+} from '@/api/partnerships'
 import { fetchPartners, type Partner } from '@/api/core'
 import { fetchLatestFxRate } from '@/api/finance'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
@@ -61,7 +68,7 @@ const ALLOCATION_OPTIONS = [
   { value: 'BY_QUANTITY', label: 'По количеству' },
 ]
 
-const FALLBACK_FOREIGN_FX_RATE = '12000'
+const FALLBACK_FOREIGN_FX_RATE = '12100'
 
 const selectedType = ref<ProcurementType>(ProcurementType.OWN_FUNDS)
 const selectedSupplierId = ref<number | null>(null)
@@ -74,6 +81,8 @@ const isLoadingRefs = ref(false)
 const isSaving = ref(false)
 const formError = ref<string | null>(null)
 const isLoadingDraft = ref(false)
+const linkedAgreement = ref<InvestmentAgreementDetail | null>(null)
+const editingAgreementId = ref<number | null>(null)
 const simulatedInvestorCapitalPercentDraft = ref('')
 const isRecalculationOpen = ref(false)
 const quickProductSheetOpen = ref(false)
@@ -98,6 +107,11 @@ const editingProcurementId = computed(() => {
   return Number.isFinite(raw) ? raw : null
 })
 const isEditMode = computed(() => editingProcurementId.value !== null)
+const linkedAgreementId = computed(() => {
+  const raw = Number(route.query.agreement_id)
+  return Number.isFinite(raw) && raw > 0 ? raw : null
+})
+const isLinkedAgreementMode = computed(() => linkedAgreementId.value !== null && !isEditMode.value)
 
 interface LineRow {
   id: string
@@ -703,6 +717,7 @@ function applyDefaultContract(): void {
 
 function resetDraftForm(): void {
   selectedType.value = ProcurementType.OWN_FUNDS
+  editingAgreementId.value = null
   selectedSupplierId.value = null
   notes.value = ''
   lines.value = []
@@ -712,8 +727,27 @@ function resetDraftForm(): void {
   contractRows.value = buildDefaultContractRows()
 }
 
+function applyLinkedAgreementDefaults(): void {
+  const agreement = linkedAgreement.value
+  if (!agreement) return
+  selectedType.value = ProcurementType.PARTNERSHIP
+  selectedSupplierId.value = agreement.supplier
+  contractCurrency.value = normalizeCurrency(agreement.currency)
+  plannedBudget.value = String(agreement.planned_budget)
+  contractRows.value = agreement.partners.map((partner) => ({
+    id: crypto.randomUUID(),
+    partner_id: partner.partner,
+    role: partner.role as ContractRow['role'],
+    capital_percent: Number(agreement.planned_budget) > 0
+      ? formatEditablePercent((Number(partner.planned_capital_share) / Number(agreement.planned_budget)) * 100)
+      : '0',
+    profit_percent: formatEditablePercent(Number(partner.profit_share) * 100),
+  }))
+}
+
 function populateFormFromProcurement(procurement: ProcurementDetail): void {
   selectedType.value = procurement.procurement_type as ProcurementType
+  editingAgreementId.value = procurement.agreement
   selectedSupplierId.value = procurement.supplier
   notes.value = procurement.notes ?? ''
   lines.value = procurement.items.map((item) => {
@@ -826,6 +860,7 @@ async function saveDraft(): Promise<void> {
       client_request_id: isEditMode.value ? undefined : generateRequestId(),
       procurement_type: selectedType.value,
       supplier_id: selectedSupplierId.value,
+      agreement_id: isLinkedAgreementMode.value ? linkedAgreementId.value : editingAgreementId.value,
       notes: notes.value.trim(),
       items: lines.value.map((line) => ({
         product_variant_id: line.variant!.id,
@@ -873,6 +908,10 @@ onMounted(async () => {
     categories.value = categoryResponse
     partners.value = partnerResponse
     resetDraftForm()
+    if (isLinkedAgreementMode.value && linkedAgreementId.value) {
+      linkedAgreement.value = await fetchInvestmentAgreement(linkedAgreementId.value)
+      applyLinkedAgreementDefaults()
+    }
     await loadExistingDraft()
   } catch {
     toast.error('Ошибка загрузки справочных данных')
@@ -893,6 +932,16 @@ onMounted(async () => {
     </header>
 
     <div class="form-body">
+      <section v-if="linkedAgreement" class="linked-agreement-strip">
+        <div>
+          <span>Источник капитала</span>
+          <strong>Инвестдоговор #{{ linkedAgreement.id }}</strong>
+        </div>
+        <button type="button" @click="router.push({ name: 'agreement-detail', params: { id: linkedAgreement.id } })">
+          Открыть
+        </button>
+      </section>
+
       <section class="form-section">
         <h2 class="section-title">Тип закупки</h2>
         <div class="type-grid">
@@ -901,6 +950,7 @@ onMounted(async () => {
             :key="card.type"
             class="type-card"
             :class="{ selected: selectedType === card.type }"
+            :disabled="isLinkedAgreementMode"
             @click="selectedType = card.type; applyDefaultContract()"
           >
             <div class="type-card-icon">
@@ -1187,6 +1237,7 @@ onMounted(async () => {
                     class="input-field line-input money-input"
                     :value="line.cost_per_unit"
                     min="0"
+                    step="0.000001"
                     placeholder="Цена"
                     aria-label="Цена закупки"
                     @input="(e) => updateLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
@@ -1213,7 +1264,7 @@ onMounted(async () => {
                   :value="line.fx_rate"
                   min="0"
                   step="0.0001"
-                  placeholder="12000"
+                  placeholder="12100"
                   aria-label="Курс валюты"
                   @input="(e) => updateLine(line.id, 'fx_rate', (e.target as HTMLInputElement).value)"
                 />
@@ -1293,7 +1344,7 @@ onMounted(async () => {
               :value="expense.fx_rate"
               min="0"
               step="0.0001"
-              placeholder="12000"
+              placeholder="12100"
               @input="(e) => updateExpense(expense.id, 'fx_rate', (e.target as HTMLInputElement).value)"
             />
           </div>
@@ -1437,12 +1488,17 @@ onMounted(async () => {
 .btn-back,.header-spacer { width: 40px; height: 40px; display:inline-flex; align-items:center; justify-content:center; border-radius: var(--radius-md); color: var(--color-text-primary); }
 .page-title { flex:1; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .form-body { display:grid; gap: var(--space-4); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-12)); }
+.linked-agreement-strip { display:flex; align-items:center; justify-content:space-between; gap: var(--space-3); padding: var(--space-3); border:1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-brand-50); }
+.linked-agreement-strip div { min-width:0; display:grid; gap: 2px; }
+.linked-agreement-strip span { color: var(--color-brand-700); font-size: var(--text-xs); font-weight: var(--font-medium); }
+.linked-agreement-strip strong { color: var(--color-text-primary); font-size: var(--text-sm); }
+.linked-agreement-strip button { flex:0 0 auto; min-height:34px; padding:0 var(--space-3); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); }
 .form-section { display:grid; gap: var(--space-3); }
 .section-title { font-size: var(--text-base); font-weight: var(--font-semibold); }
 .type-grid { display:grid; gap: var(--space-3); }
 .type-card { display:grid; gap: var(--space-2); text-align:left; padding: var(--space-4); border-radius: var(--radius-lg); border:1px solid var(--color-border-subtle); background: var(--color-bg-elevated); }
 .type-card.selected { border-color: var(--color-brand-500); box-shadow: 0 0 0 2px rgba(27,138,111,0.12); }
-.type-card.disabled { opacity: 0.55; }
+.type-card.disabled, .type-card:disabled { opacity: 0.55; }
 .type-card-label { font-weight: var(--font-semibold); }
 .type-card-desc { color: var(--color-text-secondary); font-size: var(--text-sm); }
 .contract-metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: var(--space-2); }

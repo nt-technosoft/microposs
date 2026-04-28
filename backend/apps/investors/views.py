@@ -131,6 +131,50 @@ class InvestorProcurementView(APIView):
         return Response(InvestorProcurementDetailSerializer(payload).data)
 
 
+class InvestorAgreementView(APIView):
+    permission_classes = [IsInvestor]
+
+    def get(self, request, agreement_id=None):
+        from apps.finance.services import get_agreement_profitability_detail
+        from apps.partnerships.models import InvestmentAgreement
+
+        partner = _get_request_investor_partner(request)
+        agreements = (
+            InvestmentAgreement.objects
+            .filter(tenant_id=request.tenant_id, partners__partner=partner)
+            .select_related('supplier')
+            .prefetch_related('procurements', 'partners__partner')
+            .distinct()
+        )
+
+        if agreement_id is None:
+            payload = [
+                {
+                    'id': agreement.id,
+                    'status': agreement.status,
+                    'opened_at': agreement.opened_at,
+                    'closed_at': agreement.closed_at,
+                    'supplier_name': getattr(agreement.supplier, 'name', None),
+                    'planned_budget': agreement.planned_budget,
+                    'currency': agreement.currency,
+                    'balances': agreement.balances or {},
+                    'procurements_count': agreement.procurements.count(),
+                }
+                for agreement in agreements.order_by('-opened_at')
+            ]
+            return Response(payload)
+
+        agreement = agreements.filter(pk=agreement_id).first()
+        if agreement is None:
+            raise PermissionDenied('Agreement is not available for this investor.')
+        payload = get_agreement_profitability_detail(
+            tenant_id=request.tenant_id,
+            agreement_id=agreement.id,
+        )
+        payload['current_partner_id'] = partner.id
+        return Response(payload)
+
+
 class InvestorViewSet(viewsets.ModelViewSet):
     serializer_class = InvestorSerializer
     permission_classes = [IsOwner]

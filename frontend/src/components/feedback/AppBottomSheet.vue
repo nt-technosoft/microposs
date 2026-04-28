@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
+
+let activeBodyLocks = 0
 
 interface Props {
   open: boolean
@@ -16,13 +18,31 @@ const emit = defineEmits<{
 }>()
 
 const sheetRef = ref<HTMLElement | null>(null)
+let bodyLockedByThisSheet = false
 
-watch(() => props.open, (isOpen) => {
-  if (isOpen) {
-    document.body.style.overflow = 'hidden'
-  } else {
+function lockBodyScroll(): void {
+  if (bodyLockedByThisSheet) return
+  activeBodyLocks += 1
+  bodyLockedByThisSheet = true
+  document.body.style.overflow = 'hidden'
+}
+
+function unlockBodyScroll(): void {
+  if (!bodyLockedByThisSheet) return
+  activeBodyLocks = Math.max(0, activeBodyLocks - 1)
+  bodyLockedByThisSheet = false
+  if (activeBodyLocks === 0) {
     document.body.style.overflow = ''
   }
+}
+
+watch(() => props.open, (isOpen) => {
+  if (isOpen) lockBodyScroll()
+  else unlockBodyScroll()
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  unlockBodyScroll()
 })
 
 function onBackdropClick() {
