@@ -10,6 +10,8 @@ import { useSessionStore } from '@/stores/session'
 
 function getRoleHomeRoute(role?: string | null) {
   switch (role) {
+    case 'platform_admin':
+      return { name: 'platform-admin-requests' as const }
     case 'investor':
       return { name: 'investor-dashboard' as const }
     case 'warehouse':

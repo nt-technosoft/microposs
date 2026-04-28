@@ -6,12 +6,14 @@ ROLE_OWNER = 'owner'
 ROLE_CASHIER = 'cashier'
 ROLE_WAREHOUSE = 'warehouse'
 ROLE_INVESTOR = 'investor'
+ROLE_PLATFORM_ADMIN = 'platform_admin'
 
 KNOWN_ROLES = {
     ROLE_OWNER,
     ROLE_CASHIER,
     ROLE_WAREHOUSE,
     ROLE_INVESTOR,
+    ROLE_PLATFORM_ADMIN,
 }
 
 
@@ -67,6 +69,10 @@ def _user_has_tenant_access(user, tenant_id: int | None) -> bool:
 def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
     if not getattr(user, 'is_authenticated', False):
         return _coerce_tenant_id(header_tenant_id)
+
+    group_names = _group_names(user)
+    if ROLE_PLATFORM_ADMIN in group_names or user.is_superuser or user.is_staff:
+        return None
 
     explicit_candidates = [
         _coerce_tenant_id(getattr(user, 'active_tenant_id', None)),
@@ -125,7 +131,6 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
         tenant_id = _coerce_tenant_id(system_business_id)
 
     if tenant_id is None:
-        group_names = _group_names(user)
         if (
             ROLE_INVESTOR in group_names
             and ROLE_OWNER not in group_names
@@ -184,6 +189,10 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
         if normalized in KNOWN_ROLES:
             return normalized
 
+    group_names = _group_names(user)
+    if ROLE_PLATFORM_ADMIN in group_names or user.is_superuser or user.is_staff:
+        return ROLE_PLATFORM_ADMIN
+
     from apps.core.models import BusinessInvestorRelation, Partner
 
     partner_query = Partner.objects.filter(user_id=user.id, is_active=True)
@@ -205,7 +214,6 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
     if investor_relation_query.exists():
         return ROLE_INVESTOR
 
-    group_names = _group_names(user)
     for role in (ROLE_OWNER, ROLE_CASHIER, ROLE_WAREHOUSE):
         if role in group_names:
             return role
@@ -218,9 +226,6 @@ def resolve_user_role(user, tenant_id: int | None = None) -> str | None:
             partner__role=Partner.Role.INVESTOR,
         ).exists():
             return ROLE_INVESTOR
-
-    if user.is_superuser or user.is_staff:
-        return ROLE_OWNER
 
     if hasattr(user, 'owned_businesses') and user.owned_businesses.exists():
         return ROLE_OWNER
@@ -283,4 +288,15 @@ class IsInvestor(BasePermission):
         return (
             request.user.is_authenticated
             and resolve_user_role(request.user, request.tenant_id) == ROLE_INVESTOR
+        )
+
+
+class IsPlatformAdmin(BasePermission):
+    """Global platform administration access."""
+
+    def has_permission(self, request, view):
+        ensure_request_tenant(request)
+        return (
+            request.user.is_authenticated
+            and resolve_user_role(request.user, request.tenant_id) == ROLE_PLATFORM_ADMIN
         )

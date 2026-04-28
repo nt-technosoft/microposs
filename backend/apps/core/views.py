@@ -9,18 +9,32 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.core.permissions import IsOwner
+from apps.core.permissions import IsOwner, IsPlatformAdmin
 
-from .models import BusinessInvestorRelation, InvestorInvite, Partner
+from .models import (
+    BusinessInvestorRelation,
+    BusinessRegistrationRequest,
+    InvestorInvite,
+    Partner,
+)
 from .serializers import (
     BusinessInvestorRelationSerializer,
+    BusinessRegistrationRequestCreateSerializer,
+    BusinessRegistrationRequestRejectSerializer,
+    BusinessRegistrationRequestSerializer,
     InvestorInviteCreateSerializer,
     InvestorInvitePreviewSerializer,
     InvestorInviteRegisterSerializer,
     InvestorInviteSerializer,
     PartnerSerializer,
 )
-from .services import accept_investor_invite, create_investor_invite
+from .services import (
+    accept_investor_invite,
+    approve_business_registration_request,
+    create_business_registration_request,
+    create_investor_invite,
+    reject_business_registration_request,
+)
 
 
 class PartnerViewSet(viewsets.ReadOnlyModelViewSet):
@@ -174,3 +188,76 @@ class InvestorInviteRegisterView(APIView):
             'invite': InvestorInviteSerializer(invite).data,
             'relation': BusinessInvestorRelationSerializer(relation).data,
         }, status=status.HTTP_201_CREATED)
+
+
+class BusinessRegistrationRequestViewSet(viewsets.GenericViewSet):
+    queryset = BusinessRegistrationRequest.objects.all()
+    serializer_class = BusinessRegistrationRequestSerializer
+    ordering = ['created_at']
+
+    def get_permissions(self):
+        if self.action == 'create':
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsPlatformAdmin]
+        return [permission() for permission in permission_classes]
+
+    def get_queryset(self):
+        queryset = (
+            BusinessRegistrationRequest.objects
+            .select_related('reviewed_by', 'approved_user', 'approved_business')
+            .order_by('status', '-created_at')
+        )
+        status_filter = str(self.request.query_params.get('status', '')).strip().upper()
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_queryset(), many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_object())
+        return Response(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = BusinessRegistrationRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            registration_request = create_business_registration_request(**serializer.validated_data)
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(
+            BusinessRegistrationRequestSerializer(registration_request).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        registration_request = self.get_object()
+        try:
+            registration_request = approve_business_registration_request(
+                request_id=registration_request.pk,
+                reviewed_by=request.user,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        serializer = self.get_serializer(registration_request)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        payload = BusinessRegistrationRequestRejectSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        registration_request = self.get_object()
+        try:
+            registration_request = reject_business_registration_request(
+                request_id=registration_request.pk,
+                reviewed_by=request.user,
+                rejection_reason=payload.validated_data['rejection_reason'],
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        serializer = self.get_serializer(registration_request)
+        return Response(serializer.data)

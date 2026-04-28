@@ -150,6 +150,7 @@ function rolesLabel(roles: UserRole[]): string {
     [UserRole.CASHIER]: 'cashier',
     [UserRole.WAREHOUSE]: 'warehouse',
     [UserRole.INVESTOR]: 'investor',
+    [UserRole.PLATFORM_ADMIN]: 'platform_admin',
   }
   return roles.map((role) => labels[role]).join(' / ')
 }

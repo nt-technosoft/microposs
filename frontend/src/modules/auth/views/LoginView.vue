@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Sprout, User, Lock, Eye, EyeOff } from 'lucide-vue-next'
+import { Sprout, User, Lock, Eye, EyeOff, Building2, ArrowRight } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionStore } from '@/stores/session'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -68,6 +68,10 @@ function onPasswordInput(event: Event) {
   if (apiError.value) apiError.value = ''
 }
 
+function openBusinessRegistration() {
+  router.push('/register-business')
+}
+
 async function handleSubmit() {
   if (!validateForm()) return
   if (isLoading.value) return
@@ -88,14 +92,19 @@ async function handleSubmit() {
     const role = authStore.role
     if (role === 'warehouse') {
       await router.push('/procurements')
+    } else if (role === 'platform_admin') {
+      await router.push('/platform-admin')
     } else if (role === 'investor') {
       await router.push('/investor')
     } else {
       await router.push('/sales')
     }
   } catch (error: unknown) {
-    const axiosError = error as { response?: { status?: number } }
-    if (axiosError?.response?.status === 401 || axiosError?.response?.status === 400) {
+    const axiosError = error as { response?: { status?: number, data?: { detail?: string } } }
+    const detail = axiosError?.response?.data?.detail
+    if (typeof detail === 'string' && detail.trim()) {
+      apiError.value = detail
+    } else if (axiosError?.response?.status === 401 || axiosError?.response?.status === 400) {
       apiError.value = 'Неверный логин или пароль'
     } else {
       apiError.value = 'Ошибка сети. Проверьте подключение и попробуйте снова.'
@@ -224,6 +233,17 @@ onMounted(() => {
             {{ isLoading ? 'Выполняется вход…' : 'Войти' }}
           </BaseButton>
         </form>
+
+        <button type="button" class="register-link-card" @click="openBusinessRegistration">
+          <span class="register-link-card__icon" aria-hidden="true">
+            <Building2 :size="18" stroke-width="1.8" />
+          </span>
+          <span class="register-link-card__content">
+            <span class="register-link-card__title">Подать заявку на подключение бизнеса</span>
+            <span class="register-link-card__text">Короткая регистрация, активация после подтверждения в платформе.</span>
+          </span>
+          <ArrowRight :size="18" stroke-width="1.8" class="register-link-card__arrow" aria-hidden="true" />
+        </button>
 
         <!-- Footer -->
         <p class="form-footer">MicroPOS v0.1</p>
@@ -512,6 +532,66 @@ onMounted(() => {
     background var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out),
     transform var(--duration-fast) var(--ease-out) !important;
+}
+
+.register-link-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: 20px;
+  border: 1px solid rgba(21, 107, 86, 0.14);
+  background:
+    linear-gradient(180deg, rgba(27, 138, 111, 0.05), rgba(27, 138, 111, 0.02)),
+    var(--color-bg-primary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.register-link-card:active {
+  transform: scale(0.985);
+}
+
+.register-link-card__icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #156B56;
+  background: rgba(21, 107, 86, 0.08);
+  border: 1px solid rgba(21, 107, 86, 0.12);
+}
+
+.register-link-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.register-link-card__title {
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.register-link-card__text {
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+.register-link-card__arrow {
+  color: var(--color-text-tertiary);
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */

@@ -1,11 +1,40 @@
 """Auth API views."""
 
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-from apps.core.models import Business
+from apps.core.models import Business, BusinessRegistrationRequest
 from apps.core.permissions import ensure_request_tenant, resolve_user_role
+
+
+class PendingAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """JWT auth with clearer messages for pending business registration requests."""
+
+    def validate(self, attrs):
+        username = str(attrs.get(self.username_field, '')).strip()
+        try:
+            return super().validate(attrs)
+        except AuthenticationFailed as error:
+            latest_request = (
+                BusinessRegistrationRequest.objects
+                .filter(username=username)
+                .order_by('-created_at')
+                .first()
+            )
+            if latest_request is not None:
+                if latest_request.status == BusinessRegistrationRequest.Status.PENDING:
+                    raise AuthenticationFailed('Заявка ещё не подтверждена.') from error
+                if latest_request.status == BusinessRegistrationRequest.Status.REJECTED:
+                    raise AuthenticationFailed('Заявка была отклонена.') from error
+            raise
+
+
+class PendingAwareTokenObtainPairView(TokenObtainPairView):
+    serializer_class = PendingAwareTokenObtainPairSerializer
 
 
 class CurrentUserView(APIView):

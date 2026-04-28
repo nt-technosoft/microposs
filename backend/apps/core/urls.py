@@ -5,6 +5,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views_alignment import ReconciliationLatestView
 from .views import (
+    BusinessRegistrationRequestViewSet,
     BusinessInvestorRelationViewSet,
     InvestorInviteAcceptView,
     InvestorInvitePreviewView,
@@ -17,6 +18,11 @@ router = DefaultRouter()
 router.register('partners', PartnerViewSet, basename='partner')
 router.register('investor-relations', BusinessInvestorRelationViewSet, basename='investor-relation')
 router.register('investor-invites', InvestorInviteViewSet, basename='investor-invite')
+router.register(
+    'business-registration-requests',
+    BusinessRegistrationRequestViewSet,
+    basename='business-registration-request',
+)
 
 urlpatterns = [
     path('', include(router.urls)),

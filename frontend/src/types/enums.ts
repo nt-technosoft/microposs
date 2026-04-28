@@ -45,6 +45,7 @@ export enum UserRole {
   CASHIER = 'cashier',
   WAREHOUSE = 'warehouse',
   INVESTOR = 'investor',
+  PLATFORM_ADMIN = 'platform_admin',
 }
 
 export enum ProcurementType {

@@ -244,6 +244,57 @@ class InvestorInvite(TenantModel):
         return self.expires_at <= timezone.now()
 
 
+class BusinessRegistrationRequest(BaseModel):
+    """Public request for creating a new business account on the platform."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Ожидает'
+        APPROVED = 'APPROVED', 'Подтверждена'
+        REJECTED = 'REJECTED', 'Отклонена'
+
+    username = models.CharField(max_length=150, db_index=True)
+    password_hash = models.CharField(max_length=128)
+    first_name = models.CharField(max_length=150, blank=True, default='')
+    last_name = models.CharField(max_length=150, blank=True, default='')
+    phone = models.CharField(max_length=32, blank=True, default='')
+    business_name = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    rejection_reason = models.CharField(max_length=255, blank=True, default='')
+    reviewed_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='reviewed_business_registration_requests',
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    approved_user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='approved_business_registration_requests',
+        null=True,
+        blank=True,
+    )
+    approved_business = models.ForeignKey(
+        Business,
+        on_delete=models.PROTECT,
+        related_name='registration_requests',
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        db_table = 'core_business_registration_request'
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['username', 'status']),
+        ]
+
+
 class OutboxEvent(BaseModel):
     """
     Outbox pattern — stores domain events for async processing.

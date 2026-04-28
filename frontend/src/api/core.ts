@@ -44,6 +44,26 @@ export interface InvestorInvitePreview {
   is_expired: boolean
 }
 
+export type BusinessRegistrationRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+
+export interface BusinessRegistrationRequest {
+  id: number
+  username: string
+  first_name: string
+  last_name: string
+  full_name: string
+  phone: string
+  business_name: string
+  status: BusinessRegistrationRequestStatus
+  rejection_reason: string
+  reviewed_by: number | null
+  reviewed_at: string | null
+  approved_user: number | null
+  approved_business: number | null
+  approved_business_name: string
+  created_at: string
+}
+
 export async function fetchPartners(params?: {
   role?: 'INVESTOR' | 'OPERATOR'
   is_active?: boolean
@@ -99,5 +119,37 @@ export async function registerInvestorFromInvite(token: string, payload: {
   relation: InvestorRelation
 }> {
   const { data } = await api.post(`/api/v1/core/investor-invites/${token}/register/`, payload)
+  return data
+}
+
+export async function createBusinessRegistrationRequest(payload: {
+  username: string
+  password: string
+  first_name: string
+  last_name: string
+  phone: string
+  business_name: string
+}): Promise<BusinessRegistrationRequest> {
+  const { data } = await api.post<BusinessRegistrationRequest>('/api/v1/core/business-registration-requests/', payload)
+  return data
+}
+
+export async function fetchBusinessRegistrationRequests(status?: BusinessRegistrationRequestStatus): Promise<BusinessRegistrationRequest[]> {
+  const { data } = await api.get<PaginatedResponse<BusinessRegistrationRequest> | BusinessRegistrationRequest[]>(
+    '/api/v1/core/business-registration-requests/',
+    { params: status ? { status } : undefined },
+  )
+  return toList<BusinessRegistrationRequest>(data)
+}
+
+export async function approveBusinessRegistrationRequest(id: number): Promise<BusinessRegistrationRequest> {
+  const { data } = await api.post<BusinessRegistrationRequest>(`/api/v1/core/business-registration-requests/${id}/approve/`)
+  return data
+}
+
+export async function rejectBusinessRegistrationRequest(id: number, rejectionReason = ''): Promise<BusinessRegistrationRequest> {
+  const { data } = await api.post<BusinessRegistrationRequest>(`/api/v1/core/business-registration-requests/${id}/reject/`, {
+    rejection_reason: rejectionReason,
+  })
   return data
 }

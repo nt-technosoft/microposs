@@ -1,6 +1,11 @@
 from rest_framework import serializers
 
-from .models import BusinessInvestorRelation, InvestorInvite, Partner
+from .models import (
+    BusinessInvestorRelation,
+    BusinessRegistrationRequest,
+    InvestorInvite,
+    Partner,
+)
 
 
 class PartnerSerializer(serializers.ModelSerializer):
@@ -66,3 +71,52 @@ class InvestorInviteRegisterSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=4, write_only=True)
     display_name = serializers.CharField(required=False, allow_blank=True, default='')
     email = serializers.EmailField(required=False, allow_blank=True, default='')
+
+
+class BusinessRegistrationRequestSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    approved_business_name = serializers.CharField(source='approved_business.name', read_only=True)
+
+    class Meta:
+        model = BusinessRegistrationRequest
+        fields = [
+            'id',
+            'username',
+            'first_name',
+            'last_name',
+            'full_name',
+            'phone',
+            'business_name',
+            'status',
+            'rejection_reason',
+            'reviewed_by',
+            'reviewed_at',
+            'approved_user',
+            'approved_business',
+            'approved_business_name',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        return ' '.join(
+            part for part in [obj.first_name.strip(), obj.last_name.strip()] if part
+        ).strip()
+
+
+class BusinessRegistrationRequestCreateSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(min_length=6, write_only=True)
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    phone = serializers.CharField(max_length=32)
+    business_name = serializers.CharField(max_length=255)
+
+
+class BusinessRegistrationRequestRejectSerializer(serializers.Serializer):
+    rejection_reason = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        default='',
+    )

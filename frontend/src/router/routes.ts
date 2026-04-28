@@ -13,6 +13,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: false, layout: 'blank' },
   },
   {
+    path: '/register-business',
+    name: 'business-registration',
+    component: () => import('@/modules/auth/views/BusinessRegistrationView.vue'),
+    meta: { requiresAuth: false, layout: 'blank' },
+  },
+  {
     path: '/investor/invite/:token',
     name: 'investor-invite',
     component: () => import('@/modules/investors/views/InvestorInviteAccept.vue'),
@@ -189,6 +195,12 @@ const routes: RouteRecordRaw[] = [
     name: 'owner-investors',
     component: () => import('@/modules/investors/views/OwnerInvestors.vue'),
     meta: { roles: ['owner'] },
+  },
+  {
+    path: '/platform-admin',
+    name: 'platform-admin-requests',
+    component: () => import('@/modules/platformAdmin/views/PlatformAdminRequestsView.vue'),
+    meta: { roles: ['platform_admin'], layout: 'blank' },
   },
 
   // More section
