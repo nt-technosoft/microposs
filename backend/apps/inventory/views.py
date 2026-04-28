@@ -178,9 +178,31 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
     ordering = ['-created_at']
 
     def get_queryset(self):
-        return StockMovement.objects.filter(
+        qs = StockMovement.objects.filter(
             tenant_id=self.request.tenant_id,
         ).select_related('from_location', 'to_location', 'lot')
+
+        movement_type = self.request.query_params.get('movement_type')
+        if movement_type:
+            qs = qs.filter(movement_type=str(movement_type).lower())
+
+        reference_type = self.request.query_params.get('reference_type')
+        if reference_type:
+            qs = qs.filter(reference_type=reference_type)
+
+        from_location = self.request.query_params.get('from_location')
+        if from_location and str(from_location).isdigit():
+            qs = qs.filter(from_location_id=int(from_location))
+
+        to_location = self.request.query_params.get('to_location')
+        if to_location and str(to_location).isdigit():
+            qs = qs.filter(to_location_id=int(to_location))
+
+        lot = self.request.query_params.get('lot')
+        if lot and str(lot).isdigit():
+            qs = qs.filter(lot_id=int(lot))
+
+        return qs
 
 
 class StockView(viewsets.ViewSet):

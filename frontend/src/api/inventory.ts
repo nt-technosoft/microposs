@@ -24,6 +24,12 @@ interface FetchLotsParams {
 
 interface FetchStockMovementsParams {
   page?: number
+  page_size?: number
+  movement_type?: string
+  reference_type?: string
+  from_location?: number
+  to_location?: number
+  lot?: number
 }
 
 export interface TransferStockPayload {

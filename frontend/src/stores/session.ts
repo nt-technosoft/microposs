@@ -10,6 +10,7 @@ import {
   closeSession as apiCloseSession,
 } from '../api/sales'
 import { getApiErrorMessage } from '@/utils/errors'
+import { useCartStore } from '@/stores/cart'
 
 interface SessionState {
   currentSession: PosSession | null
@@ -82,9 +83,11 @@ export const useSessionStore = defineStore('session', {
             ...(normalizedLocation ? { location: normalizedLocation } : {}),
           }
           this.location = normalizedLocation
+          useCartStore().setLocation(normalizedLocation?.id ?? null)
         } else {
           this.currentSession = null
           this.location = null
+          useCartStore().clear()
         }
       } catch (error: unknown) {
         this.error = getApiErrorMessage(error, 'Не удалось загрузить смену')
@@ -105,6 +108,7 @@ export const useSessionStore = defineStore('session', {
           ...(normalizedLocation ? { location: normalizedLocation } : {}),
         }
         this.location = normalizedLocation
+        useCartStore().setLocation(normalizedLocation?.id ?? null)
         return session
       } catch (error: unknown) {
         this.error = getApiErrorMessage(error, 'Не удалось открыть смену')
@@ -127,6 +131,7 @@ export const useSessionStore = defineStore('session', {
         await apiCloseSession(this.currentSession.id, { actual_cash: actualCash })
         this.currentSession = null
         this.location = null
+        useCartStore().clear()
       } catch (error: unknown) {
         this.error = getApiErrorMessage(error, 'Не удалось закрыть смену')
         throw error

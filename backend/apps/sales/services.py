@@ -327,7 +327,7 @@ def create_sale(
                     lot=lot,
                     movement_type=StockMovement.MovementType.SALE,
                     quantity=-alloc_qty,
-                    from_location_id=location_id,
+                    from_location_id=sale_location_id,
                     reference_type='sale',
                     reference_id=sale.pk,
                 )

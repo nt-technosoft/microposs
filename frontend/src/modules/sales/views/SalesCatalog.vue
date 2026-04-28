@@ -156,10 +156,18 @@ function getDisplaySku(product: Product): string {
 }
 
 function productStock(product: Product): number {
+  if (!activeSession.value) return productTotalStock(product)
+  if (Number.isFinite(product.stock_at_location)) return Number(product.stock_at_location)
   if (Number.isFinite(product.total_stock)) return Number(product.total_stock)
   if (Array.isArray(product.variants) && product.variants.length > 0) {
     return product.variants.reduce((sum, variant) => sum + (variant.stock_quantity ?? 0), 0)
   }
+  return 0
+}
+
+function productTotalStock(product: Product): number {
+  if (Number.isFinite(product.total_stock_all_locations)) return Number(product.total_stock_all_locations)
+  if (Number.isFinite(product.total_stock)) return Number(product.total_stock)
   return 0
 }
 
@@ -181,7 +189,11 @@ function productTrace(product: Product): string {
 
 function stockLabel(product: Product): string {
   const stock = productStock(product)
-  return stock > 0 ? `${stock} в наличии` : 'Нет в наличии'
+  if (!activeSession.value) {
+    return stock > 0 ? `Всего ${stock}` : 'Нет в наличии'
+  }
+  if (stock > 0) return `${stock} в магазине`
+  return productTotalStock(product) > 0 ? 'На складе · нет в магазине' : 'Нет в наличии'
 }
 
 const viewModeButtonLabel = computed(() =>
@@ -226,6 +238,12 @@ async function onAddToCart(product: Product | null | undefined) {
     return
   }
 
+  if (!activeSession.value?.location?.id) {
+    toast.warning('Открой смену в магазине, чтобы добавлять товары')
+    openSessionSheet()
+    return
+  }
+
   const supportsQuickAdd = !product.has_variants && product.pricing_mode === PricingMode.FIXED
   if (!supportsQuickAdd) {
     router.push({ name: 'product-detail', params: { id: product.id } })
@@ -236,7 +254,7 @@ async function onAddToCart(product: Product | null | undefined) {
   let variant: ProductVariant | null = localVariants[0] ?? null
   if (!variant) {
     try {
-      const locationId = sessionStore.currentSession?.location?.id
+      const locationId = activeSession.value.location.id
       const loadedVariants = await fetchProductVariants(product.id, {
         location_id: locationId,
       })
@@ -251,8 +269,14 @@ async function onAddToCart(product: Product | null | undefined) {
     return
   }
 
-  if ((variant.stock_quantity ?? 0) <= 0) {
+  const availableStock = Number(variant.stock_at_location ?? variant.stock_quantity ?? 0)
+  if (availableStock <= 0) {
     router.push({ name: 'product-detail', params: { id: product.id } })
+    return
+  }
+
+  if (inCartQuantity(product) >= availableStock) {
+    toast.warning('В магазине больше нет доступного остатка')
     return
   }
 
@@ -263,6 +287,8 @@ async function onAddToCart(product: Product | null | undefined) {
     product_name: product.name,
     pricing_mode: product.pricing_mode,
     lot_id: null,
+    location_id: activeSession.value.location.id,
+    available_stock: availableStock,
     quantity: 1,
     unit_price: price,
     base_price: price,
@@ -359,6 +385,7 @@ async function submitOpenSession(): Promise<void> {
   try {
     await sessionStore.openSession(openForm.value.locationId, openingCash)
     closeOpenSessionSheet()
+    await productsStore.fetchProducts(true)
     toast.success('Смена открыта')
   } catch (error: unknown) {
     openFormError.value = getApiErrorMessage(error, 'Не удалось открыть смену')
@@ -377,6 +404,7 @@ async function submitCloseSession(): Promise<void> {
   try {
     await sessionStore.closeSession(actualCash)
     closeCloseSessionSheet()
+    await productsStore.fetchProducts(true)
     toast.success('Смена закрыта')
   } catch (error: unknown) {
     closeFormError.value = getApiErrorMessage(error, 'Не удалось закрыть смену')
@@ -402,6 +430,14 @@ watch(catalogViewMode, (value) => {
   if (typeof window === 'undefined') return
   window.localStorage.setItem('sales-catalog-view', value)
 })
+
+watch(
+  () => sessionStore.currentSession?.location?.id ?? null,
+  async (locationId) => {
+    cartStore.setLocation(locationId)
+    await productsStore.fetchProducts(true)
+  },
+)
 
 watch(searchQuery, (value) => {
   if (value.trim()) {
@@ -672,6 +708,7 @@ onBeforeUnmount(() => {
             <ProductCard
               :product="product"
               :in-cart-quantity="inCartQuantity(product)"
+              :location-scoped="!!activeSession"
               @add-to-cart="onAddToCart"
               @view-detail="onViewDetail"
             />
@@ -727,11 +764,11 @@ onBeforeUnmount(() => {
 
             <button
               class="compact-product-action"
-              :class="{ 'compact-product-action--select': product.has_variants }"
-              :aria-label="product.has_variants ? `Выбрать ${product.name}` : `Добавить ${product.name}`"
-              @click.stop="product.has_variants ? onViewDetail(product) : onAddToCart(product)"
+              :class="{ 'compact-product-action--select': product.has_variants || productStock(product) <= 0 }"
+              :aria-label="product.has_variants || productStock(product) <= 0 ? `Открыть ${product.name}` : `Добавить ${product.name}`"
+              @click.stop="product.has_variants || productStock(product) <= 0 ? onViewDetail(product) : onAddToCart(product)"
             >
-              <template v-if="product.has_variants">
+              <template v-if="product.has_variants || productStock(product) <= 0">
                 <ChevronRight :size="16" :stroke-width="2" />
               </template>
               <template v-else>

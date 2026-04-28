@@ -218,8 +218,11 @@ export async function fetchProducts(params?: FetchProductsParams): Promise<Pagin
   return toPaginated<Product>(data)
 }
 
-export async function fetchProduct(id: number): Promise<Product> {
-  const { data } = await api.get<Product>(`/api/v1/catalog/products/${id}/`)
+export async function fetchProduct(
+  id: number,
+  params?: { location_id?: number; location?: number },
+): Promise<Product> {
+  const { data } = await api.get<Product>(`/api/v1/catalog/products/${id}/`, { params })
   return data
 }
 

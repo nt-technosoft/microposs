@@ -3,11 +3,58 @@ Catalog serializers — DRF serializers for all catalog models.
 """
 
 from rest_framework import serializers
+from django.db import models as db_models
+
 from .models import (
     Category, Attribute, AttributeValue, CategoryAttribute, CategoryCharacteristicTemplate,
     Product, ProductVariant, VariantAttributeValue,
     ProductCharacteristic, DiscountReason,
 )
+
+
+def _requested_location_id(context) -> int | None:
+    warehouse_id = context.get('warehouse_id') or context.get('location_id')
+    return warehouse_id if isinstance(warehouse_id, int) else None
+
+
+def _stock_base_queryset():
+    from apps.inventory.models import LotStock
+
+    return LotStock.objects.filter(
+        lot__is_active=True,
+        quantity_remaining__gt=0,
+    )
+
+
+def _stock_total(queryset) -> int:
+    result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
+    return int(result['total'] or 0)
+
+
+def _stock_by_location(queryset) -> list[dict]:
+    return [
+        {
+            'warehouse_id': row['warehouse_id'],
+            'warehouse_name': row['warehouse__name'],
+            'warehouse_kind': row['warehouse__kind'],
+            'quantity': int(row['quantity'] or 0),
+        }
+        for row in queryset.values(
+            'warehouse_id',
+            'warehouse__name',
+            'warehouse__kind',
+        ).annotate(
+            quantity=db_models.Sum('quantity_remaining'),
+        ).order_by('warehouse__kind', 'warehouse__name')
+    ]
+
+
+def _availability_state(*, total_stock: int, stock_at_location: int) -> str:
+    if stock_at_location > 0:
+        return 'in_shop'
+    if total_stock > 0:
+        return 'warehouse_only'
+    return 'out_of_stock'
 
 
 # === Category ===
@@ -156,6 +203,10 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         max_digits=12, decimal_places=2, read_only=True,
     )
     stock_quantity = serializers.SerializerMethodField()
+    total_stock_all_locations = serializers.SerializerMethodField()
+    stock_at_location = serializers.SerializerMethodField()
+    stock_by_location = serializers.SerializerMethodField()
+    availability_state = serializers.SerializerMethodField()
     product_name = serializers.CharField(source='product.name', read_only=True)
     category_id = serializers.IntegerField(source='product.category_id', read_only=True)
     category_name = serializers.CharField(source='product.category.name', read_only=True, default=None)
@@ -167,6 +218,8 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_name', 'category_id', 'category_name',
             'sku', 'display_sku', 'price', 'effective_price',
             'is_active', 'attribute_values', 'stock_quantity',
+            'total_stock_all_locations', 'stock_at_location',
+            'stock_by_location', 'availability_state',
         ]
         read_only_fields = ['id', 'effective_price']
 
@@ -183,18 +236,41 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         ]
 
     def get_stock_quantity(self, obj):
-        from apps.inventory.models import LotStock
-        from django.db import models as db_models
-        queryset = LotStock.objects.filter(
+        queryset = _stock_base_queryset().filter(
             lot__product_variant=obj,
-            lot__is_active=True,
         )
-        warehouse_id = self.context.get('warehouse_id') or self.context.get('location_id')
-        if isinstance(warehouse_id, int):
+        warehouse_id = _requested_location_id(self.context)
+        if warehouse_id is not None:
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
-        result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
-        return result['total'] or 0
+        return _stock_total(queryset)
+
+    def get_total_stock_all_locations(self, obj):
+        return _stock_total(_stock_base_queryset().filter(lot__product_variant=obj))
+
+    def get_stock_at_location(self, obj):
+        warehouse_id = _requested_location_id(self.context)
+        if warehouse_id is None:
+            return None
+        return _stock_total(
+            _stock_base_queryset().filter(
+                lot__product_variant=obj,
+                warehouse_id=warehouse_id,
+            )
+        )
+
+    def get_stock_by_location(self, obj):
+        return _stock_by_location(
+            _stock_base_queryset().filter(lot__product_variant=obj)
+        )
+
+    def get_availability_state(self, obj):
+        total_stock = self.get_total_stock_all_locations(obj)
+        stock_at_location = self.get_stock_at_location(obj)
+        return _availability_state(
+            total_stock=total_stock,
+            stock_at_location=stock_at_location or 0,
+        )
 
     def get_display_sku(self, obj):
         sku = (obj.sku or '').strip()
@@ -230,6 +306,10 @@ class ProductListSerializer(serializers.ModelSerializer):
     )
     variants_count = serializers.SerializerMethodField()
     total_stock = serializers.SerializerMethodField()
+    total_stock_all_locations = serializers.SerializerMethodField()
+    stock_at_location = serializers.SerializerMethodField()
+    stock_by_location = serializers.SerializerMethodField()
+    availability_state = serializers.SerializerMethodField()
     display_sku = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
 
@@ -239,6 +319,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             'id', 'name', 'category', 'category_name',
             'base_price', 'pricing_mode', 'has_variants',
             'is_active', 'photo_url', 'display_sku', 'variants_count', 'total_stock',
+            'total_stock_all_locations', 'stock_at_location',
+            'stock_by_location', 'availability_state',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -247,18 +329,43 @@ class ProductListSerializer(serializers.ModelSerializer):
         return obj.variants.filter(is_active=True).count()
 
     def get_total_stock(self, obj):
-        from apps.inventory.models import LotStock
-        from django.db import models as db_models
-        queryset = LotStock.objects.filter(
+        queryset = _stock_base_queryset().filter(
             lot__product_variant__product=obj,
-            lot__is_active=True,
         )
-        warehouse_id = self.context.get('warehouse_id') or self.context.get('location_id')
-        if isinstance(warehouse_id, int):
+        warehouse_id = _requested_location_id(self.context)
+        if warehouse_id is not None:
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
-        result = queryset.aggregate(total=db_models.Sum('quantity_remaining'))
-        return result['total'] or 0
+        return _stock_total(queryset)
+
+    def get_total_stock_all_locations(self, obj):
+        return _stock_total(
+            _stock_base_queryset().filter(lot__product_variant__product=obj)
+        )
+
+    def get_stock_at_location(self, obj):
+        warehouse_id = _requested_location_id(self.context)
+        if warehouse_id is None:
+            return None
+        return _stock_total(
+            _stock_base_queryset().filter(
+                lot__product_variant__product=obj,
+                warehouse_id=warehouse_id,
+            )
+        )
+
+    def get_stock_by_location(self, obj):
+        return _stock_by_location(
+            _stock_base_queryset().filter(lot__product_variant__product=obj)
+        )
+
+    def get_availability_state(self, obj):
+        total_stock = self.get_total_stock_all_locations(obj)
+        stock_at_location = self.get_stock_at_location(obj)
+        return _availability_state(
+            total_stock=total_stock,
+            stock_at_location=stock_at_location or 0,
+        )
 
     def get_display_sku(self, obj):
         variant = obj.variants.filter(is_active=True).order_by('id').first()
@@ -282,15 +389,38 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     variants = ProductVariantSerializer(many=True, read_only=True)
     characteristics = ProductCharacteristicSerializer(many=True, read_only=True)
     photo_url = serializers.SerializerMethodField()
+    total_stock = serializers.SerializerMethodField()
+    total_stock_all_locations = serializers.SerializerMethodField()
+    stock_at_location = serializers.SerializerMethodField()
+    stock_by_location = serializers.SerializerMethodField()
+    availability_state = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'category', 'category_name', 'description',
             'base_price', 'pricing_mode', 'has_variants', 'is_active',
-            'photo_url', 'variants', 'characteristics', 'created_at', 'updated_at',
+            'photo_url', 'variants', 'characteristics',
+            'total_stock', 'total_stock_all_locations', 'stock_at_location',
+            'stock_by_location', 'availability_state',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_total_stock(self, obj):
+        return ProductListSerializer(context=self.context).get_total_stock(obj)
+
+    def get_total_stock_all_locations(self, obj):
+        return ProductListSerializer(context=self.context).get_total_stock_all_locations(obj)
+
+    def get_stock_at_location(self, obj):
+        return ProductListSerializer(context=self.context).get_stock_at_location(obj)
+
+    def get_stock_by_location(self, obj):
+        return ProductListSerializer(context=self.context).get_stock_by_location(obj)
+
+    def get_availability_state(self, obj):
+        return ProductListSerializer(context=self.context).get_availability_state(obj)
 
     def get_photo_url(self, obj):
         request = self.context.get('request')

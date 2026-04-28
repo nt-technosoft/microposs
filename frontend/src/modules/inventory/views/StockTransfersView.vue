@@ -49,6 +49,22 @@ const destinationOptions = computed(() =>
     })),
 )
 
+const selectedSource = computed(() =>
+  activeLocations.value.find((location) => location.id === form.value.fromWarehouseId) ?? null,
+)
+
+const selectedDestination = computed(() =>
+  activeLocations.value.find((location) => location.id === form.value.toWarehouseId) ?? null,
+)
+
+const directionLabel = computed(() => {
+  const sourceKind = selectedSource.value?.kind
+  const destinationKind = selectedDestination.value?.kind
+  if (sourceKind === 'storage' && destinationKind === 'shop') return 'Со склада в магазин'
+  if (sourceKind === 'shop' && destinationKind === 'storage') return 'Из магазина на склад'
+  return 'Между точками хранения'
+})
+
 function lotAvailableQuantity(lot: Lot): number {
   const stock = lot.stocks?.find((entry) => entry.warehouse === form.value.fromWarehouseId)
   return stock?.quantity_remaining ?? 0
@@ -108,12 +124,10 @@ async function loadLocationsAndMovements(): Promise<void> {
   try {
     const [loadedLocations, movementsResponse] = await Promise.all([
       fetchLocations(),
-      fetchStockMovements({ page: 1 }),
+      fetchStockMovements({ movement_type: 'transfer', page: 1, page_size: 6 }),
     ])
     locations.value = loadedLocations
-    recentTransfers.value = movementsResponse.results.filter((movement) => (
-      movement.movement_type === 'TRANSFER' || movement.reference_type === 'transfer'
-    )).slice(0, 6)
+    recentTransfers.value = movementsResponse.results
 
     if (!form.value.fromWarehouseId) {
       const defaultSource = loadedLocations.find((location) => location.kind === 'storage') ?? loadedLocations[0]
@@ -247,10 +261,15 @@ onMounted(async () => {
         <div v-if="loadError" class="error-banner">{{ loadError }}</div>
 
         <div v-else class="form-grid">
+          <div class="direction-strip">
+            <ArrowRightLeft :size="16" :stroke-width="2" />
+            <span>{{ directionLabel }}</span>
+          </div>
+
           <BaseSelect
             v-model="form.fromWarehouseId"
             :options="sourceOptions"
-            title="Откуда перемещаем"
+            title="Источник"
             placeholder="Выбери точку отправления"
           />
 
@@ -263,7 +282,7 @@ onMounted(async () => {
           <BaseSelect
             v-model="form.toWarehouseId"
             :options="destinationOptions"
-            title="Куда перемещаем"
+            title="Назначение"
             placeholder="Выбери точку назначения"
           />
 
@@ -424,6 +443,20 @@ onMounted(async () => {
 .form-grid {
   display: grid;
   gap: var(--space-3);
+}
+
+.direction-strip {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
 }
 
 .swap-row {

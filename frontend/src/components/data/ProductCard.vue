@@ -7,10 +7,12 @@ import PriceDisplay from '@/components/data/PriceDisplay.vue'
 interface Props {
   product: Product
   inCartQuantity?: number
+  locationScoped?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   inCartQuantity: 0,
+  locationScoped: true,
 })
 
 const emit = defineEmits<{
@@ -35,6 +37,25 @@ const hasImage = computed(() =>
 )
 
 const totalStock = computed(() => {
+  if (Number.isFinite(props.product.total_stock_all_locations)) {
+    return Number(props.product.total_stock_all_locations)
+  }
+  if (Number.isFinite(props.product.total_stock)) {
+    return Number(props.product.total_stock)
+  }
+  return 0
+})
+
+const stockAtLocation = computed(() => {
+  if (!props.locationScoped) {
+    return totalStock.value
+  }
+  if (props.product.availability_state === 'warehouse_only') {
+    return 0
+  }
+  if (Number.isFinite(props.product.stock_at_location)) {
+    return Number(props.product.stock_at_location)
+  }
   if (Number.isFinite(props.product.total_stock)) {
     return Number(props.product.total_stock)
   }
@@ -44,13 +65,24 @@ const totalStock = computed(() => {
   return 0
 })
 
+const stockStatusLabel = computed(() => {
+  if (!props.locationScoped) {
+    return totalStock.value > 0 ? `Всего ${totalStock.value} шт` : 'Нет в наличии'
+  }
+  if (stockAtLocation.value > 0) return `${stockAtLocation.value} шт в магазине`
+  if (totalStock.value > 0) return 'На складе · нет в магазине'
+  return 'Нет в наличии'
+})
+
+const isUnavailableForSale = computed(() => stockAtLocation.value <= 0)
+
 function onCardClick() {
   emit('view-detail', props.product)
 }
 
 function onActionClick(event: MouseEvent) {
   event.stopPropagation()
-  if (props.product.has_variants) {
+  if (props.product.has_variants || isUnavailableForSale.value) {
     emit('view-detail', props.product)
   } else {
     emit('add-to-cart', props.product)
@@ -96,8 +128,14 @@ function onActionClick(event: MouseEvent) {
       </div>
 
       <div class="product-meta">
-        <span class="meta-pill" :class="{ 'meta-pill--warning': totalStock <= 0 }">
-          {{ totalStock > 0 ? `${totalStock} шт` : 'Нет в наличии' }}
+        <span
+          class="meta-pill"
+          :class="{
+            'meta-pill--warning': totalStock <= 0,
+            'meta-pill--storage': stockAtLocation <= 0 && totalStock > 0,
+          }"
+        >
+          {{ stockStatusLabel }}
         </span>
         <span v-if="product.has_variants" class="meta-pill">
           Вариативный
@@ -108,12 +146,12 @@ function onActionClick(event: MouseEvent) {
     <!-- Action button -->
     <button
       class="product-action"
-      :class="{ 'product-action--select': product.has_variants }"
-      :aria-label="product.has_variants ? `Выбрать вариант ${product.name}` : `Добавить ${product.name} в корзину`"
+      :class="{ 'product-action--select': product.has_variants || isUnavailableForSale }"
+      :aria-label="product.has_variants || isUnavailableForSale ? `Открыть ${product.name}` : `Добавить ${product.name} в корзину`"
       @click="onActionClick"
     >
-      <template v-if="product.has_variants">
-        <span class="action-label">Выбрать</span>
+      <template v-if="product.has_variants || isUnavailableForSale">
+        <span class="action-label">{{ product.has_variants ? 'Выбрать' : 'Подробнее' }}</span>
         <ChevronRight :size="16" :stroke-width="2" />
       </template>
       <template v-else>
@@ -247,6 +285,12 @@ function onActionClick(event: MouseEvent) {
 
 .meta-pill--warning {
   border-color: var(--color-warning);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.meta-pill--storage {
+  border-color: rgba(217, 119, 6, 0.22);
   color: var(--color-warning);
   background: var(--color-warning-bg);
 }

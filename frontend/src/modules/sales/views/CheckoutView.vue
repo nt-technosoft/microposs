@@ -89,7 +89,11 @@ function deselectCustomer(): void {
 // ==============================
 
 const canSubmit = computed(
-  () => !cartStore.isEmpty && sessionStore.isOpen && !(creditRequired.value && !selectedCustomer.value),
+  () => !cartStore.isEmpty
+    && sessionStore.isOpen
+    && !cartStore.hasAvailabilityIssues
+    && !cartStore.hasLocationMismatch
+    && !(creditRequired.value && !selectedCustomer.value),
 )
 
 async function confirmSale(): Promise<void> {
@@ -100,6 +104,11 @@ async function confirmSale(): Promise<void> {
 
   if (!sessionStore.currentSession) {
     toast.error('Нет активной кассовой смены')
+    return
+  }
+
+  if (cartStore.hasAvailabilityIssues || cartStore.hasLocationMismatch) {
+    toast.error('Проверь остатки магазина в корзине')
     return
   }
 
@@ -200,6 +209,22 @@ function goToHistory(): void {
           </div>
           <BaseButton variant="secondary" size="sm" @click="openSession">
             Открыть смену
+          </BaseButton>
+        </section>
+
+        <section
+          v-else-if="cartStore.hasAvailabilityIssues || cartStore.hasLocationMismatch"
+          class="session-alert"
+          aria-label="Проверка остатков"
+        >
+          <div class="session-alert__body">
+            <p class="session-alert__title">Проверь остатки магазина</p>
+            <p class="session-alert__text">
+              В корзине есть позиции сверх доступного остатка или из другой точки продаж.
+            </p>
+          </div>
+          <BaseButton variant="secondary" size="sm" @click="goBack">
+            Корзина
           </BaseButton>
         </section>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Package, ShoppingCart, Check, ListTree } from 'lucide-vue-next'
+import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
@@ -137,15 +137,73 @@ const priceChanged = computed(() => (
 
 const lineTotal = computed(() => lineUnitPrice.value * quantity.value)
 
+const activeLocationId = computed(() => sessionStore.currentSession?.location?.id ?? null)
+
+const stockLocations = computed(() => (
+  matchedVariant.value?.stock_by_location
+  ?? product.value?.stock_by_location
+  ?? []
+))
+
+const explicitShopStock = computed(() =>
+  stockLocations.value
+    .filter((entry) => String(entry.warehouse_kind).toUpperCase() === 'SHOP')
+    .reduce((sum, entry) => sum + Number(entry.quantity || 0), 0),
+)
+
+const explicitStorageStock = computed(() =>
+  stockLocations.value
+    .filter((entry) => String(entry.warehouse_kind).toUpperCase() === 'STORAGE')
+    .reduce((sum, entry) => sum + Number(entry.quantity || 0), 0),
+)
+
 const stockQuantity = computed((): number | null => {
+  if (!activeLocationId.value) return null
+  if (matchedVariant.value?.stock_at_location !== undefined && matchedVariant.value.stock_at_location !== null) {
+    return matchedVariant.value.stock_at_location
+  }
   if (matchedVariant.value?.stock_quantity !== undefined) {
     return matchedVariant.value.stock_quantity
   }
   return null
 })
 
+const totalStock = computed((): number => {
+  if (Number.isFinite(matchedVariant.value?.total_stock_all_locations)) {
+    return Number(matchedVariant.value?.total_stock_all_locations)
+  }
+  if (Number.isFinite(product.value?.total_stock_all_locations)) {
+    return Number(product.value?.total_stock_all_locations)
+  }
+  if (Number.isFinite(product.value?.total_stock)) {
+    return Number(product.value?.total_stock)
+  }
+  return stockQuantity.value ?? 0
+})
+
+const shopStock = computed(() => (
+  activeLocationId.value ? (stockQuantity.value ?? 0) : explicitShopStock.value
+))
+
+const storageStock = computed(() => {
+  if (explicitStorageStock.value > 0) return explicitStorageStock.value
+  return Math.max(totalStock.value - shopStock.value, 0)
+})
+
+const stockStateLabel = computed(() => {
+  if (!activeLocationId.value) {
+    if (totalStock.value <= 0) return 'Нет в наличии'
+    if (shopStock.value > 0) return 'Есть в магазине'
+    return 'Есть в наличии'
+  }
+  if (shopStock.value > 0) return 'Доступно в магазине'
+  if (storageStock.value > 0) return 'Есть на складе'
+  return 'Нет в наличии'
+})
+
 const canAddToCart = computed((): boolean => {
   if (!product.value) return false
+  if (!sessionStore.currentSession?.location?.id) return false
   if (product.value.has_variants && !matchedVariant.value) return false
   if (stockQuantity.value !== null && stockQuantity.value <= 0) return false
   if (lineUnitPrice.value <= 0) return false
@@ -158,6 +216,10 @@ const canAddToCart = computed((): boolean => {
   return true
 })
 
+const canOpenSessionFromDetail = computed(() => (
+  !activeLocationId.value && !!product.value && totalStock.value > 0
+))
+
 const categoryLabel = computed((): string | null => {
   if (!product.value) return null
   if (product.value.category && typeof product.value.category === 'object' && 'name' in product.value.category) {
@@ -168,6 +230,9 @@ const categoryLabel = computed((): string | null => {
 })
 
 const addButtonLabel = computed((): string => {
+  if (!activeLocationId.value) {
+    return totalStock.value > 0 ? 'Открыть смену для продажи' : 'Нет в наличии'
+  }
   if (!product.value?.has_variants || matchedVariant.value) {
     return `В корзину`
   }
@@ -228,6 +293,8 @@ function addToCart() {
     product_name: product.value.name,
     pricing_mode: pricingMode.value,
     lot_id: null,
+    location_id: sessionStore.currentSession?.location?.id ?? null,
+    available_stock: stockQuantity.value,
     quantity: quantity.value,
     unit_price: lineUnitPrice.value.toFixed(2),
     base_price: lineBasePrice.value.toFixed(2),
@@ -244,8 +311,20 @@ function addToCart() {
   }, 900)
 }
 
+function handlePrimaryAction() {
+  if (canOpenSessionFromDetail.value) {
+    router.push({ name: 'sales-catalog', query: { openSession: '1' } })
+    return
+  }
+  addToCart()
+}
+
 function goBack() {
   router.back()
+}
+
+function goToTransfers() {
+  router.push({ name: 'stock-transfers' })
 }
 
 // ===== Load data =====
@@ -264,7 +343,9 @@ async function loadProduct() {
   try {
     const locationId = sessionStore.currentSession?.location?.id
     const [productData, variantsData, discountReasons] = await Promise.all([
-      fetchProduct(id),
+      fetchProduct(id, {
+        location_id: locationId,
+      }),
       fetchProductVariants(id, {
         location_id: locationId,
       }),
@@ -463,14 +544,39 @@ onMounted(() => {
             />
           </div>
 
-          <div v-if="stockQuantity !== null" class="stock-row">
-            <span class="stock-label">В наличии</span>
-            <span
-              class="stock-value"
-              :class="{ 'stock-value--empty': stockQuantity <= 0 }"
+          <div class="stock-breakdown" aria-label="Остатки товара">
+            <div class="stock-breakdown__header">
+              <span class="stock-label">Остатки</span>
+              <span
+                class="stock-state"
+                :class="{ 'stock-state--warning': shopStock <= 0 && totalStock > 0, 'stock-state--empty': totalStock <= 0 }"
+              >
+                {{ stockStateLabel }}
+              </span>
+            </div>
+            <div class="stock-breakdown__grid">
+              <div class="stock-metric">
+                <span>Всего</span>
+                <strong>{{ formatStock(totalStock) }}</strong>
+              </div>
+              <div class="stock-metric">
+                <span>В магазине</span>
+                <strong :class="{ 'stock-value--empty': shopStock <= 0 }">{{ formatStock(shopStock) }}</strong>
+              </div>
+              <div class="stock-metric">
+                <span>На складе</span>
+                <strong>{{ formatStock(storageStock) }}</strong>
+              </div>
+            </div>
+            <button
+              v-if="shopStock <= 0 && storageStock > 0"
+              class="stock-transfer-btn"
+              type="button"
+              @click="goToTransfers"
             >
-              {{ formatStock(stockQuantity) }}
-            </span>
+              <ArrowRightLeft :size="15" :stroke-width="2" />
+              Переместить в магазин
+            </button>
           </div>
         </div>
 
@@ -489,11 +595,11 @@ onMounted(() => {
             class="add-to-cart-btn"
             :class="{
               'add-to-cart-btn--added': isAdded,
-              'add-to-cart-btn--disabled': !canAddToCart,
+              'add-to-cart-btn--disabled': !canAddToCart && !canOpenSessionFromDetail,
             }"
-            :disabled="!canAddToCart"
+            :disabled="!canAddToCart && !canOpenSessionFromDetail"
             :aria-label="addButtonLabel"
-            @click="addToCart"
+            @click="handlePrimaryAction"
           >
             <Transition name="btn-icon" mode="out-in">
               <Check v-if="isAdded" :key="'check'" :size="20" :stroke-width="2.5" />
@@ -504,6 +610,9 @@ onMounted(() => {
                 <span v-if="isAdded" key="added">Добавлено!</span>
                 <span v-else-if="!canAddToCart && product.has_variants && !matchedVariant" key="select">
                   Выберите вариант
+                </span>
+                <span v-else-if="canOpenSessionFromDetail" key="session">
+                  {{ addButtonLabel }}
                 </span>
                 <span v-else key="price">
                   {{ addButtonLabel }}&nbsp;—&nbsp;<PriceDisplay
@@ -890,8 +999,7 @@ onMounted(() => {
   gap: var(--space-3);
 }
 
-.price-row,
-.stock-row {
+.price-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -945,6 +1053,82 @@ onMounted(() => {
 
 .stock-value--empty {
   color: var(--color-error);
+}
+
+.stock-breakdown {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.stock-breakdown__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.stock-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+}
+
+.stock-state--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.stock-state--empty {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.stock-breakdown__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.stock-metric {
+  min-width: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  display: grid;
+  gap: 2px;
+}
+
+.stock-metric span {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.stock-metric strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+}
+
+.stock-transfer-btn {
+  min-height: 38px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-brand-700);
+  background: var(--color-bg-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
 }
 
 /* ===== Cart section ===== */

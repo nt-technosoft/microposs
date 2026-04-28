@@ -79,6 +79,19 @@ export interface ProductVariant extends BaseModel {
     value: string
   }>
   stock_quantity?: number
+  total_stock_all_locations?: number
+  stock_at_location?: number | null
+  stock_by_location?: StockByLocation[]
+  availability_state?: StockAvailabilityState
+}
+
+export type StockAvailabilityState = 'in_shop' | 'warehouse_only' | 'out_of_stock'
+
+export interface StockByLocation {
+  warehouse_id: number
+  warehouse_name: string
+  warehouse_kind: 'SHOP' | 'STORAGE' | 'shop' | 'storage' | string
+  quantity: number
 }
 
 export interface ProductCharacteristic {
@@ -100,6 +113,10 @@ export interface Product extends BaseModel {
   display_sku?: string
   variants_count?: number
   total_stock?: number
+  total_stock_all_locations?: number
+  stock_at_location?: number | null
+  stock_by_location?: StockByLocation[]
+  availability_state?: StockAvailabilityState
   variants: ProductVariant[]
   characteristics?: ProductCharacteristic[]
 }
@@ -196,6 +213,8 @@ export interface CartItem {
   product_name: string
   pricing_mode: PricingMode
   lot_id: number | null
+  location_id?: number | null
+  available_stock?: number | null
   quantity: number
   unit_price: string
   base_price: string

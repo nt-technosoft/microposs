@@ -1,6 +1,8 @@
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.inventory.models import StockMovement
+
 from ._helpers import build_tenant, seed_received_procurement
 
 
@@ -37,3 +39,41 @@ class InventoryTransferApiTests(APITestCase):
             response.data['to_warehouse_id'][0],
             'Склад назначения должен отличаться от склада отправления.',
         )
+
+    def test_stock_movements_can_filter_transfers_before_pagination(self):
+        self.auth_owner()
+
+        StockMovement.objects.create(
+            tenant=self.ctx['business'],
+            lot=self.lot,
+            movement_type=StockMovement.MovementType.TRANSFER,
+            quantity=3,
+            from_location=self.ctx['storage'],
+            to_location=self.ctx['store'],
+            reference_type='transfer',
+        )
+        for index in range(25):
+            StockMovement.objects.create(
+                tenant=self.ctx['business'],
+                lot=self.lot,
+                movement_type=StockMovement.MovementType.SALE,
+                quantity=-1,
+                from_location=self.ctx['store'],
+                reference_type='sale',
+                reference_id=index + 1,
+            )
+
+        unfiltered = self.client.get('/api/v1/inventory/movements/', {'page': 1})
+        filtered = self.client.get(
+            '/api/v1/inventory/movements/',
+            {'movement_type': 'transfer', 'page': 1, 'page_size': 6},
+        )
+
+        self.assertEqual(unfiltered.status_code, status.HTTP_200_OK)
+        self.assertTrue(any(
+            item['movement_type'] != StockMovement.MovementType.TRANSFER
+            for item in unfiltered.data['results']
+        ))
+        self.assertEqual(filtered.status_code, status.HTTP_200_OK)
+        self.assertEqual(filtered.data['count'], 1)
+        self.assertEqual(filtered.data['results'][0]['movement_type'], StockMovement.MovementType.TRANSFER)

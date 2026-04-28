@@ -24,6 +24,22 @@ const lineTotal = computed(() =>
   },
 )
 
+const cartBlocked = computed(() =>
+  !sessionStore.isOpen || cartStore.hasAvailabilityIssues || cartStore.hasLocationMismatch,
+)
+
+const cartBlockReason = computed(() => {
+  if (!sessionStore.isOpen) return 'Откройте кассовую смену'
+  if (cartStore.hasLocationMismatch) return 'Корзина собрана для другой точки продаж'
+  if (cartStore.hasAvailabilityIssues) return 'В корзине есть товары сверх остатка магазина'
+  return ''
+})
+
+function itemAvailableStock(index: number): number {
+  const stock = cartStore.items[index]?.available_stock
+  return typeof stock === 'number' && Number.isFinite(stock) ? stock : 9999
+}
+
 function goBack(): void {
   router.push('/sales')
 }
@@ -152,7 +168,7 @@ function cancelClear(): void {
             <QuantityControl
               :model-value="item.quantity"
               :min="1"
-              :max="9999"
+              :max="itemAvailableStock(index)"
               @update:model-value="handleQuantityChange(index, $event)"
             />
             <PriceDisplay
@@ -171,11 +187,14 @@ function cancelClear(): void {
         <span class="cart-footer__label">Итого</span>
         <PriceDisplay :amount="cartStore.total" size="lg" />
       </div>
+      <p v-if="cartBlockReason" class="cart-footer__warning">
+        {{ cartBlockReason }}
+      </p>
       <BaseButton
         variant="primary"
         size="lg"
         :full-width="true"
-        :disabled="!sessionStore.isOpen"
+        :disabled="cartBlocked"
         @click="goToCheckout"
       >
         Оформить заказ →
@@ -512,6 +531,13 @@ function cancelClear(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.cart-footer__warning {
+  margin: calc(var(--space-2) * -1) 0 0;
+  color: var(--color-warning);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
 }
 
 .cart-footer__label {
