@@ -31,6 +31,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.utils import timezone
 
+from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
 
 SNAPSHOT_DEFAULT = 'backend/import_snapshots/client_snapshot_full_from_xlsx.json'
 
@@ -128,7 +129,7 @@ class Command(BaseCommand):
         from apps.catalog.models import Category, DiscountReason
         from apps.core.models import Business, Partner
         from apps.finance.chart_of_accounts import setup_chart_of_accounts
-        from apps.finance.models import Account, CashAccount
+        from apps.finance.models import Account, CashAccount, ExchangeRate
         from apps.inventory.models import Warehouse
 
         groups = {
@@ -167,6 +168,20 @@ class Command(BaseCommand):
             business.save(update_fields=['is_active', 'updated_at'])
 
         setup_chart_of_accounts(business.id)
+        ExchangeRate.objects.get_or_create(
+            tenant=business,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            defaults={
+                'rate': DEFAULT_DEMO_USD_UZS_RATE,
+                'source': ExchangeRate.Source.MANUAL,
+                'is_manual': True,
+                'notes': 'Excel seed fallback rate',
+                'raw_payload': {},
+                'fetched_at': timezone.now(),
+            },
+        )
         acct_cash = Account.objects.get(tenant_id=business.id, code='1000')
         acct_bank = Account.objects.get(tenant_id=business.id, code='1010')
 
@@ -392,7 +407,7 @@ class Command(BaseCommand):
             name = str(row.get('MIJOZ') or '').strip().upper()
             amount = _to_decimal(row.get('MIQDOR'))
             currency = str(row.get('VALYUTA') or 'USD').strip().upper()
-            fx = _to_decimal(row.get('KURS'), '12100')
+            fx = _to_decimal(row.get('KURS'), str(DEFAULT_DEMO_USD_UZS_RATE))
             if currency == 'SOM':
                 currency = 'UZS'
             if currency != 'USD':
@@ -450,13 +465,13 @@ class Command(BaseCommand):
             name = str(row.get('MIJOZ') or '').strip().upper()
             amount = _to_decimal(row.get('MIQDOR'))
             currency = str(row.get('VALYUTA') or 'USD').strip().upper()
-            fx = _to_decimal(row.get('KURS'), '12100')
+            fx = _to_decimal(row.get('KURS'), str(DEFAULT_DEMO_USD_UZS_RATE))
             if currency == 'SOM':
                 currency = 'UZS'
             if currency != 'USD':
                 amount = amount / fx
                 currency = 'USD'
-                fx = _to_decimal(row.get('KURS'), '12100')
+                fx = _to_decimal(row.get('KURS'), str(DEFAULT_DEMO_USD_UZS_RATE))
             date = _parse_dt(row.get('SANA'))
 
             if 'USTOZ' in name:

@@ -7,6 +7,7 @@ import { formatPrice } from '@/utils/currency'
 import { ProcurementStatus, ProcurementType } from '@/types/enums'
 import { fetchProcurements, type ProcurementListItem } from '@/api/partnerships'
 import ProcurementSectionShell from '@/modules/intake/components/ProcurementSectionShell.vue'
+import { procurementStatusMeta, procurementTypeMeta, type LabelMeta } from '@/utils/domainLabels'
 
 // ── Router & composables ────────────────────────────────────────────────────
 
@@ -66,34 +67,12 @@ const filteredProcurements = computed<ProcurementListItem[]>(() => {
   return procurements.value.filter((item) => item.status === activeFilter.value)
 })
 
-// ── Type & status helpers ────────────────────────────────────────────────────
-
-interface TypeMeta {
-  label: string
-  colorClass: string
-}
-
-const TYPE_META: Record<ProcurementType, TypeMeta> = {
-  [ProcurementType.OWN_FUNDS]: { label: 'Свои деньги', colorClass: 'badge-type--teal' },
-  [ProcurementType.PARTNERSHIP]: { label: 'Партнёрский', colorClass: 'badge-type--purple' },
-  [ProcurementType.MUSHARAKA]: { label: 'Мушарака', colorClass: 'badge-type--indigo' },
-  [ProcurementType.DISTRIBUTOR]: { label: 'Дистрибьютор', colorClass: 'badge-type--blue' },
-}
-
-const STATUS_META: Record<ProcurementStatus, { label: string; colorClass: string }> = {
-  [ProcurementStatus.OPEN]: { label: 'Открыт', colorClass: 'badge-status--gray' },
-  [ProcurementStatus.PARTIALLY_RECEIVED]: { label: 'Частично', colorClass: 'badge-status--orange' },
-  [ProcurementStatus.RECEIVED]: { label: 'Завершён', colorClass: 'badge-status--green' },
-  [ProcurementStatus.CLOSED]: { label: 'Закрыт', colorClass: 'badge-status--blue' },
-  [ProcurementStatus.CANCELLED]: { label: 'Отменён', colorClass: 'badge-status--orange' },
-}
-
-function getTypeMeta(type: ProcurementType): TypeMeta {
-  return TYPE_META[type] ?? { label: type, colorClass: 'badge-type--blue' }
+function getTypeMeta(type: ProcurementType): LabelMeta {
+  return procurementTypeMeta[type] ?? { label: type, colorClass: 'badge-type--blue' }
 }
 
 function getStatusMeta(status: ProcurementStatus) {
-  return STATUS_META[status] ?? { label: status, colorClass: 'badge-status--gray' }
+  return procurementStatusMeta[status] ?? { label: status, colorClass: 'badge-status--gray' }
 }
 
 // ── Formatting ───────────────────────────────────────────────────────────────

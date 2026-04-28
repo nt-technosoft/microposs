@@ -54,7 +54,7 @@ def record_supplier_payment(
             if functional_amount is None:
                 functional_amount = amount
         else:
-            from apps.finance.services import resolve_fx_rate_snapshot, to_functional_amount_uzs
+            from apps.finance.fx_rates import resolve_fx_rate_snapshot, to_functional_amount_uzs
 
             rate = resolve_fx_rate_snapshot(
                 tenant_id=tenant_id,

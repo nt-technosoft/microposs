@@ -6,7 +6,6 @@ import { PricingMode, ProcurementStatus, ProcurementType } from '@/types/enums'
 import { formatPrice, formatPriceCompact } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { fetchLocations } from '@/api/inventory'
-import { fetchLatestFxRate } from '@/api/finance'
 import { createSupplier, fetchSuppliers } from '@/api/suppliers'
 import { createProduct, fetchCategories, fetchProductVariants, fetchVariantsPaginated } from '@/api/catalog'
 import {
@@ -31,8 +30,8 @@ import { useAuthStore } from '@/stores/auth'
 import type { Category, Product, ProductVariant, Supplier } from '@/types/models'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { useFxRate } from '@/composables/useFxRate'
 
-const FALLBACK_FX_RATE = '12100'
 const RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE = 'Сервер не вернул доли партии. Повторите расчёт.'
 
 const route = useRoute()
@@ -46,7 +45,11 @@ const selectedWarehouseId = ref<number | null>(null)
 const isLoading = ref(true)
 const isConfirming = ref(false)
 const errorMessage = ref<string | null>(null)
-const latestUsdRate = ref('12100')
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRate,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 const suppliers = ref<Supplier[]>([])
 const categories = ref<Category[]>([])
 const allVariants = ref<ProductVariant[]>([])
@@ -61,7 +64,7 @@ const withdrawalSheetOpen = ref(false)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
 const contributionCurrency = ref('USD')
-const contributionFxRate = ref('12100')
+const contributionFxRate = ref('')
 const contributionNotes = ref('')
 const contributionRateManualOpen = ref(false)
 const withdrawalAmount = ref('')
@@ -155,7 +158,7 @@ const isSplittingItem = ref(false)
 const exchangeFromCurrency = ref('USD')
 const exchangeToCurrency = ref('UZS')
 const exchangeFromAmount = ref('')
-const exchangeRate = ref(FALLBACK_FX_RATE)
+const exchangeRate = ref('')
 const exchangeNotes = ref('')
 const exchangeRateManualOpen = ref(false)
 
@@ -1815,13 +1818,12 @@ async function applyAgreementAllocation(): Promise<void> {
 
 async function loadLatestRate(): Promise<void> {
   try {
-    const latest = await fetchLatestFxRate({
-      base_currency: 'USD',
-      quote_currency: 'UZS',
-    })
-    latestUsdRate.value = String(latest.rate)
+    await loadLatestUsdRate()
+    if (!exchangeRate.value) {
+      exchangeRate.value = latestUsdRate.value
+    }
   } catch {
-    latestUsdRate.value = '12100'
+    toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
   }
 }
 
@@ -3640,7 +3642,7 @@ onMounted(async () => {
             <div class="rate-helper-card">
               <div>
                 <label class="field-label">Курс USD -> UZS</label>
-                <strong class="tabular-nums">{{ trimTrailingZeros(contributionFxRate) }}</strong>
+                <strong class="tabular-nums">{{ contributionFxRate ? trimTrailingZeros(contributionFxRate) : 'Нет курса' }}</strong>
               </div>
               <button class="text-action" type="button" @click="contributionRateManualOpen = !contributionRateManualOpen">
                 {{ contributionRateManualOpen ? 'Скрыть' : 'Изменить курс' }}

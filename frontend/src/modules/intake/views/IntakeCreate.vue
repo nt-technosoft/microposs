@@ -18,9 +18,9 @@ import {
   type ProcurementDetail,
 } from '@/api/partnerships'
 import { fetchPartners, type Partner } from '@/api/core'
-import { fetchLatestFxRate } from '@/api/finance'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { useFxRate } from '@/composables/useFxRate'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,8 +68,6 @@ const ALLOCATION_OPTIONS = [
   { value: 'BY_QUANTITY', label: 'По количеству' },
 ]
 
-const FALLBACK_FOREIGN_FX_RATE = '12100'
-
 const selectedType = ref<ProcurementType>(ProcurementType.OWN_FUNDS)
 const selectedSupplierId = ref<number | null>(null)
 const notes = ref('')
@@ -98,7 +96,11 @@ const quickSupplierPhone = ref('')
 const quickSupplierEmail = ref('')
 const quickSupplierError = ref<string | null>(null)
 const isCreatingQuickSupplier = ref(false)
-const latestUsdRate = ref(FALLBACK_FOREIGN_FX_RATE)
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRateFromApi,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 const contractCurrency = ref('USD')
 const plannedBudget = ref('')
 
@@ -281,15 +283,9 @@ function setExpenseCurrency(rowId: string, currencyValue: string | number | bool
 
 async function loadLatestUsdRate(): Promise<void> {
   try {
-    const rate = await fetchLatestFxRate({
-      base_currency: 'USD',
-      quote_currency: 'UZS',
-    })
-    if (parsePositiveNumber(rate.rate) > 0) {
-      latestUsdRate.value = String(rate.rate)
-    }
+    await loadLatestUsdRateFromApi()
   } catch {
-    latestUsdRate.value = FALLBACK_FOREIGN_FX_RATE
+    toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
   }
 }
 
@@ -1264,7 +1260,7 @@ onMounted(async () => {
                   :value="line.fx_rate"
                   min="0"
                   step="0.0001"
-                  placeholder="12100"
+                  placeholder="Введите курс"
                   aria-label="Курс валюты"
                   @input="(e) => updateLine(line.id, 'fx_rate', (e.target as HTMLInputElement).value)"
                 />
@@ -1344,7 +1340,7 @@ onMounted(async () => {
               :value="expense.fx_rate"
               min="0"
               step="0.0001"
-              placeholder="12100"
+              placeholder="Введите курс"
               @input="(e) => updateExpense(expense.id, 'fx_rate', (e.target as HTMLInputElement).value)"
             />
           </div>

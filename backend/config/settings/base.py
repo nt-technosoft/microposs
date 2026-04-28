@@ -175,6 +175,15 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# --- FX sync ---
+
+FX_SYNC_BASE_CURRENCY = env('FX_SYNC_BASE_CURRENCY', default='USD')
+FX_SYNC_QUOTE_CURRENCY = env('FX_SYNC_QUOTE_CURRENCY', default='UZS')
+FX_SYNC_TIMEZONE = env('FX_SYNC_TIMEZONE', default='Asia/Tashkent')
+FX_SYNC_HOUR = env.int('FX_SYNC_HOUR', default=8)
+FX_SYNC_MINUTE = env.int('FX_SYNC_MINUTE', default=5)
+FX_SYNC_OVERWRITE_MANUAL = env.bool('FX_SYNC_OVERWRITE_MANUAL', default=False)
+
 # --- i18n ---
 
 LANGUAGE_CODE = 'ru'

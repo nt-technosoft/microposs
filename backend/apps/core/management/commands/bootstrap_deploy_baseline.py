@@ -6,13 +6,15 @@ from uuid import UUID
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
+from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
-from apps.finance.models import Account, CashAccount
+from apps.finance.models import Account, CashAccount, ExchangeRate
 from apps.inventory.models import Lot, Warehouse
 from apps.inventory.services import transfer_lot_stock
 from apps.investors.models import Investor
@@ -192,6 +194,20 @@ class Command(BaseCommand):
         users: dict[str, User],
     ) -> dict[str, object]:
         setup_chart_of_accounts(business.id)
+        ExchangeRate.objects.get_or_create(
+            tenant=business,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            defaults={
+                'rate': DEFAULT_DEMO_USD_UZS_RATE,
+                'source': ExchangeRate.Source.MANUAL,
+                'is_manual': True,
+                'notes': 'Deploy baseline seed rate',
+                'raw_payload': {},
+                'fetched_at': timezone.now(),
+            },
+        )
         cash_account = Account.objects.get(tenant_id=business.id, code='1000')
         bank_account = Account.objects.get(tenant_id=business.id, code='1010')
 
@@ -418,13 +434,13 @@ class Command(BaseCommand):
                     'quantity': Decimal('50'),
                     'unit_purchase_price': Decimal('10'),
                     'currency': 'USD',
-                    'fx_rate': Decimal('12100'),
+                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
                 }],
                 expenses=[{
                     'expense_type': 'CUSTOMS',
                     'amount': Decimal('50'),
                     'currency': 'USD',
-                    'fx_rate': Decimal('12100'),
+                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
                     'notes': 'Baseline customs allocation',
                 }],
             )
@@ -434,7 +450,7 @@ class Command(BaseCommand):
                 partner_id=baseline['investor_partner'].id,
                 amount=Decimal('385'),
                 currency='USD',
-                fx_rate=Decimal('12100'),
+                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
                 notes='Baseline investor capital',
             )
             add_contribution(
@@ -443,7 +459,7 @@ class Command(BaseCommand):
                 partner_id=baseline['operator'].id,
                 amount=Decimal('165'),
                 currency='USD',
-                fx_rate=Decimal('12100'),
+                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
                 notes='Baseline operator capital',
             )
             pay_procurement_items(

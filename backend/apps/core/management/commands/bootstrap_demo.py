@@ -5,13 +5,15 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
+from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
-from apps.finance.models import CashAccount
+from apps.finance.models import CashAccount, ExchangeRate
 from apps.inventory.models import Warehouse
 from apps.partnerships.models import Procurement
 from apps.partnerships.services import (
@@ -83,9 +85,9 @@ class Command(BaseCommand):
         """
         Musharaka+Mudaraba demo: investor 70% / operator 30% capital,
         mudaraba_ratio = 4/7 → profit 40/60 investor/operator.
-        All amounts in USD (fx_rate=12100 UZS/USD). Plan uses 550 USD total.
+        All amounts in USD using the shared demo FX rate. Plan uses 550 USD total.
         """
-        fx = Decimal('12100')
+        fx = DEFAULT_DEMO_USD_UZS_RATE
         usd = 'USD'
 
         procurement = open_procurement(
@@ -165,7 +167,7 @@ class Command(BaseCommand):
             destination_warehouse_id=store.id,
         )
 
-        # ─── Sale: 5 units @ 20 USD (cash, UZS at 12100) ──────────────────────
+            # ─── Sale: 5 units @ 20 USD (cash, converted by demo FX rate) ─────────
         session = open_pos_session(
             tenant_id=business.id,
             location_id=store.id,
@@ -247,6 +249,20 @@ class Command(BaseCommand):
                 business.save(update_fields=['is_active', 'updated_at'])
 
             setup_chart_of_accounts(business.id)
+            ExchangeRate.objects.get_or_create(
+                tenant=business,
+                base_currency='USD',
+                quote_currency='UZS',
+                rate_date=timezone.localdate(),
+                defaults={
+                    'rate': DEFAULT_DEMO_USD_UZS_RATE,
+                    'source': ExchangeRate.Source.MANUAL,
+                    'is_manual': True,
+                    'notes': 'Local demo seed rate',
+                    'raw_payload': {},
+                    'fetched_at': timezone.now(),
+                },
+            )
 
             store, _ = Warehouse.objects.get_or_create(
                 tenant=business,

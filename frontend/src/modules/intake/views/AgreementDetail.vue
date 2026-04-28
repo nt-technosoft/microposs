@@ -13,6 +13,8 @@ import {
 } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
+import { useFxRate } from '@/composables/useFxRate'
+import { partnerRoleLabel, procurementStatusLabel } from '@/utils/domainLabels'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,6 +34,11 @@ const savingWithdrawal = ref(false)
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
 const allocating = ref(false)
+const {
+  rate: latestUsdRate,
+  error: latestUsdRateError,
+  load: loadLatestUsdRate,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 
 const agreementId = computed(() => Number(route.params.id))
 const activeProcurements = computed(() => (agreement.value?.procurements ?? []).filter((item) => item.status === 'OPEN' || item.status === 'PARTIALLY_RECEIVED'))
@@ -48,19 +55,14 @@ function formatDate(value: string): string {
   return new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
-function roleLabel(role: string): string {
-  return role === 'INVESTOR' ? 'Инвестор' : 'Бизнес'
+function fxRateForCurrency(currency: string): string {
+  return currency === 'USD' ? latestUsdRate.value : '1'
 }
 
-function procurementStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    OPEN: 'Открыт',
-    PARTIALLY_RECEIVED: 'Частично',
-    RECEIVED: 'Завершён',
-    CLOSED: 'Закрыт',
-    CANCELLED: 'Отменён',
-  }
-  return labels[status] ?? status
+function ensureFxRate(currency: string): boolean {
+  if (currency !== 'USD' || latestUsdRate.value) return true
+  toast.error(latestUsdRateError.value || 'Сначала синхронизируйте курс USD/UZS')
+  return false
 }
 
 async function load(): Promise<void> {
@@ -80,13 +82,14 @@ async function load(): Promise<void> {
 
 async function saveContribution(): Promise<void> {
   if (!agreement.value || !contributionPartnerId.value || !contributionAmount.value) return
+  if (!ensureFxRate(contributionCurrency.value)) return
   savingContribution.value = true
   try {
     await addAgreementContribution(agreement.value.id, {
       partner_id: contributionPartnerId.value,
       amount: contributionAmount.value,
       currency: contributionCurrency.value,
-      fx_rate: contributionCurrency.value === 'USD' ? '12100' : '1',
+      fx_rate: fxRateForCurrency(contributionCurrency.value),
     })
     contributionAmount.value = ''
     toast.success('Взнос добавлен')
@@ -100,13 +103,14 @@ async function saveContribution(): Promise<void> {
 
 async function saveWithdrawal(): Promise<void> {
   if (!agreement.value || !withdrawalPartnerId.value || !withdrawalAmount.value) return
+  if (!ensureFxRate(withdrawalCurrency.value)) return
   savingWithdrawal.value = true
   try {
     await addAgreementWithdrawal(agreement.value.id, {
       partner_id: withdrawalPartnerId.value,
       amount: withdrawalAmount.value,
       currency: withdrawalCurrency.value,
-      fx_rate: withdrawalCurrency.value === 'USD' ? '12100' : '1',
+      fx_rate: fxRateForCurrency(withdrawalCurrency.value),
       reason: 'Возврат из инвестдоговора',
     })
     withdrawalAmount.value = ''
@@ -132,9 +136,10 @@ async function allocateSuggested(): Promise<void> {
       partner_id: row.partner_id,
       amount: row.amount,
       currency: row.currency,
-      fx_rate: row.currency === 'USD' ? '12100' : '1',
+      fx_rate: fxRateForCurrency(row.currency),
     }))
   if (!rows.length) return
+  if (rows.some((row) => !ensureFxRate(row.currency))) return
   allocating.value = true
   try {
     await createAgreementAllocations(agreement.value.id, {
@@ -151,7 +156,12 @@ async function allocateSuggested(): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await Promise.allSettled([load(), loadLatestUsdRate()])
+  if (latestUsdRateError.value) {
+    toast.error(latestUsdRateError.value)
+  }
+})
 </script>
 
 <template>
@@ -190,7 +200,7 @@ onMounted(load)
           <div v-for="row in agreement.participant_totals" :key="row.partner_id" class="partner-row">
             <div>
               <strong>{{ row.partner_name }}</strong>
-              <span>{{ roleLabel(row.role) }} · прибыль {{ (Number(row.planned_profit_share) * 100).toFixed(2) }}%</span>
+              <span>{{ partnerRoleLabel(row.role) }} · прибыль {{ (Number(row.planned_profit_share) * 100).toFixed(2) }}%</span>
             </div>
             <div>
               <strong>{{ formatPrice(row.available_amount, agreement.currency) }}</strong>

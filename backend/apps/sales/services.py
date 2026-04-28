@@ -15,10 +15,10 @@ from apps.core.exceptions import (
     InvalidUnitPriceError,
     PricingModeViolationError,
 )
-from apps.finance.services import resolve_fx_rate_snapshot
+from apps.finance.fx_rates import resolve_fx_rate_snapshot
 from apps.partnerships.formulas import (
+    calculate_lot_profit_distribution,
     distribute_loss_by_capital_from_snapshot,
-    distribute_profit_from_snapshot,
 )
 
 from .models import (
@@ -525,12 +525,11 @@ def calculate_profit_distribution(
     Returns {partner_id_str: Decimal_str} to be stored in SaleLine.profit_distribution_snapshot.
     Returns {} for lots without a contract snapshot (own-funds path).
     """
-    unit_price = Decimal(str(unit_price))
-    unit_landed_cost = Decimal(str(unit_landed_cost))
-    gross = (unit_price - unit_landed_cost) * Decimal(quantity)
-    return distribute_profit_from_snapshot(
+    return calculate_lot_profit_distribution(
         contract_snapshot=lot.contract_snapshot,
-        gross_profit=gross,
+        unit_price=unit_price,
+        quantity=quantity,
+        unit_landed_cost=unit_landed_cost,
     )
 
 

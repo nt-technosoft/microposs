@@ -7,11 +7,15 @@ from django.utils import timezone
 
 from apps.core.models import Business
 
-from .services import sync_official_exchange_rate
+from .fx_rates import sync_official_exchange_rate
 
 
 @shared_task
-def refresh_daily_fx_rates(base_currency: str = 'USD', quote_currency: str = 'UZS'):
+def refresh_daily_fx_rates(
+    base_currency: str = 'USD',
+    quote_currency: str = 'UZS',
+    overwrite_manual: bool = False,
+):
     """
     Pull official rate once per day for every active tenant.
     Designed for Celery beat scheduling.
@@ -27,7 +31,7 @@ def refresh_daily_fx_rates(base_currency: str = 'USD', quote_currency: str = 'UZ
                 base_currency=base_currency,
                 quote_currency=quote_currency,
                 rate_date=target_date,
-                overwrite_manual=False,
+                overwrite_manual=bool(overwrite_manual),
             )
             if created:
                 stats['created'] += 1

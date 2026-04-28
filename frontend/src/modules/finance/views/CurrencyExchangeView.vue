@@ -9,10 +9,10 @@ import {
   createCurrencyExchange,
   createOwnerContribution,
   fetchCashAccounts,
-  fetchLatestFxRate,
   type CashAccountRecord,
 } from '@/api/finance'
 import { formatPrice } from '@/utils/currency'
+import { useFxRate } from '@/composables/useFxRate'
 
 const router = useRouter()
 const toast = useToast()
@@ -21,7 +21,11 @@ const accounts = ref<CashAccountRecord[]>([])
 const isLoading = ref(true)
 const isSaving = ref(false)
 const formError = ref<string | null>(null)
-const latestUsdUzsRate = ref('12100')
+const {
+  rate: latestUsdUzsRate,
+  error: latestUsdUzsRateError,
+  load: loadLatestUsdUzsRate,
+} = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
 const topUpSheetOpen = ref(false)
 const topUpAccountId = ref<number | null>(null)
 const topUpAmount = ref('')
@@ -154,13 +158,9 @@ watch(latestUsdUzsRate, () => {
 
 async function loadLatestRate(): Promise<void> {
   try {
-    const latest = await fetchLatestFxRate({
-      base_currency: 'USD',
-      quote_currency: 'UZS',
-    })
-    latestUsdUzsRate.value = String(latest.rate)
+    await loadLatestUsdUzsRate()
   } catch {
-    latestUsdUzsRate.value = '12100'
+    formError.value = latestUsdUzsRateError.value || 'Не удалось загрузить курс USD/UZS'
   }
 }
 
@@ -341,8 +341,11 @@ onMounted(async () => {
           <div class="helper-card">
             <div class="helper-row">
               <span>Справочный USD/UZS</span>
-              <strong class="tabular-nums">{{ trimTrailingZeros(latestUsdUzsRate) }}</strong>
+              <strong class="tabular-nums">
+                {{ latestUsdUzsRate ? trimTrailingZeros(latestUsdUzsRate) : 'Нет курса' }}
+              </strong>
             </div>
+            <p v-if="latestUsdUzsRateError" class="helper-error">{{ latestUsdUzsRateError }}</p>
             <div class="helper-row">
               <span>Направление обмена</span>
               <strong class="tabular-nums">{{ exchangeDirectionHint }}</strong>
@@ -490,6 +493,7 @@ onMounted(async () => {
 .rate-reset { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: calc(var(--radius-md) - 2px); border: 1px solid var(--color-border-default); background: var(--color-bg-elevated); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
 .helper-card { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-brand-50); color: var(--color-brand-700); }
 .helper-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.helper-error { margin: 0; font-size: var(--font-size-xs); line-height: 1.4; color: var(--color-danger); }
 .error-box { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-error-bg); color: var(--color-danger); }
 .section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .card-head { display:flex; align-items:center; justify-content:space-between; gap: var(--space-3); }

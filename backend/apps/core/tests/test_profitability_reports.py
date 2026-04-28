@@ -7,7 +7,8 @@ from rest_framework.test import APITestCase
 
 from apps.partnerships.models import Procurement
 from apps.sales.models import SalePayment
-from apps.sales.services import calculate_profit_distribution, create_sale
+from apps.partnerships.formulas import calculate_profit_distribution
+from apps.sales.services import create_sale
 
 from ._helpers import build_tenant, open_session, seed_received_procurement
 

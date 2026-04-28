@@ -115,6 +115,41 @@ def distribute_profit_from_snapshot(
     return result
 
 
+def calculate_lot_profit_distribution(
+    *,
+    contract_snapshot: dict | None,
+    unit_price: Decimal | str | int | float,
+    quantity: int | Decimal | str,
+    unit_landed_cost: Decimal | str | int | float,
+) -> dict[str, str]:
+    """Compute sale profit distribution from one lot/batch snapshot."""
+
+    gross = (
+        Decimal(str(unit_price)) - Decimal(str(unit_landed_cost))
+    ) * Decimal(str(quantity))
+    return distribute_profit_from_snapshot(
+        contract_snapshot=contract_snapshot,
+        gross_profit=gross,
+    )
+
+
+def calculate_profit_distribution(
+    *,
+    lot,
+    unit_price: Decimal | str | int | float,
+    quantity: int | Decimal | str,
+    unit_landed_cost: Decimal | str | int | float,
+) -> dict[str, str]:
+    """Compatibility-shaped helper for callers that already have a Lot."""
+
+    return calculate_lot_profit_distribution(
+        contract_snapshot=getattr(lot, 'contract_snapshot', None),
+        unit_price=unit_price,
+        quantity=quantity,
+        unit_landed_cost=unit_landed_cost,
+    )
+
+
 def distribute_loss_by_capital_from_snapshot(
     *,
     contract_snapshot: dict | None,

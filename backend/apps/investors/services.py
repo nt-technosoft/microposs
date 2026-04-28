@@ -51,7 +51,7 @@ def get_partner_capital_state(
     from apps.inventory.models import Lot
     from apps.partnerships.models import ProcurementPartnerLedger
     from apps.sales.models import SaleLine
-    from apps.sales.services import calculate_profit_distribution
+    from apps.partnerships.formulas import calculate_profit_distribution
 
     ledger_qs = ProcurementPartnerLedger.objects.filter(
         tenant_id=tenant_id,

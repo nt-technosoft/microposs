@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.sales.services import calculate_profit_distribution
+from apps.partnerships.formulas import calculate_profit_distribution
 
 from ._helpers import build_tenant, seed_received_procurement
 

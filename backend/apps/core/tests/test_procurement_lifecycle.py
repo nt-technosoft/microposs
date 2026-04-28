@@ -746,7 +746,7 @@ class ProcurementLifecycleTests(TestCase):
         self.assertEqual(balance.balances, {'UZS': '50.00'})
 
     def test_partial_receive_uses_batch_level_capital_snapshots(self):
-        from apps.sales.services import calculate_profit_distribution
+        from apps.partnerships.formulas import calculate_profit_distribution
 
         ctx = build_tenant()
         procurement = open_procurement(

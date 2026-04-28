@@ -81,7 +81,7 @@ def _functional_uzs_to_currency(
     if target == 'UZS':
         return _q(functional_amount_uzs)
 
-    from apps.finance.services import get_fx_rate_for_date
+    from apps.finance.fx_rates import get_fx_rate_for_date
 
     rate_row = get_fx_rate_for_date(
         tenant_id=tenant_id,
@@ -2677,7 +2677,7 @@ def receive_procurement(
             balance = ProcurementBalance.objects.select_for_update().get(procurement=procurement)
             receive_plan = build_receive_plan(procurement)
             if receive_plan['status'] == 'AUTO_SURPLUS':
-                from apps.finance.services import resolve_fx_rate_snapshot
+                from apps.finance.fx_rates import resolve_fx_rate_snapshot
 
                 balances = dict(balance.balances or {})
                 for suggestion in receive_plan['suggested_withdrawals']:
@@ -2725,7 +2725,7 @@ def receive_procurement(
                 procurement._state.fields_cache.pop('balance', None)
                 receive_plan = build_receive_plan(procurement)
             elif receive_plan['status'] == 'AGREEMENT_SURPLUS':
-                from apps.finance.services import resolve_fx_rate_snapshot
+                from apps.finance.fx_rates import resolve_fx_rate_snapshot
                 from .models import AgreementAllocation, InvestmentAgreement
 
                 if not procurement.agreement_id:

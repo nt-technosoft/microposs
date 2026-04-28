@@ -4,11 +4,12 @@ Sync official FX rates from CBU into tenant history table.
 
 from datetime import datetime
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from apps.core.models import Business
-from apps.finance.services import sync_official_exchange_rate
+from apps.finance.fx_rates import sync_official_exchange_rate
 
 
 class Command(BaseCommand):
@@ -25,13 +26,13 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--base-currency',
-            default='USD',
-            help='Base currency code (default: USD).',
+            default=getattr(settings, 'FX_SYNC_BASE_CURRENCY', 'USD'),
+            help='Base currency code. Defaults to FX_SYNC_BASE_CURRENCY.',
         )
         parser.add_argument(
             '--quote-currency',
-            default='UZS',
-            help='Quote currency code (default: UZS).',
+            default=getattr(settings, 'FX_SYNC_QUOTE_CURRENCY', 'UZS'),
+            help='Quote currency code. Defaults to FX_SYNC_QUOTE_CURRENCY.',
         )
         parser.add_argument(
             '--date',
@@ -41,7 +42,14 @@ class Command(BaseCommand):
         parser.add_argument(
             '--overwrite-manual',
             action='store_true',
+            default=getattr(settings, 'FX_SYNC_OVERWRITE_MANUAL', False),
             help='Allow overwriting manual rates for same date.',
+        )
+        parser.add_argument(
+            '--no-overwrite-manual',
+            action='store_false',
+            dest='overwrite_manual',
+            help='Prevent overwriting manual rates for same date.',
         )
 
     def handle(self, *args, **options):
