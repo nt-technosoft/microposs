@@ -713,11 +713,7 @@ function openProcurementAudit(procurementId: number): void {
         <section class="overview-panel">
           <div class="overview-head">
             <div class="overview-copy">
-              <span class="overview-kicker">Финансовый обзор</span>
               <h2 class="overview-title">{{ selectedPeriodLabel }}</h2>
-              <p class="overview-note">
-                KPI показаны в выбранной валюте отчёта. Реальные кассы вынесены отдельно.
-              </p>
             </div>
 
             <div class="overview-actions">
@@ -740,7 +736,7 @@ function openProcurementAudit(procurementId: number): void {
                 </button>
               </div>
               <button class="action-pill" type="button" @click="openCurrencyExchange">
-                Обмен валют
+                Обмен
               </button>
               <button class="action-pill" type="button" @click="openReconciliation">
                 Сверка
@@ -765,12 +761,10 @@ function openProcurementAudit(procurementId: number): void {
               <span class="metric-note">Себестоимость {{ formatReportPrice(metrics.cogs) }}</span>
             </article>
 
-            <article class="metric-tile" :class="cashFlowTotals.net < 0 ? 'metric-tile--danger' : 'metric-tile--brand'">
-              <span class="metric-label">Чистый поток</span>
-              <strong class="metric-value tabular-nums">
-                {{ cashFlowTotals.net >= 0 ? '+' : '' }}{{ formatReportPrice(cashFlowTotals.net) }}
-              </strong>
-              <span class="metric-note">Приход {{ formatReportPrice(cashFlowTotals.inflows) }} · расход {{ formatReportPrice(cashFlowTotals.outflows) }}</span>
+            <article class="metric-tile">
+              <span class="metric-label">Маржа</span>
+              <strong class="metric-value tabular-nums">{{ formatPercent(overallMargin) }}</strong>
+              <span class="metric-note">По выручке за {{ periodLabelLower }}</span>
             </article>
 
             <article class="metric-tile">
@@ -789,12 +783,6 @@ function openProcurementAudit(procurementId: number): void {
             </article>
 
             <article class="metric-tile">
-              <span class="metric-label">Маржа</span>
-              <strong class="metric-value tabular-nums">{{ formatPercent(overallMargin) }}</strong>
-              <span class="metric-note">По выручке за {{ periodLabelLower }}</span>
-            </article>
-
-            <article class="metric-tile">
               <span class="metric-label">Склад</span>
               <strong class="metric-value tabular-nums">{{ formatReportPrice(inventoryTotals.value) }}</strong>
               <span class="metric-note">{{ inventoryTotals.qty }} шт. на остатке</span>
@@ -809,31 +797,14 @@ function openProcurementAudit(procurementId: number): void {
               <span class="inline-chip">Возвраты {{ formatReportPrice(metrics.returns) }}</span>
               <span v-if="loadingParity" class="inline-chip">Обновляю остатки...</span>
             </div>
-            <div v-if="nativeCashByCurrency.length" class="inline-chip-list">
-              <span
-                v-for="item in nativeCashByCurrency"
-                :key="item.currency"
-                class="inline-chip inline-chip--muted"
-              >
-                {{ formatPrice(item.amount, item.currency) }}
-              </span>
-            </div>
           </div>
         </section>
 
         <section class="workspace-board">
-          <div class="workspace-head">
-            <div>
-              <h2 class="workspace-title">Деньги и обязательства</h2>
-              <p class="workspace-note">Денежный поток, долги и склад в выбранной валюте отчёта.</p>
-            </div>
-          </div>
-
           <div class="money-layout">
             <article class="workspace-card">
               <div class="card-head">
                 <div>
-                  <span class="card-kicker">Поток</span>
                   <h3 class="card-title">Движение наличных</h3>
                 </div>
                 <span class="status-chip" :class="cashFlowTotals.net < 0 ? 'status-chip--danger' : 'status-chip--positive'">
@@ -855,7 +826,6 @@ function openProcurementAudit(procurementId: number): void {
                   </div>
                   <div class="money-meta">
                     <span class="money-label">Приход</span>
-                    <span class="money-caption">Деньги вошли в кассу и счета</span>
                   </div>
                   <strong class="money-value money-value--in tabular-nums">{{ formatReportPrice(cashFlowTotals.inflows) }}</strong>
                 </div>
@@ -866,7 +836,6 @@ function openProcurementAudit(procurementId: number): void {
                   </div>
                   <div class="money-meta">
                     <span class="money-label">Расход</span>
-                    <span class="money-caption">Платежи, закупки и прочие списания</span>
                   </div>
                   <strong class="money-value money-value--out tabular-nums">{{ formatReportPrice(cashFlowTotals.outflows) }}</strong>
                 </div>
@@ -906,7 +875,6 @@ function openProcurementAudit(procurementId: number): void {
             <article class="workspace-card">
               <div class="card-head">
                 <div>
-                  <span class="card-kicker">Риски</span>
                   <h3 class="card-title">Долги и склад</h3>
                 </div>
               </div>
@@ -1528,6 +1496,7 @@ function openProcurementAudit(procurementId: number): void {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   font-weight: var(--font-medium);
+  white-space: nowrap;
 }
 
 .custom-range-apply,
@@ -1555,7 +1524,7 @@ function openProcurementAudit(procurementId: number): void {
 
 .overview-panel {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-5);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-brand-50) 60%, white) 0%, var(--color-bg-elevated) 38%);
@@ -1597,10 +1566,15 @@ function openProcurementAudit(procurementId: number): void {
   font-weight: var(--font-semibold);
 }
 
+.workspace-title,
+.card-title {
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
+}
+
 .overview-title {
   font-size: clamp(1.4rem, 3vw, 2rem);
   line-height: 1.05;
-  margin-top: var(--space-1);
 }
 
 .overview-note,
@@ -1699,6 +1673,7 @@ function openProcurementAudit(procurementId: number): void {
   color: var(--color-text-primary);
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
+  overflow-wrap: anywhere;
 }
 
 .cash-native-list {
@@ -1739,10 +1714,6 @@ function openProcurementAudit(procurementId: number): void {
 .workspace-board {
   display: grid;
   gap: var(--space-3);
-}
-
-.workspace-title {
-  font-size: var(--text-lg);
 }
 
 .money-layout {
@@ -2204,11 +2175,76 @@ function openProcurementAudit(procurementId: number): void {
     align-items: flex-start;
   }
 
+  .overview-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .currency-switch {
+    min-height: 36px;
+    grid-template-columns: repeat(2, minmax(36px, 1fr));
+  }
+
+  .currency-switch__btn {
+    min-height: 28px;
+    padding: 0 8px;
+  }
+
+  .action-pill {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: var(--text-xs);
+    flex: 0 0 auto;
+  }
+
   .overview-grid,
-  .obligation-grid,
+  .obligation-grid {
+    grid-template-columns: 1fr;
+  }
+
   .summary-strip,
   .skeleton-grid {
     grid-template-columns: 1fr;
+  }
+
+  .overview-panel,
+  .workspace-card {
+    padding: var(--space-4);
+  }
+
+  .overview-primary {
+    padding: var(--space-3);
+  }
+
+  .overview-primary-value {
+    font-size: 1.9rem;
+  }
+
+  .metric-value {
+    font-size: var(--text-base);
+    line-height: 1.2;
+  }
+
+  .metric-note {
+    font-size: var(--text-xs);
+  }
+
+  .card-head {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .card-title,
+  .workspace-title {
+    font-size: var(--text-lg);
+  }
+
+  .status-chip {
+    min-height: 26px;
+    padding: 0 10px;
   }
 
   .analytics-switch,
@@ -2369,7 +2405,7 @@ function openProcurementAudit(procurementId: number): void {
   }
 
   .money-row--total {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 
