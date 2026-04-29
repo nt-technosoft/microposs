@@ -49,7 +49,7 @@ def _dispatch_event(event):
     """Route event to the correct aggregation task."""
     handlers = {
         'sale.completed': _handle_sale_completed,
-        'sale.returned': _handle_financial_operation,
+        'sale.returned': _handle_sale_returned,
         'receipt.confirmed': _handle_receipt_confirmed,
         'risk.writeoff': _handle_risk_event,
         'risk_event.created': _handle_risk_event,
@@ -72,7 +72,7 @@ def _dispatch_event(event):
         'procurement.balance_exchanged': _handle_noop_retired,
         'procurement.items_paid': _handle_noop_retired,
         'procurement.expenses_paid': _handle_noop_retired,
-        'procurement.received': _handle_noop_retired,
+        'procurement.received': _handle_procurement_received,
         'partnership.dividend_paid': _handle_noop_retired,
         'finance.currency_exchange': _handle_noop_retired,
         'finance.refund': _handle_financial_operation,
@@ -85,9 +85,21 @@ def _dispatch_event(event):
     return True
 
 
+def _invalidate_profitability_cache(tenant_id: int) -> None:
+    from django.core.cache import cache
+    current = cache.get(f'profitability:v:{tenant_id}', 0)
+    cache.set(f'profitability:v:{tenant_id}', current + 1, timeout=86400)
+
+
 def _handle_sale_completed(payload, tenant_id):
     date_str = payload.get('date')
     aggregate_daily_pnl.delay(tenant_id, date_str)
+    _invalidate_profitability_cache(tenant_id)
+
+
+def _handle_sale_returned(payload, tenant_id):
+    _handle_financial_operation(payload, tenant_id)
+    _invalidate_profitability_cache(tenant_id)
 
 
 def _handle_noop_retired(payload, tenant_id):
@@ -100,6 +112,12 @@ def _handle_noop_retired(payload, tenant_id):
 
 def _handle_receipt_confirmed(payload, tenant_id):
     aggregate_daily_pnl.delay(tenant_id, payload.get('date'))
+    _invalidate_profitability_cache(tenant_id)
+
+
+def _handle_procurement_received(payload, tenant_id):
+    # Procurement receive changes stock/projection rows even without sale revenue.
+    _invalidate_profitability_cache(tenant_id)
 
 
 def _handle_risk_event(payload, tenant_id):
@@ -149,7 +167,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     sales = Sale.objects.filter(
         tenant_id=tenant_id,
         status='completed',
-        created_at__range=(day_start, day_end),
+        date__range=(day_start, day_end),
     )
 
     total_revenue = sales.aggregate(
@@ -165,7 +183,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     # Returns count
     total_returns_count = SaleReturn.objects.filter(
         tenant_id=tenant_id,
-        created_at__range=(day_start, day_end),
+        date__range=(day_start, day_end),
     ).count()
 
     # Writeoffs
@@ -262,17 +280,6 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
 
 @shared_task
-def aggregate_investor_summary_for_sale(sale_id):
-    """
-    Retired under vacuum model.
-
-    Investor-facing aggregates are now derived from PartnerLedgerEntry and
-    procurement-ledger bridge views instead of legacy InvestorSummary writes.
-    """
-    logger.info('aggregate_investor_summary_for_sale retired for sale_id=%s', sale_id)
-
-
-@shared_task
 def compute_aging_reports(tenant_id):
     """
     Recompute A/R and A/P aging buckets.
@@ -285,9 +292,14 @@ def compute_aging_reports(tenant_id):
     now = timezone.now()
 
     # Customer aging (A/R)
+    # select_related avoids N+1 on customer.receivable per iteration;
+    # exclude no-receivable rows at SQL level, then filter by balance in Python.
     customers = [
         customer
-        for customer in Customer.objects.filter(tenant_id=tenant_id)
+        for customer in Customer.objects.filter(
+            tenant_id=tenant_id,
+            receivable__isnull=False,
+        ).select_related('receivable')
         if customer.outstanding_balance > 0
     ]
 

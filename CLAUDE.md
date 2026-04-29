@@ -3,16 +3,19 @@
 ## Overview
 MicroPOS — mobile-first POS platform for small retail businesses with Islamic partnership financing support (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
 
+**Documentation:** See `docs/` for full technical and business-logic reference.
+
 ## Architecture
 - **Monorepo**: `backend/` (Django) + `frontend/` (Vue.js 3)
 - **Backend**: Python 3.12 / Django 5.x / DRF / PostgreSQL 16 / Redis / Celery
 - **Frontend**: Vue.js 3 + TypeScript + Pinia + Vue Router + Vite
+- **Tests**: `DJANGO_SETTINGS_MODULE=config.settings.development .venv/bin/python -m pytest apps/core/tests/ -q`
 
 ## Key Business Rules (NEVER violate)
-1. Products appear ONLY through Receipt (except initial inventory)
-2. Receipt.status = confirmed -> immutable forever
-3. SaleLine always references Lot (not ProductVariant directly)
-4. FIFO by default for lot selection
+1. Products appear ONLY through Procurement / Receipt (except initial inventory)
+2. Receipt.status = confirmed → immutable forever
+3. SaleLine always references Lot (not ProductVariant directly) — FIFO allocation creates one SaleLine per lot-slice
+4. FIFO by default for lot selection — ordered by (lot.received_at, lot.id)
 5. sum(profit_ratio of all participants) == 1.0
 6. capital_ratio is auto-calculated from capital_amount
 7. Credit sale requires customer_id
@@ -31,9 +34,10 @@ MicroPOS — mobile-first POS platform for small retail businesses with Islamic 
 - All POST endpoints for financial ops accept `client_request_id` (idempotency)
 - Multi-tenant: `tenant_id` on all business data models
 - Immutable financial records after confirmed/completed status
+- `CELERY_TASK_ALWAYS_EAGER=True` in development settings — tasks run synchronously in dev/test
 
 ## Frontend Conventions
-- Mobile-first, responsive (375px -> 768px -> 1024px -> 1440px)
+- Mobile-first, responsive (375px → 768px → 1024px → 1440px)
 - Vue 3 Composition API + `<script setup>` syntax
 - Pinia stores per domain
 - API layer in `src/api/` with typed clients
@@ -41,6 +45,8 @@ MicroPOS — mobile-first POS platform for small retail businesses with Islamic 
 - Design tokens in CSS custom properties
 - Lucide icons (no emojis as structural icons)
 - All animations 150-300ms, respect prefers-reduced-motion
+- AbortController pattern for all data-loading functions; cancel in onBeforeUnmount
+- Debounce 300ms on currency switches and search inputs
 
 ## Vacuum Rework Note
 - Frontend migration follows **reuse foundation / rewrite feature-domain**.

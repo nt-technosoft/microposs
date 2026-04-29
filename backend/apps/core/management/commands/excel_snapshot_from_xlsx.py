@@ -67,7 +67,7 @@ def _is_required_row(sheet_name: str, row: dict[str, Any]) -> bool:
     if sheet_name == 'SOTUV':
         return all(
             not _is_blank(_pick(row, key))
-            for key in ('SOTUV SANASI', 'MAHSULOT', 'JAMI DONA', 'SOTUV NARXI', 'OMBOR')
+            for key in ('SOTUV SANASI', 'MAHSULOT', 'JAMI DONA', 'SOTUV NARXI')
         )
     if sheet_name == 'TUSHUM':
         return all(

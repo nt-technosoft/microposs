@@ -14,6 +14,9 @@ import { useSessionStore } from './session'
 
 const PAGE_SIZE = 20
 
+// Timer lives outside store state — no reactivity overhead, no serialization
+let _searchTimer: ReturnType<typeof setTimeout> | null = null
+
 interface ProductsState {
   products: Product[]
   categories: Category[]
@@ -23,7 +26,6 @@ interface ProductsState {
   hasMore: boolean
   page: number
   discountReasons: DiscountReason[]
-  _searchDebounceTimer: ReturnType<typeof setTimeout> | null
 }
 
 export const useProductsStore = defineStore('products', {
@@ -36,7 +38,6 @@ export const useProductsStore = defineStore('products', {
     hasMore: false,
     page: 1,
     discountReasons: [],
-    _searchDebounceTimer: null,
   }),
 
   getters: {
@@ -103,12 +104,9 @@ export const useProductsStore = defineStore('products', {
     setSearch(query: string): void {
       this.searchQuery = query
 
-      if (this._searchDebounceTimer !== null) {
-        clearTimeout(this._searchDebounceTimer)
-      }
-
-      this._searchDebounceTimer = setTimeout(() => {
-        this._searchDebounceTimer = null
+      if (_searchTimer !== null) clearTimeout(_searchTimer)
+      _searchTimer = setTimeout(() => {
+        _searchTimer = null
         this.fetchProducts(true)
       }, 300)
     },

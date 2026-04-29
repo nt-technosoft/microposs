@@ -20,10 +20,12 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 — try refresh, then logout
+// Handle 401 — try refresh, then logout. Ignore cancelled requests.
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
+
     const originalRequest = error.config
 
     if (error.response?.status === 401 && !originalRequest._retry) {
@@ -53,5 +55,9 @@ api.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+export function createAbortController(): AbortController {
+  return new AbortController()
+}
 
 export default api

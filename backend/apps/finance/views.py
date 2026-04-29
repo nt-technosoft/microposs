@@ -5,8 +5,9 @@ Finance API views — accounts, journal entries, summaries.
 from datetime import timedelta
 from datetime import date as date_cls
 
+from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Max, Min
+from django.db.models import Max
 from django.db.utils import OperationalError
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -76,7 +77,9 @@ def _resolve_operation_window(
     date_from_raw: str | None,
     date_to_raw: str | None,
 ) -> tuple[date_cls | None, date_cls | None]:
-    """Resolve requested window or fallback to full operation history."""
+    """Resolve requested window or fallback to full operation history (single UNION query)."""
+    from django.db import connection
+
     parsed_from = parse_date(date_from_raw) if date_from_raw else None
     parsed_to = parse_date(date_to_raw) if date_to_raw else None
 
@@ -86,41 +89,43 @@ def _resolve_operation_window(
     if parsed_from and parsed_to:
         return parsed_from, parsed_to
 
-    candidates: list[date_cls] = []
-    min_max = [
-        Sale.objects.filter(tenant_id=tenant_id, status='completed').aggregate(
-            min_dt=Min('created_at'),
-            max_dt=Max('created_at'),
-        ),
-        Receipt.objects.filter(tenant_id=tenant_id, status='confirmed').aggregate(
-            min_dt=Min('date'),
-            max_dt=Max('date'),
-        ),
-        CustomerPayment.objects.filter(tenant_id=tenant_id).aggregate(
-            min_dt=Min('date'),
-            max_dt=Max('date'),
-        ),
-        SupplierPayment.objects.filter(tenant_id=tenant_id).aggregate(
-            min_dt=Min('date'),
-            max_dt=Max('date'),
-        ),
-        Expense.objects.filter(tenant_id=tenant_id).aggregate(
-            min_dt=Min('occurred_at'),
-            max_dt=Max('occurred_at'),
-        ),
-    ]
-
-    for mm in min_max:
-        if mm['min_dt']:
-            candidates.append(mm['min_dt'].date())
-        if mm['max_dt']:
-            candidates.append(mm['max_dt'].date())
-
-    if not candidates:
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT MIN(dt), MAX(dt) FROM (
+                    SELECT DATE(date) AS dt
+                      FROM sales_sale
+                     WHERE tenant_id = %s AND deleted_at IS NULL AND status = 'completed'
+                    UNION ALL
+                    SELECT DATE(date) AS dt
+                      FROM inventory_receipt
+                     WHERE tenant_id = %s AND deleted_at IS NULL AND status = 'confirmed'
+                    UNION ALL
+                    SELECT DATE(date) AS dt
+                      FROM customers_payment
+                     WHERE tenant_id = %s AND deleted_at IS NULL
+                    UNION ALL
+                    SELECT DATE(date) AS dt
+                      FROM suppliers_payment
+                     WHERE tenant_id = %s AND deleted_at IS NULL
+                    UNION ALL
+                    SELECT DATE(occurred_at) AS dt
+                      FROM finance_expense
+                     WHERE tenant_id = %s AND deleted_at IS NULL
+                ) combined
+                """,
+                [tenant_id] * 5,
+            )
+            row = cursor.fetchone()
+    except Exception:
         return parsed_from, parsed_to
 
-    data_min = min(candidates)
-    data_max = max(candidates)
+    if not row or row[0] is None:
+        return parsed_from, parsed_to
+
+    data_min = row[0] if isinstance(row[0], date_cls) else date_cls.fromisoformat(str(row[0]))
+    data_max = row[1] if isinstance(row[1], date_cls) else date_cls.fromisoformat(str(row[1]))
     return parsed_from or data_min, parsed_to or data_max
 
 
@@ -129,10 +134,13 @@ def _ensure_finance_aggregates(
     *,
     date_from_raw: str | None,
     date_to_raw: str | None,
-) -> tuple[date_cls | None, date_cls | None]:
+) -> tuple[date_cls | None, date_cls | None, bool]:
     """
-    Ensure daily finance aggregates exist for requested date range.
-    Runs synchronously in API request path for deterministic demo behavior.
+    Ensure daily finance aggregates are being computed for the requested range.
+    Returns (date_from, date_to, is_computing) immediately without blocking.
+    is_computing=True means background tasks were dispatched and data is incomplete.
+    If records are already present in DB → no-op (fast path).
+    If records are missing → dispatch Celery tasks for missing dates asynchronously.
     """
     date_from, date_to = _resolve_operation_window(
         tenant_id,
@@ -140,7 +148,7 @@ def _ensure_finance_aggregates(
         date_to_raw=date_to_raw,
     )
     if not date_from or not date_to:
-        return date_from, date_to
+        return date_from, date_to, False
 
     span_days = (date_to - date_from).days
     if span_days > 1825:  # Safety cap: 5 years
@@ -148,29 +156,46 @@ def _ensure_finance_aggregates(
 
     warmup_key = f'finance:agg:warm:{tenant_id}:{date_from.isoformat()}:{date_to.isoformat()}'
     if cache.get(warmup_key):
-        return date_from, date_to
+        return date_from, date_to, False
 
+    # Check which dates already have aggregated records in the DB.
+    existing_dates = set(
+        DailySummary.objects.filter(
+            tenant_id=tenant_id,
+            date__gte=date_from,
+            date__lte=date_to,
+        ).values_list('date', flat=True)
+    )
+
+    missing: list[date_cls] = []
+    cursor = date_from
+    while cursor <= date_to:
+        if cursor not in existing_dates:
+            missing.append(cursor)
+        cursor += timedelta(days=1)
+
+    if not missing:
+        # All dates present — mark as warm and return.
+        cache.set(warmup_key, True, timeout=3600)
+        return date_from, date_to, False
+
+    # Dispatch async tasks for missing dates; do NOT block the request.
     lock_key = f'finance:agg:lock:{tenant_id}'
     lock_token = str(timezone.now().timestamp())
-    lock_acquired = cache.add(lock_key, lock_token, timeout=45)
-    if not lock_acquired:
-        # Another request is already warming aggregates. Return current data instead of failing.
-        return date_from, date_to
+    if cache.add(lock_key, lock_token, timeout=60):
+        try:
+            for d in missing:
+                aggregate_daily_pnl.delay(tenant_id, d.isoformat())
+            if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+                cache.set(warmup_key, True, timeout=3600)
+                return date_from, date_to, False
+        except Exception:
+            pass
+        finally:
+            if cache.get(lock_key) == lock_token:
+                cache.delete(lock_key)
 
-    try:
-        cursor = date_from
-        while cursor <= date_to:
-            aggregate_daily_pnl.run(tenant_id, cursor.isoformat())
-            cursor += timedelta(days=1)
-        cache.set(warmup_key, True, timeout=30)
-    except OperationalError:
-        # SQLite in dev can briefly lock on parallel writes; fail-open for read APIs.
-        return date_from, date_to
-    finally:
-        if cache.get(lock_key) == lock_token:
-            cache.delete(lock_key)
-
-    return date_from, date_to
+    return date_from, date_to, True
 
 
 class CashAccountViewSet(viewsets.ModelViewSet):
@@ -443,7 +468,7 @@ class DailySummaryViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         date_from_raw = self.request.query_params.get('date_from')
         date_to_raw = self.request.query_params.get('date_to')
-        date_from, date_to = _ensure_finance_aggregates(
+        date_from, date_to, _ = _ensure_finance_aggregates(
             self.request.tenant_id,
             date_from_raw=date_from_raw,
             date_to_raw=date_to_raw,
@@ -471,7 +496,7 @@ class CashFlowSummaryViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         date_from_raw = self.request.query_params.get('date_from')
         date_to_raw = self.request.query_params.get('date_to')
-        date_from, date_to = _ensure_finance_aggregates(
+        date_from, date_to, _ = _ensure_finance_aggregates(
             self.request.tenant_id,
             date_from_raw=date_from_raw,
             date_to_raw=date_to_raw,
@@ -495,17 +520,30 @@ class SaleProfitabilityView(APIView):
         date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
         location_id = request.query_params.get('location')
+        report_currency = request.query_params.get('report_currency')
+        cache_key = _profitability_cache_key(request.tenant_id, {
+            'view': 'sales',
+            'date_from': str(date_from),
+            'date_to': str(date_to),
+            'location': location_id,
+            'currency': report_currency,
+        })
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         try:
             rows = get_sales_profitability_rows(
                 tenant_id=request.tenant_id,
                 date_from=date_from,
                 date_to=date_to,
                 location_id=int(location_id) if location_id else None,
-                report_currency=request.query_params.get('report_currency'),
+                report_currency=report_currency,
             )
         except ReportCurrencyError as exc:
             raise ValidationError({'report_currency': str(exc)})
-        return Response(SaleProfitabilitySerializer(rows, many=True).data)
+        data = SaleProfitabilitySerializer(rows, many=True).data
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
 
 
 class ProductProfitabilityView(APIView):
@@ -516,6 +554,18 @@ class ProductProfitabilityView(APIView):
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
         location_id = request.query_params.get('location')
         warehouse_id = request.query_params.get('warehouse')
+        report_currency = request.query_params.get('report_currency')
+        cache_key = _profitability_cache_key(request.tenant_id, {
+            'view': 'products',
+            'date_from': str(date_from),
+            'date_to': str(date_to),
+            'location': location_id,
+            'warehouse': warehouse_id,
+            'currency': report_currency,
+        })
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         try:
             rows = get_product_profitability_rows(
                 tenant_id=request.tenant_id,
@@ -523,11 +573,13 @@ class ProductProfitabilityView(APIView):
                 date_to=date_to,
                 location_id=int(location_id) if location_id else None,
                 warehouse_id=int(warehouse_id) if warehouse_id else None,
-                report_currency=request.query_params.get('report_currency'),
+                report_currency=report_currency,
             )
         except ReportCurrencyError as exc:
             raise ValidationError({'report_currency': str(exc)})
-        return Response(ProductProfitabilitySerializer(rows, many=True).data)
+        data = ProductProfitabilitySerializer(rows, many=True).data
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
 
 
 class ProcurementProfitabilityView(APIView):
@@ -536,16 +588,28 @@ class ProcurementProfitabilityView(APIView):
     def get(self, request):
         date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
         date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
+        report_currency = request.query_params.get('report_currency')
+        cache_key = _profitability_cache_key(request.tenant_id, {
+            'view': 'procurements',
+            'date_from': str(date_from),
+            'date_to': str(date_to),
+            'currency': report_currency,
+        })
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
         try:
             rows = get_procurement_profitability_rows(
                 tenant_id=request.tenant_id,
                 date_from=date_from,
                 date_to=date_to,
-                report_currency=request.query_params.get('report_currency'),
+                report_currency=report_currency,
             )
         except ReportCurrencyError as exc:
             raise ValidationError({'report_currency': str(exc)})
-        return Response(ProcurementProfitabilitySerializer(rows, many=True).data)
+        data = ProcurementProfitabilitySerializer(rows, many=True).data
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
 
 
 class ProcurementProfitabilityDetailView(APIView):
@@ -582,6 +646,121 @@ class AgreementProfitabilityDetailView(APIView):
         except ReportCurrencyError as exc:
             raise ValidationError({'report_currency': str(exc)})
         return Response(payload)
+
+
+def _profitability_cache_key(tenant_id: int, params: dict) -> str:
+    import hashlib, json
+    version = cache.get(f'profitability:v:{tenant_id}', 0)
+    raw = json.dumps({'tenant': tenant_id, 'v': version, **params}, sort_keys=True, default=str)
+    return f'profitability:{hashlib.md5(raw.encode()).hexdigest()}'
+
+
+class ReportAnalyticsView(APIView):
+    """
+    Combined profitability endpoint: sales + products + procurements in one request.
+    Replaces 3 separate profitability API calls on the dashboard.
+    Cached in Redis for 5 minutes per (tenant, date range, currency).
+    """
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        date_from = parse_date(request.query_params.get('date_from')) if request.query_params.get('date_from') else None
+        date_to = parse_date(request.query_params.get('date_to')) if request.query_params.get('date_to') else None
+        location_id = request.query_params.get('location')
+        report_currency = request.query_params.get('report_currency')
+
+        cache_key = _profitability_cache_key(request.tenant_id, {
+            'date_from': str(date_from),
+            'date_to': str(date_to),
+            'location': location_id,
+            'currency': report_currency,
+            'view': 'analytics',
+        })
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        try:
+            sales_rows = get_sales_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                location_id=int(location_id) if location_id else None,
+                report_currency=report_currency,
+            )
+            product_rows = get_product_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                location_id=int(location_id) if location_id else None,
+                report_currency=report_currency,
+            )
+            procurement_rows = get_procurement_profitability_rows(
+                tenant_id=request.tenant_id,
+                date_from=date_from,
+                date_to=date_to,
+                report_currency=report_currency,
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
+
+        data = {
+            'sales': SaleProfitabilitySerializer(sales_rows, many=True).data,
+            'products': ProductProfitabilitySerializer(product_rows, many=True).data,
+            'procurements': ProcurementProfitabilitySerializer(procurement_rows, many=True).data,
+        }
+        cache.set(cache_key, data, timeout=300)
+        return Response(data)
+
+
+class ReportSummaryView(APIView):
+    """
+    Combined summary endpoint: daily P&L + cash flow + debt + parity in one request.
+    Replaces 5+ separate API calls on the dashboard.
+    """
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        from apps.customers.services import get_customer_debt_summary
+        from apps.suppliers.services import get_supplier_payables_summary
+        from apps.inventory.services import get_stock_summary
+
+        date_from_raw = request.query_params.get('date_from')
+        date_to_raw = request.query_params.get('date_to')
+
+        date_from, date_to, is_computing = _ensure_finance_aggregates(
+            request.tenant_id,
+            date_from_raw=date_from_raw,
+            date_to_raw=date_to_raw,
+        )
+
+        daily_qs = DailySummary.objects.filter(tenant_id=request.tenant_id)
+        if date_from:
+            daily_qs = daily_qs.filter(date__gte=date_from)
+        if date_to:
+            daily_qs = daily_qs.filter(date__lte=date_to)
+
+        cash_qs = CashFlowSummary.objects.filter(tenant_id=request.tenant_id)
+        if date_from:
+            cash_qs = cash_qs.filter(date__gte=date_from)
+        if date_to:
+            cash_qs = cash_qs.filter(date__lte=date_to)
+
+        trial_balance = get_trial_balance(request.tenant_id)
+        cash_accounts = CashAccount.objects.filter(tenant_id=request.tenant_id)
+
+        return Response({
+            'is_computing': is_computing,
+            'daily_summary': DailySummarySerializer(daily_qs.order_by('-date'), many=True).data,
+            'cash_flow': CashFlowSummarySerializer(cash_qs.order_by('-date'), many=True).data,
+            'debt': get_customer_debt_summary(request.tenant_id),
+            'parity': {
+                'payables': get_supplier_payables_summary(request.tenant_id),
+                'stock': get_stock_summary(request.tenant_id),
+                'trial_balance': TrialBalanceSerializer(trial_balance, many=True).data,
+                'cash_accounts': CashAccountSerializer(cash_accounts, many=True).data,
+            },
+        })
 
 
 class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):

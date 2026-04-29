@@ -185,7 +185,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             tenant_id=self.request.tenant_id,
         ).select_related('supplier', 'balance', 'contract').prefetch_related(
             'items__product_variant',
-            'expenses',
+            'expenses__targets',
             'balance__contributions__partner',
             'balance__withdrawals',
             'balance__withdrawals__partner',

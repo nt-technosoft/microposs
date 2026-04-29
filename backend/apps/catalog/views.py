@@ -2,7 +2,7 @@
 Catalog API views — CRUD for categories, products, attributes, discount reasons.
 """
 
-from django.db.models import Max
+from django.db.models import Count, Max, Prefetch
 from django.conf import settings
 from django.core.validators import FileExtensionValidator
 from rest_framework import viewsets, status
@@ -48,9 +48,21 @@ class CategoryViewSet(viewsets.ModelViewSet):
         return [IsOwner()]
 
     def get_queryset(self):
-        return Category.objects.filter(
+        qs = Category.objects.filter(
             tenant_id=self.request.tenant_id,
-        ).select_related('parent')
+        ).select_related('parent').annotate(
+            products_count=Count('products', distinct=True),
+        )
+        if self.action == 'retrieve':
+            qs = qs.prefetch_related(
+                Prefetch(
+                    'children',
+                    queryset=Category.objects.annotate(
+                        products_count=Count('products', distinct=True),
+                    ),
+                )
+            )
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'retrieve':

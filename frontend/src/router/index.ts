@@ -24,6 +24,9 @@ function getRoleHomeRoute(role?: string | null) {
   }
 }
 
+let _lastSessionLoadAt = 0
+const SESSION_LOAD_COOLDOWN_MS = 30_000
+
 const router = createRouter({
   history: createWebHistory(),
   routes,
@@ -75,7 +78,9 @@ router.beforeEach(async (to) => {
       (auth.role === 'owner' || auth.role === 'cashier')
       && !session.currentSession
       && !session.isLoading
+      && Date.now() - _lastSessionLoadAt > SESSION_LOAD_COOLDOWN_MS
     ) {
+      _lastSessionLoadAt = Date.now()
       try {
         await session.loadCurrentSession()
       } catch {

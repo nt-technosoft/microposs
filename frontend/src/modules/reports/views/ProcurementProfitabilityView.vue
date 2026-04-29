@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ChevronDown, ExternalLink, PackageSearch, Scale, Wallet } from 'lucide-vue-next'
 
@@ -107,11 +107,18 @@ function openOperationalCard(): void {
   router.push({ name: 'procurement-detail', params: { id: procurementId.value } })
 }
 
+let _loadAbort: AbortController | null = null
+let _currencyTimer: ReturnType<typeof setTimeout> | null = null
+
 async function load(): Promise<void> {
   if (!Number.isFinite(procurementId.value) || procurementId.value <= 0) {
     error.value = 'Некорректный ID закупки'
     return
   }
+
+  _loadAbort?.abort()
+  _loadAbort = new AbortController()
+  const { signal } = _loadAbort
 
   loading.value = true
   error.value = null
@@ -120,24 +127,34 @@ async function load(): Promise<void> {
       fetchProcurementProfitabilityDetail(
         procurementId.value,
         selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
+        signal,
       ),
       fetchProcurement(procurementId.value),
     ])
     report.value = reportPayload
     procurementDetail.value = procurementPayload
   } catch (err: unknown) {
+    if ((err as { name?: string })?.name === 'CanceledError') return
     error.value = err instanceof Error ? err.message : 'Не удалось загрузить аудит закупки'
   } finally {
     loading.value = false
   }
 }
 
-async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
+function setReportCurrency(currency: 'UZS' | 'USD'): void {
   selectedReportCurrency.value = currency
-  await load()
+  if (_currencyTimer !== null) clearTimeout(_currencyTimer)
+  _currencyTimer = setTimeout(() => {
+    _currencyTimer = null
+    load()
+  }, 300)
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  _loadAbort?.abort()
+  if (_currencyTimer !== null) clearTimeout(_currencyTimer)
+})
 </script>
 
 <template>

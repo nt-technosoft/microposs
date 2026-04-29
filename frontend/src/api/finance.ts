@@ -4,6 +4,9 @@
 
 import api from './client'
 import type { PaginatedResponse } from './catalog'
+import type { DebtSummaryItem } from './customers'
+import type { PayablesSummaryItem } from './suppliers'
+import type { StockSummaryItem } from './inventory'
 
 export interface Account {
   id: number
@@ -409,6 +412,39 @@ function toNumber(raw: string | number | null | undefined): number {
   return 0
 }
 
+function mapDailySummary(item: BackendDailySummary): DailySummary {
+  return {
+    date: item.date,
+    total_sales: String(item.total_sales_count),
+    total_cogs: item.total_cogs,
+    gross_profit: item.gross_profit,
+    total_returns: String(item.total_returns_count),
+    net_sales: item.total_revenue,
+    cash_collected: item.total_revenue,
+  }
+}
+
+function mapCashFlowItem(item: BackendCashFlowItem): CashFlowItem {
+  const inflows = (
+    toNumber(item.cash_in_sales)
+    + toNumber(item.cash_in_debt_payments)
+    + toNumber(item.cash_in_investor)
+  )
+  const outflows = (
+    toNumber(item.cash_out_purchases)
+    + toNumber(item.cash_out_supplier_payments)
+    + toNumber(item.cash_out_expenses)
+    + toNumber(item.cash_out_investor_payments)
+  )
+
+  return {
+    date: item.date,
+    inflows: toMoneyString(inflows),
+    outflows: toMoneyString(outflows),
+    net: item.net_cash_flow,
+  }
+}
+
 export async function fetchAccounts(): Promise<Account[]> {
   const { data } = await api.get<PaginatedResponse<Account> | Account[]>('/api/v1/finance/accounts/')
   return extractList<Account>(data)
@@ -436,15 +472,7 @@ export async function fetchDailySummaries(params?: FetchDailySummariesParams): P
     '/api/v1/finance/daily-summaries/',
     { params },
   )
-  return extractList<BackendDailySummary>(data).map((item) => ({
-    date: item.date,
-    total_sales: String(item.total_sales_count),
-    total_cogs: item.total_cogs,
-    gross_profit: item.gross_profit,
-    total_returns: String(item.total_returns_count),
-    net_sales: item.total_revenue,
-    cash_collected: item.total_revenue,
-  }))
+  return extractList<BackendDailySummary>(data).map(mapDailySummary)
 }
 
 export async function fetchCashFlow(params?: FetchCashFlowParams): Promise<CashFlowItem[]> {
@@ -452,26 +480,7 @@ export async function fetchCashFlow(params?: FetchCashFlowParams): Promise<CashF
     '/api/v1/finance/cash-flow/',
     { params },
   )
-  return extractList<BackendCashFlowItem>(data).map((item) => {
-    const inflows = (
-      toNumber(item.cash_in_sales)
-      + toNumber(item.cash_in_debt_payments)
-      + toNumber(item.cash_in_investor)
-    )
-    const outflows = (
-      toNumber(item.cash_out_purchases)
-      + toNumber(item.cash_out_supplier_payments)
-      + toNumber(item.cash_out_expenses)
-      + toNumber(item.cash_out_investor_payments)
-    )
-
-    return {
-      date: item.date,
-      inflows: toMoneyString(inflows),
-      outflows: toMoneyString(outflows),
-      net: item.net_cash_flow,
-    }
-  })
+  return extractList<BackendCashFlowItem>(data).map(mapCashFlowItem)
 }
 
 export async function fetchTrialBalance(): Promise<TrialBalanceEntry[]> {
@@ -481,30 +490,33 @@ export async function fetchTrialBalance(): Promise<TrialBalanceEntry[]> {
 
 export async function fetchSalesProfitability(
   params?: FetchProfitabilityParams,
+  signal?: AbortSignal,
 ): Promise<SaleProfitabilityRow[]> {
   const { data } = await api.get<SaleProfitabilityRow[]>(
     '/api/v1/finance/sales-profitability/',
-    { params },
+    { params, signal },
   )
   return data
 }
 
 export async function fetchProductProfitability(
   params?: FetchProfitabilityParams,
+  signal?: AbortSignal,
 ): Promise<ProductProfitabilityRow[]> {
   const { data } = await api.get<ProductProfitabilityRow[]>(
     '/api/v1/finance/product-profitability/',
-    { params },
+    { params, signal },
   )
   return data
 }
 
 export async function fetchProcurementProfitability(
   params?: FetchProfitabilityParams,
+  signal?: AbortSignal,
 ): Promise<ProcurementProfitabilityRow[]> {
   const { data } = await api.get<ProcurementProfitabilityRow[]>(
     '/api/v1/finance/procurement-profitability/',
-    { params },
+    { params, signal },
   )
   return data
 }
@@ -512,10 +524,11 @@ export async function fetchProcurementProfitability(
 export async function fetchProcurementProfitabilityDetail(
   procurementId: number,
   params?: { report_currency?: string },
+  signal?: AbortSignal,
 ): Promise<ProcurementProfitabilityDetail> {
   const { data } = await api.get<ProcurementProfitabilityDetail>(
     `/api/v1/finance/procurement-profitability/${procurementId}/`,
-    { params },
+    { params, signal },
   )
   return data
 }
@@ -523,10 +536,11 @@ export async function fetchProcurementProfitabilityDetail(
 export async function fetchAgreementProfitabilityDetail(
   agreementId: number,
   params?: { report_currency?: string },
+  signal?: AbortSignal,
 ): Promise<AgreementProfitabilityDetail> {
   const { data } = await api.get<AgreementProfitabilityDetail>(
     `/api/v1/finance/agreement-profitability/${agreementId}/`,
-    { params },
+    { params, signal },
   )
   return data
 }
@@ -573,6 +587,70 @@ export async function createCurrencyExchange(
   payload: CurrencyExchangeCreatePayload,
 ): Promise<CurrencyExchangeItem> {
   const { data } = await api.post<CurrencyExchangeItem>('/api/v1/finance/currency-exchanges/', payload)
+  return data
+}
+
+export interface ReportSummaryResponse {
+  is_computing: boolean
+  daily_summary: DailySummary[]
+  cash_flow: CashFlowItem[]
+  debt: DebtSummaryItem[]
+  parity: {
+    payables: PayablesSummaryItem[]
+    stock: StockSummaryItem[]
+    trial_balance: TrialBalanceEntry[]
+    cash_accounts: CashAccountRecord[]
+  }
+}
+
+interface BackendReportSummaryResponse {
+  is_computing: boolean
+  daily_summary: BackendDailySummary[]
+  cash_flow: BackendCashFlowItem[]
+  debt: DebtSummaryItem[]
+  parity: {
+    payables: PayablesSummaryItem[]
+    stock: StockSummaryItem[]
+    trial_balance: TrialBalanceEntry[]
+    cash_accounts: CashAccountRecord[]
+  }
+}
+
+export interface ReportAnalyticsResponse {
+  sales: SaleProfitabilityRow[]
+  products: ProductProfitabilityRow[]
+  procurements: ProcurementProfitabilityRow[]
+}
+
+export interface FetchReportSummaryParams {
+  date_from?: string
+  date_to?: string
+}
+
+export interface FetchReportAnalyticsParams {
+  date_from?: string
+  date_to?: string
+  location?: string
+  report_currency?: string
+}
+
+export async function fetchReportSummary(
+  params?: FetchReportSummaryParams,
+  signal?: AbortSignal,
+): Promise<ReportSummaryResponse> {
+  const { data } = await api.get<BackendReportSummaryResponse>('/api/v1/finance/reports/summary/', { params, signal })
+  return {
+    ...data,
+    daily_summary: data.daily_summary.map(mapDailySummary),
+    cash_flow: data.cash_flow.map(mapCashFlowItem),
+  }
+}
+
+export async function fetchReportAnalytics(
+  params?: FetchReportAnalyticsParams,
+  signal?: AbortSignal,
+): Promise<ReportAnalyticsResponse> {
+  const { data } = await api.get<ReportAnalyticsResponse>('/api/v1/finance/reports/analytics/', { params, signal })
   return data
 }
 

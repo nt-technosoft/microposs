@@ -1,15 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { TrendingUp, TrendingDown, ShoppingCart, ArrowDownCircle, ArrowUpCircle, ChevronDown } from 'lucide-vue-next'
 import {
-  fetchDailySummaries,
-  fetchCashFlow,
-  fetchTrialBalance,
-  fetchCashAccounts,
-  fetchSalesProfitability,
-  fetchProductProfitability,
-  fetchProcurementProfitability,
+  fetchReportSummary,
+  fetchReportAnalytics,
   type DailySummary,
   type CashFlowItem,
   type CashAccountRecord,
@@ -17,9 +12,9 @@ import {
   type ProductProfitabilityRow,
   type ProcurementProfitabilityRow,
 } from '@/api/finance'
-import { fetchDebtSummary, type DebtSummaryItem } from '@/api/customers'
-import { fetchPayablesSummary, type PayablesSummaryItem } from '@/api/suppliers'
-import { fetchStockSummary, type StockSummaryItem } from '@/api/inventory'
+import type { DebtSummaryItem } from '@/api/customers'
+import type { PayablesSummaryItem } from '@/api/suppliers'
+import type { StockSummaryItem } from '@/api/inventory'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
 import { formatPrice } from '@/utils/currency'
@@ -88,6 +83,7 @@ const loadingAnalytics = ref(false)
 const errorSummary = ref<string | null>(null)
 const errorCashFlow = ref<string | null>(null)
 const loadingParity = ref(false)
+const isComputing = ref(false)
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -259,18 +255,26 @@ function formatRowReportPrice(
   return formatPrice(rowReportNumber(row, key, fallback), reportCurrency.value)
 }
 
+let _currencyDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
 async function setReportCurrency(currency: ReportCurrency): Promise<void> {
   if (reportCurrency.value === currency) return
   reportCurrency.value = currency
-  if (currency === 'USD' && !latestUsdRate.value) {
-    try {
-      await loadLatestUsdRate()
-    } catch {
-      reportCurrency.value = 'UZS'
-      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+
+  if (_currencyDebounceTimer !== null) clearTimeout(_currencyDebounceTimer)
+  _currencyDebounceTimer = setTimeout(async () => {
+    _currencyDebounceTimer = null
+    if (currency === 'USD' && !latestUsdRate.value) {
+      try {
+        await loadLatestUsdRate()
+      } catch {
+        reportCurrency.value = 'UZS'
+        toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+        return
+      }
     }
-  }
-  await loadAnalytics()
+    await loadAnalytics()
+  }, 300)
 }
 
 const salesProfitabilityTotals = computed(() => {
@@ -478,85 +482,92 @@ function procurementDateLabel(procurement: ProcurementProfitabilityRow): string 
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 
+let _summaryAbort: AbortController | null = null
+let _analyticsAbort: AbortController | null = null
+let _computingPollTimer: ReturnType<typeof setInterval> | null = null
+
+function _applySummaryResult(result: Awaited<ReturnType<typeof fetchReportSummary>>): void {
+  summaries.value = result.daily_summary
+  cashFlow.value = result.cash_flow
+  debtItems.value = result.debt
+  payablesItems.value = result.parity.payables
+  stockItems.value = result.parity.stock
+  trialBalance.value = result.parity.trial_balance.map((line) => ({
+    code: String(line.account_code || (line as unknown as { code?: string }).code || ''),
+    balance: String(line.balance ?? '0'),
+  }))
+  cashAccounts.value = result.parity.cash_accounts
+}
+
 async function loadSummary(): Promise<void> {
+  _summaryAbort?.abort()
+  _summaryAbort = new AbortController()
+  if (_computingPollTimer !== null) {
+    clearInterval(_computingPollTimer)
+    _computingPollTimer = null
+  }
+
   loadingSummary.value = true
+  loadingCashFlow.value = true
+  loadingDebt.value = true
+  loadingParity.value = true
   errorSummary.value = null
   try {
     const range = getDateRange(period.value)
-    summaries.value = await fetchDailySummaries(range)
+    const result = await fetchReportSummary(range, _summaryAbort.signal)
+
+    _applySummaryResult(result)
+    isComputing.value = result.is_computing
+
+    if (result.is_computing) {
+      let attempts = 0
+      _computingPollTimer = setInterval(async () => {
+        attempts++
+        if (attempts > 12) {
+          clearInterval(_computingPollTimer!)
+          _computingPollTimer = null
+          return
+        }
+        try {
+          const poll = await fetchReportSummary(range)
+          if (!poll.is_computing) {
+            clearInterval(_computingPollTimer!)
+            _computingPollTimer = null
+            _applySummaryResult(poll)
+            isComputing.value = false
+          }
+        } catch {
+          // ignore poll errors
+        }
+      }, 5000)
+    }
   } catch (err: unknown) {
+    if ((err as { name?: string })?.name === 'CanceledError') return
     errorSummary.value = err instanceof Error ? err.message : 'Ошибка загрузки'
     toast.error('Не удалось загрузить данные отчёта')
   } finally {
     loadingSummary.value = false
-  }
-}
-
-async function loadCashFlow(): Promise<void> {
-  loadingCashFlow.value = true
-  try {
-    const range = getDateRange(period.value)
-    cashFlow.value = await fetchCashFlow(range)
-  } catch {
-    toast.error('Не удалось загрузить движение наличных')
-  } finally {
     loadingCashFlow.value = false
-  }
-}
-
-async function loadDebt(): Promise<void> {
-  loadingDebt.value = true
-  try {
-    debtItems.value = await fetchDebtSummary()
-  } catch {
-    // Non-critical — fail silently in the debt section
-    debtItems.value = []
-  } finally {
     loadingDebt.value = false
-  }
-}
-
-async function loadParity(): Promise<void> {
-  loadingParity.value = true
-  try {
-    const [payables, stock, trial, cash] = await Promise.all([
-      fetchPayablesSummary(),
-      fetchStockSummary(),
-      fetchTrialBalance(),
-      fetchCashAccounts(),
-    ])
-    payablesItems.value = payables
-    stockItems.value = stock
-    trialBalance.value = trial.map((line) => ({
-      code: String(line.account_code || (line as unknown as { code?: string }).code || ''),
-      balance: String(line.balance ?? '0'),
-    }))
-    cashAccounts.value = cash
-  } catch {
-    // Non-critical for dashboard rendering.
-    payablesItems.value = []
-    stockItems.value = []
-    trialBalance.value = []
-    cashAccounts.value = []
-  } finally {
     loadingParity.value = false
   }
 }
 
 async function loadAnalytics(): Promise<void> {
+  _analyticsAbort?.abort()
+  _analyticsAbort = new AbortController()
+  const { signal } = _analyticsAbort
+
   loadingAnalytics.value = true
   try {
     const range = getDateRange(period.value)
     const params = { ...range, report_currency: reportCurrency.value }
-    const [salesRows, productRows, procurementRows] = await Promise.all([
-      fetchSalesProfitability(params),
-      fetchProductProfitability(params),
-      fetchProcurementProfitability(params),
-    ])
-    salesProfitability.value = salesRows
-    productProfitability.value = productRows
-    procurementProfitability.value = procurementRows
-  } catch {
+    const result = await fetchReportAnalytics(params, signal)
+    salesProfitability.value = result.sales
+    productProfitability.value = result.products
+    procurementProfitability.value = result.procurements
+  } catch (err: unknown) {
+    if ((err as { name?: string })?.name === 'CanceledError') return
     salesProfitability.value = []
     productProfitability.value = []
     procurementProfitability.value = []
@@ -566,7 +577,7 @@ async function loadAnalytics(): Promise<void> {
 }
 
 async function loadAll(): Promise<void> {
-  await Promise.all([loadSummary(), loadCashFlow(), loadDebt(), loadParity(), loadAnalytics()])
+  await Promise.all([loadSummary(), loadAnalytics()])
 }
 
 async function onPeriodSelect(p: Period): Promise<void> {
@@ -580,17 +591,23 @@ async function onPeriodSelect(p: Period): Promise<void> {
       customDateTo.value = toIsoDate(today)
     }
   }
-  await Promise.all([loadSummary(), loadCashFlow(), loadAnalytics()])
+  await Promise.all([loadSummary(), loadAnalytics()])
 }
 
 async function applyCustomRange(): Promise<void> {
   if (period.value !== 'custom') {
     return
   }
-  await Promise.all([loadSummary(), loadCashFlow(), loadAnalytics()])
+  await Promise.all([loadSummary(), loadAnalytics()])
 }
 
 onMounted(loadAll)
+onBeforeUnmount(() => {
+  _summaryAbort?.abort()
+  _analyticsAbort?.abort()
+  if (_computingPollTimer !== null) clearInterval(_computingPollTimer)
+  if (_currencyDebounceTimer !== null) clearTimeout(_currencyDebounceTimer)
+})
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -689,6 +706,10 @@ function openProcurementAudit(procurementId: number): void {
       </div>
 
       <template v-else>
+        <div v-if="isComputing" class="computing-notice">
+          Данные обновляются в фоне — страница обновится автоматически
+        </div>
+
         <section class="overview-panel">
           <div class="overview-head">
             <div class="overview-copy">
@@ -1362,6 +1383,17 @@ function openProcurementAudit(procurementId: number): void {
 </template>
 
 <style scoped>
+.computing-notice {
+  margin: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-brand-50) 60%, transparent);
+  border: 1px solid var(--color-brand-200, #c7d2fe);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
 .reports-page {
   display: flex;
   flex-direction: column;

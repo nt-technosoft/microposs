@@ -1,0 +1,242 @@
+# Frontend — Vue 3 Архитектура
+
+## Структура проекта
+
+```
+frontend/src/
+├── api/            HTTP-клиенты (типизированные)
+│   ├── client.ts   axios + interceptors + AbortController
+│   ├── finance.ts  finance domain API
+│   ├── catalog.ts
+│   ├── inventory.ts
+│   ├── sales.ts
+│   ├── customers.ts
+│   ├── suppliers.ts
+│   └── ...
+├── stores/         Pinia-сторы (один per domain)
+│   ├── auth.ts
+│   ├── session.ts  POS-сессия
+│   ├── products.ts
+│   ├── cart.ts
+│   └── ui.ts
+├── modules/        Feature-модули
+│   ├── auth/
+│   ├── sales/
+│   ├── products/
+│   ├── intake/         Procurement/приёмка
+│   ├── inventory/
+│   ├── reports/
+│   ├── investors/
+│   └── finance/
+├── components/     Shared-компоненты
+├── composables/    Переиспользуемая логика
+│   ├── useToast.ts
+│   ├── useFxRate.ts
+│   └── ...
+├── router/
+│   ├── index.ts    router + auth guard
+│   └── routes.ts   маршруты с meta (roles, layout)
+└── utils/          currency formatting, dates
+```
+
+---
+
+## Модульная структура
+
+Каждый `modules/<domain>` содержит:
+```
+modules/sales/
+├── views/          Страницы (Vue Router)
+├── components/     Domain-специфичные компоненты
+└── (stores/)       Если нужен отдельный стор
+```
+
+---
+
+## API-слой
+
+### `src/api/client.ts`
+- Axios-инстанс с `baseURL = '/'` (proxy через Vite)
+- Request interceptor: добавляет `Authorization: Bearer <token>`
+- Response interceptor: `axios.isCancel(error)` → тихо игнорирует cancelled-запросы; другие ошибки → пробрасывает
+
+**`createAbortController()`** — утилита для создания `AbortController`.
+
+### Паттерн для отменяемых запросов
+```typescript
+let _abort: AbortController | null = null
+
+async function load() {
+  _abort?.abort()
+  _abort = new AbortController()
+  const data = await fetchSomething(params, _abort.signal)
+}
+
+onBeforeUnmount(() => {
+  _abort?.abort()
+})
+```
+
+### Типизированные API-функции
+Все функции в `src/api/` возвращают `Promise<TypedResponse>`. Интерфейсы экспортируются вместе с функциями.
+
+**Пример (`finance.ts`):**
+```typescript
+export interface ReportSummaryResponse {
+  is_computing: boolean
+  daily_summary: DailySummary[]
+  cash_flow: CashFlowItem[]
+  debt: DebtSummaryItem[]
+  parity: { payables, stock, trial_balance, cash_accounts }
+}
+
+export async function fetchReportSummary(
+  params?: FetchReportSummaryParams,
+  signal?: AbortSignal,
+): Promise<ReportSummaryResponse> { ... }
+```
+
+---
+
+## Pinia-сторы
+
+### `useAuthStore`
+- `token`, `user`, `role`, `userLoaded`
+- `ensureUserLoaded()` — загружает пользователя если не загружен
+- `logout()` — очищает стейт и localStorage
+
+### `useSessionStore`
+- `currentSession: PosSession | null`
+- `loadCurrentSession()` — запрашивает открытую сессию
+- Cooldown 30 секунд между загрузками (защита от flood при навигации)
+
+### `useProductsStore`
+- `items`, `categories`, `search`, `loading`
+- Debounce 300мс на поиск (модульный таймер, не в state)
+- `setSearch(query)` — обновляет поиск с debounce
+
+### `useCartStore`
+- Корзина продажи: `lines[]`, `payments[]`
+- `addLine`, `removeLine`, `setQuantity`, `submit` (→ `create_sale`)
+
+### `useUIStore`
+- `simpleSellerMode` — режим упрощённого кассира (только `/sales`)
+
+---
+
+## Router
+
+### Auth Guard (`router/index.ts`)
+
+```
+beforeEach:
+1. Если requiresAuth && нет токена → redirect /login
+2. Если токен && !userLoaded → await auth.ensureUserLoaded()
+3. Если /login && токен → redirect getRoleHomeRoute(role)
+4. Если роль не входит в meta.roles → redirect getRoleHomeRoute(role)
+5. Если simpleSellerMode && owner/cashier → принудительно /sales
+```
+
+### Маршрут meta
+
+```typescript
+{
+  requiresAuth: true,          // по умолчанию true
+  roles: ['owner', 'cashier'], // пустой массив = все аутентифицированные
+  layout: 'default' | 'blank' | 'investor',
+}
+```
+
+### Начальные маршруты по ролям
+
+| Роль | Стартовая страница |
+|---|---|
+| `platform_admin` | `/platform/requests` |
+| `investor` | `/investor/dashboard` |
+| `warehouse` | `/procurements` |
+| `owner` / `cashier` | `/sales` |
+
+---
+
+## Ключевые паттерны
+
+### Debounce для FX-переключения
+```typescript
+let _currencyTimer: ReturnType<typeof setTimeout> | null = null
+
+function setReportCurrency(currency: ReportCurrency) {
+  reportCurrency.value = currency
+  if (_currencyTimer !== null) clearTimeout(_currencyTimer)
+  _currencyTimer = setTimeout(() => {
+    _currencyTimer = null
+    loadAnalytics()
+  }, 300)
+}
+```
+
+### is_computing polling (Reports Dashboard)
+```typescript
+if (result.is_computing) {
+  let attempts = 0
+  _computingPollTimer = setInterval(async () => {
+    attempts++
+    if (attempts > 12) { clearInterval(_computingPollTimer!); return }
+    const poll = await fetchReportSummary(range)
+    if (!poll.is_computing) {
+      clearInterval(_computingPollTimer!)
+      applySummaryResult(poll)
+      isComputing.value = false
+    }
+  }, 5000)
+}
+```
+
+### extractList utility
+Принимает `PaginatedResponse<T> | T[]` → возвращает `T[]`. Используется для безопасного разворачивания пагинированных и непагинированных ответов.
+
+---
+
+## Дизайн-система
+
+- **Точки останова:** 375px → 768px → 1024px → 1440px (mobile-first)
+- **Дизайн-токены:** CSS custom properties в `src/assets/tokens.css`
+- **Иконки:** Lucide Vue Next (никаких эмодзи как структурных иконок)
+- **Анимации:** 150–300мс; `prefers-reduced-motion` поддерживается
+- **Компоненты:** `<script setup>` + Composition API везде
+
+---
+
+## Ключевые composables
+
+### `useFxRate()`
+- Загружает последний курс USD/UZS для дашборда
+- `rate`, `error`, `load`
+
+### `useToast()`
+- `toast.success(message)`, `toast.error(message)`, `toast.info(message)`
+- Авто-скрытие через 3–5 сек
+
+### `formatPrice(amount, currency, fxRate?)`
+- Форматирует сумму с учётом валюты и курса
+- `UZS` → `1 200 000 UZS`, `USD` → `$123.45`
+
+---
+
+## Модуль Reports Dashboard
+
+Ключевой экран с комбинированной загрузкой данных.
+
+**Загрузка:**
+- `loadSummary()` → `fetchReportSummary()` (1 запрос вместо 5)
+- `loadAnalytics()` → `fetchReportAnalytics()` (1 запрос вместо 3)
+- `loadAll()` = `Promise.all([loadSummary(), loadAnalytics()])` = **2 запроса вместо 10**
+
+**Периоды:** today / week / month / all / custom
+
+**Переключение валюты (UZS/USD):**
+- Дебаунс 300мс
+- Только `loadAnalytics()` перезапрашивается (summary не зависит от валюты)
+
+**AbortController:**
+- `_summaryAbort` и `_analyticsAbort` отменяют in-flight запросы при смене параметров или unmount
+- `CanceledError` — тихо игнорируется в catch-блоках

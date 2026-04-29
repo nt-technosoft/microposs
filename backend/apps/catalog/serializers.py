@@ -60,7 +60,7 @@ def _availability_state(*, total_stock: int, stock_at_location: int) -> str:
 # === Category ===
 
 class CategorySerializer(serializers.ModelSerializer):
-    products_count = serializers.SerializerMethodField()
+    products_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Category
@@ -69,9 +69,6 @@ class CategorySerializer(serializers.ModelSerializer):
             'sort_order', 'products_count', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
-
-    def get_products_count(self, obj):
-        return obj.products.count()
 
 
 class CategoryDetailSerializer(CategorySerializer):
