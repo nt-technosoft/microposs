@@ -7,7 +7,13 @@ from django.utils import timezone
 from apps.finance.models import ExchangeRate
 from apps.core.models import Partner
 from apps.inventory.models import LotStock
-from apps.partnerships.models import AgreementAllocation, InvestmentAgreement, Procurement, ProcurementBalance
+from apps.partnerships.models import (
+    AgreementAllocation,
+    InvestmentAgreement,
+    Procurement,
+    ProcurementBalance,
+    ProcurementExpenseTarget,
+)
 from apps.partnerships.services import (
     add_contribution,
     add_agreement_contribution,
@@ -598,6 +604,114 @@ class ProcurementLifecycleTests(TestCase):
         self.assertEqual(first_item.quantity, Decimal('11.000'))
         self.assertEqual(expense.amount, Decimal('35.00'))
         self.assertEqual(list(expense.targets.values_list('item_id', flat=True)), [second_item.id])
+
+    def test_update_open_procurement_can_save_same_expense_target_repeatedly(self):
+        ctx = build_tenant()
+        procurement = open_procurement(
+            tenant_id=ctx['business'].id,
+            procurement_type=Procurement.Type.OWN_FUNDS,
+            supplier_id=ctx['supplier'].id,
+            items=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            expenses=[{
+                'expense_type': 'CUSTOMS',
+                'amount': Decimal('30'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'allocation_method': 'BY_QUANTITY',
+            }],
+        )
+        item = procurement.items.get()
+        expense = procurement.expenses.get()
+
+        payload = {
+            'tenant_id': ctx['business'].id,
+            'procurement_id': procurement.id,
+            'procurement_type': Procurement.Type.OWN_FUNDS,
+            'supplier_id': ctx['supplier'].id,
+            'items': [{
+                'id': item.id,
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            'expenses': [{
+                'id': expense.id,
+                'expense_type': 'CUSTOMS',
+                'amount': Decimal('30'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'allocation_method': 'BY_QUANTITY',
+                'target_item_ids': [item.id],
+            }],
+        }
+
+        update_open_procurement(**payload)
+        update_open_procurement(**payload)
+
+        expense.refresh_from_db()
+        self.assertEqual(list(expense.targets.values_list('item_id', flat=True)), [item.id])
+        self.assertEqual(
+            ProcurementExpenseTarget.all_objects.filter(expense=expense, item=item).count(),
+            1,
+        )
+
+    def test_update_procurement_expense_targets_is_idempotent_after_soft_delete(self):
+        ctx = build_tenant()
+        procurement = open_procurement(
+            tenant_id=ctx['business'].id,
+            procurement_type=Procurement.Type.OWN_FUNDS,
+            supplier_id=ctx['supplier'].id,
+            items=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            expenses=[{
+                'expense_type': 'CUSTOMS',
+                'amount': Decimal('30'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'allocation_method': 'BY_QUANTITY',
+            }],
+        )
+        item = procurement.items.get()
+        expense = procurement.expenses.get()
+
+        update_procurement_expense_targets(
+            tenant_id=ctx['business'].id,
+            procurement_id=procurement.id,
+            expense_id=expense.id,
+            target_item_ids=[item.id],
+        )
+        update_procurement_expense_targets(
+            tenant_id=ctx['business'].id,
+            procurement_id=procurement.id,
+            expense_id=expense.id,
+            target_item_ids=[],
+        )
+        update_procurement_expense_targets(
+            tenant_id=ctx['business'].id,
+            procurement_id=procurement.id,
+            expense_id=expense.id,
+            target_item_ids=[item.id],
+        )
+
+        expense.refresh_from_db()
+        self.assertEqual(list(expense.targets.values_list('item_id', flat=True)), [item.id])
+        self.assertEqual(
+            ProcurementExpenseTarget.all_objects.filter(expense=expense, item=item).count(),
+            1,
+        )
 
     def test_split_procurement_item_keeps_paid_status_and_total_quantity(self):
         ctx = build_tenant()

@@ -804,6 +804,51 @@ def _validate_contract_payload(
     _validate_contract_formula(partners, mudaraba_ratio)
 
 
+def _sync_procurement_expense_targets(
+    *,
+    tenant_id: int,
+    expense,
+    target_item_ids: set[int],
+) -> None:
+    from .models import ProcurementExpenseTarget
+
+    now = timezone.now()
+    existing_targets = list(
+        ProcurementExpenseTarget.all_objects
+        .select_for_update()
+        .filter(tenant_id=tenant_id, expense=expense)
+    )
+    existing_item_ids = {target.item_id for target in existing_targets}
+    restore_ids = [
+        target.pk
+        for target in existing_targets
+        if target.item_id in target_item_ids and target.deleted_at is not None
+    ]
+    stale_ids = [
+        target.pk
+        for target in existing_targets
+        if target.item_id not in target_item_ids and target.deleted_at is None
+    ]
+
+    if restore_ids:
+        ProcurementExpenseTarget.all_objects.filter(pk__in=restore_ids).update(
+            deleted_at=None,
+            updated_at=now,
+        )
+    if stale_ids:
+        ProcurementExpenseTarget.all_objects.filter(pk__in=stale_ids).update(
+            deleted_at=now,
+            updated_at=now,
+        )
+
+    for item_id in sorted(target_item_ids - existing_item_ids):
+        ProcurementExpenseTarget.objects.create(
+            tenant_id=tenant_id,
+            expense=expense,
+            item_id=item_id,
+        )
+
+
 def _replace_procurement_items_and_expenses(
     *,
     tenant_id: int,
@@ -812,7 +857,7 @@ def _replace_procurement_items_and_expenses(
     expenses: list[dict] | None,
     draft_only: bool = False,
 ) -> None:
-    from .models import ProcurementExpense, ProcurementExpenseTarget, ProcurementItem
+    from .models import ProcurementExpense, ProcurementItem
 
     item_queryset = procurement.items.all()
     expense_queryset = procurement.expenses.all()
@@ -914,13 +959,11 @@ def _replace_procurement_items_and_expenses(
             )
             seen_expense_ids.add(expense_obj.pk)
 
-        ProcurementExpenseTarget.objects.filter(expense=expense_obj).delete()
-        for item_id in target_ids:
-            ProcurementExpenseTarget.objects.create(
-                tenant_id=tenant_id,
-                expense=expense_obj,
-                item_id=item_id,
-            )
+        _sync_procurement_expense_targets(
+            tenant_id=tenant_id,
+            expense=expense_obj,
+            target_item_ids=target_ids,
+        )
 
     stale_expense_ids = set(existing_expenses) - seen_expense_ids
     if stale_expense_ids:
@@ -1821,7 +1864,7 @@ def update_procurement_expense_targets(
     expense_id: int,
     target_item_ids: list[int] | None = None,
 ):
-    from .models import Procurement, ProcurementExpense, ProcurementExpenseTarget, ProcurementItem
+    from .models import Procurement, ProcurementExpense, ProcurementItem
 
     requested_target_ids = {int(item_id) for item_id in target_item_ids or []}
 
@@ -1855,13 +1898,11 @@ def update_procurement_expense_targets(
         if invalid_target_ids:
             raise ValueError('Expense targets must belong to pending items in this procurement.')
 
-        ProcurementExpenseTarget.objects.filter(expense=expense).delete()
-        for item_id in sorted(requested_target_ids):
-            ProcurementExpenseTarget.objects.create(
-                tenant_id=tenant_id,
-                expense=expense,
-                item_id=item_id,
-            )
+        _sync_procurement_expense_targets(
+            tenant_id=tenant_id,
+            expense=expense,
+            target_item_ids=requested_target_ids,
+        )
 
         publish_event(
             event_type='procurement.expense_targets_updated',
