@@ -8,10 +8,24 @@ import { toPaginated, type PaginatedResponse } from './catalog'
 
 export interface WriteoffPayload {
   lot_id: number
+  warehouse_id: number
   quantity: number
   reason: string
   negligence?: boolean
   affects_investor?: boolean
+}
+
+export interface WriteoffPreview {
+  lot_id: number
+  warehouse_id: number
+  warehouse_name: string
+  product_name: string
+  available_quantity: number
+  quantity: number
+  unit_landed_cost: string
+  loss_amount: string
+  negligence: boolean
+  loss_distribution: Record<string, string>
 }
 
 export interface InventoryCheck {
@@ -61,6 +75,11 @@ export async function fetchRiskEvents(params?: FetchRiskEventsParams): Promise<P
 
 export async function createWriteoff(payload: WriteoffPayload): Promise<RiskEvent> {
   const { data } = await api.post<RiskEvent>('/api/v1/risk/events/writeoff/', payload)
+  return data
+}
+
+export async function fetchWriteoffPreview(payload: WriteoffPayload): Promise<WriteoffPreview> {
+  const { data } = await api.post<WriteoffPreview>('/api/v1/risk/events/writeoff-preview/', payload)
   return data
 }
 

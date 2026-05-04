@@ -47,6 +47,8 @@ export interface DailySummary {
   total_cogs: string
   gross_profit: string
   total_returns: string
+  total_returns_count: number
+  total_writeoffs: string
   net_sales: string
   cash_collected: string
 }
@@ -268,7 +270,11 @@ export interface AgreementProfitabilityDetail {
     allocated_functional_uzs: string
     returned_functional_uzs: string
     pending_prepaid_cost_estimate_uzs: string
+    capital_in: string
+    capital_out: string
     profit_accrued: string
+    profit_reversed: string
+    losses_incurred: string
     dividends_paid: string
     profit_pending_payout: string
     display?: ReportDisplay
@@ -343,6 +349,8 @@ interface BackendDailySummary {
   gross_profit: string
   total_sales_count: number
   total_returns_count: number
+  total_return_amount?: string
+  total_writeoffs?: string
 }
 
 interface BackendCashFlowItem {
@@ -353,6 +361,7 @@ interface BackendCashFlowItem {
   cash_out_purchases: string
   cash_out_supplier_payments: string
   cash_out_expenses?: string
+  cash_out_refunds?: string
   cash_out_investor_payments: string
   net_cash_flow: string
 }
@@ -418,7 +427,9 @@ function mapDailySummary(item: BackendDailySummary): DailySummary {
     total_sales: String(item.total_sales_count),
     total_cogs: item.total_cogs,
     gross_profit: item.gross_profit,
-    total_returns: String(item.total_returns_count),
+    total_returns: item.total_return_amount ?? '0',
+    total_returns_count: item.total_returns_count,
+    total_writeoffs: item.total_writeoffs ?? '0',
     net_sales: item.total_revenue,
     cash_collected: item.total_revenue,
   }
@@ -434,6 +445,7 @@ function mapCashFlowItem(item: BackendCashFlowItem): CashFlowItem {
     toNumber(item.cash_out_purchases)
     + toNumber(item.cash_out_supplier_payments)
     + toNumber(item.cash_out_expenses)
+    + toNumber(item.cash_out_refunds)
     + toNumber(item.cash_out_investor_payments)
   )
 

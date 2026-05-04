@@ -15,6 +15,7 @@
 | [frontend.md](./frontend.md) | Vue 3 структура, модули, сторы, API-слой |
 | [roles.md](./roles.md) | Роли пользователей и матрица доступа |
 | [testing-data-workflow.md](./testing-data-workflow.md) | Принципы тестового заполнения базы и Excel workflow-аудита |
+| [stage-deploy-checklist.md](./stage-deploy-checklist.md) | Проверки перед stage/prod-like деплоем |
 
 ### Бизнес-домены (backend)
 | Документ | Что описывает |

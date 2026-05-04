@@ -132,8 +132,8 @@ export function ledgerEntryLabel(entryType: string): string {
   if (normalized === 'CAPITAL_OUT') return 'Возврат капитала'
   if (normalized === 'PROFIT_ACCRUED') return 'Начисление прибыли'
   if (normalized === 'DIVIDEND_PAID') return 'Выплата дивиденда'
-  if (normalized === 'LOSS_INCURRED') return 'Учтён убыток'
-  if (normalized === 'PROFIT_REVERSED') return 'Корректировка прибыли'
+  if (normalized === 'LOSS_INCURRED') return 'Убыток списания'
+  if (normalized === 'PROFIT_REVERSED') return 'Сторно прибыли'
   return entryType
 }
 

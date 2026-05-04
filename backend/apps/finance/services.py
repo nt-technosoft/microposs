@@ -757,7 +757,7 @@ def exchange_currency(
 def refund_customer(
     *,
     tenant_id: int,
-    customer_id: int,
+    customer_id: int | None,
     sale_id: int,
     amount: Decimal,
     currency: str = 'UZS',
@@ -769,7 +769,7 @@ def refund_customer(
 ) -> Refund:
     """
     Issue a customer refund. Invariant: Σ refunds per currency ≤ Σ sale payments per currency.
-    CASH/PLASTIK → CashEntry(OUT) + balance reduction.
+    CASH/PLASTIK/TRANSFER → CashEntry(OUT) + balance reduction.
     RECEIVABLE_OFFSET → reduces Receivable.balances (cancel debt).
     """
     from apps.sales.models import Sale, SalePayment
@@ -809,9 +809,9 @@ def refund_customer(
             )
 
         account = None
-        if method in (Refund.Method.CASH, Refund.Method.PLASTIK):
+        if method in (Refund.Method.CASH, Refund.Method.PLASTIK, Refund.Method.TRANSFER):
             if account_id is None:
-                raise ValueError('account_id is required for cash/plastik refund.')
+                raise ValueError('account_id is required for cash/plastik/transfer refund.')
             account = CashAccount.objects.select_for_update().get(
                 pk=account_id, tenant_id=tenant_id,
             )
@@ -833,6 +833,8 @@ def refund_customer(
         elif method == Refund.Method.RECEIVABLE_OFFSET:
             from apps.customers.services import get_or_create_receivable
             from apps.customers.models import Customer, ReceivableEntry
+            if customer_id is None:
+                raise ValueError('customer_id is required for receivable offset refund.')
             customer_obj = Customer.objects.get(pk=customer_id, tenant_id=tenant_id)
             receivable = get_or_create_receivable(customer_obj, tenant_id)
             receivable = type(receivable).objects.select_for_update().get(pk=receivable.pk)
@@ -1001,6 +1003,48 @@ def _investor_profit_from_distribution(line) -> Decimal:
     )
 
 
+def _return_quantities_for_sale_line(line) -> tuple[int, int]:
+    from apps.sales.models import Return, ReturnLine
+
+    returned_total = int(
+        ReturnLine.objects
+        .filter(sale_line=line)
+        .aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+    restock_qty = int(
+        ReturnLine.objects
+        .filter(sale_line=line, return_doc__resolution=Return.Resolution.RESTOCK)
+        .aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+    return returned_total, restock_qty
+
+
+def _net_line_metrics(line) -> dict:
+    returned_total, restock_qty = _return_quantities_for_sale_line(line)
+    net_qty = max(int(line.quantity) - returned_total, 0)
+    cogs_qty = max(int(line.quantity) - restock_qty, 0)
+    investor_profit = _investor_profit_from_distribution(line)
+    if int(line.quantity) > 0:
+        investor_profit = (
+            investor_profit * Decimal(net_qty) / Decimal(int(line.quantity))
+        ).quantize(Decimal('0.01'))
+    else:
+        investor_profit = Decimal('0.00')
+    revenue = _money(Decimal(str(line.unit_price)) * Decimal(net_qty))
+    cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(cogs_qty))
+    return {
+        'net_qty': net_qty,
+        'returned_qty': returned_total,
+        'restock_qty': restock_qty,
+        'revenue': revenue,
+        'cogs': cogs,
+        'gross_profit': _money(revenue - cogs),
+        'investor_profit': investor_profit,
+    }
+
+
 def _investor_profit_from_snapshot(
     *,
     snapshot: dict | None,
@@ -1042,7 +1086,14 @@ def get_sales_profitability_rows(
 
     queryset = (
         Sale.objects
-        .filter(tenant_id=tenant_id, status=Sale.SaleStatus.COMPLETED)
+        .filter(
+            tenant_id=tenant_id,
+            status__in=[
+                Sale.SaleStatus.COMPLETED,
+                Sale.SaleStatus.PARTIALLY_RETURNED,
+                Sale.SaleStatus.RETURNED,
+            ],
+        )
         .select_related('location', 'customer')
         .prefetch_related('payments', 'lines__lot', 'lines__product_variant__product')
         .order_by('-date', '-id')
@@ -1056,11 +1107,14 @@ def get_sales_profitability_rows(
 
     rows: list[dict] = []
     for sale in queryset:
+        line_metrics = [_net_line_metrics(line) for line in sale.lines.all()]
+        revenue = _money(sum((item['revenue'] for item in line_metrics), Decimal('0')))
+        cogs = _money(sum((item['cogs'] for item in line_metrics), Decimal('0')))
         investor_profit = sum(
-            (_investor_profit_from_distribution(line) for line in sale.lines.all()),
+            (item['investor_profit'] for item in line_metrics),
             Decimal('0.00'),
         ).quantize(Decimal('0.01'))
-        gross_profit = _money(sale.total_amount - sale.total_cogs)
+        gross_profit = _money(revenue - cogs)
         rows.append(_attach_display({
             'sale_id': sale.id,
             'date': sale.date,
@@ -1070,14 +1124,14 @@ def get_sales_profitability_rows(
             'customer_name': getattr(sale.customer, 'name', None),
             'payment_methods': sorted({payment.method for payment in sale.payments.all()}),
             'line_count': sale.lines.count(),
-            'quantity_sold': sum(int(line.quantity) for line in sale.lines.all()),
-            'revenue': _money(sale.total_amount),
-            'cogs': _money(sale.total_cogs),
+            'quantity_sold': sum(int(item['net_qty']) for item in line_metrics),
+            'revenue': revenue,
+            'cogs': cogs,
             'gross_profit': gross_profit,
             'investor_profit': investor_profit,
             'business_profit': _money(gross_profit - investor_profit),
-            'margin_percent': _percent(gross_profit, _money(sale.total_amount)),
-            'markup_percent': _percent(gross_profit, _money(sale.total_cogs)),
+            'margin_percent': _percent(gross_profit, revenue),
+            'markup_percent': _percent(gross_profit, cogs),
         }, display_context))
     return rows
 
@@ -1092,7 +1146,7 @@ def get_product_profitability_rows(
     report_currency: str | None = None,
 ) -> list[dict]:
     from apps.inventory.models import LotStock
-    from apps.sales.models import SaleLine
+    from apps.sales.models import Sale, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
 
     display_context = resolve_report_currency_context(
@@ -1104,7 +1158,14 @@ def get_product_profitability_rows(
 
     sale_lines = (
         SaleLine.objects
-        .filter(tenant_id=tenant_id, sale__status='completed')
+        .filter(
+            tenant_id=tenant_id,
+            sale__status__in=[
+                Sale.SaleStatus.COMPLETED,
+                Sale.SaleStatus.PARTIALLY_RETURNED,
+                Sale.SaleStatus.RETURNED,
+            ],
+        )
         .select_related('sale__location', 'lot', 'product_variant__product')
         .order_by('product_variant_id', 'id')
     )
@@ -1145,15 +1206,12 @@ def get_product_profitability_rows(
 
     for line in sale_lines:
         row = ensure_row(line.product_variant)
-        revenue = _money(Decimal(str(line.unit_price)) * Decimal(str(line.quantity)))
-        cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(str(line.quantity)))
-        gross = _money(revenue - cogs)
-        investor_profit = _investor_profit_from_distribution(line)
-        row['quantity_sold'] += int(line.quantity)
-        row['revenue'] += revenue
-        row['cogs'] += cogs
-        row['gross_profit'] += gross
-        row['investor_profit'] += investor_profit
+        metrics = _net_line_metrics(line)
+        row['quantity_sold'] += int(metrics['net_qty'])
+        row['revenue'] += metrics['revenue']
+        row['cogs'] += metrics['cogs']
+        row['gross_profit'] += metrics['gross_profit']
+        row['investor_profit'] += metrics['investor_profit']
 
     remaining_stock = (
         LotStock.objects
@@ -1229,7 +1287,7 @@ def get_procurement_profitability_rows(
 ) -> list[dict]:
     from apps.inventory.models import LotStock
     from apps.partnerships.models import Procurement
-    from apps.sales.models import SaleLine
+    from apps.sales.models import Sale, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
 
     display_context = resolve_report_currency_context(
@@ -1243,7 +1301,11 @@ def get_procurement_profitability_rows(
         SaleLine.objects
         .filter(
             tenant_id=tenant_id,
-            sale__status='completed',
+            sale__status__in=[
+                Sale.SaleStatus.COMPLETED,
+                Sale.SaleStatus.PARTIALLY_RETURNED,
+                Sale.SaleStatus.RETURNED,
+            ],
             lot__procurement_item__isnull=False,
         )
         .select_related(
@@ -1339,16 +1401,12 @@ def get_procurement_profitability_rows(
         if row is None:
             continue
 
-        revenue = _money(Decimal(str(line.unit_price)) * Decimal(str(line.quantity)))
-        cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(str(line.quantity)))
-        gross = _money(revenue - cogs)
-        investor_profit = _investor_profit_from_distribution(line)
-
-        row['quantity_sold'] += int(line.quantity)
-        row['revenue'] += revenue
-        row['cogs'] += cogs
-        row['gross_profit'] += gross
-        row['investor_profit'] += investor_profit
+        metrics = _net_line_metrics(line)
+        row['quantity_sold'] += int(metrics['net_qty'])
+        row['revenue'] += metrics['revenue']
+        row['cogs'] += metrics['cogs']
+        row['gross_profit'] += metrics['gross_profit']
+        row['investor_profit'] += metrics['investor_profit']
 
     for stock in remaining_stock:
         procurement_id = stock.lot.procurement_item.procurement_id
@@ -1414,7 +1472,7 @@ def get_procurement_profitability_detail(
 ) -> dict:
     from apps.inventory.models import LotStock
     from apps.partnerships.models import Procurement
-    from apps.sales.models import SaleLine
+    from apps.sales.models import Sale, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
 
     procurement = (
@@ -1472,7 +1530,11 @@ def get_procurement_profitability_detail(
         SaleLine.objects
         .filter(
             tenant_id=tenant_id,
-            sale__status='completed',
+            sale__status__in=[
+                Sale.SaleStatus.COMPLETED,
+                Sale.SaleStatus.PARTIALLY_RETURNED,
+                Sale.SaleStatus.RETURNED,
+            ],
             lot__procurement_item__procurement_id=procurement_id,
         )
         .select_related('lot__procurement_item', 'product_variant__product')
@@ -1545,16 +1607,12 @@ def get_procurement_profitability_detail(
 
     for line in sale_lines:
         row = ensure_item_row(line.lot.procurement_item)
-        revenue = _money(Decimal(str(line.unit_price)) * Decimal(str(line.quantity)))
-        cogs = _money(Decimal(str(line.unit_landed_cost)) * Decimal(str(line.quantity)))
-        gross_profit = _money(revenue - cogs)
-        investor_profit = _investor_profit_from_distribution(line)
-
-        row['sold_quantity'] += int(line.quantity)
-        row['revenue'] += revenue
-        row['cogs'] += cogs
-        row['gross_profit'] += gross_profit
-        row['investor_profit'] += investor_profit
+        metrics = _net_line_metrics(line)
+        row['sold_quantity'] += int(metrics['net_qty'])
+        row['revenue'] += metrics['revenue']
+        row['cogs'] += metrics['cogs']
+        row['gross_profit'] += metrics['gross_profit']
+        row['investor_profit'] += metrics['investor_profit']
 
     for stock in remaining_stock:
         row = ensure_item_row(stock.lot.procurement_item)

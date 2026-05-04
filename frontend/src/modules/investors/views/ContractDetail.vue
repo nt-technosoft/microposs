@@ -72,14 +72,14 @@ function sourceRefLabel(rawRef: string | null | undefined): string {
   const nestedId = parts[3]
   const labels: Record<string, string> = {
     sale: 'Продажа',
-    sale_line: 'Строка продажи',
+    sale_line: 'Продажа',
     return: 'Возврат',
-    risk_event: 'Риск',
+    risk_event: 'Списание',
     contribution: 'Взнос',
     dividend_payment: 'Выплата прибыли',
     procurement: 'Приход',
   }
-  if (source === 'return' && nested === 'line' && id && nestedId) return `Возврат #${id} · строка #${nestedId}`
+  if (source === 'return' && nested === 'line' && id && nestedId) return `Возврат #${id}`
   if (id) return `${labels[source] ?? source.replaceAll('_', ' ')} #${id}`
   return labels[source] ?? rawRef.replaceAll('_', ' ')
 }

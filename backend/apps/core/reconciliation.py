@@ -74,14 +74,15 @@ def _build_check(
 
 def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
     from apps.customers.models import Receivable, ReceivableEntry
-    from apps.finance.models import CashAccount, CashEntry, JournalEntry
-    from apps.sales.models import PosSession, Sale, SalePayment
+    from apps.finance.models import CashAccount, CashEntry, JournalEntry, Refund
+    from apps.sales.models import PosSession, Sale, SalePayment, Return as SaleReturn
+    from apps.sales.services import SALE_ACCOUNTING_STATUSES, sale_financial_effect
     from apps.suppliers.models import Supplier
 
     sales = list(
         Sale.objects
-        .filter(tenant_id=tenant_id, status=Sale.SaleStatus.COMPLETED)
-        .prefetch_related('payments')
+        .filter(tenant_id=tenant_id, status__in=SALE_ACCOUNTING_STATUSES)
+        .prefetch_related('payments', 'lines__return_lines__return_doc', 'lines__lot')
         .order_by('id')
     )
     receivables = list(
@@ -146,18 +147,33 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
         SalePayment.objects
         .filter(
             sale__tenant_id=tenant_id,
-            sale__status=Sale.SaleStatus.COMPLETED,
-            role=SalePayment.Role.INCOMING,
+            sale__status__in=SALE_ACCOUNTING_STATUSES,
             method=SalePayment.Method.CASH,
         )
         .select_related('sale')
         .order_by('id')
     ):
         currency = str(payment.currency or 'UZS').upper()
-        cash_incoming_by_session[payment.sale.pos_session_id][currency] += Decimal(str(payment.amount))
+        signed_amount = Decimal(str(payment.amount))
+        if payment.role == SalePayment.Role.REFUND:
+            signed_amount *= Decimal('-1')
+        cash_incoming_by_session[payment.sale.pos_session_id][currency] += signed_amount
 
     revenue_by_sale: dict[int, Decimal] = defaultdict(lambda: _ZERO)
     cogs_by_sale: dict[int, Decimal] = defaultdict(lambda: _ZERO)
+    return_to_sale = {
+        item.id: item.sale_id
+        for item in SaleReturn.objects.filter(tenant_id=tenant_id).only('id', 'sale_id')
+    }
+    refund_to_sale = {
+        item.id: item.return_ref.sale_id
+        for item in (
+            Refund.objects
+            .filter(tenant_id=tenant_id, return_ref__isnull=False)
+            .select_related('return_ref')
+            .only('id', 'return_ref__sale_id')
+        )
+    }
     journal_balance_mismatches: list[str] = []
     for journal in journal_entries:
         total_debit = _ZERO
@@ -173,20 +189,46 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
                     revenue_by_sale[journal.operation_id] += credit - debit
                 elif line.account.code == '5000':
                     cogs_by_sale[journal.operation_id] += debit - credit
+            elif journal.operation_type == JournalEntry.OperationType.RETURN:
+                sale_id = refund_to_sale.get(journal.operation_id) or return_to_sale.get(journal.operation_id)
+                if sale_id:
+                    if line.account.code == '4000':
+                        revenue_by_sale[sale_id] += credit - debit
+                    elif line.account.code == '5000':
+                        cogs_by_sale[sale_id] += debit - credit
 
         if _money(total_debit) != _money(total_credit):
             journal_balance_mismatches.append(f'journal:{journal.id}')
 
-    sales_total = _money(sum((Decimal(str(sale.total_amount)) for sale in sales), _ZERO))
+    sale_effect_by_id = {sale.id: sale_financial_effect(sale) for sale in sales}
+    sales_total = _money(sum((effect['revenue'] for effect in sale_effect_by_id.values()), _ZERO))
     sales_settlement_total = _ZERO
     sales_settlement_mismatches: list[str] = []
     sales_revenue_journal_total = _ZERO
     sales_revenue_mismatches: list[str] = []
-    sales_cogs_total = _money(sum((Decimal(str(sale.total_cogs)) for sale in sales), _ZERO))
+    sales_cogs_total = _money(sum((effect['cogs'] for effect in sale_effect_by_id.values()), _ZERO))
     sales_cogs_journal_total = _ZERO
     sales_cogs_mismatches: list[str] = []
+    return_quantity_mismatches: list[str] = []
+    refund_capacity_mismatches: list[str] = []
 
     for sale in sales:
+        incoming_by_currency: dict[str, Decimal] = defaultdict(lambda: _ZERO)
+        refund_by_currency: dict[str, Decimal] = defaultdict(lambda: _ZERO)
+        for payment in sale.payments.all():
+            currency = str(payment.currency or 'UZS').upper()
+            if payment.role == SalePayment.Role.INCOMING:
+                incoming_by_currency[currency] += Decimal(str(payment.amount))
+            elif payment.role == SalePayment.Role.REFUND:
+                refund_by_currency[currency] += Decimal(str(payment.amount))
+        for currency, refunded_amount in refund_by_currency.items():
+            if refunded_amount > incoming_by_currency.get(currency, _ZERO):
+                refund_capacity_mismatches.append(f'sale:{sale.id}:{currency}')
+        for line in sale.lines.all():
+            returned_qty = sum((int(return_line.quantity) for return_line in line.return_lines.all()), 0)
+            if returned_qty > int(line.quantity):
+                return_quantity_mismatches.append(f'sale_line:{line.id}')
+
         non_credit_incoming = sum(
             (
                 payment_functional_amount_uzs(payment)
@@ -196,9 +238,32 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
             ),
             _ZERO,
         )
-        sale_settlement = _money(non_credit_incoming + receivable_from_sale.get(sale.id, _ZERO))
+        non_credit_refunds = sum(
+            (
+                payment_functional_amount_uzs(payment)
+                for payment in sale.payments.all()
+                if payment.role == SalePayment.Role.REFUND
+                and payment.method != SalePayment.Method.CREDIT
+            ),
+            _ZERO,
+        )
+        credit_refunds = sum(
+            (
+                payment_functional_amount_uzs(payment)
+                for payment in sale.payments.all()
+                if payment.role == SalePayment.Role.REFUND
+                and payment.method == SalePayment.Method.CREDIT
+            ),
+            _ZERO,
+        )
+        sale_settlement = _money(
+            non_credit_incoming
+            - non_credit_refunds
+            + receivable_from_sale.get(sale.id, _ZERO)
+            - credit_refunds
+        )
         sales_settlement_total += sale_settlement
-        sale_total_amount = _money(sale.total_amount)
+        sale_total_amount = _money(sale_effect_by_id[sale.id]['revenue'])
         if sale_settlement != sale_total_amount:
             sales_settlement_mismatches.append(f'sale:{sale.id}')
 
@@ -209,7 +274,7 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
 
         sale_cogs_journal = _money(cogs_by_sale.get(sale.id, _ZERO))
         sales_cogs_journal_total += sale_cogs_journal
-        sale_total_cogs = _money(sale.total_cogs)
+        sale_total_cogs = _money(sale_effect_by_id[sale.id]['cogs'])
         if sale_cogs_journal != sale_total_cogs:
             sales_cogs_mismatches.append(f'sale:{sale.id}')
 
@@ -358,7 +423,7 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
         _build_check(
             code='closed_sessions_expected_cash',
             title='Закрытые смены сходятся по expected cash',
-            summary='Stored expected_cash должен совпадать с opening_cash + cash sale payments по смене.',
+            summary='Stored expected_cash должен совпадать с opening_cash + cash sale payments - cash refunds по смене.',
             actual_label='Stored expected cash',
             expected_label='Расчетный expected cash',
             actual_amount=stored_expected_total,
@@ -421,6 +486,28 @@ def build_operational_reconciliation_summary(*, tenant_id: int) -> dict:
             expected_amount=sales_cogs_journal_total,
             mismatch_count=len(sales_cogs_mismatches),
             sample_refs=sales_cogs_mismatches,
+        ),
+        _build_check(
+            code='return_quantities',
+            title='Возвраты не превышают проданное количество',
+            summary='По каждой строке продажи суммарный возврат должен быть не больше проданного количества.',
+            actual_label='Ошибочные строки',
+            expected_label='Цель',
+            actual_amount=Decimal(len(return_quantity_mismatches)),
+            expected_amount=_ZERO,
+            mismatch_count=len(return_quantity_mismatches),
+            sample_refs=return_quantity_mismatches,
+        ),
+        _build_check(
+            code='refund_capacity',
+            title='Возвраты денег не превышают оплату',
+            summary='По каждой валюте сумма refund payments не должна быть больше исходной оплаты продажи.',
+            actual_label='Ошибочные продажи',
+            expected_label='Цель',
+            actual_amount=Decimal(len(refund_capacity_mismatches)),
+            expected_amount=_ZERO,
+            mismatch_count=len(refund_capacity_mismatches),
+            sample_refs=refund_capacity_mismatches,
         ),
     ]
 

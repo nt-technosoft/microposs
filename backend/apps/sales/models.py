@@ -106,6 +106,7 @@ class Sale(ImmutableMixin, TenantModel):
     class SaleStatus(models.TextChoices):
         DRAFT = 'draft', 'Черновик'
         COMPLETED = 'completed', 'Завершена'
+        PARTIALLY_RETURNED = 'partially_returned', 'Частично возвращена'
         RETURNED = 'returned', 'Возвращена'
 
     status = models.CharField(

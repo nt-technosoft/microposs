@@ -181,6 +181,9 @@ class DailySummary(TenantModel):
     net_business_profit = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     total_sales_count = models.IntegerField(default=0)
     total_returns_count = models.IntegerField(default=0)
+    total_return_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    total_return_restock_cogs = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    total_return_disposal_loss = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     total_writeoffs = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
 
     class Meta:
@@ -201,6 +204,7 @@ class CashFlowSummary(TenantModel):
     cash_out_purchases = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_supplier_payments = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_expenses = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    cash_out_refunds = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     cash_out_investor_payments = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
     net_cash_flow = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
 
@@ -387,12 +391,15 @@ class Refund(TenantModel):
     class Method(models.TextChoices):
         CASH = 'cash', 'Наличные'
         PLASTIK = 'plastik', 'Карт-терминал'
+        TRANSFER = 'transfer', 'Перевод'
         RECEIVABLE_OFFSET = 'receivable_offset', 'Зачёт долга'
 
     customer = models.ForeignKey(
         'customers.Customer',
         on_delete=models.PROTECT,
         related_name='refunds',
+        null=True,
+        blank=True,
     )
     date = models.DateTimeField()
     amount = models.DecimalField(max_digits=14, decimal_places=2)

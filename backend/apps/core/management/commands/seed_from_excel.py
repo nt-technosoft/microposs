@@ -26,12 +26,14 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
+from apps.core.management.safety import require_debug_or_confirmation
 
 SNAPSHOT_DEFAULT = 'backend/import_snapshots/client_snapshot_full_from_xlsx.json'
 
@@ -70,10 +72,22 @@ class Command(BaseCommand):
         parser.add_argument('--wipe', action='store_true')
         parser.add_argument('--tenant-name', default='MicroPOS Demo')
         parser.add_argument('--verbose-seed', action='store_true')
+        parser.add_argument(
+            '--confirm-production-seed',
+            action='store_true',
+            help='Allow Excel seed mutations when DEBUG=False.',
+        )
 
     # ─── entry point ──────────────────────────────────────────────────────
 
     def handle(self, *args, **options):
+        require_debug_or_confirmation(
+            command_name='seed_from_excel',
+            confirmed=options['confirm_production_seed'],
+            flag_name='--confirm-production-seed',
+            action='this command seeds demo data and may wipe existing business data',
+        )
+
         self.verbose = options['verbose_seed']
         snapshot_path = Path(options['snapshot'])
         if not snapshot_path.is_absolute():
@@ -945,8 +959,12 @@ class Command(BaseCommand):
         self.stdout.write(f"  Currency exchanges: {stats['exchanges']}")
         self.stdout.write(f"  Dividend payments: {stats['dividends']}")
         self.stdout.write('\nUsers:')
-        self.stdout.write('  admin / Admin123!     (superuser)')
-        self.stdout.write('  owner / Owner123!     (owner role)')
-        self.stdout.write('  cashier / Cashier123! (cashier role)')
-        self.stdout.write('  warehouse / Warehouse123! (warehouse role)')
-        self.stdout.write('  investor / Investor123! (investor role)')
+        if settings.DEBUG:
+            self.stdout.write('  admin / Admin123!     (superuser)')
+            self.stdout.write('  owner / Owner123!     (owner role)')
+            self.stdout.write('  cashier / Cashier123! (cashier role)')
+            self.stdout.write('  warehouse / Warehouse123! (warehouse role)')
+            self.stdout.write('  investor / Investor123! (investor role)')
+        else:
+            self.stdout.write('  admin, owner, cashier, warehouse, investor')
+            self.stdout.write('  Passwords are not printed while DEBUG=False.')

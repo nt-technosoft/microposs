@@ -130,6 +130,12 @@ export const useSalesStore = defineStore('sales', {
 
       try {
         const result = await apiProcessReturn(saleId, returnData)
+        await this.fetchSale(saleId)
+        if (this.currentSale) {
+          this.sales = this.sales.map((sale) => (
+            sale.id === saleId ? { ...sale, ...this.currentSale } : sale
+          ))
+        }
         return result
       } catch (error: unknown) {
         this.error = error instanceof Error

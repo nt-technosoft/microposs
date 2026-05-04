@@ -527,6 +527,16 @@ onMounted(loadDashboard)
               <span class="investor-detail-card__hint">Прибыль, которую система уже отнесла на вас.</span>
             </article>
             <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Снято возвратами</span>
+              <strong class="investor-detail-card__value tabular-nums investor-negative">{{ formatLedgerTotal('profit_reversed') }}</strong>
+              <span class="investor-detail-card__hint">Прибыль, сторнированная после возврата продажи.</span>
+            </article>
+            <article class="investor-detail-card">
+              <span class="investor-detail-card__label">Убытки списаний</span>
+              <strong class="investor-detail-card__value tabular-nums investor-negative">{{ formatLedgerTotal('losses_incurred') }}</strong>
+              <span class="investor-detail-card__hint">Списания и утилизации, отнесённые на вашу долю.</span>
+            </article>
+            <article class="investor-detail-card">
               <span class="investor-detail-card__label">Дивиденды выплачены</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('dividends_paid') }}</strong>
               <span class="investor-detail-card__hint">Фактические выплаты, которые вы уже получили.</span>

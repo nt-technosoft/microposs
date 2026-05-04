@@ -33,6 +33,11 @@ const currentPartner = computed(() =>
 const procurements = computed(() => report.value?.procurements ?? [])
 const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? summary.value?.currency ?? 'UZS')
 
+function amountNumber(value: string | number | null | undefined): number {
+  const parsed = Number.parseFloat(String(value ?? '0'))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function formatAmount(value: string | number | null | undefined, currency = 'UZS'): string {
   return formatPrice(value ?? '0', currency)
 }
@@ -47,6 +52,34 @@ function formatReportAmount(
   }
   return formatAmount(fallback)
 }
+
+function reportAmountNumber(
+  row: { display?: { currency: string; amounts: Record<string, string> } } | null | undefined,
+  key: string,
+  fallback: string | number | null | undefined,
+): number {
+  return amountNumber(row?.display?.amounts?.[key] ?? fallback)
+}
+
+const currentPartnerNetProfit = computed(() => {
+  const row = currentPartner.value
+  if (!row) return formatAmount('0', activeReportCurrency.value)
+  const currency = row.display?.currency ?? activeReportCurrency.value
+  const net = (
+    reportAmountNumber(row, 'profit_accrued', row.profit_accrued)
+    - reportAmountNumber(row, 'profit_reversed', row.profit_reversed)
+    - reportAmountNumber(row, 'losses_incurred', row.losses_incurred)
+  )
+  return formatAmount(net, currency)
+})
+
+const hasCurrentPartnerAdjustments = computed(() => {
+  const row = currentPartner.value
+  return Boolean(row && (
+    amountNumber(row.profit_reversed) > 0
+    || amountNumber(row.losses_incurred) > 0
+  ))
+})
 
 function toggleProcurement(id: number): void {
   expandedProcurementId.value = expandedProcurementId.value === id ? null : id
@@ -233,6 +266,53 @@ onMounted(load)
               <span class="investor-detail-card__hint">Невыплаченная прибыль по вашей стороне.</span>
             </article>
           </div>
+        </section>
+
+        <section class="investor-panel investor-adjustments-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Возвраты и списания</h2>
+              <p class="investor-panel__hint">
+                Как возвраты продаж и складские списания изменили вашу прибыль по договору.
+              </p>
+            </div>
+            <span class="investor-panel__icon">
+              <Scale :size="18" :stroke-width="2" />
+            </span>
+          </div>
+
+          <div class="investor-adjustment-strip">
+            <article class="investor-adjustment-card investor-adjustment-card--positive">
+              <span>Начислено</span>
+              <strong class="tabular-nums">
+                {{ formatReportAmount(currentPartner, 'profit_accrued', currentPartner?.profit_accrued ?? '0') }}
+              </strong>
+            </article>
+            <article class="investor-adjustment-card">
+              <span>Снято возвратами</span>
+              <strong class="tabular-nums investor-negative">
+                {{ formatReportAmount(currentPartner, 'profit_reversed', currentPartner?.profit_reversed ?? '0') }}
+              </strong>
+            </article>
+            <article class="investor-adjustment-card">
+              <span>Убытки списаний</span>
+              <strong class="tabular-nums investor-negative">
+                {{ formatReportAmount(currentPartner, 'losses_incurred', currentPartner?.losses_incurred ?? '0') }}
+              </strong>
+            </article>
+            <article class="investor-adjustment-card investor-adjustment-card--net">
+              <span>Чистый результат</span>
+              <strong class="tabular-nums">
+                {{ currentPartnerNetProfit }}
+              </strong>
+            </article>
+          </div>
+
+          <p class="investor-adjustment-note">
+            {{ hasCurrentPartnerAdjustments
+              ? 'Эти суммы уже учтены в показателе «К выплате».'
+              : 'Возвратов и списаний по вашей доле пока нет.' }}
+          </p>
         </section>
 
         <section class="investor-panel">
@@ -437,6 +517,58 @@ onMounted(load)
 .agreement-row__details {
   display: grid;
   gap: var(--space-3);
+}
+
+.investor-adjustments-panel {
+  gap: var(--space-4);
+}
+
+.investor-adjustment-strip {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.investor-adjustment-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: 16px;
+  background: rgba(250, 250, 248, 0.92);
+  border: 1px solid rgba(12, 69, 51, 0.06);
+}
+
+.investor-adjustment-card span {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.investor-adjustment-card strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.investor-adjustment-card--positive strong {
+  color: var(--color-success);
+}
+
+.investor-adjustment-card--net {
+  background: rgba(12, 69, 51, 0.06);
+  border-color: rgba(12, 69, 51, 0.1);
+}
+
+.investor-adjustment-note {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
 }
 
 .investor-currency-switch {

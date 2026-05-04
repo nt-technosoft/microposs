@@ -5,7 +5,6 @@
 import type {
   ReceiptType, ReceiptStatus, SaleStatus, PaymentMethod,
   PricingMode, ContractType, ContractStatus, RiskEventType,
-  ReturnCondition,
 } from './enums'
 
 // === Base ===
@@ -301,7 +300,6 @@ export interface Sale extends BaseModel {
 export interface SaleReturnLine {
   sale_line_id: number
   quantity: number
-  condition: ReturnCondition
 }
 
 // === Customers ===

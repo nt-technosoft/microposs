@@ -3,11 +3,13 @@
 from decimal import Decimal
 
 from django.apps import apps as django_apps
+from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
 from apps.catalog.models import DiscountReason
+from apps.core.management.safety import require_debug_or_confirmation
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import Account, CashAccount
@@ -28,8 +30,20 @@ class Command(BaseCommand):
         parser.add_argument('--cashier-password', default='Cashier123!')
         parser.add_argument('--warehouse-password', default='Warehouse123!')
         parser.add_argument('--investor-password', default='Investor123!')
+        parser.add_argument(
+            '--confirm-production-reset',
+            action='store_true',
+            help='Allow workflow demo reset when DEBUG=False.',
+        )
 
     def handle(self, *args, **options):
+        require_debug_or_confirmation(
+            command_name='reset_workflow_demo',
+            confirmed=options['confirm_production_reset'],
+            flag_name='--confirm-production-reset',
+            action='this command truncates business data and resets users',
+        )
+
         with transaction.atomic():
             self._wipe_business_data()
             users = self._create_users(options)
@@ -39,14 +53,18 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Workflow baseline reset complete.'))
         self.stdout.write(f"Tenant: {business.name} (#{business.id})")
         self.stdout.write('Users:')
-        self.stdout.write(f"  admin / {options['admin_password']} (superuser)")
-        self.stdout.write(f"  owner / {options['owner_password']} (owner)")
-        self.stdout.write(f"  cashier / {options['cashier_password']} (cashier)")
-        self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse)")
-        self.stdout.write(
-            f"  investor / {options['investor_password']} "
-            "(linked investor)"
-        )
+        if settings.DEBUG:
+            self.stdout.write(f"  admin / {options['admin_password']} (superuser)")
+            self.stdout.write(f"  owner / {options['owner_password']} (owner)")
+            self.stdout.write(f"  cashier / {options['cashier_password']} (cashier)")
+            self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse)")
+            self.stdout.write(
+                f"  investor / {options['investor_password']} "
+                "(linked investor)"
+            )
+        else:
+            self.stdout.write('  admin, owner, cashier, warehouse, investor')
+            self.stdout.write('  Passwords are not printed while DEBUG=False.')
 
     def _wipe_business_data(self) -> None:
         keep = {'auth', 'admin', 'contenttypes', 'sessions', 'django_celery_beat'}

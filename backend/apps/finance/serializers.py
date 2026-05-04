@@ -138,6 +138,8 @@ class DailySummarySerializer(serializers.ModelSerializer):
             'gross_profit', 'investor_share',
             'net_business_profit',
             'total_sales_count', 'total_returns_count',
+            'total_return_amount', 'total_return_restock_cogs',
+            'total_return_disposal_loss',
             'total_writeoffs',
         ]
         read_only_fields = fields
@@ -150,6 +152,7 @@ class CashFlowSummarySerializer(serializers.ModelSerializer):
             'id', 'date',
             'cash_in_sales', 'cash_in_debt_payments', 'cash_in_investor',
             'cash_out_purchases', 'cash_out_supplier_payments', 'cash_out_expenses',
+            'cash_out_refunds',
             'cash_out_investor_payments',
             'net_cash_flow',
         ]
@@ -371,7 +374,7 @@ class RefundSerializer(serializers.ModelSerializer):
 
 
 class RefundCreateSerializer(serializers.Serializer):
-    customer_id = serializers.IntegerField()
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
     sale_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
     currency = serializers.CharField(max_length=3, required=False, default='UZS')

@@ -17,6 +17,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
+from apps.core.management.safety import require_debug_or_confirmation
 
 
 SNAPSHOT_DEFAULT = 'backend/import_snapshots/muzoraba_ustoz_bekzod_latest.json'
@@ -103,12 +104,24 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true', help='Apply workflow to database.')
         parser.add_argument('--wipe', action='store_true', help='Hard reset business data before apply.')
         parser.add_argument('--strict-gaps', action='store_true', help='Fail if Excel lacks transfer rows required by sales.')
+        parser.add_argument(
+            '--confirm-production-wipe',
+            action='store_true',
+            help='Allow this destructive workflow when DEBUG=False.',
+        )
 
     def handle(self, *args, **options):
         if bool(options['dry_run']) == bool(options['apply']):
             raise CommandError('Choose exactly one: --dry-run or --apply.')
         if options['apply'] and not options['wipe']:
             raise CommandError('--apply requires --wipe so the audit starts from a clean database.')
+        if options['apply'] and options['wipe']:
+            require_debug_or_confirmation(
+                command_name='excel_workflow_audit',
+                confirmed=options['confirm_production_wipe'],
+                flag_name='--confirm-production-wipe',
+                action='this command truncates business data and rebuilds the Excel audit workflow',
+            )
 
         snapshot_path = Path(options['snapshot'])
         if not snapshot_path.is_absolute():

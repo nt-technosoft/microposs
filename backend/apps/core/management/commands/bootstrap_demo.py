@@ -2,6 +2,7 @@
 
 from decimal import Decimal, ROUND_HALF_UP
 
+from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -10,6 +11,7 @@ from django.utils import timezone
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
 from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
+from apps.core.management.safety import require_debug_or_confirmation
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
@@ -37,6 +39,11 @@ class Command(BaseCommand):
         parser.add_argument('--cashier-password', default='Cashier123!')
         parser.add_argument('--warehouse-password', default='Warehouse123!')
         parser.add_argument('--investor-password', default='Investor123!')
+        parser.add_argument(
+            '--confirm-production-demo',
+            action='store_true',
+            help='Allow demo bootstrap mutations when DEBUG=False.',
+        )
 
     def _upsert_user(
         self,
@@ -196,6 +203,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        require_debug_or_confirmation(
+            command_name='bootstrap_demo',
+            confirmed=options['confirm_production_demo'],
+            flag_name='--confirm-production-demo',
+            action='this command creates demo users and sets account passwords',
+        )
+
         tenant_name = options['tenant_name']
 
         with transaction.atomic():
@@ -434,9 +448,13 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS('Demo bootstrap completed.'))
         self.stdout.write('Users:')
-        self.stdout.write(f"  admin / {options['admin_password']} (superuser)")
-        self.stdout.write(f"  owner / {options['owner_password']} (owner role)")
-        self.stdout.write(f"  cashier / {options['cashier_password']} (cashier role)")
-        self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse role)")
-        self.stdout.write(f"  investor / {options['investor_password']} (investor role)")
+        if settings.DEBUG:
+            self.stdout.write(f"  admin / {options['admin_password']} (superuser)")
+            self.stdout.write(f"  owner / {options['owner_password']} (owner role)")
+            self.stdout.write(f"  cashier / {options['cashier_password']} (cashier role)")
+            self.stdout.write(f"  warehouse / {options['warehouse_password']} (warehouse role)")
+            self.stdout.write(f"  investor / {options['investor_password']} (investor role)")
+        else:
+            self.stdout.write('  admin, owner, cashier, warehouse, investor')
+            self.stdout.write('  Passwords are not printed while DEBUG=False.')
         self.stdout.write(f'Tenant: {tenant_name}')

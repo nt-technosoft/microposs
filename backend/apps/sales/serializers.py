@@ -85,12 +85,18 @@ class PosSessionSerializer(serializers.ModelSerializer):
         totals: dict[str, Decimal] = {}
         for payment in SalePayment.objects.filter(
             sale__pos_session=obj,
-            sale__status=Sale.SaleStatus.COMPLETED,
-            role=SalePayment.Role.INCOMING,
+            sale__status__in=[
+                Sale.SaleStatus.COMPLETED,
+                Sale.SaleStatus.PARTIALLY_RETURNED,
+                Sale.SaleStatus.RETURNED,
+            ],
             method=SalePayment.Method.CASH,
         ):
             currency = str(payment.currency or 'UZS').upper()
-            totals[currency] = totals.get(currency, Decimal('0.00')) + payment.amount
+            amount = payment.amount
+            if payment.role == SalePayment.Role.REFUND:
+                amount *= Decimal('-1')
+            totals[currency] = totals.get(currency, Decimal('0.00')) + amount
         return {currency: str(_money(amount)) for currency, amount in sorted(totals.items())}
 
 
@@ -391,28 +397,65 @@ class SaleCreateSerializer(serializers.Serializer):
 # === Returns ===
 
 class ReturnLineSerializer(serializers.ModelSerializer):
+    sale_line_id = serializers.IntegerField(source='sale_line.id', read_only=True)
+    product_name = serializers.CharField(source='sale_line.product_variant.product.name', read_only=True)
+
     class Meta:
         model = ReturnLine
-        fields = ['id', 'sale_line', 'quantity']
+        fields = ['id', 'sale_line', 'sale_line_id', 'product_name', 'quantity']
         read_only_fields = ['id']
 
 
 class ReturnSerializer(serializers.ModelSerializer):
     lines = ReturnLineSerializer(many=True, read_only=True)
+    refunds = serializers.SerializerMethodField()
+    total_refund_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = Return
         fields = [
             'id', 'sale', 'processed_by',
             'resolution', 'reason', 'date',
-            'lines', 'notes', 'created_at',
+            'lines', 'refunds', 'total_refund_amount',
+            'notes', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_refunds(self, obj):
+        return [
+            {
+                'id': refund.id,
+                'amount': str(_money(refund.amount)),
+                'currency': refund.currency,
+                'fx_rate': str(refund.fx_rate),
+                'method': refund.method,
+                'account_id': refund.account_id,
+            }
+            for refund in obj.refunds.all()
+        ]
+
+    def get_total_refund_amount(self, obj):
+        total = sum((refund.amount for refund in obj.refunds.all()), Decimal('0'))
+        return str(_money(total))
 
 
 class ReturnInputLineSerializer(serializers.Serializer):
     sale_line_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1)
+
+
+class ReturnRefundPaymentSerializer(serializers.Serializer):
+    method = serializers.ChoiceField(choices=[
+        SalePayment.Method.CASH,
+        SalePayment.Method.CARD,
+        SalePayment.Method.TRANSFER,
+        SalePayment.Method.CREDIT,
+        'RECEIVABLE_OFFSET',
+    ])
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField(required=False, default='UZS', max_length=3)
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False)
+    account_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class ReturnCreateSerializer(serializers.Serializer):
@@ -422,5 +465,6 @@ class ReturnCreateSerializer(serializers.Serializer):
         required=False,
         default=Return.Reason.CLIENT_REFUSE,
     )
-    lines = ReturnInputLineSerializer(many=True)
+    lines = ReturnInputLineSerializer(many=True, required=False, default=list)
+    refund_payments = ReturnRefundPaymentSerializer(many=True, required=False, default=list)
     notes = serializers.CharField(required=False, default='', allow_blank=True)

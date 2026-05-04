@@ -12,8 +12,10 @@ const route = useRoute()
 const authStore = useAuthStore()
 const sessionStore = useSessionStore()
 
-const username = ref('owner')
-const password = ref('Owner123!')
+const enableLoginPrefill = import.meta.env.VITE_ENABLE_LOGIN_PREFILL === 'true'
+
+const username = ref(enableLoginPrefill ? (import.meta.env.VITE_LOGIN_PREFILL_USERNAME || '') : '')
+const password = ref(enableLoginPrefill ? (import.meta.env.VITE_LOGIN_PREFILL_PASSWORD || '') : '')
 const showPassword = ref(false)
 const isLoading = ref(false)
 const apiError = ref('')

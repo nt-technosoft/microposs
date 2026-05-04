@@ -122,6 +122,7 @@ def _handle_procurement_received(payload, tenant_id):
 
 def _handle_risk_event(payload, tenant_id):
     aggregate_daily_pnl.delay(tenant_id, payload.get('date'))
+    _invalidate_profitability_cache(tenant_id)
 
 
 def _handle_financial_operation(payload, tenant_id):
@@ -152,6 +153,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     """
     from apps.finance.models import DailySummary, CashFlowSummary
     from apps.sales.models import Sale, Return as SaleReturn
+    from apps.sales.services import SALE_ACCOUNTING_STATUSES, sale_financial_effect
     from apps.finance.models import Expense
 
     if date_str:
@@ -166,17 +168,13 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
     # Sales aggregation
     sales = Sale.objects.filter(
         tenant_id=tenant_id,
-        status='completed',
+        status__in=SALE_ACCOUNTING_STATUSES,
         date__range=(day_start, day_end),
-    )
+    ).prefetch_related('lines__return_lines__return_doc', 'lines__lot')
 
-    total_revenue = sales.aggregate(
-        total=Sum('total_amount'),
-    )['total'] or Decimal('0')
-
-    total_cogs = sales.aggregate(
-        total=Sum('total_cogs'),
-    )['total'] or Decimal('0')
+    sale_effects = [sale_financial_effect(sale) for sale in sales]
+    total_revenue = sum((effect['revenue'] for effect in sale_effects), Decimal('0'))
+    total_cogs = sum((effect['cogs'] for effect in sale_effects), Decimal('0'))
 
     total_sales_count = sales.count()
 
@@ -185,6 +183,9 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         tenant_id=tenant_id,
         date__range=(day_start, day_end),
     ).count()
+    total_return_amount = sum((effect['returned_amount'] for effect in sale_effects), Decimal('0'))
+    total_return_restock_cogs = sum((effect['restock_cogs'] for effect in sale_effects), Decimal('0'))
+    total_return_disposal_loss = sum((effect['disposal_loss'] for effect in sale_effects), Decimal('0'))
 
     # Writeoffs
     from apps.risk.models import RiskEvent
@@ -205,11 +206,17 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
     # Investor share is currently derived from partner ledger accruals.
     from apps.partnerships.models import PartnerLedgerEntry
-    investor_share = PartnerLedgerEntry.objects.filter(
+    accrued_profit = PartnerLedgerEntry.objects.filter(
         tenant_id=tenant_id,
         entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
         date__range=(day_start, day_end),
     ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    reversed_profit = PartnerLedgerEntry.objects.filter(
+        tenant_id=tenant_id,
+        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
+        date__range=(day_start, day_end),
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    investor_share = accrued_profit - reversed_profit
 
     net_business_profit = gross_profit - investor_share - writeoffs - operational_expenses
 
@@ -224,6 +231,9 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             'net_business_profit': net_business_profit,
             'total_sales_count': total_sales_count,
             'total_returns_count': total_returns_count,
+            'total_return_amount': total_return_amount,
+            'total_return_restock_cogs': total_return_restock_cogs,
+            'total_return_disposal_loss': total_return_disposal_loss,
             'total_writeoffs': writeoffs,
         },
     )
@@ -237,6 +247,18 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             for payment in SalePayment.objects.filter(
                 tenant_id=tenant_id,
                 role=SalePayment.Role.INCOMING,
+                method=SalePayment.Method.CASH,
+                date__range=(day_start, day_end),
+            )
+        ),
+        Decimal('0'),
+    )
+    cash_refunds = sum(
+        (
+            payment_functional_amount_uzs(payment)
+            for payment in SalePayment.objects.filter(
+                tenant_id=tenant_id,
+                role=SalePayment.Role.REFUND,
                 method=SalePayment.Method.CASH,
                 date__range=(day_start, day_end),
             )
@@ -261,7 +283,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         occurred_at__range=(day_start, day_end),
     ).aggregate(total=Sum('functional_amount_uzs'))['total'] or Decimal('0')
 
-    net_cash = cash_sales + debt_payments - supplier_payments - expense_outflows
+    net_cash = cash_sales + debt_payments - cash_refunds - supplier_payments - expense_outflows
 
     CashFlowSummary.objects.update_or_create(
         tenant_id=tenant_id,
@@ -273,6 +295,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             'cash_out_purchases': Decimal('0'),
             'cash_out_supplier_payments': supplier_payments,
             'cash_out_expenses': expense_outflows,
+            'cash_out_refunds': cash_refunds,
             'cash_out_investor_payments': Decimal('0'),
             'net_cash_flow': net_cash,
         },

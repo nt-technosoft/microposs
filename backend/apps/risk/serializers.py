@@ -27,6 +27,10 @@ class WriteoffCreateSerializer(serializers.Serializer):
     negligence = serializers.BooleanField(default=False)
 
 
+class WriteoffPreviewSerializer(WriteoffCreateSerializer):
+    reason = serializers.CharField(required=False, allow_blank=True, default='')
+
+
 class InventoryCheckLineSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(
         source='product_variant.__str__', read_only=True,

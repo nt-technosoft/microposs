@@ -23,11 +23,18 @@ from apps.partnerships.formulas import (
 from apps.sales.currency import functional_amount_uzs, money
 
 from .models import (
-    Sale, SaleLine, Return, ReturnLine, PosSession,
+    Sale, SaleLine, SalePayment, Return, ReturnLine, PosSession,
 )
 
 if TYPE_CHECKING:
     from apps.inventory.models import Lot
+
+
+SALE_ACCOUNTING_STATUSES = (
+    Sale.SaleStatus.COMPLETED,
+    Sale.SaleStatus.PARTIALLY_RETURNED,
+    Sale.SaleStatus.RETURNED,
+)
 
 
 def _currency_map(value: dict | None, *, fallback_uzs: Decimal | None = None) -> dict[str, str]:
@@ -609,6 +616,412 @@ def calculate_profit_distribution(
     )
 
 
+def _returned_quantity_for_line(sale_line: SaleLine) -> int:
+    return int(
+        ReturnLine.objects
+        .filter(sale_line=sale_line)
+        .aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+
+
+def _returned_quantity_by_resolution(sale_line: SaleLine, resolution: str) -> int:
+    return int(
+        ReturnLine.objects
+        .filter(sale_line=sale_line, return_doc__resolution=resolution)
+        .aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+
+
+def sale_financial_effect(sale: Sale) -> dict:
+    """
+    Net sale effect after returns.
+
+    Revenue is reduced by every returned item. COGS is reduced only when the
+    item returns to stock. Returned disposed goods remain a business loss.
+    """
+    revenue = Decimal('0')
+    cogs = Decimal('0')
+    returned_amount = Decimal('0')
+    restock_cogs = Decimal('0')
+    disposal_loss = Decimal('0')
+    quantity_sold = 0
+    quantity_returned = 0
+
+    for line in sale.lines.all():
+        returned_total = _returned_quantity_for_line(line)
+        restock_qty = _returned_quantity_by_resolution(line, Return.Resolution.RESTOCK)
+        dispose_qty = _returned_quantity_by_resolution(line, Return.Resolution.DISPOSE)
+        net_qty = max(int(line.quantity) - returned_total, 0)
+
+        revenue += Decimal(str(line.unit_price)) * Decimal(net_qty)
+        cogs += Decimal(str(line.unit_landed_cost)) * Decimal(int(line.quantity) - restock_qty)
+        returned_amount += Decimal(str(line.unit_price)) * Decimal(returned_total)
+        restock_cogs += Decimal(str(line.unit_landed_cost)) * Decimal(restock_qty)
+        disposal_loss += Decimal(str(line.unit_landed_cost)) * Decimal(dispose_qty)
+        quantity_sold += net_qty
+        quantity_returned += returned_total
+
+    gross_profit = revenue - cogs
+    return {
+        'revenue': money(revenue),
+        'cogs': money(cogs),
+        'gross_profit': money(gross_profit),
+        'returned_amount': money(returned_amount),
+        'restock_cogs': money(restock_cogs),
+        'disposal_loss': money(disposal_loss),
+        'quantity_sold': quantity_sold,
+        'quantity_returned': quantity_returned,
+    }
+
+
+def _sync_sale_return_status(sale: Sale) -> None:
+    total_qty = int(
+        sale.lines.aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+    returned_qty = int(
+        ReturnLine.objects
+        .filter(return_doc__sale=sale)
+        .aggregate(total=models.Sum('quantity'))['total']
+        or 0
+    )
+    if returned_qty <= 0:
+        next_status = Sale.SaleStatus.COMPLETED
+    elif returned_qty >= total_qty:
+        next_status = Sale.SaleStatus.RETURNED
+    else:
+        next_status = Sale.SaleStatus.PARTIALLY_RETURNED
+
+    if sale.status != next_status:
+        Sale.objects.filter(pk=sale.pk).update(status=next_status, updated_at=timezone.now())
+        sale.status = next_status
+
+
+def _profit_reversal_for_line(sale_line: SaleLine, qty: int) -> Decimal:
+    if sale_line.quantity <= 0:
+        return Decimal('0.00')
+    qty_ratio = Decimal(qty) / Decimal(sale_line.quantity)
+    return money(
+        sum(
+            (
+                Decimal(str(amount)) * qty_ratio
+                for amount in (sale_line.profit_distribution_snapshot or {}).values()
+            ),
+            Decimal('0'),
+        )
+    )
+
+
+def _build_selected_return_effect(
+    *,
+    sale: Sale,
+    return_lines: list[dict] | None,
+    resolution: str,
+) -> dict:
+    selected_by_line = {
+        int(line['sale_line_id']): int(line.get('quantity') or 0)
+        for line in (return_lines or [])
+    }
+    selected_refund = Decimal('0')
+    selected_cogs = Decimal('0')
+    selected_profit_reversal = Decimal('0')
+
+    line_payloads = []
+    for sale_line in sale.lines.select_related('product_variant__product', 'lot').all():
+        already_returned = _returned_quantity_for_line(sale_line)
+        available_qty = max(int(sale_line.quantity) - already_returned, 0)
+        requested_qty = selected_by_line.get(sale_line.pk, 0)
+        if requested_qty < 0 or requested_qty > available_qty:
+            raise ValueError(
+                f'Return quantity for sale_line #{sale_line.pk} must be between 0 and {available_qty}.'
+            )
+        if requested_qty:
+            selected_refund += Decimal(str(sale_line.unit_price)) * Decimal(requested_qty)
+            selected_cogs += Decimal(str(sale_line.unit_landed_cost)) * Decimal(requested_qty)
+            selected_profit_reversal += _profit_reversal_for_line(sale_line, requested_qty)
+
+        product = sale_line.product_variant.product
+        line_payloads.append({
+            'sale_line_id': sale_line.pk,
+            'product_name': product.name,
+            'variant_name': str(sale_line.product_variant),
+            'lot_id': sale_line.lot_id,
+            'sold_quantity': int(sale_line.quantity),
+            'already_returned_quantity': already_returned,
+            'available_quantity': available_qty,
+            'selected_quantity': requested_qty,
+            'unit_price_uzs': str(money(sale_line.unit_price)),
+            'unit_landed_cost_uzs': str(money(sale_line.unit_landed_cost)),
+            'operation_currency': sale_line.operation_currency,
+            'operation_unit_price': str(sale_line.operation_unit_price or sale_line.unit_price),
+            'fx_rate_snapshot': str(sale_line.fx_rate_snapshot),
+        })
+
+    cogs_effect_key = (
+        'restock_cogs_uzs'
+        if resolution == Return.Resolution.RESTOCK
+        else 'disposal_loss_uzs'
+    )
+    return {
+        'lines': line_payloads,
+        'selected': {
+            'refund_amount_uzs': str(money(selected_refund)),
+            'profit_reversal_uzs': str(money(selected_profit_reversal)),
+            'restock_cogs_uzs': str(money(selected_cogs if resolution == Return.Resolution.RESTOCK else Decimal('0'))),
+            'disposal_loss_uzs': str(money(selected_cogs if resolution == Return.Resolution.DISPOSE else Decimal('0'))),
+            cogs_effect_key: str(money(selected_cogs)),
+        },
+    }
+
+
+def build_return_preview(
+    *,
+    sale: Sale,
+    tenant_id: int,
+    return_lines: list[dict] | None = None,
+    resolution: str = Return.Resolution.RESTOCK,
+) -> dict:
+    """Preview returnable lines, refund capacity and financial effect."""
+    if sale.tenant_id != tenant_id:
+        raise ValueError('Sale does not belong to tenant.')
+    if resolution not in (Return.Resolution.RESTOCK, Return.Resolution.DISPOSE):
+        raise ValueError(f'Invalid resolution: {resolution}')
+
+    effect = _build_selected_return_effect(
+        sale=sale,
+        return_lines=return_lines,
+        resolution=resolution,
+    )
+    incoming_by_currency: dict[str, Decimal] = {}
+    refunded_by_currency: dict[str, Decimal] = {}
+    for payment in sale.payments.all():
+        currency = str(payment.currency or 'UZS').upper()
+        if payment.role == SalePayment.Role.INCOMING:
+            incoming_by_currency[currency] = incoming_by_currency.get(currency, Decimal('0')) + Decimal(str(payment.amount))
+        elif payment.role == SalePayment.Role.REFUND:
+            refunded_by_currency[currency] = refunded_by_currency.get(currency, Decimal('0')) + Decimal(str(payment.amount))
+
+    remaining_refundable = {
+        currency: str(money(amount - refunded_by_currency.get(currency, Decimal('0'))))
+        for currency, amount in sorted(incoming_by_currency.items())
+    }
+    return {
+        'sale_id': sale.pk,
+        'sale_status': sale.status,
+        'resolution': resolution,
+        'status': 'READY',
+        'remaining_refundable_by_currency': remaining_refundable,
+        **effect,
+    }
+
+
+def _refund_method_to_sale_method(method: str) -> str:
+    normalized = str(method or '').upper()
+    if normalized in {'CASH', 'НАЛИЧНЫЕ'}:
+        return SalePayment.Method.CASH
+    if normalized in {'CARD', 'PLASTIK', 'ПЛАСТИК'}:
+        return SalePayment.Method.CARD
+    if normalized in {'TRANSFER', 'BANK', 'ПЕРЕВОД'}:
+        return SalePayment.Method.TRANSFER
+    if normalized in {'CREDIT', 'RECEIVABLE_OFFSET'}:
+        return SalePayment.Method.CREDIT
+    raise ValueError(f'Invalid refund method: {method}')
+
+
+def _refund_method_to_finance_method(method: str) -> str:
+    from apps.finance.models import Refund
+
+    sale_method = _refund_method_to_sale_method(method)
+    if sale_method == SalePayment.Method.CASH:
+        return Refund.Method.CASH
+    if sale_method == SalePayment.Method.CARD:
+        return Refund.Method.PLASTIK
+    if sale_method == SalePayment.Method.TRANSFER:
+        return Refund.Method.TRANSFER
+    return Refund.Method.RECEIVABLE_OFFSET
+
+
+def _validate_refund_currency_capacity(
+    *,
+    sale: Sale,
+    refund_payments: list[dict],
+) -> None:
+    incoming: dict[str, Decimal] = {}
+    refunded: dict[str, Decimal] = {}
+    requested: dict[str, Decimal] = {}
+    for payment in sale.payments.all():
+        currency = str(payment.currency or 'UZS').upper()
+        if payment.role == SalePayment.Role.INCOMING:
+            incoming[currency] = incoming.get(currency, Decimal('0')) + Decimal(str(payment.amount))
+        elif payment.role == SalePayment.Role.REFUND:
+            refunded[currency] = refunded.get(currency, Decimal('0')) + Decimal(str(payment.amount))
+    for payload in refund_payments:
+        currency = str(payload.get('currency') or 'UZS').upper()
+        requested[currency] = requested.get(currency, Decimal('0')) + money(payload['amount'])
+    for currency, amount in requested.items():
+        if refunded.get(currency, Decimal('0')) + amount > incoming.get(currency, Decimal('0')):
+            raise ValueError(
+                f'Refund {amount} {currency} exceeds remaining paid amount '
+                f'{incoming.get(currency, Decimal("0")) - refunded.get(currency, Decimal("0"))} {currency}.'
+            )
+
+
+def _issue_return_refund(
+    *,
+    sale: Sale,
+    return_doc: Return,
+    tenant_id: int,
+    payment_payload: dict,
+    date,
+):
+    from apps.customers.models import Customer, ReceivableEntry
+    from apps.customers.services import get_or_create_receivable
+    from apps.finance.models import CashAccount, CashEntry, Refund
+    from apps.finance.services import create_cash_entry, create_journal_entry
+
+    method = _refund_method_to_sale_method(payment_payload['method'])
+    finance_method = _refund_method_to_finance_method(payment_payload['method'])
+    amount = money(payment_payload['amount'])
+    currency = str(payment_payload.get('currency') or 'UZS').upper()
+    fx_rate = resolve_fx_rate_snapshot(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=payment_payload.get('fx_rate'),
+    )
+    functional_amount = functional_amount_uzs(
+        amount=amount,
+        currency=currency,
+        fx_rate=fx_rate,
+    )
+    if amount <= 0:
+        raise ValueError('Refund amount must be > 0.')
+
+    account = None
+    if method != SalePayment.Method.CREDIT:
+        account_id = payment_payload.get('account_id')
+        if account_id is None:
+            account_id = _resolve_default_cash_account_id(
+                tenant_id=tenant_id,
+                payment_method=method,
+                currency=currency,
+            )
+        if account_id is None:
+            raise ValueError(f'Не найден счёт для возврата {method} {currency}.')
+        account = CashAccount.objects.select_for_update().get(
+            pk=account_id,
+            tenant_id=tenant_id,
+        )
+        if account.currency != currency:
+            raise ValueError(
+                f'Refund currency {currency} does not match cash account {account.name} currency {account.currency}.'
+            )
+        if account.balance < amount:
+            raise ValueError(
+                f'Недостаточно денег на счёте {account.name}: есть {account.balance}, нужно {amount}.'
+            )
+    elif sale.customer_id is None:
+        raise ValueError('Зачёт долга возможен только для продажи с клиентом.')
+
+    refund = Refund.objects.create(
+        tenant_id=tenant_id,
+        customer_id=sale.customer_id,
+        date=date,
+        amount=amount,
+        currency=currency,
+        fx_rate=fx_rate,
+        account=account,
+        method=finance_method,
+        return_ref=return_doc,
+    )
+
+    SalePayment.objects.create(
+        tenant_id=tenant_id,
+        sale=sale,
+        date=date,
+        amount=amount,
+        currency=currency,
+        fx_rate=fx_rate,
+        method=method,
+        role=SalePayment.Role.REFUND,
+        account_id=account.pk if account else None,
+    )
+
+    if method == SalePayment.Method.CREDIT:
+        customer_obj = Customer.objects.get(pk=sale.customer_id, tenant_id=tenant_id)
+        receivable = get_or_create_receivable(customer_obj, tenant_id)
+        receivable = type(receivable).objects.select_for_update().get(pk=receivable.pk)
+        balances = dict(receivable.balances)
+        current = Decimal(str(balances.get(currency, '0')))
+        balances[currency] = str(money(current - amount))
+        receivable.balances = balances
+        receivable.save(update_fields=['balances', 'updated_at'])
+        ReceivableEntry.objects.create(
+            tenant_id=tenant_id,
+            receivable=receivable,
+            date=date,
+            amount=-amount,
+            currency=currency,
+            fx_rate=fx_rate,
+            entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
+            source_ref=f'refund:{refund.pk}',
+        )
+        credit_code = '1200'
+    else:
+        create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=date,
+            source_ref_type='refund',
+            source_ref_id=refund.pk,
+        )
+        credit_code = account.linked_account.code if account and account.linked_account_id else (
+            '1000' if method == SalePayment.Method.CASH else '1010'
+        )
+
+    create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type='return',
+        operation_id=refund.pk,
+        lines=[
+            {
+                'account_code': '4000',
+                'debit': functional_amount,
+                'credit': Decimal('0'),
+                'description': f'Return refund #{refund.pk} revenue reversal',
+            },
+            {
+                'account_code': credit_code,
+                'debit': Decimal('0'),
+                'credit': functional_amount,
+                'description': f'Return refund #{refund.pk}',
+            },
+        ],
+        description=f'Sale return refund #{refund.pk}',
+        date=date,
+    )
+
+    publish_event(
+        event_type='finance.refund',
+        payload={
+            'refund_id': refund.pk,
+            'return_id': return_doc.pk,
+            'sale_id': sale.pk,
+            'customer_id': sale.customer_id,
+            'amount': str(amount),
+            'currency': currency,
+            'method': finance_method,
+            'date': date.isoformat(),
+        },
+        tenant_id=tenant_id,
+    )
+    return refund
+
+
 def process_return(
     sale: Sale,
     return_lines: list[dict],
@@ -619,6 +1032,7 @@ def process_return(
     notes: str = '',
     date=None,
     refund: dict | None = None,
+    refund_payments: list[dict] | None = None,
 ) -> Return:
     """
     Process a return for a completed sale with shariah-correct partner impact.
@@ -634,15 +1048,16 @@ def process_return(
       - LOSS_INCURRED per partner distributed by capital_share from contract_snapshot.
 
     Monetary refund:
-      If `refund` is provided — {method, currency?, fx_rate?, account_id?} — a Refund
-      is issued for the full line-level refund total via finance.refund_customer.
-      If `refund` is None, the caller is responsible for the monetary side.
+      If `refund_payments` is provided, each item creates SalePayment(role=REFUND),
+      CashEntry/ReceivableEntry and revenue reversal journal in functional UZS.
+      Legacy `refund` is still accepted and converted into a single refund payment.
 
     Invariant: Σ ReturnLine.qty per sale_line ≤ SaleLine.qty (including prior returns).
     """
-    from apps.inventory.models import Lot, LotStock, StockDisposal
+    from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
     from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+    from apps.finance.services import create_journal_entry
 
     if date is None:
         date = timezone.now()
@@ -650,7 +1065,24 @@ def process_return(
     if resolution not in (Return.Resolution.RESTOCK, Return.Resolution.DISPOSE):
         raise ValueError(f'Invalid resolution: {resolution}')
 
+    refund_payments = list(refund_payments or [])
+    if refund and not refund_payments:
+        refund_payments = [{
+            'method': refund['method'],
+            'currency': refund.get('currency', 'UZS'),
+            'fx_rate': refund.get('fx_rate', '1'),
+            'account_id': refund.get('account_id'),
+            'amount': refund.get('amount'),
+        }]
+
     with transaction.atomic():
+        sale = Sale.objects.select_for_update().get(pk=sale.pk, tenant_id=tenant_id)
+        if sale.status not in (
+            Sale.SaleStatus.COMPLETED,
+            Sale.SaleStatus.PARTIALLY_RETURNED,
+        ):
+            raise ValueError('Возврат можно оформить только по завершённой продаже.')
+
         return_doc = Return.objects.create(
             tenant_id=tenant_id,
             sale=sale,
@@ -662,6 +1094,7 @@ def process_return(
         )
 
         total_refund = Decimal('0')
+        total_restock_cogs = Decimal('0')
         total_loss = Decimal('0')
 
         for rl_data in return_lines:
@@ -743,6 +1176,17 @@ def process_return(
                 if not lot.is_active:
                     Lot.objects.filter(pk=lot.pk).update(is_active=True)
 
+                StockMovement.objects.create(
+                    tenant_id=tenant_id,
+                    lot=lot,
+                    movement_type=StockMovement.MovementType.RETURN,
+                    quantity=qty,
+                    to_location=sale.location,
+                    reference_type='return',
+                    reference_id=return_doc.pk,
+                )
+                total_restock_cogs += line_loss
+
             else:  # DISPOSE
                 StockDisposal.objects.create(
                     tenant_id=tenant_id,
@@ -786,24 +1230,69 @@ def process_return(
                             date=date,
                         )
 
-        if refund and total_refund > 0:
-            from apps.finance.services import refund_customer
-            if sale.customer_id is None:
-                raise ValueError(
-                    'Cannot issue refund: sale has no customer. Remove refund kwarg or set customer.'
-                )
-            refund_customer(
+        if total_restock_cogs > 0:
+            create_journal_entry(
                 tenant_id=tenant_id,
-                customer_id=sale.customer_id,
-                sale_id=sale.pk,
-                amount=total_refund,
-                currency=str(refund.get('currency', 'UZS')).upper(),
-                fx_rate=Decimal(str(refund.get('fx_rate', '1'))),
-                method=refund['method'],
-                account_id=refund.get('account_id'),
-                return_ref_id=return_doc.pk,
+                operation_type='return',
+                operation_id=return_doc.pk,
+                lines=[
+                    {
+                        'account_code': '1100',
+                        'debit': total_restock_cogs,
+                        'credit': Decimal('0'),
+                        'description': f'Return #{return_doc.pk} inventory restore',
+                    },
+                    {
+                        'account_code': '5000',
+                        'debit': Decimal('0'),
+                        'credit': total_restock_cogs,
+                        'description': f'Return #{return_doc.pk} COGS reversal',
+                    },
+                ],
+                description=f'Sale return #{return_doc.pk} COGS reversal',
                 date=date,
             )
+
+        if refund_payments and total_refund > 0:
+            if len(refund_payments) == 1 and refund_payments[0].get('amount') in (None, ''):
+                refund_payments[0]['amount'] = total_refund
+                refund_payments[0].setdefault('currency', 'UZS')
+                refund_payments[0].setdefault('fx_rate', Decimal('1'))
+
+            _validate_refund_currency_capacity(
+                sale=sale,
+                refund_payments=refund_payments,
+            )
+            functional_refund_total = money(sum(
+                (
+                    functional_amount_uzs(
+                        amount=money(payment['amount']),
+                        currency=str(payment.get('currency') or 'UZS').upper(),
+                        fx_rate=resolve_fx_rate_snapshot(
+                            tenant_id=tenant_id,
+                            operation_currency=str(payment.get('currency') or 'UZS').upper(),
+                            operation_at=date,
+                            fx_rate_snapshot=payment.get('fx_rate'),
+                        ),
+                    )
+                    for payment in refund_payments
+                ),
+                Decimal('0'),
+            ))
+            if functional_refund_total != money(total_refund):
+                raise ValueError(
+                    'Сумма возврата в UZS-эквиваленте не совпадает с суммой возвращаемых строк.'
+                )
+            for payment in refund_payments:
+                _issue_return_refund(
+                    sale=sale,
+                    return_doc=return_doc,
+                    tenant_id=tenant_id,
+                    payment_payload=payment,
+                    date=date,
+                )
+
+        _sync_sale_return_status(sale)
 
         publish_event(
             event_type='sale.returned',
@@ -814,8 +1303,10 @@ def process_return(
                 'reason': reason,
                 'lines_count': len(return_lines),
                 'refund_amount': str(total_refund),
-                'refund_issued': bool(refund and total_refund > 0),
+                'refund_issued': bool(refund_payments and total_refund > 0),
+                'restock_cogs': str(total_restock_cogs),
                 'loss_amount': str(total_loss),
+                'date': date.isoformat(),
             },
             tenant_id=tenant_id,
         )
@@ -895,21 +1386,21 @@ def close_pos_session(
         if session.status != PosSession.SessionStatus.OPEN:
             raise ValueError('Можно закрыть только открытую смену.')
 
-        # Calculate expected cash from incoming cash payments.
-        from apps.sales.models import SalePayment
-
+        # Calculate expected cash from incoming cash payments minus cash refunds.
         cash_payments = SalePayment.objects.filter(
             sale__pos_session=session,
-            sale__status=Sale.SaleStatus.COMPLETED,
-            role=SalePayment.Role.INCOMING,
+            sale__status__in=SALE_ACCOUNTING_STATUSES,
             method=SalePayment.Method.CASH,
         )
         cash_sales_by_currency: dict[str, Decimal] = {}
         for payment in cash_payments:
             currency = str(payment.currency or 'UZS').upper()
+            signed_amount = Decimal(str(payment.amount))
+            if payment.role == SalePayment.Role.REFUND:
+                signed_amount *= Decimal('-1')
             cash_sales_by_currency[currency] = (
                 cash_sales_by_currency.get(currency, Decimal('0'))
-                + Decimal(str(payment.amount))
+                + signed_amount
             )
 
         opening_by_currency = _currency_map(

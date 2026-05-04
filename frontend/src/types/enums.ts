@@ -18,6 +18,7 @@ export enum ReceiptStatus {
 export enum SaleStatus {
   DRAFT = 'draft',
   COMPLETED = 'completed',
+  PARTIALLY_RETURNED = 'partially_returned',
   RETURNED = 'returned',
 }
 

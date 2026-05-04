@@ -5,6 +5,9 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+        VITE_ENABLE_LOGIN_PREFILL: ${VITE_ENABLE_LOGIN_PREFILL:-false}
+        VITE_LOGIN_PREFILL_USERNAME: ${VITE_LOGIN_PREFILL_USERNAME:-}
+        VITE_LOGIN_PREFILL_PASSWORD: ${VITE_LOGIN_PREFILL_PASSWORD:-}
     restart: unless-stopped
     expose:
       - "80"

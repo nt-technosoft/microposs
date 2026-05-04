@@ -50,20 +50,75 @@ export interface CloseSessionPayload {
 export interface ReturnLinePayload {
   sale_line_id: number
   quantity: number
-  condition: 'good' | 'damaged'
+}
+
+export type ReturnResolution = 'RESTOCK' | 'DISPOSE'
+export type ReturnReason = 'CLIENT_REFUSE' | 'DEFECT' | 'OTHER'
+
+export interface ReturnRefundPaymentPayload {
+  method: PaymentMethod | 'RECEIVABLE_OFFSET'
+  amount: string
+  currency: string
+  fx_rate?: string
+  account_id?: number | null
 }
 
 export interface ReturnCreatePayload {
+  resolution: ReturnResolution
+  reason?: ReturnReason
   lines: ReturnLinePayload[]
+  refund_payments?: ReturnRefundPaymentPayload[]
   notes?: string
 }
 
 export interface SaleReturn {
   id: number
-  original_sale_id: number
+  sale: number
+  resolution: ReturnResolution
+  reason: ReturnReason
+  date: string
   created_at: string
   notes: string
   lines: ReturnLinePayload[]
+  refunds?: Array<{
+    id: number
+    amount: string
+    currency: string
+    fx_rate: string
+    method: string
+    account_id: number | null
+  }>
+}
+
+export interface SaleReturnPreviewLine {
+  sale_line_id: number
+  product_name: string
+  variant_name: string
+  lot_id: number
+  sold_quantity: number
+  already_returned_quantity: number
+  available_quantity: number
+  selected_quantity: number
+  unit_price_uzs: string
+  unit_landed_cost_uzs: string
+  operation_currency: string
+  operation_unit_price: string
+  fx_rate_snapshot: string
+}
+
+export interface SaleReturnPreview {
+  sale_id: number
+  sale_status: string
+  resolution: ReturnResolution
+  status: 'READY' | 'BLOCKED'
+  remaining_refundable_by_currency: Record<string, string>
+  lines: SaleReturnPreviewLine[]
+  selected: {
+    refund_amount_uzs: string
+    profit_reversal_uzs: string
+    restock_cogs_uzs: string
+    disposal_loss_uzs: string
+  }
 }
 
 export interface SaleExplanationPartnerSplit {
@@ -271,5 +326,13 @@ export async function createSale(payload: SaleCreatePayload): Promise<Sale> {
 
 export async function processReturn(saleId: number, payload: ReturnCreatePayload): Promise<SaleReturn> {
   const { data } = await api.post<SaleReturn>(`/api/v1/sales/sales/${saleId}/return/`, payload)
+  return data
+}
+
+export async function fetchReturnPreview(
+  saleId: number,
+  payload: ReturnCreatePayload,
+): Promise<SaleReturnPreview> {
+  const { data } = await api.post<SaleReturnPreview>(`/api/v1/sales/sales/${saleId}/return-preview/`, payload)
   return data
 }

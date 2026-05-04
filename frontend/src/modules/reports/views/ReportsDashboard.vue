@@ -141,7 +141,7 @@ function getDateRange(p: Period): { date_from?: string; date_to?: string } {
 // ── Aggregated metrics ───────────────────────────────────────────────────────
 
 const metrics = computed(() => {
-  const zero = { revenue: 0, profit: 0, cogs: 0, salesCount: 0, salesDays: 0, returns: 0 }
+  const zero = { revenue: 0, profit: 0, cogs: 0, salesCount: 0, salesDays: 0, returns: 0, returnsCount: 0, writeoffs: 0 }
 
   return summaries.value.reduce((acc, s) => ({
     revenue: acc.revenue + parseFloat(s.net_sales),
@@ -150,6 +150,8 @@ const metrics = computed(() => {
     salesCount: acc.salesCount + Number(s.total_sales || 0),
     salesDays: acc.salesDays + (Number(s.total_sales || 0) > 0 ? 1 : 0),
     returns: acc.returns + parseFloat(s.total_returns),
+    returnsCount: acc.returnsCount + Number(s.total_returns_count || 0),
+    writeoffs: acc.writeoffs + parseFloat(s.total_writeoffs || '0'),
   }), zero)
 })
 
@@ -751,7 +753,7 @@ function openProcurementAudit(procurementId: number): void {
               <div class="overview-primary-meta">
                 <span>{{ metrics.salesCount }} продаж</span>
                 <span>{{ metrics.salesDays }} дней с продажами</span>
-                <span>Возвраты {{ formatReportPrice(metrics.returns) }}</span>
+                <span>Возвраты {{ metrics.returnsCount }} · {{ formatReportPrice(metrics.returns) }}</span>
               </div>
             </article>
 
@@ -795,6 +797,7 @@ function openProcurementAudit(procurementId: number): void {
               <span class="inline-chip">Дебиторка {{ formatReportPrice(totalDebt) }}</span>
               <span class="inline-chip">Кредиторка {{ formatReportPrice(totalPayables) }}</span>
               <span class="inline-chip">Возвраты {{ formatReportPrice(metrics.returns) }}</span>
+              <span class="inline-chip">Списания {{ formatReportPrice(metrics.writeoffs) }}</span>
               <span v-if="loadingParity" class="inline-chip">Обновляю остатки...</span>
             </div>
           </div>
@@ -836,6 +839,9 @@ function openProcurementAudit(procurementId: number): void {
                   </div>
                   <div class="money-meta">
                     <span class="money-label">Расход</span>
+                    <span v-if="metrics.returns > 0" class="money-caption">
+                      включая возвраты {{ formatReportPrice(metrics.returns) }}
+                    </span>
                   </div>
                   <strong class="money-value money-value--out tabular-nums">{{ formatReportPrice(cashFlowTotals.outflows) }}</strong>
                 </div>
@@ -895,6 +901,10 @@ function openProcurementAudit(procurementId: number): void {
                 <div class="obligation-tile">
                   <span class="metric-label">Остаток в штуках</span>
                   <strong class="metric-value tabular-nums">{{ inventoryTotals.qty }}</strong>
+                </div>
+                <div v-if="metrics.writeoffs > 0" class="obligation-tile">
+                  <span class="metric-label">Списания</span>
+                  <strong class="metric-value tabular-nums">{{ formatReportPrice(metrics.writeoffs) }}</strong>
                 </div>
               </div>
 

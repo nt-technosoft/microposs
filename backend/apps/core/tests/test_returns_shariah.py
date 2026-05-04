@@ -2,7 +2,8 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.inventory.models import Lot, StockDisposal
+from apps.finance.models import CashEntry, JournalEntry
+from apps.inventory.models import Lot, StockDisposal, StockMovement
 from apps.partnerships.models import PartnerLedgerEntry
 from apps.sales.models import Return, SalePayment
 from apps.sales.services import create_sale, process_return
@@ -137,3 +138,62 @@ class ReturnsShariahTests(TestCase):
         actual_losses = {entry.ledger.partner_id: entry.amount for entry in loss_entries}
         self.assertEqual(actual_losses, expected_losses)
         self.assertEqual(sum(actual_losses.values()), expected_loss_amount)
+
+    def test_cash_return_without_customer_updates_stock_cash_journal_and_status(self):
+        ctx = build_tenant()
+        seed_received_procurement(ctx)
+        session = open_session(ctx)
+        sale = create_sale(
+            tenant_id=ctx['business'].id,
+            pos_session_id=session.id,
+            location_id=ctx['store'].id,
+            sold_by_id=ctx['cashier'].id,
+            customer_id=None,
+            lines=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': 1,
+                'unit_price': Decimal('240000.00'),
+            }],
+            payments=[{
+                'amount': Decimal('240000.00'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'method': SalePayment.Method.CASH,
+                'account_id': ctx['cash_account'].id,
+            }],
+        )
+
+        return_doc = process_return(
+            sale=sale,
+            return_lines=[{'sale_line_id': sale.lines.get().id, 'quantity': 1}],
+            resolution=Return.Resolution.RESTOCK,
+            reason=Return.Reason.CLIENT_REFUSE,
+            processed_by_id=ctx['cashier'].id,
+            tenant_id=ctx['business'].id,
+            refund_payments=[{
+                'amount': Decimal('240000.00'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'method': SalePayment.Method.CASH,
+                'account_id': ctx['cash_account'].id,
+            }],
+        )
+
+        sale.refresh_from_db()
+        self.assertEqual(sale.status, sale.SaleStatus.RETURNED)
+        self.assertEqual(sale.payments.filter(role=SalePayment.Role.REFUND).count(), 1)
+        self.assertEqual(
+            CashEntry.objects.filter(source_ref_type='refund', direction=CashEntry.Direction.OUT).count(),
+            1,
+        )
+        self.assertTrue(
+            StockMovement.objects.filter(
+                movement_type=StockMovement.MovementType.RETURN,
+                reference_type='return',
+                reference_id=return_doc.pk,
+            ).exists()
+        )
+        self.assertGreaterEqual(
+            JournalEntry.objects.filter(operation_type=JournalEntry.OperationType.RETURN).count(),
+            2,
+        )

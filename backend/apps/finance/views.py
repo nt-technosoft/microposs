@@ -154,10 +154,6 @@ def _ensure_finance_aggregates(
     if span_days > 1825:  # Safety cap: 5 years
         date_from = date_to - timedelta(days=1825)
 
-    warmup_key = f'finance:agg:warm:{tenant_id}:{date_from.isoformat()}:{date_to.isoformat()}'
-    if cache.get(warmup_key):
-        return date_from, date_to, False
-
     # Check which dates already have aggregated records in the DB.
     existing_dates = set(
         DailySummary.objects.filter(
@@ -174,6 +170,7 @@ def _ensure_finance_aggregates(
             missing.append(cursor)
         cursor += timedelta(days=1)
 
+    warmup_key = f'finance:agg:warm:{tenant_id}:{date_from.isoformat()}:{date_to.isoformat()}'
     if not missing:
         # All dates present — mark as warm and return.
         cache.set(warmup_key, True, timeout=3600)
@@ -284,7 +281,7 @@ class RefundViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         refund = refund_customer(
             tenant_id=request.tenant_id,
-            customer_id=data['customer_id'],
+            customer_id=data.get('customer_id'),
             sale_id=data['sale_id'],
             amount=data['amount'],
             currency=data['currency'],

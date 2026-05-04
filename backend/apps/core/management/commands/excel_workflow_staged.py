@@ -8,6 +8,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from apps.core.management.safety import require_debug_or_confirmation
 from apps.core.management.commands.excel_workflow_audit import (
     Command as WorkflowEngine,
     SCENARIOS,
@@ -30,10 +31,22 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true')
         parser.add_argument('--wipe', action='store_true')
         parser.add_argument('--strict-gaps', action='store_true')
+        parser.add_argument(
+            '--confirm-production-apply',
+            action='store_true',
+            help='Allow staged Excel workflow mutations when DEBUG=False.',
+        )
 
     def handle(self, *args, **options):
         if bool(options['dry_run']) == bool(options['apply']):
             raise CommandError('Choose exactly one: --dry-run or --apply.')
+        if options['apply']:
+            require_debug_or_confirmation(
+                command_name='excel_workflow_staged',
+                confirmed=options['confirm_production_apply'],
+                flag_name='--confirm-production-apply',
+                action='this command mutates the staged Excel workflow data',
+            )
 
         stage = options['stage']
         if options['apply'] and stage in {'baseline', 'all'} and not options['wipe']:

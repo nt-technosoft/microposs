@@ -50,7 +50,7 @@ def get_partner_capital_state(
     """
     from apps.inventory.models import Lot
     from apps.partnerships.models import ProcurementPartnerLedger
-    from apps.sales.models import SaleLine
+    from apps.sales.models import Return, ReturnLine, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
 
     ledger_qs = ProcurementPartnerLedger.objects.filter(
@@ -117,9 +117,17 @@ def get_partner_capital_state(
             capital_share = lot_shares.get(line.lot_id, Decimal('0'))
             if capital_share <= 0:
                 continue
-            quantity = Decimal(str(line.quantity))
-            sold_cost += Decimal(str(line.unit_landed_cost)) * quantity * capital_share
-            sold_revenue += Decimal(str(line.unit_price)) * quantity * capital_share
+            returned_total = ReturnLine.objects.filter(sale_line=line).aggregate(
+                total=models.Sum('quantity'),
+            )['total'] or 0
+            restock_qty = ReturnLine.objects.filter(
+                sale_line=line,
+                return_doc__resolution=Return.Resolution.RESTOCK,
+            ).aggregate(total=models.Sum('quantity'))['total'] or 0
+            revenue_qty = Decimal(str(max(int(line.quantity) - int(returned_total), 0)))
+            cost_qty = Decimal(str(max(int(line.quantity) - int(restock_qty), 0)))
+            sold_cost += Decimal(str(line.unit_landed_cost)) * cost_qty * capital_share
+            sold_revenue += Decimal(str(line.unit_price)) * revenue_qty * capital_share
 
     return {
         'sold_cost_uzs': _q(sold_cost),

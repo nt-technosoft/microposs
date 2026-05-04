@@ -12,6 +12,95 @@ from apps.partnerships.formulas import distribute_loss_by_capital_from_snapshot
 from .models import RiskEvent, InventoryCheck, InventoryCheckLine
 
 
+def _writeoff_loss_distribution(contract_snapshot: dict, loss_amount: Decimal, negligence: bool) -> dict[str, str]:
+    if not negligence:
+        return distribute_loss_by_capital_from_snapshot(
+            contract_snapshot=contract_snapshot,
+            loss_amount=loss_amount,
+        )
+
+    partners_meta = contract_snapshot.get('partners', []) or []
+    operators = [
+        partner
+        for partner in partners_meta
+        if partner.get('role') == 'OPERATOR' and partner.get('partner_id') is not None
+    ]
+    if not operators:
+        return distribute_loss_by_capital_from_snapshot(
+            contract_snapshot=contract_snapshot,
+            loss_amount=loss_amount,
+        )
+    total_weight = sum(
+        (Decimal(str(partner.get('capital_share') or '0')) for partner in operators),
+        Decimal('0'),
+    )
+    if total_weight <= 0:
+        total_weight = Decimal(len(operators))
+        weights = {str(partner['partner_id']): Decimal('1') for partner in operators}
+    else:
+        weights = {
+            str(partner['partner_id']): Decimal(str(partner.get('capital_share') or '0'))
+            for partner in operators
+        }
+    remaining = loss_amount
+    result: dict[str, str] = {}
+    operator_ids = list(weights.keys())
+    for index, partner_id in enumerate(operator_ids):
+        if index == len(operator_ids) - 1:
+            share = remaining
+        else:
+            share = (loss_amount * weights[partner_id] / total_weight).quantize(Decimal('0.01'))
+            remaining -= share
+        result[partner_id] = str(share)
+    return result
+
+
+def build_writeoff_preview(
+    *,
+    tenant_id: int,
+    lot_id: int,
+    warehouse_id: int,
+    quantity: int,
+    negligence: bool = False,
+) -> dict:
+    from apps.inventory.models import Lot, LotStock
+
+    if quantity < 1:
+        raise ValueError('Writeoff quantity must be >= 1.')
+    lot = Lot.objects.select_related(
+        'product_variant__product',
+        'procurement_item__procurement',
+    ).get(pk=lot_id, tenant_id=tenant_id)
+    stock = LotStock.objects.select_related('warehouse').get(
+        tenant_id=tenant_id,
+        lot=lot,
+        warehouse_id=warehouse_id,
+    )
+    if stock.quantity_remaining < quantity:
+        raise ValueError(
+            f'Insufficient stock in warehouse {warehouse_id} for lot #{lot.pk}: '
+            f'have {stock.quantity_remaining}, need {quantity}.'
+        )
+    loss_amount = (lot.landed_cost_per_unit * quantity).quantize(Decimal('0.01'))
+    distribution = _writeoff_loss_distribution(
+        contract_snapshot=lot.contract_snapshot or {},
+        loss_amount=loss_amount,
+        negligence=negligence,
+    )
+    return {
+        'lot_id': lot.pk,
+        'warehouse_id': warehouse_id,
+        'warehouse_name': stock.warehouse.name,
+        'product_name': lot.product_variant.product.name,
+        'available_quantity': int(stock.quantity_remaining),
+        'quantity': int(quantity),
+        'unit_landed_cost': str(lot.landed_cost_per_unit),
+        'loss_amount': str(loss_amount),
+        'negligence': negligence,
+        'loss_distribution': distribution,
+    }
+
+
 def create_writeoff(
     tenant_id: int,
     lot_id: int,
@@ -56,7 +145,7 @@ def create_writeoff(
 
         contract_snapshot = lot.contract_snapshot or {}
         partners_meta = contract_snapshot.get('partners', []) or []
-        affects_investor = any(
+        affects_investor = (not negligence) and any(
             p.get('role') == 'INVESTOR' for p in partners_meta
         )
 
@@ -110,9 +199,10 @@ def create_writeoff(
             procurement_id = lot.procurement_item.procurement_id
 
         if procurement_id and partners_meta:
-            loss_distribution = distribute_loss_by_capital_from_snapshot(
+            loss_distribution = _writeoff_loss_distribution(
                 contract_snapshot=contract_snapshot,
                 loss_amount=monetary_impact,
+                negligence=negligence,
             )
             for partner_id_str, loss_str in loss_distribution.items():
                 partner_id = int(partner_id_str)
@@ -164,6 +254,7 @@ def create_writeoff(
                 'quantity': quantity,
                 'monetary_impact': str(monetary_impact),
                 'affects_investor': affects_investor,
+                'date': timezone.now().isoformat(),
             },
             tenant_id=tenant_id,
         )

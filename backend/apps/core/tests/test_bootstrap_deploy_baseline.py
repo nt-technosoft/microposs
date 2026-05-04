@@ -18,8 +18,8 @@ class BootstrapDeployBaselineTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
         out = StringIO()
-        call_command('bootstrap_deploy_baseline', stdout=out)
-        call_command('bootstrap_deploy_baseline', stdout=out)
+        call_command('bootstrap_deploy_baseline', '--confirm-production-bootstrap', stdout=out)
+        call_command('bootstrap_deploy_baseline', '--confirm-production-bootstrap', stdout=out)
 
     def auth_investor(self):
         response = self.client.post('/api/v1/auth/token/', {

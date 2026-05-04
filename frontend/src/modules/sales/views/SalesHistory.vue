@@ -9,6 +9,7 @@ import { useToast } from '@/composables/useToast'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { PaymentMethod, SaleStatus } from '@/types/enums'
 import type { Sale, SaleLine, SalePayment } from '@/types/models'
+import { fetchReturnPreview, type ReturnReason, type ReturnResolution, type SaleReturnPreview } from '@/api/sales'
 import { formatPrice } from '@/utils/currency'
 
 // ── Stores & composables ────────────────────────────────────────────────────
@@ -44,6 +45,15 @@ const activeFilter = ref<FilterOption>('all')
 const detailOpen = ref(false)
 const detailLoading = ref(false)
 const selectedSale = ref<Sale | null>(null)
+const returnOpen = ref(false)
+const returnLoading = ref(false)
+const returnSubmitting = ref(false)
+const returnPreview = ref<SaleReturnPreview | null>(null)
+const returnResolution = ref<ReturnResolution>('RESTOCK')
+const returnReason = ref<ReturnReason>('CLIENT_REFUSE')
+const returnQuantities = ref<Record<number, number>>({})
+const returnRefundMethod = ref<PaymentMethod.CASH | PaymentMethod.CARD | PaymentMethod.TRANSFER | 'RECEIVABLE_OFFSET'>(PaymentMethod.CASH)
+const returnError = ref('')
 
 // ── Load sales ──────────────────────────────────────────────────────────────
 
@@ -265,6 +275,10 @@ function isReturned(sale: Sale): boolean {
   return sale.status === SaleStatus.RETURNED
 }
 
+function isPartiallyReturned(sale: Sale): boolean {
+  return sale.status === SaleStatus.PARTIALLY_RETURNED
+}
+
 function lineDisplayName(line: SaleLine): string {
   const explicitName = (line as SaleLine & { product_name?: string }).product_name
   if (explicitName && explicitName.trim()) {
@@ -418,8 +432,122 @@ function closeDetail(): void {
   selectedSale.value = null
 }
 
-function handleReturnPlaceholder(): void {
-  toast.info('Coming soon')
+function selectedReturnLines() {
+  return Object.entries(returnQuantities.value)
+    .map(([saleLineId, quantity]) => ({
+      sale_line_id: Number(saleLineId),
+      quantity: Number(quantity || 0),
+    }))
+    .filter((line) => line.quantity > 0)
+}
+
+function selectedReturnAmountUzs(): number {
+  return toNumber(returnPreview.value?.selected.refund_amount_uzs)
+}
+
+function preferredRefundPayment() {
+  const sale = selectedSale.value
+  const amountUzs = selectedReturnAmountUzs()
+  const payment = sale ? incomingPayments(sale)[0] : null
+  const currency = (payment?.currency || 'UZS').toUpperCase()
+  const fxRate = Number.parseFloat(payment?.fx_rate || '1')
+  const amount = currency === 'UZS'
+    ? amountUzs
+    : fxRate > 0
+      ? amountUzs / fxRate
+      : 0
+  return {
+    method: returnRefundMethod.value,
+    amount: amount.toFixed(2),
+    currency,
+    fx_rate: currency === 'UZS' ? '1' : String(fxRate || 1),
+  }
+}
+
+async function refreshReturnPreview(): Promise<void> {
+  if (!selectedSale.value) return
+  returnLoading.value = true
+  returnError.value = ''
+  try {
+    returnPreview.value = await fetchReturnPreview(selectedSale.value.id, {
+      resolution: returnResolution.value,
+      reason: returnReason.value,
+      lines: selectedReturnLines(),
+    })
+  } catch (error) {
+    returnError.value = error instanceof Error ? error.message : 'Не удалось рассчитать возврат'
+  } finally {
+    returnLoading.value = false
+  }
+}
+
+async function openReturnSheet(): Promise<void> {
+  if (!selectedSale.value || isReturned(selectedSale.value)) return
+  if (!selectedSale.value.lines || selectedSale.value.lines.length === 0) {
+    await salesStore.fetchSale(selectedSale.value.id)
+    selectedSale.value = salesStore.currentSale
+  }
+  returnResolution.value = 'RESTOCK'
+  returnReason.value = 'CLIENT_REFUSE'
+  returnRefundMethod.value = PaymentMethod.CASH
+  returnQuantities.value = {}
+  returnOpen.value = true
+  await refreshReturnPreview()
+}
+
+function closeReturnSheet(): void {
+  returnOpen.value = false
+  returnPreview.value = null
+  returnQuantities.value = {}
+  returnError.value = ''
+}
+
+async function updateReturnQuantity(saleLineId: number, rawValue: string | number, maxQuantity: number): Promise<void> {
+  const parsed = Number(rawValue)
+  const next = Number.isFinite(parsed)
+    ? Math.max(0, Math.min(maxQuantity, Math.floor(parsed)))
+    : 0
+  returnQuantities.value = {
+    ...returnQuantities.value,
+    [saleLineId]: next,
+  }
+  await refreshReturnPreview()
+}
+
+async function updateReturnResolution(value: ReturnResolution): Promise<void> {
+  returnResolution.value = value
+  await refreshReturnPreview()
+}
+
+async function confirmReturn(): Promise<void> {
+  if (!selectedSale.value || returnSubmitting.value) return
+  const lines = selectedReturnLines()
+  if (lines.length === 0) {
+    returnError.value = 'Выберите хотя бы одну позицию для возврата.'
+    return
+  }
+  const refundPayment = preferredRefundPayment()
+  if (selectedReturnAmountUzs() > 0 && Number(refundPayment.amount) <= 0) {
+    returnError.value = 'Не удалось рассчитать сумму возврата.'
+    return
+  }
+  returnSubmitting.value = true
+  returnError.value = ''
+  try {
+    await salesStore.processReturn(selectedSale.value.id, {
+      resolution: returnResolution.value,
+      reason: returnReason.value,
+      lines,
+      refund_payments: selectedReturnAmountUzs() > 0 ? [refundPayment] : [],
+    })
+    selectedSale.value = salesStore.currentSale
+    toast.success('Возврат оформлен')
+    closeReturnSheet()
+  } catch (error) {
+    returnError.value = error instanceof Error ? error.message : 'Не удалось оформить возврат'
+  } finally {
+    returnSubmitting.value = false
+  }
 }
 
 function openExplanation(): void {
@@ -548,6 +676,7 @@ function openExplanation(): void {
                 <span class="sale-id">#{{ sale.id }}</span>
                 <span class="sale-time">{{ formatTime(sale.created_at) }}</span>
                 <span v-if="isReturned(sale)" class="badge badge-return">Возврат</span>
+                <span v-else-if="isPartiallyReturned(sale)" class="badge badge-return">Частично</span>
               </div>
               <span class="sale-items">{{ itemsLabel(sale) }}</span>
             </div>
@@ -609,6 +738,9 @@ function openExplanation(): void {
         <!-- Returned banner -->
         <div v-if="isReturned(selectedSale)" class="detail-return-banner">
           Продажа возвращена
+        </div>
+        <div v-else-if="isPartiallyReturned(selectedSale)" class="detail-return-banner">
+          По продаже уже был частичный возврат
         </div>
 
         <!-- Line items -->
@@ -720,11 +852,108 @@ function openExplanation(): void {
         <button
           class="btn-return"
           :disabled="isReturned(selectedSale)"
-          @click="handleReturnPlaceholder"
+          @click="openReturnSheet"
         >
           Оформить возврат
         </button>
       </template>
+    </AppBottomSheet>
+
+    <AppBottomSheet
+      :open="returnOpen"
+      title="Возврат продажи"
+      @close="closeReturnSheet"
+    >
+      <div class="return-sheet">
+        <div class="return-mode">
+          <button
+            class="return-mode__option"
+            :class="{ active: returnResolution === 'RESTOCK' }"
+            @click="updateReturnResolution('RESTOCK')"
+          >
+            Вернуть на склад
+          </button>
+          <button
+            class="return-mode__option"
+            :class="{ active: returnResolution === 'DISPOSE' }"
+            @click="updateReturnResolution('DISPOSE')"
+          >
+            Списать брак
+          </button>
+        </div>
+
+        <label class="return-field">
+          <span>Причина</span>
+          <select v-model="returnReason" class="return-select">
+            <option value="CLIENT_REFUSE">Отказ клиента</option>
+            <option value="DEFECT">Брак</option>
+            <option value="OTHER">Другое</option>
+          </select>
+        </label>
+
+        <div v-if="returnPreview" class="return-lines">
+          <div
+            v-for="line in returnPreview.lines"
+            :key="line.sale_line_id"
+            class="return-line"
+          >
+            <div class="return-line__main">
+              <strong>{{ line.product_name }}</strong>
+              <span>
+                Продано {{ line.sold_quantity }} · доступно {{ line.available_quantity }}
+              </span>
+            </div>
+            <input
+              class="return-line__input"
+              type="number"
+              min="0"
+              :max="line.available_quantity"
+              :value="returnQuantities[line.sale_line_id] || 0"
+              @input="updateReturnQuantity(line.sale_line_id, ($event.target as HTMLInputElement).value, line.available_quantity)"
+            >
+          </div>
+        </div>
+
+        <div class="return-effect">
+          <div>
+            <span>К возврату клиенту</span>
+            <strong>{{ formatPrice(returnPreview?.selected.refund_amount_uzs || 0) }}</strong>
+          </div>
+          <div>
+            <span>{{ returnResolution === 'RESTOCK' ? 'Вернётся в себестоимость' : 'Убыток списания' }}</span>
+            <strong>
+              {{ formatPrice(returnResolution === 'RESTOCK'
+                ? (returnPreview?.selected.restock_cogs_uzs || 0)
+                : (returnPreview?.selected.disposal_loss_uzs || 0)) }}
+            </strong>
+          </div>
+          <div>
+            <span>Сторно прибыли</span>
+            <strong>{{ formatPrice(returnPreview?.selected.profit_reversal_uzs || 0) }}</strong>
+          </div>
+        </div>
+
+        <label class="return-field">
+          <span>Как вернуть деньги</span>
+          <select v-model="returnRefundMethod" class="return-select">
+            <option :value="PaymentMethod.CASH">Наличные</option>
+            <option :value="PaymentMethod.CARD">Карта</option>
+            <option :value="PaymentMethod.TRANSFER">Перевод</option>
+            <option value="RECEIVABLE_OFFSET">Зачёт долга</option>
+          </select>
+        </label>
+
+        <p v-if="returnError" class="return-error">{{ returnError }}</p>
+
+        <button
+          class="btn-return-confirm"
+          :disabled="returnSubmitting || returnLoading || selectedReturnLines().length === 0"
+          @click="confirmReturn"
+        >
+          <span v-if="returnSubmitting">Оформляем…</span>
+          <span v-else>Подтвердить возврат</span>
+        </button>
+      </div>
     </AppBottomSheet>
   </div>
 </template>
@@ -1488,6 +1717,159 @@ function openExplanation(): void {
 
 .btn-return:disabled {
   opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.return-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.return-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+}
+
+.return-mode__option {
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-secondary);
+}
+
+.return-mode__option.active {
+  background: var(--color-bg-primary);
+  color: var(--color-brand-700);
+  box-shadow: var(--shadow-xs);
+}
+
+.return-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.return-select,
+.return-line__input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+}
+
+.return-select {
+  padding: 0 var(--space-3);
+}
+
+.return-line__input {
+  max-width: 84px;
+  padding: 0 var(--space-2);
+  text-align: center;
+  font-weight: var(--font-semibold);
+}
+
+.return-lines {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.return-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.return-line:last-child {
+  border-bottom: 0;
+}
+
+.return-line__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.return-line__main strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.return-line__main span {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.return-effect {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+}
+
+.return-effect > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.return-effect span {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.return-effect strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  text-align: right;
+}
+
+.return-error {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+}
+
+.btn-return-confirm {
+  width: 100%;
+  min-height: 48px;
+  border-radius: var(--radius-lg);
+  background: var(--color-brand-600);
+  color: white;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+}
+
+.btn-return-confirm:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 

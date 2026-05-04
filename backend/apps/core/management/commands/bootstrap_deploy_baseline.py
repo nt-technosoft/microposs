@@ -3,6 +3,7 @@
 from decimal import Decimal
 from uuid import UUID
 
+from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -11,6 +12,7 @@ from django.utils import timezone
 from apps.catalog.models import Category, DiscountReason, Product
 from apps.catalog.services import create_product_with_variants
 from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
+from apps.core.management.safety import require_debug_or_confirmation
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.customers.models import Customer
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
@@ -64,8 +66,20 @@ class Command(BaseCommand):
         parser.add_argument('--owner-username', default='owner')
         parser.add_argument('--skip-products', action='store_true')
         parser.add_argument('--skip-sample-flow', action='store_true')
+        parser.add_argument(
+            '--confirm-production-bootstrap',
+            action='store_true',
+            help='Allow baseline user/password bootstrap when DEBUG=False.',
+        )
 
     def handle(self, *args, **options):
+        require_debug_or_confirmation(
+            command_name='bootstrap_deploy_baseline',
+            confirmed=options['confirm_production_bootstrap'],
+            flag_name='--confirm-production-bootstrap',
+            action='this command creates users and sets account passwords',
+        )
+
         with transaction.atomic():
             users = self._create_users(options)
             business = self._create_business(options['tenant_name'], users['owner'])
@@ -86,13 +100,17 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Deploy baseline bootstrap complete.'))
         self.stdout.write(f"Business: {business.name} (#{business.id})")
         self.stdout.write('Users:')
-        self.stdout.write(f"  admin / {options['admin_password']}")
-        self.stdout.write(
-            f"  {options['owner_username']} / {options['owner_password']}"
-        )
-        self.stdout.write(f"  cashier / {options['cashier_password']}")
-        self.stdout.write(f"  warehouse / {options['warehouse_password']}")
-        self.stdout.write(f"  investor / {options['investor_password']}")
+        if settings.DEBUG:
+            self.stdout.write(f"  admin / {options['admin_password']}")
+            self.stdout.write(
+                f"  {options['owner_username']} / {options['owner_password']}"
+            )
+            self.stdout.write(f"  cashier / {options['cashier_password']}")
+            self.stdout.write(f"  warehouse / {options['warehouse_password']}")
+            self.stdout.write(f"  investor / {options['investor_password']}")
+        else:
+            self.stdout.write('  admin, owner, cashier, warehouse, investor')
+            self.stdout.write('  Passwords are not printed while DEBUG=False.')
         if options['skip_products']:
             self.stdout.write('Products: skipped')
         else:

@@ -4,17 +4,18 @@ Risk API views — risk events, writeoffs, inventory checks.
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 
 from .models import RiskEvent, InventoryCheck, InventoryCheckLine
 from .serializers import (
-    RiskEventSerializer, WriteoffCreateSerializer,
+    RiskEventSerializer, WriteoffCreateSerializer, WriteoffPreviewSerializer,
     InventoryCheckSerializer, InventoryCheckCreateSerializer,
     InventoryCheckLineSerializer,
 )
-from .services import create_writeoff, complete_inventory_check
+from .services import create_writeoff, complete_inventory_check, build_writeoff_preview
 
 
 class RiskEventViewSet(viewsets.ReadOnlyModelViewSet):
@@ -57,6 +58,24 @@ class RiskEventViewSet(viewsets.ReadOnlyModelViewSet):
         )
         output = RiskEventSerializer(risk_event)
         return Response(output.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='writeoff-preview')
+    def writeoff_preview(self, request):
+        """Preview stock writeoff loss before confirmation."""
+        serializer = WriteoffPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            preview = build_writeoff_preview(
+                tenant_id=request.tenant_id,
+                lot_id=data['lot_id'],
+                warehouse_id=data['warehouse_id'],
+                quantity=data['quantity'],
+                negligence=data.get('negligence', False),
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(preview)
 
 
 class InventoryCheckViewSet(viewsets.ModelViewSet):

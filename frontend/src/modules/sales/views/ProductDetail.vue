@@ -3,23 +3,28 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
+import { fetchLots } from '@/api/inventory'
+import { createWriteoff, fetchWriteoffPreview, type WriteoffPreview } from '@/api/risk'
 import { useFxRate } from '@/composables/useFxRate'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
+import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
-import type { Product, ProductVariant } from '@/types/models'
+import type { Lot, Product, ProductVariant } from '@/types/models'
 import { PricingMode } from '@/types/enums'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
 import PriceDisplay from '@/components/data/PriceDisplay.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { formatPrice } from '@/utils/currency'
 
 // ===== Route + store =====
 const route = useRoute()
 const router = useRouter()
 const cartStore = useCartStore()
 const sessionStore = useSessionStore()
+const authStore = useAuthStore()
 const toast = useToast()
 const {
   rate: latestUsdRate,
@@ -41,6 +46,16 @@ const unitPriceInput = ref('0')
 const selectedCurrency = ref<'UZS' | 'USD'>('UZS')
 const selectedDiscountReasonId = ref<number | null>(null)
 const variantSheetOpen = ref(false)
+const writeoffSheetOpen = ref(false)
+const writeoffLots = ref<Lot[]>([])
+const selectedWriteoffKey = ref('')
+const writeoffQuantity = ref(1)
+const writeoffReason = ref('Списание товара')
+const writeoffNegligence = ref(false)
+const writeoffPreview = ref<WriteoffPreview | null>(null)
+const writeoffLoading = ref(false)
+const writeoffSubmitting = ref(false)
+const writeoffError = ref('')
 const isAdded = ref(false)
 let addedTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -264,6 +279,35 @@ const addButtonLabel = computed((): string => {
   return 'Выберите вариант'
 })
 
+const canWriteOff = computed(() => authStore.isOwner && !!matchedVariant.value && totalStock.value > 0)
+
+const writeoffOptions = computed(() => {
+  const options: Array<{
+    key: string
+    lotId: number
+    warehouseId: number
+    label: string
+    quantity: number
+  }> = []
+  for (const lot of writeoffLots.value) {
+    for (const stock of lot.stocks ?? []) {
+      if (stock.quantity_remaining <= 0) continue
+      options.push({
+        key: `${lot.id}:${stock.warehouse}`,
+        lotId: lot.id,
+        warehouseId: stock.warehouse,
+        label: `${stock.warehouse_name} · партия #${lot.id}`,
+        quantity: stock.quantity_remaining,
+      })
+    }
+  }
+  return options
+})
+
+const selectedWriteoffOption = computed(() => (
+  writeoffOptions.value.find((option) => option.key === selectedWriteoffKey.value) ?? null
+))
+
 function formatStock(stock: number | undefined): string {
   if (!Number.isFinite(stock)) return '0 шт'
   if ((stock ?? 0) <= 0) return 'Нет в наличии'
@@ -379,6 +423,86 @@ function goBack() {
 
 function goToTransfers() {
   router.push({ name: 'stock-transfers' })
+}
+
+async function refreshWriteoffPreview(): Promise<void> {
+  const option = selectedWriteoffOption.value
+  if (!option) return
+  writeoffLoading.value = true
+  writeoffError.value = ''
+  try {
+    writeoffPreview.value = await fetchWriteoffPreview({
+      lot_id: option.lotId,
+      warehouse_id: option.warehouseId,
+      quantity: writeoffQuantity.value,
+      reason: writeoffReason.value,
+      negligence: writeoffNegligence.value,
+    })
+  } catch (error) {
+    writeoffError.value = error instanceof Error ? error.message : 'Не удалось рассчитать списание'
+  } finally {
+    writeoffLoading.value = false
+  }
+}
+
+async function openWriteoffSheet(): Promise<void> {
+  if (!matchedVariant.value || !canWriteOff.value) return
+  writeoffSheetOpen.value = true
+  writeoffLoading.value = true
+  writeoffError.value = ''
+  try {
+    const response = await fetchLots({
+      product_variant: matchedVariant.value.id,
+      active: true,
+    })
+    writeoffLots.value = response.results
+    selectedWriteoffKey.value = writeoffOptions.value[0]?.key ?? ''
+    writeoffQuantity.value = 1
+    await refreshWriteoffPreview()
+  } catch (error) {
+    writeoffError.value = error instanceof Error ? error.message : 'Не удалось загрузить партии'
+  } finally {
+    writeoffLoading.value = false
+  }
+}
+
+function closeWriteoffSheet(): void {
+  writeoffSheetOpen.value = false
+  writeoffPreview.value = null
+  writeoffError.value = ''
+}
+
+async function updateWriteoffQuantity(value: string | number): Promise<void> {
+  const option = selectedWriteoffOption.value
+  const max = option?.quantity ?? 1
+  const parsed = Number(value)
+  writeoffQuantity.value = Number.isFinite(parsed)
+    ? Math.max(1, Math.min(max, Math.floor(parsed)))
+    : 1
+  await refreshWriteoffPreview()
+}
+
+async function submitWriteoff(): Promise<void> {
+  const option = selectedWriteoffOption.value
+  if (!option || writeoffSubmitting.value) return
+  writeoffSubmitting.value = true
+  writeoffError.value = ''
+  try {
+    await createWriteoff({
+      lot_id: option.lotId,
+      warehouse_id: option.warehouseId,
+      quantity: writeoffQuantity.value,
+      reason: writeoffReason.value,
+      negligence: writeoffNegligence.value,
+    })
+    toast.success('Списание зафиксировано')
+    closeWriteoffSheet()
+    await loadProduct()
+  } catch (error) {
+    writeoffError.value = error instanceof Error ? error.message : 'Не удалось списать товар'
+  } finally {
+    writeoffSubmitting.value = false
+  }
 }
 
 // ===== Load data =====
@@ -652,6 +776,14 @@ onMounted(() => {
               <ArrowRightLeft :size="15" :stroke-width="2" />
               Переместить в магазин
             </button>
+            <button
+              v-if="canWriteOff"
+              class="stock-writeoff-btn"
+              type="button"
+              @click="openWriteoffSheet"
+            >
+              Списать товар
+            </button>
           </div>
         </div>
 
@@ -731,6 +863,84 @@ onMounted(() => {
             </span>
           </div>
           <PriceDisplay :amount="variant.effective_price" size="sm" />
+        </button>
+      </div>
+    </AppBottomSheet>
+
+    <AppBottomSheet
+      :open="writeoffSheetOpen"
+      title="Списание товара"
+      @close="closeWriteoffSheet"
+    >
+      <div class="writeoff-sheet">
+        <label class="writeoff-field">
+          <span>Партия и место</span>
+          <select
+            v-model="selectedWriteoffKey"
+            class="writeoff-select"
+            @change="refreshWriteoffPreview"
+          >
+            <option
+              v-for="option in writeoffOptions"
+              :key="option.key"
+              :value="option.key"
+            >
+              {{ option.label }} · доступно {{ option.quantity }} шт.
+            </option>
+          </select>
+        </label>
+
+        <label class="writeoff-field">
+          <span>Количество</span>
+          <input
+            class="writeoff-input"
+            type="number"
+            min="1"
+            :max="selectedWriteoffOption?.quantity || 1"
+            :value="writeoffQuantity"
+            @input="updateWriteoffQuantity(($event.target as HTMLInputElement).value)"
+          >
+        </label>
+
+        <label class="writeoff-field">
+          <span>Причина</span>
+          <input
+            v-model="writeoffReason"
+            class="writeoff-input"
+            type="text"
+            placeholder="Например, брак или потеря"
+          >
+        </label>
+
+        <label class="writeoff-check">
+          <input
+            v-model="writeoffNegligence"
+            type="checkbox"
+            @change="refreshWriteoffPreview"
+          >
+          <span>Убыток по вине бизнеса</span>
+        </label>
+
+        <div class="writeoff-effect">
+          <div>
+            <span>Сумма убытка</span>
+            <strong>{{ formatPrice(writeoffPreview?.loss_amount || 0) }}</strong>
+          </div>
+          <div>
+            <span>Доступно</span>
+            <strong>{{ selectedWriteoffOption?.quantity || 0 }} шт.</strong>
+          </div>
+        </div>
+
+        <p v-if="writeoffError" class="writeoff-error">{{ writeoffError }}</p>
+
+        <button
+          class="writeoff-confirm"
+          :disabled="writeoffSubmitting || writeoffLoading || !selectedWriteoffOption"
+          @click="submitWriteoff"
+        >
+          <span v-if="writeoffSubmitting">Списываем…</span>
+          <span v-else>Подтвердить списание</span>
         </button>
       </div>
     </AppBottomSheet>
@@ -1229,11 +1439,11 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.stock-transfer-btn {
+.stock-transfer-btn,
+.stock-writeoff-btn {
   min-height: 38px;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border-default);
-  color: var(--color-brand-700);
   background: var(--color-bg-primary);
   display: inline-flex;
   align-items: center;
@@ -1241,6 +1451,118 @@ onMounted(() => {
   gap: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
+}
+
+.stock-transfer-btn {
+  color: var(--color-brand-700);
+}
+
+.stock-writeoff-btn {
+  color: var(--color-error);
+}
+
+.writeoff-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.writeoff-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.writeoff-select,
+.writeoff-input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+}
+
+.writeoff-select {
+  padding: 0 var(--space-3);
+}
+
+.writeoff-input {
+  padding: 0 var(--space-3);
+}
+
+.writeoff-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+}
+
+.writeoff-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-brand-600);
+}
+
+.writeoff-effect {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+}
+
+.writeoff-effect > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.writeoff-effect span {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.writeoff-effect strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  text-align: right;
+}
+
+.writeoff-error {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+}
+
+.writeoff-confirm {
+  width: 100%;
+  min-height: 48px;
+  border-radius: var(--radius-lg);
+  background: var(--color-error);
+  color: white;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+}
+
+.writeoff-confirm:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ===== Cart section ===== */

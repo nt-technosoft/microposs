@@ -6,7 +6,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-from django.db.models import Count, Q, Sum, DecimalField
+from django.db.models import Case, Count, Q, Sum, DecimalField, F, When
 from django.db.models.functions import Coalesce
 
 from apps.core.permissions import IsOwner, IsCashier
@@ -19,7 +19,7 @@ from .serializers import (
 )
 from .explanations import build_sale_explanation
 from .services import (
-    create_sale, process_return,
+    create_sale, process_return, build_return_preview,
     open_pos_session, close_pos_session,
 )
 
@@ -39,15 +39,29 @@ class PosSessionViewSet(viewsets.ReadOnlyModelViewSet):
         ).select_related('location', 'opened_by', 'closed_by').annotate(
             sales_count=Count(
                 'sales',
-                filter=Q(sales__status=Sale.SaleStatus.COMPLETED),
+                filter=Q(sales__status__in=[
+                    Sale.SaleStatus.COMPLETED,
+                    Sale.SaleStatus.PARTIALLY_RETURNED,
+                    Sale.SaleStatus.RETURNED,
+                ]),
                 distinct=True,
             ),
             cash_sales_total=Coalesce(
                 Sum(
-                    'sales__payments__amount',
+                    Case(
+                        When(
+                            sales__payments__role=SalePayment.Role.REFUND,
+                            then=-F('sales__payments__amount'),
+                        ),
+                        default=F('sales__payments__amount'),
+                        output_field=DecimalField(max_digits=14, decimal_places=2),
+                    ),
                     filter=Q(
-                        sales__status=Sale.SaleStatus.COMPLETED,
-                        sales__payments__role=SalePayment.Role.INCOMING,
+                        sales__status__in=[
+                            Sale.SaleStatus.COMPLETED,
+                            Sale.SaleStatus.PARTIALLY_RETURNED,
+                            Sale.SaleStatus.RETURNED,
+                        ],
                         sales__payments__method=SalePayment.Method.CASH,
                     ),
                 ),
@@ -192,18 +206,42 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = ReturnCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        if not data.get('lines'):
+            raise ValidationError({'lines': 'Выберите хотя бы одну строку для возврата.'})
 
-        return_doc = process_return(
-            sale=sale,
-            return_lines=[dict(line) for line in data['lines']],
-            resolution=data['resolution'],
-            reason=data.get('reason', Return.Reason.CLIENT_REFUSE),
-            processed_by_id=request.user.pk,
-            tenant_id=request.tenant_id,
-            notes=data.get('notes', ''),
-        )
+        try:
+            return_doc = process_return(
+                sale=sale,
+                return_lines=[dict(line) for line in data['lines']],
+                resolution=data['resolution'],
+                reason=data.get('reason', Return.Reason.CLIENT_REFUSE),
+                processed_by_id=request.user.pk,
+                tenant_id=request.tenant_id,
+                notes=data.get('notes', ''),
+                refund_payments=[dict(payment) for payment in data.get('refund_payments', [])],
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
 
         return Response(ReturnSerializer(return_doc).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='return-preview')
+    def return_preview(self, request, pk=None):
+        """Preview returnable lines, refund and stock/profit impact."""
+        sale = self.get_object()
+        serializer = ReturnCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            preview = build_return_preview(
+                sale=sale,
+                tenant_id=request.tenant_id,
+                return_lines=[dict(line) for line in data.get('lines', [])],
+                resolution=data.get('resolution', Return.Resolution.RESTOCK),
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(preview)
 
     @action(detail=True, methods=['get'], url_path='returns')
     def list_returns(self, request, pk=None):
