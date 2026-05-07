@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 type SectionMode = 'procurements' | 'agreements'
 
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 function openMode(mode: SectionMode): void {
   if (mode === props.activeMode) return
@@ -52,14 +54,14 @@ function openMode(mode: SectionMode): void {
       </div>
     </header>
 
-    <nav class="mode-switch" aria-label="Переключение между приходами и договорами">
+    <nav class="mode-switch" :aria-label="`${t('procurements.title')} / ${t('procurements.agreements')}`">
       <button
         class="mode-switch-btn"
         :class="{ active: activeMode === 'procurements' }"
         type="button"
         @click="openMode('procurements')"
       >
-        Приходы
+        {{ t('procurements.title') }}
       </button>
       <button
         class="mode-switch-btn"
@@ -67,7 +69,7 @@ function openMode(mode: SectionMode): void {
         type="button"
         @click="openMode('agreements')"
       >
-        Договоры
+        {{ t('procurements.agreements') }}
       </button>
     </nav>
 

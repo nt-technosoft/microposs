@@ -7,6 +7,7 @@
 import axios from 'axios'
 
 import api from './client'
+import type { Locale } from '@/i18n/keys'
 
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 
@@ -16,6 +17,7 @@ export interface CurrentUserResponse {
   role: string | null
   active_tenant_id: number | null
   tenant_name: string
+  locale: Locale
 }
 
 export interface TokenPair {
@@ -44,5 +46,10 @@ export async function refreshToken(refresh: string): Promise<RefreshedToken> {
 
 export async function fetchCurrentUser(): Promise<CurrentUserResponse> {
   const { data } = await api.get<CurrentUserResponse>('/api/v1/auth/me/')
+  return data
+}
+
+export async function updateUserPreferences(payload: { locale: Locale }): Promise<CurrentUserResponse> {
+  const { data } = await api.patch<CurrentUserResponse>('/api/v1/auth/preferences/', payload)
   return data
 }

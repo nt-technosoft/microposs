@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Sprout, User, Lock, Eye, EyeOff, Building2, ArrowRight } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionStore } from '@/stores/session'
@@ -9,6 +10,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 // ── State ──────────────────────────────────────────────────────────────────
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 const authStore = useAuthStore()
 const sessionStore = useSessionStore()
 
@@ -31,7 +33,7 @@ const isFormDirty = computed(() => username.value.length > 0 || password.value.l
 // ── Validation ─────────────────────────────────────────────────────────────
 function validateUsername(): boolean {
   if (!username.value.trim()) {
-    usernameError.value = 'Введите имя пользователя'
+    usernameError.value = t('auth.usernameRequired')
     return false
   }
   usernameError.value = ''
@@ -40,11 +42,11 @@ function validateUsername(): boolean {
 
 function validatePassword(): boolean {
   if (!password.value) {
-    passwordError.value = 'Введите пароль'
+    passwordError.value = t('auth.passwordRequired')
     return false
   }
   if (password.value.length < 4) {
-    passwordError.value = 'Пароль должен содержать не менее 4 символов'
+    passwordError.value = t('auth.passwordTooShort')
     return false
   }
   passwordError.value = ''
@@ -107,9 +109,9 @@ async function handleSubmit() {
     if (typeof detail === 'string' && detail.trim()) {
       apiError.value = detail
     } else if (axiosError?.response?.status === 401 || axiosError?.response?.status === 400) {
-      apiError.value = 'Неверный логин или пароль'
+      apiError.value = t('auth.invalidCredentials')
     } else {
-      apiError.value = 'Ошибка сети. Проверьте подключение и попробуйте снова.'
+      apiError.value = t('auth.networkError')
     }
   } finally {
     isLoading.value = false
@@ -134,7 +136,7 @@ onMounted(() => {
           <Sprout :size="40" stroke-width="1.5" />
         </div>
         <h1 class="brand-name">MicroPOS</h1>
-        <p class="brand-tagline">Умный учёт для вашего бизнеса</p>
+        <p class="brand-tagline">{{ t('auth.tagline') }}</p>
       </div>
 
       <!-- Decorative circles -->
@@ -145,12 +147,12 @@ onMounted(() => {
     <!-- Form card: bottom 60% -->
     <div class="form-card" :class="{ 'form-card--visible': mounted }" role="main">
       <div class="form-card__inner">
-        <h2 class="form-title">Войти в систему</h2>
+        <h2 class="form-title">{{ t('auth.loginTitle') }}</h2>
 
         <form class="form" novalidate @submit.prevent="handleSubmit">
           <!-- Username field -->
           <div class="field-group" :class="{ 'field-group--error': usernameError }">
-            <label class="field-label" for="username">Имя пользователя</label>
+            <label class="field-label" for="username">{{ t('auth.username') }}</label>
             <div class="field-input-wrap">
               <span class="field-icon field-icon--left" aria-hidden="true">
                 <User :size="18" stroke-width="1.75" />
@@ -161,7 +163,7 @@ onMounted(() => {
                 type="text"
                 autocomplete="username"
                 autocapitalize="none"
-                placeholder="Введите логин"
+                :placeholder="t('auth.usernamePlaceholder')"
                 :value="username"
                 :disabled="isLoading"
                 :aria-describedby="usernameError ? 'username-error' : undefined"
@@ -179,7 +181,7 @@ onMounted(() => {
 
           <!-- Password field -->
           <div class="field-group" :class="{ 'field-group--error': passwordError }">
-            <label class="field-label" for="password">Пароль</label>
+            <label class="field-label" for="password">{{ t('auth.password') }}</label>
             <div class="field-input-wrap">
               <span class="field-icon field-icon--left" aria-hidden="true">
                 <Lock :size="18" stroke-width="1.75" />
@@ -189,7 +191,7 @@ onMounted(() => {
                 class="field-input"
                 :type="showPassword ? 'text' : 'password'"
                 autocomplete="current-password"
-                placeholder="Введите пароль"
+                :placeholder="t('auth.passwordPlaceholder')"
                 :value="password"
                 :disabled="isLoading"
                 :aria-describedby="passwordError ? 'password-error' : undefined"
@@ -200,7 +202,7 @@ onMounted(() => {
               <button
                 type="button"
                 class="field-icon field-icon--right field-icon--btn"
-                :aria-label="showPassword ? 'Скрыть пароль' : 'Показать пароль'"
+                :aria-label="showPassword ? t('auth.hidePassword') : t('auth.showPassword')"
                 tabindex="0"
                 @click="showPassword = !showPassword"
               >
@@ -232,7 +234,7 @@ onMounted(() => {
             :disabled="isLoading"
             class="submit-btn"
           >
-            {{ isLoading ? 'Выполняется вход…' : 'Войти' }}
+            {{ isLoading ? t('auth.submitting') : t('auth.submit') }}
           </BaseButton>
         </form>
 
@@ -241,8 +243,8 @@ onMounted(() => {
             <Building2 :size="18" stroke-width="1.8" />
           </span>
           <span class="register-link-card__content">
-            <span class="register-link-card__title">Подать заявку на подключение бизнеса</span>
-            <span class="register-link-card__text">Короткая регистрация, активация после подтверждения в платформе.</span>
+            <span class="register-link-card__title">{{ t('auth.registerBusinessTitle') }}</span>
+            <span class="register-link-card__text">{{ t('auth.registerBusinessText') }}</span>
           </span>
           <ArrowRight :size="18" stroke-width="1.8" class="register-link-card__arrow" aria-hidden="true" />
         </button>

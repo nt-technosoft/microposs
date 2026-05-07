@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { Category } from '@/types/models'
 
 interface Props {
@@ -7,6 +8,7 @@ interface Props {
 }
 
 defineProps<Props>()
+const { t } = useI18n()
 
 const emit = defineEmits<{
   select: [categoryId: number | null]
@@ -18,7 +20,7 @@ function onSelect(id: number | null) {
 </script>
 
 <template>
-  <div class="chips-scroll-area" role="toolbar" aria-label="Фильтр по категориям">
+  <div class="chips-scroll-area" role="toolbar" :aria-label="t('products.categoryFilter')">
     <div class="chips-track">
       <!-- "All" chip -->
       <button
@@ -27,7 +29,7 @@ function onSelect(id: number | null) {
         :aria-pressed="selected === null"
         @click="onSelect(null)"
       >
-        Все
+        {{ t('sales.allCategories') }}
       </button>
 
       <button

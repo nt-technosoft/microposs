@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, CheckCircle2, AlertCircle, PlusCircle, ArrowRightLeft, Plus, Trash2, RefreshCcw, ChevronDown, BarChart3, Wallet } from 'lucide-vue-next'
 import { PricingMode, ProcurementStatus, ProcurementType } from '@/types/enums'
 import { formatPrice, formatPriceCompact } from '@/utils/currency'
@@ -31,13 +32,14 @@ import type { Category, Product, ProductVariant, Supplier } from '@/types/models
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useFxRate } from '@/composables/useFxRate'
-
-const RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE = 'Сервер не вернул доли партии. Повторите расчёт.'
+import { intlLocale } from '@/i18n/format'
+import { partnerRoleLabel, procurementStatusLabel as domainProcurementStatusLabel, procurementTypeLabel as domainProcurementTypeLabel } from '@/utils/domainLabels'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const auth = useAuthStore()
+const { t, locale } = useI18n()
 
 const procurement = ref<ProcurementDetail | null>(null)
 const locations = ref<Array<{ value: number; label: string; kind?: 'shop' | 'storage'; location_type?: 'warehouse' | 'store' }>>([])
@@ -162,27 +164,19 @@ const exchangeRate = ref('')
 const exchangeNotes = ref('')
 const exchangeRateManualOpen = ref(false)
 
-const typeLabel: Record<ProcurementType, string> = {
-  [ProcurementType.OWN_FUNDS]: 'Свои деньги',
-  [ProcurementType.PARTNERSHIP]: 'Партнёрский',
-  [ProcurementType.MUSHARAKA]: 'Мушарака',
-  [ProcurementType.DISTRIBUTOR]: 'Дистрибьютор',
-}
-
-const expenseTypeLabel: Record<string, string> = {
-  CUSTOMS: 'Растаможка',
-  LOGISTICS: 'Логистика',
-  FEE: 'Комиссия',
-  OTHER: 'Другое',
-}
-
-const allocationOptions = [
-  { value: 'BY_VALUE', label: 'По стоимости' },
-  { value: 'BY_QUANTITY', label: 'По количеству' },
-]
+const allocationOptions = computed(() => [
+  { value: 'BY_VALUE', label: t('domain.allocationMethod.BY_VALUE') },
+  { value: 'BY_QUANTITY', label: t('domain.allocationMethod.BY_QUANTITY') },
+])
 
 const categoryOptions = computed(() => categories.value.map((category) => ({ value: category.id, label: category.name })))
 const supplierOptions = computed(() => suppliers.value.map((supplier) => ({ value: supplier.id, label: supplier.name })))
+
+function receiveCapitalPreviewMissingMessage(): string {
+  return t('procurements.detail.previewMissing')
+}
+
+const RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE = computed(() => receiveCapitalPreviewMissingMessage())
 
 const canWorkOnProcurement = computed(() => (
   procurement.value?.status === ProcurementStatus.OPEN
@@ -330,15 +324,20 @@ const receiveCapitalValidationMessage = computed(() => {
     const raw = receiveCapitalDrafts.value[row.partner_id] ?? row.amount
     const parsed = parseLooseNumber(raw)
     if (!Number.isFinite(parsed) || parsed < 0) {
-      return 'Укажи корректные суммы долей партии.'
+      return t('procurements.detail.invalidBatchShareAmount')
     }
     const available = parsePositiveNumber(row.available_amount)
     if (parsed - available > 0.01) {
-      return `${displayPartnerName(row.partner_name, row.role)} может покрыть только ${formatCompactAmount(available, receiveCapitalCurrency.value)}.`
+      return t('procurements.detail.partnerCanCoverOnly', {
+        partner: displayPartnerName(row.partner_name, row.role),
+        amount: formatCompactAmount(available, receiveCapitalCurrency.value),
+      })
     }
   }
   if (!receiveCapitalIsBalanced.value) {
-    return `Сумма долей должна равняться ${formatCompactAmount(receiveCapitalRequired.value, receiveCapitalCurrency.value)}.`
+    return t('procurements.detail.batchSharesMustEqual', {
+      amount: formatCompactAmount(receiveCapitalRequired.value, receiveCapitalCurrency.value),
+    })
   }
   return ''
 })
@@ -356,12 +355,12 @@ const receiveCapitalApprovalNote = computed(() => {
     return ''
   }
   if (receiveCapitalEditing.value) {
-    return 'Проверь суммы, затем нажми «Готово». После этого отдельно подтверди доли партии.'
+    return t('procurements.detail.batchSharesEditHint')
   }
   if (isReceiveCapitalConfirmed.value) {
-    return 'Доли партии подтверждены. Теперь можно оприходовать эту поставку.'
+    return t('procurements.detail.batchSharesConfirmedHint')
   }
-  return 'Сначала подтверди доли партии. Без этого оприходование останется заблокированным.'
+  return t('procurements.detail.batchSharesNeedConfirm')
 })
 const canSubmitReceiveConfirm = computed(() => {
   const preview = activeReceiveCapitalPreview.value
@@ -374,24 +373,31 @@ const canSubmitReceiveConfirm = computed(() => {
     )
 })
 const receiveSelectionLabel = computed(() => {
-  if (!receivableLines.value.length) return 'Нет оплаченных строк'
-  if (allReceivableSelected.value) return `Все готовые строки: ${receivableLines.value.length}`
-  return `Выбрано: ${selectedReceiveLines.value.length} из ${receivableLines.value.length}`
+  if (!receivableLines.value.length) return t('procurements.detail.noPaidLines')
+  if (allReceivableSelected.value) return t('procurements.detail.allReadyLines', { count: receivableLines.value.length })
+  return t('procurements.detail.selectedLines', {
+    selected: selectedReceiveLines.value.length,
+    total: receivableLines.value.length,
+  })
 })
 const receiveProgressLabel = computed(() => {
   const plan = procurement.value?.receive_plan
   if (!plan) return ''
   const total = plan.received_items_count + plan.pending_paid_items_count + plan.draft_items_count
-  if (!total) return 'Нет позиций'
+  if (!total) return t('procurements.detail.noLines')
   const left = plan.pending_paid_items_count + plan.draft_items_count
-  return `${plan.received_items_count}/${total} позиций · осталось ${left}`
+  return t('procurements.detail.receiveProgress', {
+    received: plan.received_items_count,
+    total,
+    left,
+  })
 })
 const receiveActionLabel = computed(() => {
-  if (isConfirming.value) return 'Оприходование…'
-  if (!canReceive.value) return 'Сначала свести баланс'
-  if (!selectedReceiveLines.value.length) return 'Выберите позиции'
-  if (receiveWillFinish.value) return 'Завершить приход'
-  return 'Оприходовать выбранные'
+  if (isConfirming.value) return t('procurements.detail.receiving')
+  if (!canReceive.value) return t('procurements.detail.balanceFirst')
+  if (!selectedReceiveLines.value.length) return t('procurements.detail.chooseLines')
+  if (receiveWillFinish.value) return t('procurements.detail.finishProcurement')
+  return t('procurements.detail.receiveSelected')
 })
 const splitCandidateLine = computed(() => selectedReceiveLines.value.length === 1 ? selectedReceiveLines.value[0] : null)
 const splitQuantityNumeric = computed(() => parsePositiveNumber(splitItemQuantity.value))
@@ -411,7 +417,7 @@ const canSplitSelectedReceiveLine = computed(() => {
 const contractPartners = computed(() => procurement.value?.contract?.partners ?? [])
 const contributionPartnerOptions = computed(() => contractPartners.value.map((partner) => ({
   value: partner.partner,
-  label: `${partner.partner_name} · ${partner.role === 'INVESTOR' ? 'инвестор' : 'бизнес'}`,
+  label: `${partner.partner_name} · ${partnerRoleLabel(partner.role)}`,
 })))
 const balanceParticipantTotals = computed(() => procurement.value?.balance?.participant_totals ?? [])
 const balanceHistoryEntries = computed(() => {
@@ -434,14 +440,14 @@ const expenseTargetOptions = computed(() => {
   const paid = paidItems.value.map((line) => ({
     id: line.id,
     label: line.product_variant_name,
-    meta: `${formatPlainAmount(line.quantity)} шт. · оплачено`,
+    meta: t('procurements.detail.lineQtyStatusPaid', { qty: formatPlainAmount(line.quantity) }),
   }))
   const draft = draftLines.value
     .filter((line) => line.serverId !== null && line.variant)
     .map((line) => ({
       id: line.serverId as number,
       label: variantDisplay(line.variant as ProductVariant),
-      meta: `${formatPlainAmount(line.quantity)} шт. · черновик`,
+      meta: t('procurements.detail.lineQtyStatusDraft', { qty: formatPlainAmount(line.quantity) }),
     }))
   return [...paid, ...draft]
 })
@@ -459,26 +465,48 @@ const exchangeToAmountPreview = computed(() => {
   if (amount <= 0 || rate <= 0) return 0
   return amount * rate
 })
+const typeLabel = computed<Record<ProcurementType, string>>(() => ({
+  [ProcurementType.OWN_FUNDS]: domainProcurementTypeLabel(ProcurementType.OWN_FUNDS),
+  [ProcurementType.PARTNERSHIP]: domainProcurementTypeLabel(ProcurementType.PARTNERSHIP),
+  [ProcurementType.MUSHARAKA]: domainProcurementTypeLabel(ProcurementType.MUSHARAKA),
+  [ProcurementType.DISTRIBUTOR]: domainProcurementTypeLabel(ProcurementType.DISTRIBUTOR),
+}))
+const expenseTypeLabel = computed<Record<string, string>>(() => ({
+  CUSTOMS: t('domain.expenseType.CUSTOMS'),
+  LOGISTICS: t('domain.expenseType.LOGISTICS'),
+  FEE: t('domain.expenseType.FEE'),
+  OTHER: t('domain.expenseType.OTHER'),
+}))
+const expenseTypeOptions = computed(() => [
+  { value: 'CUSTOMS', label: t('domain.expenseType.CUSTOMS') },
+  { value: 'LOGISTICS', label: t('domain.expenseType.LOGISTICS') },
+  { value: 'FEE', label: t('domain.expenseType.FEE') },
+  { value: 'OTHER', label: t('domain.expenseType.OTHER') },
+])
+const quickProductCategoryOptions = computed(() => [
+  { value: null, label: t('products.noCategory') },
+  ...categoryOptions.value,
+])
 const contractSummary = computed(() => {
-  if (!procurement.value?.contract) return 'Без партнёрского договора'
+  if (!procurement.value?.contract) return t('procurements.detail.noPartnershipContract')
   const investor = procurement.value.contract.partners.find((partner) => partner.role === 'INVESTOR')
   return [
-    investor?.partner_name ?? 'Инвестор',
+    investor?.partner_name ?? t('procurements.investor'),
     formatPrice(procurement.value.contract.planned_budget, procurement.value.contract.currency),
   ].join(' · ')
 })
 const balanceSummary = computed(() => {
-  if (!balanceEntries.value.length) return 'Баланс пока пуст'
+  if (!balanceEntries.value.length) return t('procurements.detail.balanceEmpty')
   return balanceEntries.value.map(([currency, amount]) => formatPrice(amount, currency)).join(' · ')
 })
 const operationsSummary = computed(() => {
   const parts = [
-    draftLines.value.length ? `товары к оплате: ${draftLines.value.length}` : '',
-    draftExpenses.value.length ? `расходы к оплате: ${draftExpenses.value.length}` : '',
-    paidItems.value.length ? `оплачено: ${paidItems.value.length} тов.` : '',
-    paidExpenses.value.length ? `оплачено: ${paidExpenses.value.length} расх.` : '',
+    draftLines.value.length ? t('procurements.detail.itemsToPay', { count: draftLines.value.length }) : '',
+    draftExpenses.value.length ? t('procurements.detail.expensesToPay', { count: draftExpenses.value.length }) : '',
+    paidItems.value.length ? t('procurements.detail.itemsPaid', { count: paidItems.value.length }) : '',
+    paidExpenses.value.length ? t('procurements.detail.expensesPaid', { count: paidExpenses.value.length }) : '',
   ].filter(Boolean)
-  return parts.join(' · ') || 'Операций пока нет'
+  return parts.join(' · ') || t('procurements.detail.noOperationsYet')
 })
 const hasDraftChanges = computed(() => draftLines.value.length > 0 || draftExpenses.value.length > 0 || selectedSupplierId.value !== procurement.value?.supplier)
 
@@ -503,7 +531,7 @@ const costPreviewScenarios = computed(() => {
   const scenarios = [
     {
       key: 'receive-now',
-      label: 'Если оприходовать сейчас',
+      label: t('procurements.detail.ifReceiveNow'),
       basis: procurement.value.cost_preview.receive_basis,
       showStatus: false,
     },
@@ -512,7 +540,7 @@ const costPreviewScenarios = computed(() => {
   if (procurement.value.cost_preview.reallocation_pending && procurement.value.cost_preview.if_all_current_lines_paid.lines.length) {
     scenarios.push({
       key: 'after-payment',
-      label: 'Если оплатить всё текущее',
+      label: t('procurements.detail.ifPayCurrent'),
       basis: procurement.value.cost_preview.if_all_current_lines_paid,
       showStatus: true,
     })
@@ -522,15 +550,15 @@ const costPreviewScenarios = computed(() => {
 })
 const headerSummaryItems = computed(() => [
   {
-    label: 'Поставщик',
-    value: procurement.value?.supplier_name ?? 'Не выбран',
+    label: t('suppliers.supplier'),
+    value: procurement.value?.supplier_name ?? t('procurements.detail.notSelected'),
   },
   {
-    label: 'Баланс прихода',
-    value: balanceEntries.value.length ? balanceSummary.value : 'Пока пуст',
+    label: t('procurements.detail.procurementBalance'),
+    value: balanceEntries.value.length ? balanceSummary.value : t('procurements.detail.balanceEmptyShort'),
   },
   {
-    label: 'Оприходование',
+    label: t('procurements.receive'),
     value: receiveStatusMeta(procurement.value?.receive_plan.status ?? 'NOT_OPEN').label,
   },
 ])
@@ -817,8 +845,8 @@ function togglePaidExpenseTarget(expenseId: number, itemId: number): void {
 
 function paidExpenseTargetsSummaryLabel(expense: ProcurementDetail['expenses'][number]): string {
   const targetIds = paidExpenseTargetIds(expense)
-  if (targetIds.length === 0) return 'Выбрать конкретные товары'
-  return `Выбрано позиций: ${targetIds.length}`
+  if (targetIds.length === 0) return t('procurements.detail.chooseSpecificItems')
+  return t('procurements.detail.selectedPositions', { count: targetIds.length })
 }
 
 function toggleExpenseTargets(rowId: string): void {
@@ -830,8 +858,8 @@ function toggleExpenseTargets(rowId: string): void {
 }
 
 function expenseTargetsSummaryLabel(expense: DraftExpenseRow): string {
-  if (expense.target_item_ids.length === 0) return 'Выбрать конкретные товары'
-  return `Выбрано позиций: ${expense.target_item_ids.length}`
+  if (expense.target_item_ids.length === 0) return t('procurements.detail.chooseSpecificItems')
+  return t('procurements.detail.selectedPositions', { count: expense.target_item_ids.length })
 }
 
 function setDraftLineCurrency(rowId: string, currencyValue: string): void {
@@ -904,7 +932,7 @@ function selectVariant(variant: ProductVariant): void {
     return line.variant.id === variant.id
   })
   if (duplicateExists) {
-    toast.error('Этот товар уже добавлен в черновик')
+    toast.error(t('procurements.detail.duplicateDraftVariant'))
     return
   }
   updateDraftLine(activeLineId.value, 'variant', variant)
@@ -956,7 +984,7 @@ function closeQuickProductCreator(): void {
 async function createQuickProduct(): Promise<void> {
   const name = normalizeTextInput(quickProductName.value)
   if (!name) {
-    quickProductError.value = 'Введите название товара'
+    quickProductError.value = t('products.nameRequired')
     return
   }
 
@@ -972,7 +1000,7 @@ async function createQuickProduct(): Promise<void> {
     const variants = product.variants?.length > 0 ? product.variants : await fetchProductVariants(product.id)
     const createdVariant = variants.find((variant) => variant.is_active !== false) ?? variants[0]
     if (!createdVariant) {
-      quickProductError.value = 'Товар создан, но вариант не найден'
+      quickProductError.value = t('procurements.create.productCreatedNoVariant')
       return
     }
     const variant = normalizeCreatedVariant(product, createdVariant)
@@ -987,10 +1015,10 @@ async function createQuickProduct(): Promise<void> {
     } else {
       draftLines.value = [...draftLines.value, { ...buildEmptyDraftLine(), variant, cost_per_unit: String(variant.price ?? '') }]
     }
-    toast.success('Товар создан')
+    toast.success(t('products.createSuccess'))
     closeQuickProductCreator()
   } catch (error: unknown) {
-    quickProductError.value = error instanceof Error ? error.message : 'Не удалось создать товар'
+    quickProductError.value = error instanceof Error ? error.message : t('products.createFailed')
   } finally {
     isCreatingQuickProduct.value = false
   }
@@ -1015,7 +1043,7 @@ function closeQuickSupplierCreator(): void {
 async function createQuickSupplier(): Promise<void> {
   const name = normalizeTextInput(quickSupplierName.value)
   if (!name) {
-    quickSupplierError.value = 'Введите название поставщика'
+    quickSupplierError.value = t('procurements.create.supplierNameRequired')
     return
   }
   isCreatingQuickSupplier.value = true
@@ -1028,10 +1056,10 @@ async function createQuickSupplier(): Promise<void> {
     })
     suppliers.value = [supplier, ...suppliers.value.filter((item) => item.id !== supplier.id)]
     selectedSupplierId.value = supplier.id
-    toast.success('Поставщик создан')
+    toast.success(t('procurements.create.supplierCreated'))
     closeQuickSupplierCreator()
   } catch (error: unknown) {
-    quickSupplierError.value = error instanceof Error ? error.message : 'Не удалось создать поставщика'
+    quickSupplierError.value = error instanceof Error ? error.message : t('procurements.create.supplierCreateFailed')
   } finally {
     isCreatingQuickSupplier.value = false
   }
@@ -1065,7 +1093,7 @@ function formatDateTime(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(intlLocale(locale.value), {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -1082,7 +1110,7 @@ function formatCompactAmount(value: string | number, currency?: string | null): 
 function formatPlainAmount(value: string | number): string {
   const num = typeof value === 'string' ? Number.parseFloat(value) : value
   if (!Number.isFinite(num)) return '—'
-  return num.toLocaleString('ru-RU', {
+  return num.toLocaleString(intlLocale(locale.value), {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })
@@ -1106,104 +1134,98 @@ function formatUsdUzsRate(rate: string | number, fromCurrency: string, toCurrenc
 }
 
 function procurementStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    OPEN: 'В процессе',
-    PARTIALLY_RECEIVED: 'Частично оприходовано',
-    RECEIVED: 'Приход завершён',
-    CLOSED: 'Закрыт',
-    CANCELLED: 'Отменён',
-  }
-  return labels[status] ?? status
+  if (status === 'OPEN') return t('procurements.detail.inProgress')
+  return domainProcurementStatusLabel(status)
 }
 
 function receivePlanLabel(status: string): string {
-  const labels: Record<string, string> = {
-    BLOCKED: 'В процессе',
-    READY: 'Готово к оприходованию',
-    AUTO_SURPLUS: 'Есть остаток к возврату',
-    AGREEMENT_SURPLUS: 'Остаток вернётся в договор',
-    COSTS_UNPAID: 'Нужно сверить движения по балансу',
-    DRAFT_PENDING: 'Есть позиции к оплате',
-    RECALCULATE_OR_CONTRIBUTE: 'Нужна доплата или перерасчёт',
-    CONTRIBUTION_REQUIRED: 'Нужна доплата',
-    NO_ITEMS: 'Добавьте товары',
-    NOT_OPEN: 'Закупка уже закрыта',
-    COMPLETE: 'Приход завершён',
-  }
-  return labels[status] ?? status
+  const key = ({
+    BLOCKED: 'procurements.detail.receiveBlocked',
+    READY: 'procurements.detail.receiveReady',
+    AUTO_SURPLUS: 'procurements.detail.receiveAutoSurplus',
+    AGREEMENT_SURPLUS: 'procurements.detail.receiveAgreementSurplus',
+    COSTS_UNPAID: 'procurements.detail.receiveCostsUnpaid',
+    DRAFT_PENDING: 'procurements.detail.receiveDraftPending',
+    RECALCULATE_OR_CONTRIBUTE: 'procurements.detail.receiveRecalculateOrContribute',
+    CONTRIBUTION_REQUIRED: 'procurements.detail.receiveContributionRequired',
+    NO_ITEMS: 'procurements.detail.receiveNoItems',
+    NOT_OPEN: 'procurements.detail.receiveNotOpen',
+    COMPLETE: 'procurements.detail.receiveComplete',
+  } as Record<string, string>)[status]
+  return key ? t(key) : status
 }
 
 function receiveStatusMeta(status: string): { label: string; tone: 'success' | 'warning' | 'neutral'; hint: string } {
   const map: Record<string, { label: string; tone: 'success' | 'warning' | 'neutral'; hint: string }> = {
     BLOCKED: {
-      label: 'В процессе',
+      label: t('procurements.detail.receiveBlocked'),
       tone: 'warning',
-      hint: 'Приход пока в работе. Добавь и оплати позиции, затем сведи баланс по валютам.',
+      hint: t('procurements.detail.receiveBlockedHint'),
     },
     READY: {
-      label: 'Можно оприходовать',
+      label: t('procurements.detail.receiveCanProceed'),
       tone: 'success',
-      hint: 'Баланс сведен. Выбери строки, которые фактически пришли на склад.',
+      hint: t('procurements.detail.receiveCanProceedHint'),
     },
     AUTO_SURPLUS: {
-      label: 'Нужно вернуть остаток',
+      label: t('procurements.detail.receiveNeedReturn'),
       tone: 'warning',
-      hint: 'После возврата излишка партнёрам оприходование станет доступно.',
+      hint: t('procurements.detail.receiveNeedReturnHint'),
     },
     AGREEMENT_SURPLUS: {
-      label: 'Остаток в договор',
+      label: t('procurements.detail.receiveToAgreement'),
       tone: 'warning',
-      hint: 'При оприходовании лишний баланс вернётся в общий инвестдоговор.',
+      hint: t('procurements.detail.receiveToAgreementHint'),
     },
     COSTS_UNPAID: {
-      label: 'Нужно сверить баланс',
+      label: t('procurements.detail.receiveNeedBalance'),
       tone: 'warning',
-      hint: 'Есть оплаченные позиции, для которых не хватает движения по балансу прихода.',
+      hint: t('procurements.detail.receiveNeedBalanceHint'),
     },
     DRAFT_PENDING: {
-      label: 'Есть позиции к оплате',
+      label: t('procurements.detail.receiveNeedPayment'),
       tone: 'warning',
-      hint: 'Сначала оплати товары и расходы, которые ещё находятся в рабочем списке.',
+      hint: t('procurements.detail.receiveNeedPaymentHint'),
     },
     RECALCULATE_OR_CONTRIBUTE: {
-      label: 'Нужна доплата',
+      label: t('procurements.detail.receiveNeedContribution'),
       tone: 'warning',
-      hint: 'Баланс прихода не сходится. Добавь деньги или пересчитай движения.',
+      hint: t('procurements.detail.receiveNeedContributionHint'),
     },
     CONTRIBUTION_REQUIRED: {
-      label: 'Нужна доплата',
+      label: t('procurements.detail.receiveNeedContribution'),
       tone: 'warning',
-      hint: 'По одной из валют не хватает денег для завершения прихода.',
+      hint: t('procurements.detail.receiveNeedContributionCurrencyHint'),
     },
     NO_ITEMS: {
-      label: 'Нет товаров',
+      label: t('procurements.detail.receiveNoItems'),
       tone: 'neutral',
-      hint: 'Сначала добавь товары в приход.',
+      hint: t('procurements.detail.receiveNoItemsHint'),
     },
     NOT_OPEN: {
-      label: 'Приход закрыт',
+      label: t('procurements.detail.receiveClosed'),
       tone: 'neutral',
-      hint: 'Этот приход уже не находится на этапе оприходования.',
+      hint: t('procurements.detail.receiveClosedHint'),
     },
     COMPLETE: {
-      label: 'Приход завершён',
+      label: t('procurements.detail.receiveComplete'),
       tone: 'success',
-      hint: 'Все строки этого прихода уже зафиксированы на складе.',
+      hint: t('procurements.detail.receiveCompleteHint'),
     },
   }
   return map[status] ?? {
     label: receivePlanLabel(status),
     tone: 'neutral',
-    hint: 'Проверь текущее состояние прихода.',
+    hint: t('procurements.detail.receiveCheckState'),
   }
 }
 
 function roleLabel(role: string): string {
-  return role === 'INVESTOR' ? 'Инвестор' : 'Бизнес'
+  return partnerRoleLabel(role)
 }
 
 function displayPartnerName(partnerName: string, role?: string | null): string {
-  return role === 'OPERATOR' ? 'Бизнес' : partnerName
+  return role === 'OPERATOR' ? t('procurements.business') : partnerName
 }
 
 function formatSharePercent(value: string | number): string {
@@ -1231,9 +1253,9 @@ function balanceHistoryAmountClass(kind: string): string {
 }
 
 function balanceHistoryKindLabel(kind: string): string {
-  if (kind === 'CONTRIBUTION') return 'Приход'
-  if (kind === 'WITHDRAWAL') return 'Расход'
-  return 'Обмен'
+  if (kind === 'CONTRIBUTION') return t('finance.inflow')
+  if (kind === 'WITHDRAWAL') return t('finance.outflow')
+  return t('finance.exchange')
 }
 
 function balanceHistoryRowClass(kind: string): string {
@@ -1254,19 +1276,24 @@ function balanceHistorySignedAmount(
 }
 
 function allocationMethodLabel(value: string): string {
-  return value === 'BY_QUANTITY' ? 'по количеству' : 'по стоимости'
+  return value === 'BY_QUANTITY'
+    ? t('domain.allocationMethod.BY_QUANTITY').toLocaleLowerCase(intlLocale(locale.value))
+    : t('domain.allocationMethod.BY_VALUE').toLocaleLowerCase(intlLocale(locale.value))
 }
 
 function draftLineSummary(line: DraftLineRow): string {
   const quantity = parsePositiveNumber(line.quantity)
   const price = parsePositiveNumber(line.cost_per_unit)
   if (quantity > 0 && price > 0) {
-    return `${formatPlainAmount(quantity)} шт. · ${formatCompactAmount(price, line.currency)} / шт.`
+    return t('procurements.detail.lineQtyPrice', {
+      qty: formatPlainAmount(quantity),
+      price: formatCompactAmount(price, line.currency),
+    })
   }
   if (quantity > 0) {
-    return `${formatPlainAmount(quantity)} шт.`
+    return t('procurements.detail.lineQtyOnly', { qty: formatPlainAmount(quantity) })
   }
-  return 'Укажи количество и цену'
+  return t('procurements.detail.enterQtyAndPrice')
 }
 
 function draftLineTotal(line: DraftLineRow): string {
@@ -1280,7 +1307,7 @@ function draftExpenseSummary(expense: DraftExpenseRow): string {
   return [
     allocationMethodLabel(expense.allocation_method),
     expense.notes.trim() || null,
-  ].filter(Boolean).join(' · ') || 'Укажи сумму и комментарий при необходимости'
+  ].filter(Boolean).join(' · ') || t('procurements.detail.enterAmountAndComment')
 }
 
 function draftExpenseAmount(expense: DraftExpenseRow): string {
@@ -1290,12 +1317,17 @@ function draftExpenseAmount(expense: DraftExpenseRow): string {
 }
 
 function paidItemSummary(line: ProcurementDetail['items'][number]): string {
-  return `${formatPlainAmount(line.quantity)} шт. · ${formatCompactAmount(line.unit_purchase_price, line.currency)} / шт.`
+  return t('procurements.detail.lineQtyPrice', {
+    qty: formatPlainAmount(line.quantity),
+    price: formatCompactAmount(line.unit_purchase_price, line.currency),
+  })
 }
 
 function paidExpenseSummary(expense: ProcurementDetail['expenses'][number]): string {
   const targets = paidExpenseTargetIds(expense)
-  const scope = targets.length === 0 ? 'все позиции' : `${targets.length} поз.`
+  const scope = targets.length === 0
+    ? t('procurements.detail.allPositions')
+    : t('procurements.detail.positionsShort', { count: targets.length })
   return `${allocationMethodLabel(expense.allocation_method)} · ${scope}`
 }
 
@@ -1434,7 +1466,7 @@ function setReceiveCapitalDraft(partnerId: number, value: string): void {
       ...receiveCapitalDrafts.value,
       [partnerId]: value,
     }
-    receiveCapitalDraftIssue.value = 'Укажи корректную сумму доли.'
+    receiveCapitalDraftIssue.value = t('procurements.detail.invalidSingleBatchShare')
     return
   }
 
@@ -1454,7 +1486,7 @@ function setReceiveCapitalDraft(partnerId: number, value: string): void {
     }
     receiveCapitalDraftIssue.value = remainderNeeded === 0
       ? ''
-      : `Сумма партии должна равняться ${formatCompactAmount(required, receiveCapitalCurrency.value)}.`
+      : t('procurements.detail.batchAmountMustEqual', { amount: formatCompactAmount(required, receiveCapitalCurrency.value) })
     return
   }
 
@@ -1464,7 +1496,7 @@ function setReceiveCapitalDraft(partnerId: number, value: string): void {
     }
     receiveCapitalDrafts.value = nextDrafts
     receiveCapitalDraftIssue.value = remainderNeeded < 0
-      ? `Сумма партии превышена на ${formatCompactAmount(Math.abs(remainderNeeded), receiveCapitalCurrency.value)}.`
+      ? t('procurements.detail.batchAmountExceeded', { amount: formatCompactAmount(Math.abs(remainderNeeded), receiveCapitalCurrency.value) })
       : ''
     return
   }
@@ -1481,7 +1513,9 @@ function setReceiveCapitalDraft(partnerId: number, value: string): void {
       nextDrafts[row.partnerId] = formatDraftMoney(row.available)
     }
     receiveCapitalDrafts.value = nextDrafts
-    receiveCapitalDraftIssue.value = `Остальным участникам не хватает ${formatCompactAmount(remainderNeeded - totalOtherAvailable, receiveCapitalCurrency.value)} для этой партии.`
+    receiveCapitalDraftIssue.value = t('procurements.detail.otherPartnersMissing', {
+      amount: formatCompactAmount(remainderNeeded - totalOtherAvailable, receiveCapitalCurrency.value),
+    })
     return
   }
 
@@ -1525,7 +1559,7 @@ function setReceiveCapitalDraft(partnerId: number, value: string): void {
 
   receiveCapitalDrafts.value = nextDrafts
   receiveCapitalDraftIssue.value = remaining > 0.01
-    ? `Не удалось распределить ещё ${formatCompactAmount(remaining, receiveCapitalCurrency.value)}.`
+    ? t('procurements.detail.unallocatedRemaining', { amount: formatCompactAmount(remaining, receiveCapitalCurrency.value) })
     : ''
 }
 
@@ -1602,9 +1636,9 @@ async function refreshReceiveCapitalPreview(showError = false): Promise<void> {
     if (plan.status === 'READY' && !preview) {
       receivePlanPreview.value = null
       receivePlanPreviewKey.value = key
-      receivePlanPreviewError.value = RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE
+      receivePlanPreviewError.value = receiveCapitalPreviewMissingMessage()
       syncReceiveCapitalDrafts(null)
-      if (showError) toast.error(RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE)
+      if (showError) toast.error(receiveCapitalPreviewMissingMessage())
       return
     }
     receivePlanPreview.value = preview
@@ -1613,7 +1647,7 @@ async function refreshReceiveCapitalPreview(showError = false): Promise<void> {
     syncReceiveCapitalDrafts(preview?.status === 'READY' ? preview : null)
   } catch (error: unknown) {
     if (requestId !== receivePlanRequestId) return
-    const message = apiErrorMessage(error, 'Не удалось рассчитать доли партии')
+    const message = apiErrorMessage(error, t('procurements.detail.batchPreviewFailed'))
     receivePlanPreview.value = null
     receivePlanPreviewError.value = message
     if (showError) toast.error(message)
@@ -1656,7 +1690,7 @@ function closeSplitItemSheet(): void {
 }
 
 function costPreviewScenarioSummary(itemsCount: number, expensesCount: number): string {
-  return `${itemsCount} тов. · ${expensesCount} расх.`
+  return t('procurements.detail.costPreviewSummary', { items: itemsCount, expenses: expensesCount })
 }
 
 function costPreviewScenarioExpenses(totalExpenses: string | number): string {
@@ -1667,9 +1701,9 @@ function costPreviewLineSummary(
   line: ProcurementDetail['cost_preview']['receive_basis']['lines'][number],
   showStatus: boolean,
 ): string {
-  const parts = [`${formatPlainAmount(line.quantity)} шт.`]
+  const parts = [`${formatPlainAmount(line.quantity)} ${t('common.pieces')}`]
   if (showStatus) {
-    parts.push(line.status === 'PAID' ? 'оплачено' : 'черновик')
+    parts.push(line.status === 'PAID' ? t('procurements.detail.paidShort') : t('procurements.detail.draftShort'))
   }
   return parts.join(' · ')
 }
@@ -1780,7 +1814,7 @@ async function openAgreementAllocationSheet(): Promise<void> {
     }
     allocationPreview.value = await fetchAgreementAllocationPreview(procurement.value.agreement, procurement.value.id)
   } catch (error: unknown) {
-    allocationError.value = error instanceof Error ? error.message : 'Не удалось рассчитать распределение'
+    allocationError.value = error instanceof Error ? error.message : t('procurements.capitalAllocateFailed')
   } finally {
     isLoadingAllocation.value = false
   }
@@ -1797,7 +1831,7 @@ async function applyAgreementAllocation(): Promise<void> {
       fx_rate: row.currency === 'USD' ? latestUsdRate.value : '1',
     }))
   if (!rows.length) {
-    allocationError.value = 'Нет доступной суммы для распределения'
+    allocationError.value = t('procurements.detail.noAvailableAllocation')
     return
   }
   isAllocatingFromAgreement.value = true
@@ -1806,11 +1840,11 @@ async function applyAgreementAllocation(): Promise<void> {
       procurement_id: procurement.value.id,
       allocations: rows,
     })
-    toast.success('Капитал перенесён из инвестдоговора')
+    toast.success(t('procurements.capitalAllocated'))
     closeAllocationSheet()
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    allocationError.value = error instanceof Error ? error.message : 'Не удалось перенести капитал'
+    allocationError.value = error instanceof Error ? error.message : t('procurements.capitalAllocateFailed')
   } finally {
     isAllocatingFromAgreement.value = false
   }
@@ -1823,7 +1857,7 @@ async function loadLatestRate(): Promise<void> {
       exchangeRate.value = latestUsdRate.value
     }
   } catch {
-    toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+    toast.error(latestUsdRateError.value || t('products.usdRateMissing'))
   }
 }
 
@@ -1895,16 +1929,16 @@ function buildContractPayload(detail: ProcurementDetail) {
 function validateDraftWorkspace(): string {
   const seenVariantIds = new Set<number>()
   for (const line of draftLines.value) {
-    if (!line.variant) return 'Выберите товар в каждой строке'
-    if (seenVariantIds.has(line.variant.id)) return 'Один и тот же товар нельзя добавлять дважды'
+    if (!line.variant) return t('procurements.create.validationChooseEveryProduct')
+    if (seenVariantIds.has(line.variant.id)) return t('procurements.detail.validationDuplicateTwice')
     seenVariantIds.add(line.variant.id)
-    if (parsePositiveNumber(line.quantity) <= 0) return 'Укажите количество'
-    if (parsePositiveNumber(line.cost_per_unit) <= 0) return 'Укажите цену закупки'
-    if (showFxField(line.currency) && parsePositiveNumber(line.fx_rate) <= 0) return 'Укажите курс для валютной строки товара'
+    if (parsePositiveNumber(line.quantity) <= 0) return t('procurements.create.validationQuantity')
+    if (parsePositiveNumber(line.cost_per_unit) <= 0) return t('procurements.create.validationPurchasePrice')
+    if (showFxField(line.currency) && parsePositiveNumber(line.fx_rate) <= 0) return t('procurements.create.validationItemFxRate')
   }
   for (const expense of draftExpenses.value) {
-    if (parsePositiveNumber(expense.amount) <= 0) return 'Укажите сумму расхода'
-    if (showFxField(expense.currency) && parsePositiveNumber(expense.fx_rate) <= 0) return 'Укажите курс для валютного расхода'
+    if (parsePositiveNumber(expense.amount) <= 0) return t('procurements.create.validationExpenseAmount')
+    if (showFxField(expense.currency) && parsePositiveNumber(expense.fx_rate) <= 0) return t('procurements.create.validationExpenseFxRate')
   }
   return ''
 }
@@ -1948,10 +1982,10 @@ async function saveDraftWorkspace(): Promise<boolean> {
     })
     procurement.value = updated
     populateDraftWorkspace(updated)
-    toast.success('Черновики прихода сохранены')
+    toast.success(t('procurements.detail.draftsSaved'))
     return true
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Не удалось сохранить черновики'
+    const message = error instanceof Error ? error.message : t('procurements.detail.draftsSaveFailed')
     draftError.value = message
     toast.error(message)
     return false
@@ -1968,10 +2002,10 @@ async function savePaidExpenseTargets(expense: ProcurementDetail['expenses'][num
       expense_id: expense.id,
       target_item_ids: paidExpenseTargetIds(expense),
     })
-    toast.success('Товары расхода обновлены')
+    toast.success(t('procurements.detail.expenseItemsUpdated'))
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось обновить товары расхода')
+    toast.error(error instanceof Error ? error.message : t('procurements.detail.expenseItemsUpdateFailed'))
   } finally {
     savingExpenseTargetsId.value = null
   }
@@ -2015,18 +2049,18 @@ function detectShortfall(requiredByCurrency: Record<string, number>): { currency
 function handleShortfall(shortfall: { currency: string; missing: number }, contextLabel: string): void {
   const sourceCurrency = preferredExchangeSourceCurrency(shortfall.currency)
   if (sourceCurrency) {
-    toast.error(`Для ${contextLabel} не хватает ${shortfall.currency}. Открыл обмен валют внутри прихода.`)
+    toast.error(t('procurements.detail.shortfallExchange', { context: contextLabel, currency: shortfall.currency }))
     openExchangeSheet(shortfall.currency, shortfall.missing)
     focusStage('balance')
     return
   }
   if (procurement.value?.agreement) {
-    toast.error(`Для ${contextLabel} не хватает ${shortfall.currency}. Открыл распределение из инвестдоговора.`)
+    toast.error(t('procurements.detail.shortfallAgreement', { context: contextLabel, currency: shortfall.currency }))
     void openAgreementAllocationSheet()
     focusStage('balance')
     return
   }
-  toast.error(`Для ${contextLabel} не хватает ${shortfall.currency}. Открыл пополнение баланса.`)
+  toast.error(t('procurements.detail.shortfallContribution', { context: contextLabel, currency: shortfall.currency }))
   openContributionSheet(shortfall.currency)
   focusStage('balance')
 }
@@ -2034,7 +2068,7 @@ function handleShortfall(shortfall: { currency: string; missing: number }, conte
 async function payDraftItemBatch(itemIds?: number[]): Promise<void> {
   if (!procurement.value) return
   if (draftLines.value.length === 0) {
-    toast.error('Нет неоплаченных товаров')
+    toast.error(t('procurements.detail.noUnpaidItems'))
     return
   }
   const saved = await saveDraftWorkspace()
@@ -2042,21 +2076,21 @@ async function payDraftItemBatch(itemIds?: number[]): Promise<void> {
   const targetItemIds = itemIds?.length ? itemIds : undefined
   const required = sumDraftItemRequirements(targetItemIds)
   if (targetItemIds && Object.keys(required).length === 0) {
-    toast.error('Эту строку уже нельзя оплатить')
+    toast.error(t('procurements.detail.lineCannotBePaid'))
     return
   }
   const shortfall = detectShortfall(required)
   if (shortfall) {
-    handleShortfall(shortfall, 'оплаты товаров')
+    handleShortfall(shortfall, t('procurements.detail.itemPaymentContext'))
     return
   }
   isPayingItems.value = true
   try {
     await payProcurementItems(procurement.value.id, targetItemIds ? { item_ids: targetItemIds } : undefined)
-    toast.success(targetItemIds ? 'Товар оплачен из баланса прихода' : 'Товары оплачены из баланса прихода')
+    toast.success(targetItemIds ? t('procurements.detail.singleItemPaid') : t('procurements.detail.itemsPaidFromBalance'))
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось оплатить товары')
+    toast.error(error instanceof Error ? error.message : t('procurements.detail.itemsPayFailed'))
   } finally {
     isPayingItems.value = false
   }
@@ -2065,23 +2099,23 @@ async function payDraftItemBatch(itemIds?: number[]): Promise<void> {
 async function payDraftExpenseBatch(expenseIds?: number[]): Promise<void> {
   if (!procurement.value) return
   if (draftExpenses.value.length === 0) {
-    toast.error('Нет неоплаченных расходов')
+    toast.error(t('procurements.detail.noUnpaidExpenses'))
     return
   }
   const saved = await saveDraftWorkspace()
   if (!saved) return
   const shortfall = detectShortfall(sumDraftExpenseRequirements())
   if (shortfall) {
-    handleShortfall(shortfall, 'оплаты расходов')
+    handleShortfall(shortfall, t('procurements.detail.expensePaymentContext'))
     return
   }
   isPayingExpenses.value = true
   try {
     await payProcurementExpenses(procurement.value.id, expenseIds && expenseIds.length > 0 ? { expense_ids: expenseIds } : undefined)
-    toast.success('Расходы оплачены из баланса прихода')
+    toast.success(t('procurements.detail.expensesPaidFromBalance'))
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось оплатить расходы')
+    toast.error(error instanceof Error ? error.message : t('procurements.detail.expensesPayFailed'))
   } finally {
     isPayingExpenses.value = false
   }
@@ -2097,15 +2131,15 @@ async function submitExchange(): Promise<void> {
   const pairRate = parsePositiveNumber(pairRateFromStandardRate(fromCurrency, toCurrency, exchangeRate.value))
 
   if (fromCurrency === toCurrency) {
-    exchangeError.value = 'Валюты обмена должны отличаться'
+    exchangeError.value = t('procurements.detail.exchangeCurrencyMismatch')
     return
   }
   if (fromAmount <= 0) {
-    exchangeError.value = 'Укажите сумму списания'
+    exchangeError.value = t('procurements.detail.exchangeAmountRequired')
     return
   }
   if (standardRate <= 0 || pairRate <= 0) {
-    exchangeError.value = 'Укажите корректный курс'
+    exchangeError.value = t('procurements.detail.exchangeRateRequired')
     return
   }
 
@@ -2118,11 +2152,11 @@ async function submitExchange(): Promise<void> {
       rate: pairRate.toFixed(6),
       notes: exchangeNotes.value.trim(),
     })
-    toast.success('Обмен валют проведён внутри прихода')
+    toast.success(t('procurements.detail.exchangeDone'))
     closeExchangeSheet()
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    exchangeError.value = error instanceof Error ? error.message : 'Не удалось провести обмен'
+    exchangeError.value = error instanceof Error ? error.message : t('procurements.detail.exchangeFailed')
     toast.error(exchangeError.value)
   } finally {
     isSavingExchange.value = false
@@ -2132,7 +2166,7 @@ async function submitExchange(): Promise<void> {
 async function loadProcurement(options: { silent?: boolean } = {}): Promise<void> {
   const id = Number(route.params.id)
   if (!Number.isFinite(id)) {
-    errorMessage.value = 'Некорректный ID закупки'
+    errorMessage.value = t('investors.invalidProcurementId')
     isLoading.value = false
     return
   }
@@ -2154,7 +2188,7 @@ async function loadProcurement(options: { silent?: boolean } = {}): Promise<void
     }
     syncReceiveSelection()
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить закупку'
+    errorMessage.value = error instanceof Error ? error.message : t('investors.loadProcurementFailed')
   } finally {
     if (shouldShowLoader) {
       isLoading.value = false
@@ -2191,10 +2225,10 @@ async function confirmReceipt(): Promise<void> {
     )
     procurement.value = updated
     receiveConfirmSheetOpen.value = false
-    toast.success(wasFinalReceive ? 'Приход завершён' : 'Партия оприходована')
+    toast.success(wasFinalReceive ? t('procurements.detail.procurementFinished') : t('procurements.detail.batchReceived'))
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Не удалось оприходовать закупку'
+    const message = error instanceof Error ? error.message : t('procurements.detail.receiveFailed')
     toast.error(message)
   } finally {
     isConfirming.value = false
@@ -2208,7 +2242,7 @@ async function submitSplitItem(): Promise<void> {
   const quantity = parsePositiveNumber(splitItemQuantity.value)
   const currentQuantity = Number(line.quantity)
   if (quantity <= 0 || quantity >= currentQuantity) {
-    splitItemError.value = `Укажи количество больше 0 и меньше ${formatPlainAmount(line.quantity)}`
+    splitItemError.value = t('procurements.detail.splitRangeError', { qty: formatPlainAmount(line.quantity) })
     return
   }
 
@@ -2220,10 +2254,10 @@ async function submitSplitItem(): Promise<void> {
     })
     procurement.value = updated
     splitItemSheetOpen.value = false
-    toast.success('Строка разделена')
+    toast.success(t('procurements.detail.lineSplit'))
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    splitItemError.value = apiErrorMessage(error, 'Не удалось разделить строку')
+    splitItemError.value = apiErrorMessage(error, t('procurements.detail.splitFailed'))
     toast.error(splitItemError.value)
   } finally {
     isSplittingItem.value = false
@@ -2234,15 +2268,15 @@ async function submitContribution(): Promise<void> {
   if (!procurement.value) return
   contributionError.value = null
   if (!contributionPartnerId.value) {
-    contributionError.value = 'Выберите участника'
+    contributionError.value = t('procurements.detail.chooseParticipant')
     return
   }
   if (parsePositiveNumber(contributionAmount.value) <= 0) {
-    contributionError.value = 'Укажите сумму пополнения'
+    contributionError.value = t('procurements.detail.topUpAmountRequired')
     return
   }
   if (showFxField(contributionCurrency.value) && parsePositiveNumber(contributionFxRate.value) <= 0) {
-    contributionError.value = 'Укажите курс для валютного пополнения'
+    contributionError.value = t('procurements.detail.topUpRateRequired')
     return
   }
 
@@ -2255,11 +2289,11 @@ async function submitContribution(): Promise<void> {
       fx_rate: showFxField(contributionCurrency.value) ? contributionFxRate.value : '1',
       notes: contributionNotes.value.trim(),
     })
-    toast.success('Баланс прихода пополнен')
+    toast.success(t('procurements.detail.balanceToppedUp'))
     closeContributionSheet()
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    contributionError.value = error instanceof Error ? error.message : 'Не удалось пополнить баланс'
+    contributionError.value = error instanceof Error ? error.message : t('procurements.detail.balanceTopUpFailed')
     toast.error(contributionError.value)
   } finally {
     isSavingContribution.value = false
@@ -2270,11 +2304,11 @@ async function submitWithdrawal(): Promise<void> {
   if (!procurement.value) return
   withdrawalError.value = null
   if (parsePositiveNumber(withdrawalAmount.value) <= 0) {
-    withdrawalError.value = 'Укажите сумму списания'
+    withdrawalError.value = t('procurements.detail.withdrawalAmountRequired')
     return
   }
   if (showFxField(withdrawalCurrency.value) && parsePositiveNumber(withdrawalFxRate.value) <= 0) {
-    withdrawalError.value = 'Укажите курс для валютного списания'
+    withdrawalError.value = t('procurements.detail.withdrawalRateRequired')
     return
   }
 
@@ -2286,11 +2320,11 @@ async function submitWithdrawal(): Promise<void> {
       fx_rate: showFxField(withdrawalCurrency.value) ? withdrawalFxRate.value : '1',
       reason: withdrawalReason.value.trim(),
     })
-    toast.success('Списание из баланса сохранено')
+    toast.success(t('procurements.detail.balanceWithdrawalSaved'))
     closeWithdrawalSheet()
     await loadProcurement({ silent: true })
   } catch (error: unknown) {
-    withdrawalError.value = error instanceof Error ? error.message : 'Не удалось списать из баланса'
+    withdrawalError.value = error instanceof Error ? error.message : t('procurements.detail.balanceWithdrawalFailed')
     toast.error(withdrawalError.value)
   } finally {
     isSavingWithdrawal.value = false
@@ -2312,10 +2346,10 @@ onMounted(async () => {
 <template>
   <div class="detail-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Закупка #{{ route.params.id }}</h1>
+      <h1 class="page-title">{{ t('procurements.procurementNumber', { id: route.params.id }) }}</h1>
       <div class="header-spacer" />
     </header>
 
@@ -2329,7 +2363,7 @@ onMounted(async () => {
     <div v-else-if="errorMessage" class="error-wrap" role="alert">
       <AlertCircle :size="24" :stroke-width="1.75" />
       <p>{{ errorMessage }}</p>
-      <button class="retry-btn" type="button" @click="() => loadProcurement()">Повторить</button>
+      <button class="retry-btn" type="button" @click="() => loadProcurement()">{{ t('common.retry') }}</button>
     </div>
 
     <template v-else-if="procurement">
@@ -2345,17 +2379,17 @@ onMounted(async () => {
             <span class="date">{{ formatDateTime(procurement.opened_at) }}</span>
           </div>
           <div class="stage-pills">
-            <button class="stage-pill stage-pill--done" type="button" @click="focusStage('contract')">1. Договор</button>
-            <button class="stage-pill stage-pill--active" type="button" @click="focusStage('balance')">2. Баланс</button>
-            <button class="stage-pill stage-pill--active" type="button" @click="focusStage('operations')">3. Товары и расходы</button>
-            <button class="stage-pill" :class="canReceive ? 'stage-pill--done' : ''" type="button" @click="focusStage('receive')">4. Оприходование</button>
+            <button class="stage-pill stage-pill--done" type="button" @click="focusStage('contract')">1. {{ t('procurements.agreement') }}</button>
+            <button class="stage-pill stage-pill--active" type="button" @click="focusStage('balance')">2. {{ t('procurements.detail.procurementBalance') }}</button>
+            <button class="stage-pill stage-pill--active" type="button" @click="focusStage('operations')">3. {{ t('procurements.detail.itemsExpenses') }}</button>
+            <button class="stage-pill" :class="canReceive ? 'stage-pill--done' : ''" type="button" @click="focusStage('receive')">4. {{ t('procurements.receive') }}</button>
           </div>
 
           <button v-if="auth.isOwner" class="audit-entry" type="button" @click="openProcurementAudit">
             <span class="audit-entry-icon"><BarChart3 :size="16" :stroke-width="1.75" /></span>
             <span class="audit-entry-copy">
-              <strong>Аудит закупки</strong>
-              <span>Прибыль, остаток, прогноз и распределение долей</span>
+              <strong>{{ t('procurements.detail.auditTitle') }}</strong>
+              <span>{{ t('procurements.detail.auditHint') }}</span>
             </span>
           </button>
 
@@ -2372,28 +2406,37 @@ onMounted(async () => {
             type="button"
             @click="router.push({ name: 'agreement-detail', params: { id: procurement.agreement } })"
           >
-            <span>Источник</span>
-            <strong>{{ procurement.agreement_label || `Инвестдоговор #${procurement.agreement}` }}</strong>
+            <span>{{ t('common.source') }}</span>
+            <strong>{{ procurement.agreement_label || t('procurements.agreementTitle', { id: procurement.agreement }) }}</strong>
           </button>
         </section>
 
         <section id="stage-contract" class="card stage-card">
           <button class="stage-card-head" type="button" @click="toggleStage('contract')">
             <div>
-              <h2 class="section-title">Договор</h2>
+              <h2 class="section-title">{{ t('procurements.detail.contractSectionTitle') }}</h2>
               <p class="stage-summary">{{ contractSummary }}</p>
             </div>
             <ChevronDown class="stage-chevron" :class="{ 'stage-chevron--open': stageState.contract }" :size="18" :stroke-width="2" />
           </button>
           <div v-if="stageState.contract" class="stage-body">
             <div v-if="!procurement.contract || procurement.contract.partners.length === 0" class="muted">
-              Для этого типа закупки партнёры не заданы.
+              {{ t('procurements.detail.noPartnersForType') }}
             </div>
             <div v-else class="participants">
-              <p class="muted">Валюта договора: <strong>{{ procurement.contract.currency }}</strong></p>
+              <p class="muted">{{ t('procurements.detail.contractCurrency') }}: <strong>{{ procurement.contract.currency }}</strong></p>
               <div v-for="partner in procurement.contract.partners" :key="partner.id" class="participant-row">
                 <span class="participant-name">{{ displayPartnerName(partner.partner_name, partner.role) }}</span>
-                <span class="participant-share">{{ roleLabel(partner.role) }} · капитал {{ Number(partner.planned_capital_share).toFixed(2) }} {{ procurement.contract.currency }} · прибыль {{ (Number(partner.profit_share) * 100).toFixed(2) }}%</span>
+                <span class="participant-share">
+                  {{ roleLabel(partner.role) }} ·
+                  {{ t('procurements.detail.capitalPlannedAmount', {
+                    amount: Number(partner.planned_capital_share).toFixed(2),
+                    currency: procurement.contract.currency,
+                  }) }} ·
+                  {{ t('procurements.detail.profitPlannedPercent', {
+                    value: (Number(partner.profit_share) * 100).toFixed(2),
+                  }) }}
+                </span>
               </div>
             </div>
           </div>
@@ -2402,7 +2445,7 @@ onMounted(async () => {
         <section id="stage-balance" class="card balance-card stage-card">
           <button class="stage-card-head" type="button" @click="toggleStage('balance')">
             <div>
-              <h2 class="section-title">Баланс прихода</h2>
+              <h2 class="section-title">{{ t('procurements.detail.procurementBalance') }}</h2>
               <p class="stage-summary">{{ balanceSummary }}</p>
             </div>
             <ChevronDown class="stage-chevron" :class="{ 'stage-chevron--open': stageState.balance }" :size="18" :stroke-width="2" />
@@ -2414,7 +2457,7 @@ onMounted(async () => {
                 <span class="status-pill" :class="balanceStatusKind === 'success' ? 'status-pill--success' : 'status-pill--blocked'">
                   {{ receiveStatusMeta(procurement.receive_plan.status).label }}
                 </span>
-                <span class="subtle-meta">{{ balanceHistoryEntries.length }} движ.</span>
+                <span class="subtle-meta">{{ t('procurements.detail.movementsShort', { count: balanceHistoryEntries.length }) }}</span>
               </div>
 
               <div v-if="balanceEntries.length" class="balance-chip-list">
@@ -2422,26 +2465,26 @@ onMounted(async () => {
                   {{ formatPrice(amount, currency) }}
                 </span>
               </div>
-              <p v-else class="muted">Баланс пока пуст.</p>
+              <p v-else class="muted">{{ t('procurements.detail.balanceEmpty') }}</p>
 
               <p class="balance-caption">
                 {{ procurement.receive_plan.status === 'NOT_OPEN'
-                  ? 'Приход завершён. Ниже показана итоговая картина по балансу и движениям.'
+                  ? t('procurements.detail.finishedBalanceHint')
                   : receiveStatusMeta(procurement.receive_plan.status).hint }}
               </p>
             </div>
 
             <div v-if="balanceParticipantTotals.length" class="balance-block">
               <div class="section-inline-head">
-                <strong class="subsection-title">Участники</strong>
-                <span class="subtle-meta">{{ balanceParticipantTotals.length }} участ.</span>
+                <strong class="subsection-title">{{ t('procurements.participants') }}</strong>
+                <span class="subtle-meta">{{ t('procurements.detail.participantsShort', { count: balanceParticipantTotals.length }) }}</span>
               </div>
               <div class="mini-table">
                 <div class="mini-table-head">
-                  <span>Участник</span>
-                  <span>Внёс</span>
-                  <span>Нетто</span>
-                  <span>Доля</span>
+                  <span>{{ t('procurements.detail.tableParticipant') }}</span>
+                  <span>{{ t('procurements.contributed') }}</span>
+                  <span>{{ t('procurements.detail.netCapital') }}</span>
+                  <span>{{ t('procurements.detail.share') }}</span>
                 </div>
                 <div class="mini-table-body">
                   <div v-for="item in balanceParticipantTotals" :key="item.partner_id" class="mini-table-row">
@@ -2457,7 +2500,7 @@ onMounted(async () => {
                     </div>
                     <div class="mini-table-cell">
                       <strong class="tabular-nums">{{ formatSharePercent(item.actual_capital_share) }}</strong>
-                      <span class="line-qty">профит {{ formatSharePercent(item.planned_profit_share) }}</span>
+                      <span class="line-qty">{{ t('procurements.detail.profitShortLabel', { value: formatSharePercent(item.planned_profit_share) }) }}</span>
                     </div>
                   </div>
                 </div>
@@ -2466,14 +2509,14 @@ onMounted(async () => {
 
             <div v-if="balanceHistoryEntries.length" class="balance-block">
               <div class="section-inline-head">
-                <strong class="subsection-title">Движение денег</strong>
-                <span class="subtle-meta">{{ balanceHistoryEntries.length }} операций</span>
+                <strong class="subsection-title">{{ t('procurements.detail.moneyFlow') }}</strong>
+                <span class="subtle-meta">{{ t('procurements.detail.operationsShort', { count: balanceHistoryEntries.length }) }}</span>
               </div>
               <div class="money-flow-table">
                 <div class="money-flow-head">
-                  <span>Операция</span>
-                  <span>Тип</span>
-                  <span>Сумма</span>
+                  <span>{{ t('procurements.detail.tableOperation') }}</span>
+                  <span>{{ t('common.type') }}</span>
+                  <span>{{ t('common.amount') }}</span>
                 </div>
                 <div class="money-flow-body">
                   <article
@@ -2506,43 +2549,45 @@ onMounted(async () => {
                     <div v-if="expandedBalanceHistoryId === entry.id" class="money-flow-detail">
                       <span v-if="entry.kind === 'EXCHANGE'" class="line-qty">
                         {{ formatCompactAmount(entry.amount, entry.currency) }} -> {{ formatCompactAmount(entry.secondary_amount || '0', entry.secondary_currency) }}
-                        · курс {{ formatUsdUzsRate(entry.fx_rate, entry.currency, entry.secondary_currency || entry.currency) }}
+                        · {{ t('procurements.detail.fxRateShort', { value: formatUsdUzsRate(entry.fx_rate, entry.currency, entry.secondary_currency || entry.currency) }) }}
                       </span>
                       <span v-else-if="entry.note" class="line-qty">{{ entry.note }}</span>
-                      <span v-else class="line-qty">Без дополнительного комментария</span>
+                      <span v-else class="line-qty">{{ t('procurements.detail.noExtraComment') }}</span>
                     </div>
                   </article>
                 </div>
               </div>
               <button v-if="hasCollapsedBalanceHistory" class="inline-link" type="button" @click="showFullBalanceHistory = !showFullBalanceHistory">
-                {{ showFullBalanceHistory ? 'Свернуть историю' : `Показать все ${balanceHistoryEntries.length} операций` }}
+                {{ showFullBalanceHistory
+                  ? t('procurements.detail.collapseHistory')
+                  : t('procurements.detail.showAllOperations', { count: balanceHistoryEntries.length }) }}
               </button>
             </div>
 
             <div v-if="Object.keys(procurement.receive_plan.missing_spend).length" class="balance-block warning-block">
               <div class="section-inline-head">
-                <strong class="subsection-title">Служебная несостыковка</strong>
+                <strong class="subsection-title">{{ t('procurements.detail.serviceMismatch') }}</strong>
                 <button class="inline-link" type="button" @click="toggleStage('service')">
-                  {{ stageState.service ? 'Скрыть' : 'Исправить' }}
+                  {{ stageState.service ? t('common.close') : t('procurements.detail.fixServiceMismatch') }}
                 </button>
               </div>
               <div class="compact-inline-list">
                 <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="currency" class="compact-inline-item">
                   <span class="participant-name">{{ currency }}</span>
-                  <span class="participant-share">не закрыто {{ amount }}</span>
+                  <span class="participant-share">{{ t('procurements.detail.notCoveredAmount', { amount }) }}</span>
                 </div>
               </div>
             </div>
 
             <div v-if="procurement.receive_plan.suggested_withdrawals.length" class="balance-block">
               <div class="section-inline-head">
-                <strong class="subsection-title">Излишек к возврату</strong>
+                <strong class="subsection-title">{{ t('procurements.detail.surplusToReturn') }}</strong>
                 <span class="subtle-meta">{{ procurement.receive_plan.suggested_withdrawals.length }}</span>
               </div>
               <div class="compact-inline-list">
                 <div v-for="item in procurement.receive_plan.suggested_withdrawals" :key="item.partner_id" class="compact-inline-item">
                   <span class="participant-name">{{ item.partner_name }}</span>
-                  <span class="participant-share">вернуть {{ item.amount }} {{ item.currency }}</span>
+                  <span class="participant-share">{{ t('procurements.detail.returnAmount', { amount: `${item.amount} ${item.currency}` }) }}</span>
                 </div>
               </div>
             </div>
@@ -2550,28 +2595,28 @@ onMounted(async () => {
             <div v-if="canManageBalance" class="balance-actions">
               <button v-if="canAllocateFromAgreement" class="action-btn" type="button" @click="openAgreementAllocationSheet">
                 <Wallet :size="16" :stroke-width="2" />
-                Из договора
+                {{ t('procurements.detail.fromAgreement') }}
               </button>
               <button class="action-btn" type="button" @click="openContributionSheet()">
                 <PlusCircle :size="16" :stroke-width="2" />
-                Пополнить
+                {{ t('procurements.addContribution') }}
               </button>
               <button class="action-btn action-btn--secondary" type="button" @click="openExchangeSheet()">
                 <ArrowRightLeft :size="16" :stroke-width="2" />
-                Обменять
+                {{ t('finance.exchange') }}
               </button>
             </div>
 
             <div v-if="stageState.service && Object.keys(procurement.receive_plan.missing_spend).length" class="service-actions-card">
               <div class="section-inline-head">
-                <strong class="subsection-title">Сервисные действия</strong>
-                <span class="subtle-meta">для старых данных</span>
+                <strong class="subsection-title">{{ t('procurements.detail.serviceActions') }}</strong>
+                <span class="subtle-meta">{{ t('procurements.detail.forLegacyData') }}</span>
               </div>
               <div class="compact-inline-list">
                 <div v-for="(amount, currency) in procurement.receive_plan.missing_spend" :key="`service-${currency}`" class="compact-inline-item">
                   <span class="participant-name">{{ currency }}</span>
                   <button class="inline-link" type="button" @click="openWithdrawalSheet(currency)">
-                    Списать {{ amount }}
+                    {{ t('procurements.detail.writeOffAmount', { amount }) }}
                   </button>
                 </div>
               </div>
@@ -2582,27 +2627,27 @@ onMounted(async () => {
         <section id="stage-operations" class="card stage-card">
           <button class="stage-card-head" type="button" @click="toggleStage('operations')">
             <div>
-              <h2 class="section-title">Товары и расходы</h2>
+              <h2 class="section-title">{{ t('procurements.detail.itemsExpenses') }}</h2>
               <p class="stage-summary">{{ operationsSummary }}</p>
             </div>
             <ChevronDown class="stage-chevron" :class="{ 'stage-chevron--open': stageState.operations }" :size="18" :stroke-width="2" />
           </button>
           <div v-if="stageState.operations" class="stage-body">
-          <p class="muted">Оплаченные позиции остаются ниже как история. Новые позиции можно добавлять и оплачивать по мере работы с приходом.</p>
+          <p class="muted">{{ t('procurements.detail.itemsExpensesHint') }}</p>
 
           <div class="workspace-grid">
             <div class="field-group">
-              <label class="field-label">Поставщик</label>
+              <label class="field-label">{{ t('suppliers.supplier') }}</label>
               <div class="inline-field-actions">
                 <BaseSelect
                   v-model="selectedSupplierId"
                   :options="supplierOptions"
-                  title="Выбор поставщика"
-                  placeholder="Без поставщика"
+                  :title="t('procurements.create.supplierSelectTitle')"
+                  :placeholder="t('procurements.supplierMissing')"
                 />
                 <button class="action-chip" type="button" @click="openQuickSupplierCreator">
                   <Plus :size="14" :stroke-width="2" />
-                  Поставщик
+                  {{ t('suppliers.supplier') }}
                 </button>
               </div>
             </div>
@@ -2610,28 +2655,28 @@ onMounted(async () => {
             <div class="workspace-block">
               <div class="workspace-head">
                 <div>
-                  <h3 class="subsection-title">Товары</h3>
-                  <p class="muted">Добавляй позиции, а затем оплачивай их из баланса прихода.</p>
+                  <h3 class="subsection-title">{{ t('products.title') }}</h3>
+                  <p class="muted">{{ t('procurements.detail.itemsWorkspaceHint') }}</p>
                 </div>
               </div>
 
             <div v-if="paidItems.length" class="paid-block">
                 <div class="section-inline-head">
-                  <span class="group-label">Оплаченные товары</span>
-                  <span class="subtle-meta">{{ paidItems.length }} поз.</span>
+                  <span class="group-label">{{ t('procurements.detail.paidItemsTitle') }}</span>
+                  <span class="subtle-meta">{{ t('procurements.detail.positionsShort', { count: paidItems.length }) }}</span>
                 </div>
                 <div class="record-table">
                   <div class="record-table-head">
-                    <span>Позиция</span>
-                    <span>Статус</span>
-                    <span>Сумма</span>
+                    <span>{{ t('procurements.detail.tablePosition') }}</span>
+                    <span>{{ t('common.status') }}</span>
+                    <span>{{ t('common.amount') }}</span>
                   </div>
                   <div v-for="line in paidItems" :key="line.id" class="record-row record-row--settled">
                     <div class="record-main">
                       <strong class="participant-name">{{ line.product_variant_name }}</strong>
                       <span class="line-qty">{{ paidItemSummary(line) }}</span>
                     </div>
-                    <span class="record-status record-status--settled">Оплачено</span>
+                    <span class="record-status record-status--settled">{{ t('procurements.detail.paidLabel') }}</span>
                     <strong class="tabular-nums record-amount">{{ formatPrice(Number(line.quantity) * Number(line.unit_purchase_price), line.currency) }}</strong>
                   </div>
                 </div>
@@ -2641,14 +2686,14 @@ onMounted(async () => {
 
               <div v-if="draftLines.length" class="draft-block">
                 <div class="section-inline-head">
-                  <span class="group-label">К оплате</span>
-                  <span class="subtle-meta">{{ draftLines.length }} поз.</span>
+                  <span class="group-label">{{ t('procurements.detail.toPayTitle') }}</span>
+                  <span class="subtle-meta">{{ t('procurements.detail.positionsShort', { count: draftLines.length }) }}</span>
                 </div>
                 <div class="record-table">
                   <div class="record-table-head">
-                    <span>Позиция</span>
-                    <span>Статус</span>
-                    <span>Сумма</span>
+                    <span>{{ t('procurements.detail.tablePosition') }}</span>
+                    <span>{{ t('common.status') }}</span>
+                    <span>{{ t('common.amount') }}</span>
                   </div>
                   <article
                     v-for="line in draftLines"
@@ -2659,24 +2704,24 @@ onMounted(async () => {
                     <div class="record-row">
                       <button class="record-row-toggle" type="button" @click="toggleDraftLineExpanded(line.id)">
                         <div class="record-main">
-                          <strong class="participant-name">{{ line.variant ? variantDisplay(line.variant) : 'Новый товар' }}</strong>
+                          <strong class="participant-name">{{ line.variant ? variantDisplay(line.variant) : t('common.new') }}</strong>
                           <span class="line-qty">{{ draftLineSummary(line) }}</span>
                         </div>
-                        <span class="record-status record-status--draft">Черновик</span>
+                        <span class="record-status record-status--draft">{{ t('domain.saleStatus.draft') }}</span>
                         <strong class="tabular-nums record-amount">{{ draftLineTotal(line) }}</strong>
                         <ChevronDown class="stage-chevron record-chevron" :class="{ 'stage-chevron--open': expandedDraftLineId === line.id }" :size="16" :stroke-width="2" />
                       </button>
-                      <button class="icon-btn-inline record-row-remove" type="button" aria-label="Удалить строку" @click.stop="removeDraftLine(line.id)">
+                      <button class="icon-btn-inline record-row-remove" type="button" :aria-label="t('procurements.create.removeLine')" @click.stop="removeDraftLine(line.id)">
                         <Trash2 :size="16" :stroke-width="2" />
                       </button>
                     </div>
                     <div v-if="expandedDraftLineId === line.id" class="record-panel">
                       <button class="picker-btn draft-product-btn" :class="{ 'picker-btn--placeholder': !line.variant }" type="button" @click="openVariantPicker(line.id)">
-                        {{ line.variant ? variantDisplay(line.variant) : 'Выбрать товар' }}
+                        {{ line.variant ? variantDisplay(line.variant) : t('procurements.detail.chooseProduct') }}
                       </button>
                       <div class="draft-line-grid">
                         <div class="field-group">
-                          <label class="field-label">Кол-во</label>
+                          <label class="field-label">{{ t('common.quantity') }}</label>
                           <input
                             :value="line.quantity"
                             class="input-field compact-input"
@@ -2687,7 +2732,7 @@ onMounted(async () => {
                           />
                         </div>
                         <div class="field-group">
-                          <label class="field-label">Цена</label>
+                          <label class="field-label">{{ t('common.amount') }}</label>
                           <div class="money-field">
                             <input
                               :value="line.cost_per_unit"
@@ -2698,7 +2743,7 @@ onMounted(async () => {
                               placeholder="0"
                               @input="(e) => updateDraftLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
                             />
-                            <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftLineCurrency(line.id)">
+                            <button type="button" class="currency-toggle" :title="t('procurements.create.changeLineCurrency', { currency: line.currency })" @click="toggleDraftLineCurrency(line.id)">
                               <span class="currency-toggle-code">{{ line.currency }}</span>
                               <span class="currency-toggle-hint" aria-hidden="true">
                                 <RefreshCcw :size="12" :stroke-width="2" />
@@ -2711,17 +2756,17 @@ onMounted(async () => {
                   </article>
                 </div>
               </div>
-              <p v-else-if="paidItems.length === 0" class="muted">Товаров пока нет.</p>
+              <p v-else-if="paidItems.length === 0" class="muted">{{ t('procurements.detail.noItemsYet') }}</p>
 
               <div class="workspace-separator" />
               <div class="action-row action-row--double action-row--compact-double">
                 <button class="action-chip" type="button" @click="addDraftLine">
                   <Plus :size="14" :stroke-width="2" />
-                  Добавить товар
+                  {{ t('procurements.create.addLine') }}
                 </button>
                 <button class="action-chip" type="button" @click="openQuickProductCreator()">
                   <Plus :size="14" :stroke-width="2" />
-                  Создать товар
+                  {{ t('products.create') }}
                 </button>
               </div>
 
@@ -2735,10 +2780,10 @@ onMounted(async () => {
                   :disabled="isSavingDraft"
                   @click="saveDraftWorkspace"
                 >
-                  {{ isSavingDraft ? 'Сохранение…' : 'Сохранить товары' }}
+                  {{ isSavingDraft ? t('common.saving') : t('procurements.detail.saveItems') }}
                 </button>
                 <button v-if="draftLines.length" class="action-btn" type="button" :disabled="isPayingItems || draftLines.length === 0" @click="() => payDraftItemBatch()">
-                  {{ isPayingItems ? 'Оплата…' : 'Оплатить товары' }}
+                  {{ isPayingItems ? t('sales.payment') + '…' : t('procurements.detail.payItems') }}
                 </button>
               </div>
             </div>
@@ -2746,25 +2791,25 @@ onMounted(async () => {
             <div class="workspace-block">
               <div class="workspace-head">
                 <div>
-                  <h3 class="subsection-title">Расходы</h3>
-                  <p class="muted">Расход относится ко всему приходу и попадёт в себестоимость при оприходовании.</p>
+                  <h3 class="subsection-title">{{ t('procurements.expenses') }}</h3>
+                  <p class="muted">{{ t('procurements.detail.expensesWorkspaceHint') }}</p>
                 </div>
               </div>
               <button class="action-chip action-chip--full" type="button" @click="addDraftExpense">
                   <Plus :size="14" :stroke-width="2" />
-                  Добавить расход
+                  {{ t('procurements.detail.addExpense') }}
               </button>
 
               <div v-if="paidExpenses.length" class="paid-block">
                 <div class="section-inline-head">
-                  <span class="group-label">Оплаченные расходы</span>
-                  <span class="subtle-meta">{{ paidExpenses.length }} расх.</span>
+                  <span class="group-label">{{ t('procurements.detail.paidExpensesTitle') }}</span>
+                  <span class="subtle-meta">{{ t('procurements.detail.expensesShort', { count: paidExpenses.length }) }}</span>
                 </div>
                 <div class="record-table">
                   <div class="record-table-head">
-                    <span>Расход</span>
-                    <span>Статус</span>
-                    <span>Сумма</span>
+                    <span>{{ t('procurements.expenses') }}</span>
+                    <span>{{ t('common.status') }}</span>
+                    <span>{{ t('common.amount') }}</span>
                   </div>
                   <article
                     v-for="expense in paidExpenses"
@@ -2777,13 +2822,13 @@ onMounted(async () => {
                         <strong class="participant-name">{{ expenseTypeLabel[expense.expense_type] ?? expense.expense_type }}</strong>
                         <span class="line-qty">{{ paidExpenseSummary(expense) }}</span>
                       </div>
-                      <span class="record-status record-status--settled">Оплачено</span>
+                      <span class="record-status record-status--settled">{{ t('procurements.detail.paidLabel') }}</span>
                       <strong class="tabular-nums record-amount">{{ formatPrice(Number(expense.amount), expense.currency) }}</strong>
                       <ChevronDown class="stage-chevron record-chevron" :class="{ 'stage-chevron--open': expandedPaidExpenseId === expense.id }" :size="16" :stroke-width="2" />
                     </button>
                     <div v-if="expandedPaidExpenseId === expense.id" class="record-panel">
                       <div v-if="expenseTargetOptions.length" class="field-group">
-                        <label class="field-label">К каким товарам относится расход</label>
+                        <label class="field-label">{{ t('procurements.detail.expenseTargetsTitle') }}</label>
                         <div class="target-toggle-row">
                           <button
                             class="target-toggle"
@@ -2791,7 +2836,7 @@ onMounted(async () => {
                             type="button"
                             @click="setPaidExpenseTargetsAll(expense.id)"
                           >
-                            Все позиции
+                            {{ t('procurements.detail.allPositionsLabel') }}
                           </button>
                           <button
                             class="target-toggle target-toggle--hint"
@@ -2804,7 +2849,7 @@ onMounted(async () => {
                           </button>
                         </div>
                         <p v-if="!isPaidExpenseTargetsExpanded(expense.id)" class="target-helper">
-                          Для частичного оприходования лучше выбрать конкретные товары.
+                          {{ t('procurements.detail.expenseTargetsPartialHint') }}
                         </p>
                         <div v-if="isPaidExpenseTargetsExpanded(expense.id)" class="target-picker-list">
                           <button
@@ -2819,7 +2864,7 @@ onMounted(async () => {
                             <small>{{ item.meta }}</small>
                           </button>
                           <button class="target-picker-close" type="button" @click="closePaidExpenseTargets(expense.id)">
-                            Скрыть список
+                            {{ t('procurements.detail.hideList') }}
                           </button>
                         </div>
                       </div>
@@ -2829,7 +2874,7 @@ onMounted(async () => {
                         :disabled="savingExpenseTargetsId === expense.id"
                         @click="savePaidExpenseTargets(expense)"
                       >
-                        {{ savingExpenseTargetsId === expense.id ? 'Сохраняю…' : 'Сохранить товары расхода' }}
+                        {{ savingExpenseTargetsId === expense.id ? t('common.saving') : t('procurements.detail.saveExpenseItems') }}
                       </button>
                     </div>
                   </article>
@@ -2840,14 +2885,14 @@ onMounted(async () => {
 
               <div v-if="draftExpenses.length" class="draft-block">
                 <div class="section-inline-head">
-                  <span class="group-label">К оплате</span>
-                  <span class="subtle-meta">{{ draftExpenses.length }} расх.</span>
+                  <span class="group-label">{{ t('procurements.detail.toPayTitle') }}</span>
+                  <span class="subtle-meta">{{ t('procurements.detail.expensesShort', { count: draftExpenses.length }) }}</span>
                 </div>
                 <div class="record-table">
                   <div class="record-table-head">
-                    <span>Расход</span>
-                    <span>Статус</span>
-                    <span>Сумма</span>
+                    <span>{{ t('procurements.expenses') }}</span>
+                    <span>{{ t('common.status') }}</span>
+                    <span>{{ t('common.amount') }}</span>
                   </div>
                   <article
                     v-for="expense in draftExpenses"
@@ -2861,41 +2906,36 @@ onMounted(async () => {
                           <strong class="participant-name">{{ expenseTypeLabel[expense.expense_type] }}</strong>
                           <span class="line-qty">{{ draftExpenseSummary(expense) }}</span>
                         </div>
-                        <span class="record-status record-status--draft">Черновик</span>
+                        <span class="record-status record-status--draft">{{ t('domain.saleStatus.draft') }}</span>
                         <strong class="tabular-nums record-amount">{{ draftExpenseAmount(expense) }}</strong>
                         <ChevronDown class="stage-chevron record-chevron" :class="{ 'stage-chevron--open': expandedDraftExpenseId === expense.id }" :size="16" :stroke-width="2" />
                       </button>
-                      <button class="icon-btn-inline record-row-remove" type="button" aria-label="Удалить расход" @click.stop="removeDraftExpense(expense.id)">
+                      <button class="icon-btn-inline record-row-remove" type="button" :aria-label="t('procurements.create.removeExpense')" @click.stop="removeDraftExpense(expense.id)">
                         <Trash2 :size="16" :stroke-width="2" />
                       </button>
                     </div>
                     <div v-if="expandedDraftExpenseId === expense.id" class="record-panel">
                       <div class="field-group">
-                        <label class="field-label">Тип</label>
+                        <label class="field-label">{{ t('common.type') }}</label>
                         <BaseSelect
                           :model-value="expense.expense_type"
-                          :options="[
-                            { value: 'CUSTOMS', label: 'Растаможка' },
-                            { value: 'LOGISTICS', label: 'Логистика' },
-                            { value: 'FEE', label: 'Комиссия' },
-                            { value: 'OTHER', label: 'Другое' },
-                          ]"
-                          title="Тип расхода"
+                          :options="expenseTypeOptions"
+                          :title="t('procurements.create.expenseType')"
                           @update:model-value="(value) => updateDraftExpense(expense.id, 'expense_type', String(value))"
                         />
                       </div>
                       <div class="expense-grid-split">
                         <div class="field-group">
-                          <label class="field-label">Разносить</label>
+                          <label class="field-label">{{ t('procurements.create.allocateBy') }}</label>
                           <BaseSelect
                             :model-value="expense.allocation_method"
                             :options="allocationOptions"
-                            title="Метод распределения"
+                            :title="t('procurements.create.allocationMethod')"
                             @update:model-value="(value) => updateDraftExpense(expense.id, 'allocation_method', String(value))"
                           />
                         </div>
                         <div class="field-group">
-                          <label class="field-label">Сумма</label>
+                          <label class="field-label">{{ t('common.amount') }}</label>
                           <div class="money-field">
                             <input
                               :value="expense.amount"
@@ -2905,7 +2945,7 @@ onMounted(async () => {
                               placeholder="0"
                               @input="(e) => updateDraftExpense(expense.id, 'amount', (e.target as HTMLInputElement).value)"
                             />
-                            <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleDraftExpenseCurrency(expense.id)">
+                            <button type="button" class="currency-toggle" :title="t('procurements.create.changeExpenseCurrency', { currency: expense.currency })" @click="toggleDraftExpenseCurrency(expense.id)">
                               <span class="currency-toggle-code">{{ expense.currency }}</span>
                               <span class="currency-toggle-hint" aria-hidden="true">
                                 <RefreshCcw :size="12" :stroke-width="2" />
@@ -2915,7 +2955,7 @@ onMounted(async () => {
                         </div>
                       </div>
                       <div v-if="expenseTargetOptions.length" class="field-group">
-                        <label class="field-label">К каким товарам относится расход</label>
+                        <label class="field-label">{{ t('procurements.detail.expenseTargetsTitle') }}</label>
                         <div class="target-toggle-row">
                           <button
                             class="target-toggle"
@@ -2923,7 +2963,7 @@ onMounted(async () => {
                             type="button"
                             @click="setExpenseTargetsAll(expense.id)"
                           >
-                            Все позиции
+                            {{ t('procurements.detail.allPositionsLabel') }}
                           </button>
                           <button
                             class="target-toggle target-toggle--hint"
@@ -2936,7 +2976,7 @@ onMounted(async () => {
                           </button>
                         </div>
                         <p v-if="!isExpenseTargetsExpanded(expense.id)" class="target-helper">
-                          Используйте выборочно, если расход относится не ко всем товарам.
+                          {{ t('procurements.detail.expenseTargetsSelectiveHint') }}
                         </p>
                         <div v-if="isExpenseTargetsExpanded(expense.id)" class="target-picker-list">
                           <button
@@ -2951,17 +2991,17 @@ onMounted(async () => {
                             <small>{{ item.meta }}</small>
                           </button>
                           <button class="target-picker-close" type="button" @click="closeExpenseTargets(expense.id)">
-                            Скрыть список
+                            {{ t('procurements.detail.hideList') }}
                           </button>
                         </div>
                       </div>
                       <div class="field-group">
-                        <label class="field-label">Комментарий</label>
+                        <label class="field-label">{{ t('common.comment') }}</label>
                         <input
                           :value="expense.notes"
                           class="input-field compact-input"
                           type="text"
-                          placeholder="Например, первая часть растаможки"
+                          :placeholder="t('procurements.detail.expenseCommentPlaceholder')"
                           @input="(e) => updateDraftExpense(expense.id, 'notes', (e.target as HTMLInputElement).value)"
                         />
                       </div>
@@ -2969,7 +3009,7 @@ onMounted(async () => {
                   </article>
                 </div>
               </div>
-              <p v-else-if="paidExpenses.length === 0" class="muted">Расходов пока нет.</p>
+              <p v-else-if="paidExpenses.length === 0" class="muted">{{ t('procurements.detail.noExpensesYet') }}</p>
 
               <div v-if="draftExpenses.length" class="inline-actions">
                 <button
@@ -2979,10 +3019,10 @@ onMounted(async () => {
                   :disabled="isSavingDraft"
                   @click="saveDraftWorkspace"
                 >
-                  {{ isSavingDraft ? 'Сохранение…' : 'Сохранить расходы' }}
+                  {{ isSavingDraft ? t('common.saving') : t('procurements.detail.saveExpenses') }}
                 </button>
                 <button class="action-btn" type="button" :disabled="isPayingExpenses || draftExpenses.length === 0" @click="payDraftExpenseBatch()">
-                  {{ isPayingExpenses ? 'Оплата…' : 'Оплатить расходы' }}
+                  {{ isPayingExpenses ? t('sales.payment') + '…' : t('procurements.detail.payExpenses') }}
                 </button>
               </div>
             </div>
@@ -2996,22 +3036,22 @@ onMounted(async () => {
           <div class="divider" />
           <div class="procurement-flow-strip">
             <div class="procurement-flow-item procurement-flow-item--wide">
-              <span>Всего в приходе</span>
+              <span>{{ t('procurements.detail.totalInProcurement') }}</span>
               <strong class="tabular-nums">{{ formatPrice(procurementTotal) }}</strong>
             </div>
             <div class="procurement-flow-item">
-              <span>Товары</span>
+              <span>{{ t('products.title') }}</span>
               <strong class="tabular-nums">{{ formatPrice(totalAmount) }}</strong>
             </div>
             <div class="procurement-flow-item">
-              <span>Расходы</span>
+              <span>{{ t('procurements.expenses') }}</span>
               <strong class="tabular-nums">{{ formatPrice(expensesTotal) }}</strong>
             </div>
           </div>
 
           <div v-if="canWorkOnProcurement && costPreviewScenarios.length" class="cost-preview-panel">
             <div class="cost-preview-head">
-              <strong class="subsection-title">Предварительная себестоимость</strong>
+              <strong class="subsection-title">{{ t('procurements.detail.preliminaryCost') }}</strong>
               <p class="muted">{{ procurement.cost_preview.message }}</p>
             </div>
 
@@ -3029,7 +3069,7 @@ onMounted(async () => {
                   </div>
                   <div class="cost-preview-meta-grid">
                     <span>
-                      <small>Расходы</small>
+                      <small>{{ t('procurements.expenses') }}</small>
                       <strong class="tabular-nums">{{ costPreviewScenarioExpenses(scenario.basis.total_expenses_uzs) }}</strong>
                     </span>
                   </div>
@@ -3049,11 +3089,11 @@ onMounted(async () => {
                       </div>
                       <div class="cost-preview-line-metrics">
                         <span>
-                          <small>Себес./шт</small>
+                          <small>{{ t('procurements.detail.costPerUnit') }}</small>
                           <strong class="tabular-nums">{{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong>
                         </span>
                         <span>
-                          <small>Расход</small>
+                          <small>{{ t('procurements.expenses') }}</small>
                           <strong class="tabular-nums">{{ formatPrice(line.allocated_expense_uzs) }}</strong>
                         </span>
                       </div>
@@ -3069,14 +3109,14 @@ onMounted(async () => {
         <section id="stage-receive" class="card stage-card">
           <button class="stage-card-head" type="button" @click="toggleStage('receive')">
             <div>
-              <h2 class="section-title">Оприходование</h2>
+              <h2 class="section-title">{{ t('procurements.receive') }}</h2>
             </div>
             <ChevronDown class="stage-chevron" :class="{ 'stage-chevron--open': stageState.receive }" :size="18" :stroke-width="2" />
           </button>
           <div v-if="stageState.receive" class="stage-body">
             <div class="receive-headline">
               <div>
-                <span class="summary-label">Состояние</span>
+                <span class="summary-label">{{ t('common.status') }}</span>
                 <strong>{{ procurementStatusLabel(procurement.status) }}</strong>
                 <small>{{ receiveProgressLabel }}</small>
               </div>
@@ -3090,7 +3130,7 @@ onMounted(async () => {
             <p class="muted">{{ receiveStatusMeta(procurement.receive_plan.status).hint }}</p>
 
             <div v-if="receiveBalanceEntries.length" class="receive-balance-inline">
-              <span class="summary-label">Остаток баланса</span>
+              <span class="summary-label">{{ t('procurements.detail.balanceRemaining') }}</span>
               <div class="receive-balance-inline-values">
                 <div v-for="[currency, amount] in receiveBalanceEntries" :key="currency" class="receive-balance-inline-item">
                   <span class="receive-currency">{{ currency }}</span>
@@ -3100,7 +3140,7 @@ onMounted(async () => {
             </div>
 
             <div v-if="Object.keys(procurement.receive_plan.missing_spend).length" class="receive-note-line">
-              <span class="summary-label">Нужно списать</span>
+              <span class="summary-label">{{ t('procurements.detail.needWriteoff') }}</span>
               <span class="receive-note-value">
                 <template v-for="(amount, currency, idx) in procurement.receive_plan.missing_spend" :key="currency">
                   <span>{{ currency }} {{ formatCompactAmount(amount, currency) }}</span><span v-if="idx < Object.keys(procurement.receive_plan.missing_spend).length - 1"> · </span>
@@ -3109,7 +3149,7 @@ onMounted(async () => {
             </div>
 
             <div v-if="procurement.receive_plan.suggested_withdrawals.length" class="receive-note-line">
-              <span class="summary-label">К возврату</span>
+              <span class="summary-label">{{ t('procurements.detail.toReturn') }}</span>
               <span class="receive-note-value">
                 <template v-for="(item, idx) in procurement.receive_plan.suggested_withdrawals" :key="item.partner_id">
                   <span>{{ displayPartnerName(item.partner_name, ledgerPartnerRole(item.partner_id)) }} {{ formatCompactAmount(item.amount, item.currency) }}</span><span v-if="idx < procurement.receive_plan.suggested_withdrawals.length - 1"> · </span>
@@ -3120,10 +3160,10 @@ onMounted(async () => {
             <div v-if="receiveBatches.length" class="receive-process-block">
               <div class="receive-process-head">
                 <div>
-                  <span>На складе</span>
-                  <strong>{{ procurement.receive_plan.received_items_count }} позиций</strong>
+                  <span>{{ t('procurements.onStock') }}</span>
+                  <strong>{{ t('procurements.detail.receivedPositions', { count: procurement.receive_plan.received_items_count }) }}</strong>
                 </div>
-                <span>{{ receiveBatches.length }} парт.</span>
+                <span>{{ t('procurements.detail.batchesShort', { count: receiveBatches.length }) }}</span>
               </div>
               <div class="receive-batch-list">
                 <article
@@ -3132,17 +3172,17 @@ onMounted(async () => {
                   class="receive-batch"
                 >
                   <button type="button" class="receive-batch-head" @click="toggleReceiveBatch(batch.id)">
-                    <span>Партия #{{ batch.id }} · {{ batch.warehouse_name }}</span>
+                    <span>{{ t('reports.batchLine', { id: batch.id, count: batch.lines.length }) }} · {{ batch.warehouse_name }}</span>
                     <strong>{{ formatPrice(batch.total_inventory_uzs) }}</strong>
                   </button>
 	                  <div v-if="expandedReceiveBatchId === batch.id" class="receive-batch-lines">
 	                    <div v-for="line in batch.lines" :key="line.id" class="receive-batch-line">
 	                      <span>{{ line.product_variant_name }}</span>
-	                      <strong>{{ formatPlainAmount(line.quantity) }} шт. · {{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong>
+	                      <strong>{{ formatPlainAmount(line.quantity) }} {{ t('common.pieces') }} · {{ formatPrice(line.landed_cost_per_unit_uzs) }}</strong>
 	                    </div>
 	                    <div v-for="row in batch.capital_allocations" :key="`batch-capital-${batch.id}-${row.partner}`" class="receive-batch-line receive-batch-line--capital">
 	                      <span>{{ displayPartnerName(row.partner_name, row.role) }}</span>
-	                      <strong>{{ formatSharePercent(row.capital_share) }} кап. · {{ formatSharePercent(row.profit_share) }} приб.</strong>
+	                      <strong>{{ t('reports.capitalProfitShort', { capital: formatSharePercent(row.capital_share), profit: formatSharePercent(row.profit_share) }) }}</strong>
 	                    </div>
 	                  </div>
 	                </article>
@@ -3153,37 +3193,37 @@ onMounted(async () => {
               <div class="receive-scope-panel">
                 <div class="receive-scope-head">
                   <div>
-                    <strong>Следующее оприходование</strong>
+                    <strong>{{ t('procurements.nextReceive') }}</strong>
                     <span>{{ receiveSelectionLabel }}</span>
                   </div>
                   <span class="receive-scope-status">
-                    <b>{{ paidItems.length }} оплач.</b>
+                    <b>{{ t('procurements.detail.paidShortCount', { count: paidItems.length }) }}</b>
                     <i aria-hidden="true" />
-                    <b>{{ pendingDraftItems.length }} черн.</b>
+                    <b>{{ t('procurements.detail.draftShortCount', { count: pendingDraftItems.length }) }}</b>
                   </span>
                   <button class="target-picker-close receive-select-all-btn" type="button" :disabled="!receivableLines.length" @click="toggleAllReceiveLines">
-                    {{ allReceivableSelected ? 'Снять всё' : 'Выбрать всё' }}
+                    {{ allReceivableSelected ? t('procurements.detail.clearAll') : t('procurements.detail.selectAll') }}
                   </button>
                 </div>
                 <p class="receive-scope-hint">
-                  Выберите строки, которые приехали сейчас. Если приехала только часть позиции, разделите строку.
+                  {{ t('procurements.detail.receiveScopeHint') }}
                 </p>
 
                 <div v-if="requiresReceiveCapitalAllocation" class="receive-capital-inline">
                   <div class="receive-capital-inline-head">
-                    <span>Доли выбранной партии</span>
+                    <span>{{ t('procurements.capitalShares') }}</span>
                     <strong v-if="activeReceiveCapitalPreview?.status === 'READY'" class="tabular-nums">
                       {{ formatCompactAmount(activeReceiveCapitalPreview.required_amount, activeReceiveCapitalPreview.currency) }}
                     </strong>
-                    <strong v-else>{{ isLoadingReceivePlan ? 'Расчёт…' : (receivePlanPreviewError ? 'Ошибка расчёта' : (activeReceiveCapitalPreview ? 'Проверка нужна' : 'Расчёт не получен')) }}</strong>
+                    <strong v-else>{{ isLoadingReceivePlan ? t('procurements.detail.calculationInProgress') : (receivePlanPreviewError ? t('procurements.detail.calculationError') : (activeReceiveCapitalPreview ? t('procurements.detail.checkRequired') : t('procurements.detail.calculationMissing'))) }}</strong>
                   </div>
                   <p v-if="isLoadingReceivePlan" class="receive-capital-inline-note">
-                    Считаю, кто какой капитал фиксирует в этой партии.
+                    {{ t('procurements.detail.capitalPreviewHint') }}
                   </p>
                   <div v-else-if="receivePlanPreviewError" class="receive-capital-inline-alert">
                     <p class="receive-capital-inline-warning">{{ receivePlanPreviewError }}</p>
                     <button type="button" class="receive-capital-inline-action" @click="retryReceiveCapitalPreview">
-                      Повторить расчёт
+                      {{ t('procurements.calculate') }}
                     </button>
                   </div>
                   <div v-else-if="activeReceiveCapitalPreview && activeReceiveCapitalPreview.status !== 'READY'" class="receive-capital-inline-alert">
@@ -3191,19 +3231,19 @@ onMounted(async () => {
                       {{ activeReceiveCapitalPreview.message || RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE }}
                     </p>
                     <button type="button" class="receive-capital-inline-action" @click="retryReceiveCapitalPreview">
-                      Повторить расчёт
+                      {{ t('procurements.calculate') }}
                     </button>
                   </div>
                   <div v-else-if="!activeReceiveCapitalPreview" class="receive-capital-inline-alert">
                     <p class="receive-capital-inline-warning">{{ RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE }}</p>
                     <button type="button" class="receive-capital-inline-action" @click="retryReceiveCapitalPreview">
-                      Повторить расчёт
+                      {{ t('procurements.calculate') }}
                     </button>
                   </div>
                   <div v-else class="receive-capital-inline-list">
                     <span v-for="row in receiveCapitalDisplayRows" :key="`inline-capital-${row.partner_id}`">
                       <b>{{ displayPartnerName(row.partner_name, row.role) }}</b>
-                      <em>{{ formatCompactAmount(row.amount, receiveCapitalCurrency) }} · приб. {{ formatSharePercent(row.profitShare) }}</em>
+                      <em>{{ formatCompactAmount(row.amount, receiveCapitalCurrency) }} · {{ t('procurements.detail.profitShortLabel', { value: formatSharePercent(row.profitShare) }) }}</em>
                     </span>
                   </div>
                 </div>
@@ -3225,7 +3265,7 @@ onMounted(async () => {
                       </span>
                       <span class="receive-line-main">
                         <strong>{{ line.product_variant_name }}</strong>
-                        <small>{{ formatPlainAmount(line.quantity) }} шт. · {{ formatPrice(line.landed_cost_per_unit_uzs) }} / шт.</small>
+                        <small>{{ formatPlainAmount(line.quantity) }} {{ t('common.pieces') }} · {{ formatPrice(line.landed_cost_per_unit_uzs) }} / {{ t('common.pieces') }}</small>
                       </span>
                     </button>
                     <button
@@ -3234,39 +3274,39 @@ onMounted(async () => {
                       type="button"
                       @click="splitRoadItem(line.item_id)"
                     >
-                      Разделить
+                      {{ t('procurements.detail.splitLineAction') }}
                     </button>
                   </div>
                 </div>
-                <p v-else class="muted">Оплаченные строки для следующего оприходования появятся здесь.</p>
+                <p v-else class="muted">{{ t('procurements.detail.noReceivableLines') }}</p>
 
                 <div v-if="pendingDraftItems.length" class="receive-draft-list">
                   <div v-for="item in pendingDraftItems" :key="`draft-${item.id}`" class="receive-draft-row">
                     <span>{{ item.product_variant_name }}</span>
-                    <button type="button" :disabled="isPayingItems" @click="payDraftItemBatch([item.id])">Оплатить</button>
+                    <button type="button" :disabled="isPayingItems" @click="payDraftItemBatch([item.id])">{{ t('procurements.detail.payItemAction') }}</button>
                   </div>
                 </div>
 
                 <div v-if="receivePartialMode" class="receive-scope-warning">
-                  На склад попадут только выбранные строки. Остальные останутся в пути.
+                  {{ t('procurements.detail.partialReceiveWarning') }}
                 </div>
                 <div v-if="receiveWillFinish" class="receive-scope-success">
-                  Это последнее оприходование по приходу. После подтверждения приход будет завершён.
+                  {{ t('procurements.detail.finalReceiveSuccess') }}
                 </div>
                 <div v-if="receiveUnsafeExpenseScope" class="receive-scope-warning">
-                  <span>Уточни товары у расходов: выбранная партия не должна смешиваться с отложенными позициями или неоплаченными расходами.</span>
-                  <button type="button" @click="focusExpenseTargetFix">Настроить расходы</button>
+                  <span>{{ t('procurements.detail.expenseTargetFixHint') }}</span>
+                  <button type="button" @click="focusExpenseTargetFix">{{ t('procurements.detail.configureExpenses') }}</button>
                 </div>
               </div>
 
               <p v-if="!canReceive" class="muted">
-                Оприходование станет доступно, когда баланс прихода будет сведен по всем валютам.
+                {{ t('procurements.detail.receiveUnavailableHint') }}
               </p>
               <BaseSelect
                 v-model="selectedWarehouseId"
                 :options="locations"
-                title="Склад оприходования"
-                placeholder="Выберите склад"
+                :title="t('procurements.detail.receiveWarehouseTitle')"
+                :placeholder="t('procurements.detail.selectWarehouse')"
               />
               <button
                 class="confirm-btn"
@@ -3283,40 +3323,40 @@ onMounted(async () => {
         </section>
 
         <section v-if="procurement.notes" class="card">
-          <h2 class="section-title">Заметки</h2>
+          <h2 class="section-title">{{ t('procurements.note') }}</h2>
           <p class="notes">{{ procurement.notes }}</p>
         </section>
       </main>
 
-      <AppBottomSheet :open="receiveConfirmSheetOpen" title="Подтвердить оприходование" @close="closeReceiveConfirm">
+      <AppBottomSheet :open="receiveConfirmSheetOpen" :title="t('procurements.detail.confirmReceiveTitle')" @close="closeReceiveConfirm">
         <div class="sheet-form">
           <div class="receive-confirm-summary">
-            <span>{{ receiveWillFinish ? 'Завершение прихода' : 'Оприходование партии' }}</span>
-            <strong class="tabular-nums">{{ selectedReceiveLines.length }} поз. · {{ formatPrice(receiveSelectionTotal) }}</strong>
+            <span>{{ receiveWillFinish ? t('procurements.detail.finishProcurement') : t('procurements.detail.receiveBatchTitle') }}</span>
+            <strong class="tabular-nums">{{ t('procurements.detail.confirmSelectionSummary', { count: selectedReceiveLines.length, amount: formatPrice(receiveSelectionTotal) }) }}</strong>
             <p>
               {{ receiveWillFinish
-                ? 'После подтверждения все оставшиеся строки попадут на склад, а приход станет завершённым.'
-                : 'На склад попадут только выбранные строки. Остальные позиции останутся в пути внутри этого прихода.' }}
+                ? t('procurements.detail.finishProcurementHint')
+                : t('procurements.detail.partialReceiveConfirmHint') }}
             </p>
           </div>
 	          <div class="receive-confirm-list">
 	            <div v-for="line in selectedReceiveLines" :key="`confirm-${line.item_id}`" class="receive-confirm-row">
 	              <span>{{ line.product_variant_name }}</span>
-	              <strong class="tabular-nums">{{ formatPlainAmount(line.quantity) }} шт.</strong>
+	              <strong class="tabular-nums">{{ formatPlainAmount(line.quantity) }} {{ t('common.pieces') }}</strong>
 	            </div>
 	          </div>
 	          <div v-if="isLoadingReceivePlan" class="receive-capital-box">
-	            <span class="summary-label">Доли партии</span>
-	            <strong>Считаю распределение…</strong>
+	            <span class="summary-label">{{ t('procurements.capitalShares') }}</span>
+	            <strong>{{ t('procurements.detail.capitalCalculating') }}</strong>
 	          </div>
 	          <div v-else-if="activeReceiveCapitalPreview" class="receive-capital-box">
 	            <div class="receive-capital-head">
 	              <div>
-	                <span class="summary-label">Доли партии</span>
+	                <span class="summary-label">{{ t('procurements.capitalShares') }}</span>
 	                <strong>
                     {{ activeReceiveCapitalPreview.status === 'READY'
                       ? formatCompactAmount(activeReceiveCapitalPreview.required_amount, activeReceiveCapitalPreview.currency)
-                      : 'Проверка нужна' }}
+                      : t('procurements.detail.checkRequired') }}
                   </strong>
 	              </div>
                 <div v-if="activeReceiveCapitalPreview.status === 'READY'" class="receive-capital-actions">
@@ -3325,7 +3365,7 @@ onMounted(async () => {
                     :disabled="receiveCapitalEditing && !canFinalizeReceiveCapitalEditing"
                     @click="toggleReceiveCapitalEditing"
                   >
-                    {{ receiveCapitalEditing ? 'Готово' : 'Изменить' }}
+                    {{ receiveCapitalEditing ? t('procurements.detail.doneAction') : t('common.edit') }}
                   </button>
                   <button
                     type="button"
@@ -3334,7 +3374,7 @@ onMounted(async () => {
                     :disabled="receiveCapitalEditing || !!receiveCapitalValidationMessage || isReceiveCapitalConfirmed"
                     @click="confirmReceiveCapitalAllocation"
                   >
-                    {{ isReceiveCapitalConfirmed ? 'Доли подтверждены' : 'Подтвердить доли' }}
+                    {{ isReceiveCapitalConfirmed ? t('procurements.detail.capitalConfirmed') : t('procurements.detail.confirmCapitalShares') }}
                   </button>
                 </div>
 	            </div>
@@ -3343,14 +3383,14 @@ onMounted(async () => {
                   {{ activeReceiveCapitalPreview.message || RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE }}
                 </p>
                 <button type="button" class="receive-capital-retry" @click="retryReceiveCapitalPreview">
-                  Повторить расчёт
+                  {{ t('procurements.calculate') }}
                 </button>
               </template>
 	            <div v-else class="receive-capital-list">
 	              <div v-for="row in receiveCapitalDisplayRows" :key="`receive-capital-${row.partner_id}`" class="receive-capital-row">
 	                <div>
 	                  <span>{{ displayPartnerName(row.partner_name, row.role) }}</span>
-	                  <small>{{ roleLabel(row.role) }} · кап. {{ formatSharePercent(row.capitalShare) }} · приб. {{ formatSharePercent(row.profitShare) }}</small>
+	                  <small>{{ roleLabel(row.role) }} · {{ t('reports.capitalProfitShort', { capital: formatSharePercent(row.capitalShare), profit: formatSharePercent(row.profitShare) }) }}</small>
 	                </div>
 	                <input
 	                  v-if="receiveCapitalEditing"
@@ -3371,17 +3411,17 @@ onMounted(async () => {
 	            </div>
 	          </div>
             <div v-else-if="requiresReceiveCapitalAllocation" class="receive-capital-box">
-              <span class="summary-label">Доли партии</span>
-              <strong>Расчёт не получен</strong>
+              <span class="summary-label">{{ t('procurements.capitalShares') }}</span>
+              <strong>{{ t('procurements.detail.calculationMissing') }}</strong>
               <p class="receive-capital-warning">
                 {{ RECEIVE_CAPITAL_PREVIEW_MISSING_MESSAGE }}
               </p>
               <button type="button" class="receive-capital-retry" @click="retryReceiveCapitalPreview">
-                Повторить расчёт
+                {{ t('procurements.calculate') }}
               </button>
             </div>
             <p v-if="requiresReceiveCapitalAllocation && !isReceiveCapitalConfirmed" class="receive-submit-hint">
-              Сначала подтверди доли партии. Только после этого станет доступно итоговое оприходование.
+              {{ t('procurements.detail.batchSharesNeedConfirm') }}
             </p>
 	          <button
 	            class="sheet-submit-btn"
@@ -3389,17 +3429,17 @@ onMounted(async () => {
 	            :disabled="isConfirming || !canSubmitReceiveConfirm"
 	            @click="confirmReceipt"
 	          >
-            {{ isConfirming ? 'Оприходование…' : 'Подтвердить' }}
+            {{ isConfirming ? t('procurements.detail.receiving') : t('common.confirm') }}
           </button>
         </div>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="variantSheetOpen" title="Выбор товара" @close="closeVariantPicker">
+      <AppBottomSheet :open="variantSheetOpen" :title="t('procurements.detail.variantPickerTitle')" @close="closeVariantPicker">
         <div class="sheet-form">
-          <input v-model="variantSearch" class="input-field" type="text" placeholder="Поиск товара" />
+          <input v-model="variantSearch" class="input-field" type="text" :placeholder="t('procurements.create.searchProduct')" />
           <button class="action-chip" type="button" @click="openQuickProductCreator(activeLineId)">
             <Plus :size="14" :stroke-width="2" />
-            Создать товар
+            {{ t('products.create') }}
           </button>
           <div class="compact-list">
             <button v-for="variant in filteredVariants" :key="variant.id" class="variant-row-btn" type="button" @click="selectVariant(variant)">
@@ -3410,47 +3450,47 @@ onMounted(async () => {
         </div>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="quickProductSheetOpen" title="Быстрое создание товара" @close="closeQuickProductCreator">
+      <AppBottomSheet :open="quickProductSheetOpen" :title="t('procurements.create.quickProductTitle')" @close="closeQuickProductCreator">
         <form class="sheet-form" @submit.prevent="createQuickProduct">
           <div v-if="quickProductError" class="error-box">
             <AlertCircle :size="18" :stroke-width="1.75" />
             <span>{{ quickProductError }}</span>
           </div>
           <div class="field-group">
-            <label class="field-label">Название *</label>
-            <input v-model="quickProductName" class="input-field" type="text" placeholder="Например, iPhone 15 Pro" />
+            <label class="field-label">{{ t('products.product') }} *</label>
+            <input v-model="quickProductName" class="input-field" type="text" :placeholder="t('procurements.create.productNamePlaceholder')" />
           </div>
           <div class="field-group">
-            <label class="field-label">Категория</label>
+            <label class="field-label">{{ t('products.categories') }}</label>
             <BaseSelect
               v-model="quickProductCategoryId"
-              :options="[{ value: null, label: 'Без категории' }, ...categoryOptions]"
-              title="Категория"
-              placeholder="Без категории"
+              :options="quickProductCategoryOptions"
+              :title="t('products.categories')"
+              :placeholder="t('products.noCategory')"
             />
           </div>
           <div class="field-group">
-            <label class="field-label">Базовая цена</label>
+            <label class="field-label">{{ t('products.price') }}</label>
             <input v-model="quickProductBasePrice" class="input-field" type="number" min="0" placeholder="0" />
           </div>
           <button class="sheet-submit-btn" type="submit" :disabled="isCreatingQuickProduct">
-            {{ isCreatingQuickProduct ? 'Создание…' : 'Создать и добавить' }}
+            {{ isCreatingQuickProduct ? t('procurements.create.creating') : t('procurements.create.createAndAdd') }}
           </button>
         </form>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="quickSupplierSheetOpen" title="Быстрое создание поставщика" @close="closeQuickSupplierCreator">
+      <AppBottomSheet :open="quickSupplierSheetOpen" :title="t('procurements.create.quickSupplierTitle')" @close="closeQuickSupplierCreator">
         <form class="sheet-form" @submit.prevent="createQuickSupplier">
           <div v-if="quickSupplierError" class="error-box">
             <AlertCircle :size="18" :stroke-width="1.75" />
             <span>{{ quickSupplierError }}</span>
           </div>
           <div class="field-group">
-            <label class="field-label">Название *</label>
-            <input v-model="quickSupplierName" class="input-field" type="text" placeholder="Например, Shenzhen Trade Co." />
+            <label class="field-label">{{ t('suppliers.supplier') }} *</label>
+            <input v-model="quickSupplierName" class="input-field" type="text" :placeholder="t('procurements.create.supplierNamePlaceholder')" />
           </div>
           <div class="field-group">
-            <label class="field-label">Телефон</label>
+            <label class="field-label">{{ t('platformAdmin.phone') }}</label>
             <input v-model="quickSupplierPhone" class="input-field" type="text" placeholder="+998 90 000 00 00" />
           </div>
           <div class="field-group">
@@ -3458,21 +3498,21 @@ onMounted(async () => {
             <input v-model="quickSupplierEmail" class="input-field" type="email" placeholder="supplier@mail.com" />
           </div>
           <button class="sheet-submit-btn" type="submit" :disabled="isCreatingQuickSupplier">
-            {{ isCreatingQuickSupplier ? 'Создание…' : 'Создать и выбрать' }}
+            {{ isCreatingQuickSupplier ? t('procurements.create.creating') : t('procurements.create.createAndChoose') }}
           </button>
         </form>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="exchangeSheetOpen" title="Обмен валют внутри прихода" @close="closeExchangeSheet">
+      <AppBottomSheet :open="exchangeSheetOpen" :title="t('procurements.detail.exchangeSheetTitle')" @close="closeExchangeSheet">
         <form class="sheet-form" @submit.prevent="submitExchange">
           <div class="field-row field-row--exchange">
             <div class="field-group field-group--exchange">
               <label class="field-label exchange-field-label">
-                Списать из валюты <strong class="exchange-label-currency">{{ exchangeFromCurrency }}</strong>
+                {{ t('procurements.detail.exchangeFromCurrency') }} <strong class="exchange-label-currency">{{ exchangeFromCurrency }}</strong>
               </label>
               <input v-model="exchangeFromAmount" class="input-field exchange-input" type="number" min="0" placeholder="0" />
               <span class="helper-text exchange-helper-line">
-                <span>Доступно:</span>
+                <span>{{ t('common.available') }}:</span>
                 <strong class="tabular-nums">{{ formatPlainAmount(selectedExchangeBalance) }}</strong>
               </span>
             </div>
@@ -3485,7 +3525,7 @@ onMounted(async () => {
 
             <div class="field-group field-group--exchange">
               <label class="field-label exchange-field-label">
-                Зачислить в валюту <strong class="exchange-label-currency">{{ exchangeToCurrency }}</strong>
+                {{ t('procurements.detail.exchangeToCurrency') }} <strong class="exchange-label-currency">{{ exchangeToCurrency }}</strong>
               </label>
               <input :value="trimTrailingZeros(exchangeToAmountPreview.toFixed(2))" class="input-field exchange-input exchange-input--readonly" type="text" readonly />
             </div>
@@ -3494,11 +3534,11 @@ onMounted(async () => {
           <div class="field-group">
             <div class="rate-helper-card">
               <div class="rate-helper-main">
-                <span class="field-label rate-helper-label">Курс USD -> UZS</span>
+                <span class="field-label rate-helper-label">{{ t('procurements.detail.usdUzsRate') }}</span>
                 <strong class="tabular-nums rate-helper-value">{{ trimTrailingZeros(exchangeRate) }}</strong>
               </div>
               <button class="text-action" type="button" @click="exchangeRateManualOpen = !exchangeRateManualOpen">
-                {{ exchangeRateManualOpen ? 'Скрыть' : 'Изменить курс' }}
+                {{ exchangeRateManualOpen ? t('procurements.detail.hideRateEditor') : t('procurements.detail.editRate') }}
               </button>
             </div>
             <input
@@ -3513,8 +3553,8 @@ onMounted(async () => {
           </div>
 
           <div class="field-group">
-            <label class="field-label">Комментарий</label>
-            <input v-model="exchangeNotes" class="input-field" type="text" placeholder="Например, обмен для растаможки" />
+            <label class="field-label">{{ t('common.comment') }}</label>
+            <input v-model="exchangeNotes" class="input-field" type="text" :placeholder="t('procurements.detail.exchangeCommentPlaceholder')" />
           </div>
 
           <div v-if="exchangeError" class="error-box">
@@ -3523,18 +3563,18 @@ onMounted(async () => {
           </div>
 
           <button class="sheet-submit-btn" type="submit" :disabled="isSavingExchange">
-            {{ isSavingExchange ? 'Провожу обмен…' : 'Провести обмен' }}
+            {{ isSavingExchange ? t('procurements.detail.exchangeSubmitting') : t('procurements.detail.exchangeSubmit') }}
           </button>
         </form>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="allocationSheetOpen" title="Распределение капитала" @close="closeAllocationSheet">
+      <AppBottomSheet :open="allocationSheetOpen" :title="t('procurements.allocateCapital')" @close="closeAllocationSheet">
         <div class="sheet-form">
-          <div v-if="isLoadingAllocation" class="muted">Считаю требуемую сумму и доступные остатки...</div>
+          <div v-if="isLoadingAllocation" class="muted">{{ t('procurements.detail.allocationLoading') }}</div>
 
           <div v-else-if="allocationPreview" class="allocation-preview">
             <div class="allocation-summary">
-              <span>Требуется в приход</span>
+              <span>{{ t('procurements.detail.requiredForProcurement') }}</span>
               <strong>
                 <template v-for="(amount, currency, idx) in allocationPreview.required" :key="currency">
                   {{ formatCompactAmount(amount, currency) }}<template v-if="idx < Object.keys(allocationPreview.required).length - 1"> · </template>
@@ -3543,9 +3583,9 @@ onMounted(async () => {
             </div>
             <div class="mini-table allocation-table">
               <div class="mini-table-head allocation-table-head">
-                <span>Участник</span>
-                <span>Доступно</span>
-                <span>Перенести</span>
+                <span>{{ t('procurements.detail.tableParticipant') }}</span>
+                <span>{{ t('common.available') }}</span>
+                <span>{{ t('procurements.detail.allocateActionShort') }}</span>
               </div>
               <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="mini-table-row allocation-table-row">
                 <span class="participant-name">{{ displayPartnerName(row.partner_name, row.role) }}</span>
@@ -3566,31 +3606,31 @@ onMounted(async () => {
             :disabled="isLoadingAllocation || isAllocatingFromAgreement || !allocationPreview"
             @click="applyAgreementAllocation"
           >
-            {{ isAllocatingFromAgreement ? 'Переношу…' : 'Перенести в приход' }}
+            {{ isAllocatingFromAgreement ? t('procurements.detail.allocating') : t('procurements.detail.allocateToProcurement') }}
           </button>
         </div>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="splitItemSheetOpen" title="Разделить строку" @close="closeSplitItemSheet">
+      <AppBottomSheet :open="splitItemSheetOpen" :title="t('procurements.detail.splitLineTitle')" @close="closeSplitItemSheet">
         <div class="sheet-form">
           <div v-if="splitCandidateLine" class="receive-confirm-summary">
             <span>{{ splitCandidateLine.product_variant_name }}</span>
-            <strong>{{ formatPlainAmount(splitCandidateLine.quantity) }} шт.</strong>
-            <p>Укажи, сколько приехало сейчас. Остаток останется в пути отдельной строкой.</p>
+            <strong>{{ formatPlainAmount(splitCandidateLine.quantity) }} {{ t('common.pieces') }}</strong>
+            <p>{{ t('procurements.detail.splitLineHint') }}</p>
           </div>
           <div v-if="splitCandidateLine" class="split-flow-preview">
             <div class="split-flow-card">
-              <span>Сейчас на склад</span>
-              <strong>{{ splitQuantityNumeric > 0 ? formatPlainAmount(splitQuantityNumeric) : '—' }} шт.</strong>
+              <span>{{ t('procurements.detail.toStockNow') }}</span>
+              <strong>{{ splitQuantityNumeric > 0 ? formatPlainAmount(splitQuantityNumeric) : '—' }} {{ t('common.pieces') }}</strong>
             </div>
             <span class="split-flow-arrow">→</span>
             <div class="split-flow-card split-flow-card--muted">
-              <span>Останется в пути</span>
-              <strong>{{ formatPlainAmount(splitRemainingQuantity) }} шт.</strong>
+              <span>{{ t('procurements.detail.remainsInTransit') }}</span>
+              <strong>{{ formatPlainAmount(splitRemainingQuantity) }} {{ t('common.pieces') }}</strong>
             </div>
           </div>
           <label class="field-group">
-            <span>Количество, которое принять сейчас</span>
+            <span>{{ t('procurements.detail.receiveNowQty') }}</span>
             <input
               v-model="splitItemQuantity"
               class="input-field split-quantity-input"
@@ -3598,7 +3638,7 @@ onMounted(async () => {
               type="number"
               min="0"
               step="0.001"
-              placeholder="Например, 30"
+              :placeholder="t('procurements.detail.splitQtyPlaceholder')"
             />
           </label>
           <p v-if="splitItemError" class="form-error">{{ splitItemError }}</p>
@@ -3608,28 +3648,28 @@ onMounted(async () => {
             :disabled="isSplittingItem"
             @click="submitSplitItem"
           >
-            {{ isSplittingItem ? 'Разделяю…' : 'Разделить' }}
+            {{ isSplittingItem ? t('procurements.detail.splitting') : t('procurements.detail.splitLineAction') }}
           </button>
         </div>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="contributionSheetOpen" title="Пополнить баланс прихода" @close="closeContributionSheet">
+      <AppBottomSheet :open="contributionSheetOpen" :title="t('procurements.detail.contributionSheetTitle')" @close="closeContributionSheet">
         <form class="sheet-form" @submit.prevent="submitContribution">
           <div class="field-group">
-            <label class="field-label">Кто пополняет</label>
+            <label class="field-label">{{ t('procurements.detail.whoContributes') }}</label>
             <BaseSelect
               v-model="contributionPartnerId"
               :options="contributionPartnerOptions"
-              title="Выбор участника"
-              placeholder="Выберите участника"
+              :title="t('procurements.detail.chooseParticipantTitle')"
+              :placeholder="t('procurements.detail.chooseParticipantPlaceholder')"
             />
           </div>
 
           <div class="field-group">
-            <label class="field-label">Сумма</label>
+            <label class="field-label">{{ t('common.amount') }}</label>
             <div class="money-field">
               <input v-model="contributionAmount" class="input-field money-input" type="number" min="0" placeholder="0" />
-              <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleContributionCurrency">
+              <button type="button" class="currency-toggle" :title="t('procurements.detail.changeCurrency')" @click="toggleContributionCurrency">
                 <span class="currency-toggle-code">{{ contributionCurrency }}</span>
                 <span class="currency-toggle-hint" aria-hidden="true">
                   <RefreshCcw :size="12" :stroke-width="2" />
@@ -3641,11 +3681,11 @@ onMounted(async () => {
           <div v-if="showFxField(contributionCurrency)" class="field-group">
             <div class="rate-helper-card">
               <div>
-                <label class="field-label">Курс USD -> UZS</label>
-                <strong class="tabular-nums">{{ contributionFxRate ? trimTrailingZeros(contributionFxRate) : 'Нет курса' }}</strong>
+                <label class="field-label">{{ t('procurements.detail.usdUzsRate') }}</label>
+                <strong class="tabular-nums">{{ contributionFxRate ? trimTrailingZeros(contributionFxRate) : t('products.usdRateMissing') }}</strong>
               </div>
               <button class="text-action" type="button" @click="contributionRateManualOpen = !contributionRateManualOpen">
-                {{ contributionRateManualOpen ? 'Скрыть' : 'Изменить курс' }}
+                {{ contributionRateManualOpen ? t('procurements.detail.hideRateEditor') : t('procurements.detail.editRate') }}
               </button>
             </div>
             <input
@@ -3660,8 +3700,8 @@ onMounted(async () => {
           </div>
 
           <div class="field-group">
-            <label class="field-label">Комментарий</label>
-            <input v-model="contributionNotes" class="input-field" type="text" placeholder="Например, доплата перед receive" />
+            <label class="field-label">{{ t('common.comment') }}</label>
+            <input v-model="contributionNotes" class="input-field" type="text" :placeholder="t('procurements.detail.contributionCommentPlaceholder')" />
           </div>
 
           <div v-if="contributionError" class="error-box">
@@ -3670,35 +3710,35 @@ onMounted(async () => {
           </div>
 
           <button class="sheet-submit-btn" type="submit" :disabled="isSavingContribution">
-            {{ isSavingContribution ? 'Сохраняю…' : 'Сохранить пополнение' }}
+            {{ isSavingContribution ? t('common.saving') : t('procurements.detail.saveContribution') }}
           </button>
         </form>
       </AppBottomSheet>
 
-      <AppBottomSheet :open="withdrawalSheetOpen" title="Списать из баланса прихода" @close="closeWithdrawalSheet">
+      <AppBottomSheet :open="withdrawalSheetOpen" :title="t('procurements.detail.withdrawalSheetTitle')" @close="closeWithdrawalSheet">
         <form class="sheet-form" @submit.prevent="submitWithdrawal">
           <div class="field-group">
-            <label class="field-label">Сумма</label>
+            <label class="field-label">{{ t('common.amount') }}</label>
             <div class="money-field">
               <input v-model="withdrawalAmount" class="input-field money-input" type="number" min="0" placeholder="0" />
-              <button type="button" class="currency-toggle" title="Сменить валюту" @click="toggleWithdrawalCurrency">
+              <button type="button" class="currency-toggle" :title="t('procurements.detail.changeCurrency')" @click="toggleWithdrawalCurrency">
                 <span class="currency-toggle-code">{{ withdrawalCurrency }}</span>
                 <span class="currency-toggle-hint" aria-hidden="true">
                   <RefreshCcw :size="12" :stroke-width="2" />
                 </span>
               </button>
             </div>
-            <span class="helper-text">Доступно: {{ formatPrice(selectedWithdrawalBalance, withdrawalCurrency) }}</span>
+            <span class="helper-text">{{ t('common.available') }}: {{ formatPrice(selectedWithdrawalBalance, withdrawalCurrency) }}</span>
           </div>
 
           <div v-if="showFxField(withdrawalCurrency)" class="field-group">
             <div class="rate-helper-card">
               <div>
-                <label class="field-label">Курс USD -> UZS</label>
+                <label class="field-label">{{ t('procurements.detail.usdUzsRate') }}</label>
                 <strong class="tabular-nums">{{ trimTrailingZeros(withdrawalFxRate) }}</strong>
               </div>
               <button class="text-action" type="button" @click="withdrawalRateManualOpen = !withdrawalRateManualOpen">
-                {{ withdrawalRateManualOpen ? 'Скрыть' : 'Изменить курс' }}
+                {{ withdrawalRateManualOpen ? t('procurements.detail.hideRateEditor') : t('procurements.detail.editRate') }}
               </button>
             </div>
             <input
@@ -3713,8 +3753,8 @@ onMounted(async () => {
           </div>
 
           <div class="field-group">
-            <label class="field-label">Назначение</label>
-            <input v-model="withdrawalReason" class="input-field" type="text" placeholder="Например, оплата растаможки" />
+            <label class="field-label">{{ t('common.reason') }}</label>
+            <input v-model="withdrawalReason" class="input-field" type="text" :placeholder="t('procurements.detail.withdrawalReasonPlaceholder')" />
           </div>
 
           <div v-if="withdrawalError" class="error-box">
@@ -3723,7 +3763,7 @@ onMounted(async () => {
           </div>
 
           <button class="sheet-submit-btn" type="submit" :disabled="isSavingWithdrawal">
-            {{ isSavingWithdrawal ? 'Сохраняю…' : 'Сохранить списание' }}
+            {{ isSavingWithdrawal ? t('common.saving') : t('procurements.detail.saveWithdrawal') }}
           </button>
         </form>
       </AppBottomSheet>

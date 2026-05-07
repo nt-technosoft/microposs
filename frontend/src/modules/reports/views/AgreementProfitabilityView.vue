@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, ChevronDown, ExternalLink, PackageSearch, Users } from 'lucide-vue-next'
 import { fetchAgreementProfitabilityDetail, type AgreementProfitabilityDetail } from '@/api/finance'
 import { formatPrice } from '@/utils/currency'
+import { intlLocale } from '@/i18n/format'
+import { partnerRoleLabel, procurementStatusLabel as domainProcurementStatusLabel } from '@/utils/domainLabels'
 
 const route = useRoute()
 const router = useRouter()
+const { t, locale } = useI18n()
 
 const loading = ref(false)
 const error = ref('')
@@ -37,7 +41,7 @@ function formatReportAmount(
 
 function formatDate(value: string | null): string {
   if (!value) return '—'
-  return new Date(value).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
+  return new Date(value).toLocaleDateString(intlLocale(locale.value), { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function balanceLabel(balances: Record<string, string>): string {
@@ -47,29 +51,14 @@ function balanceLabel(balances: Record<string, string>): string {
   return parts.length ? parts.join(' · ') : '0'
 }
 
-function roleLabel(role: string): string {
-  return role === 'INVESTOR' ? 'Инвестор' : 'Бизнес'
-}
-
 function displayPartnerName(name: string, role: string): string {
-  return role === 'OPERATOR' ? 'Бизнес' : name
+  return role === 'OPERATOR' ? t('procurements.business') : name
 }
 
 function formatRatio(value: string | number): string {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return '0.00%'
   return `${(parsed * 100).toFixed(2)}%`
-}
-
-function procurementStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    OPEN: 'Открыт',
-    PARTIALLY_RECEIVED: 'Частично',
-    RECEIVED: 'Завершён',
-    CLOSED: 'Закрыт',
-    CANCELLED: 'Отменён',
-  }
-  return labels[status] ?? status
 }
 
 function toggleProcurement(id: number): void {
@@ -94,7 +83,7 @@ async function load(): Promise<void> {
     )
   } catch (err: unknown) {
     if ((err as { name?: string })?.name === 'CanceledError') return
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить отчёт договора'
+    error.value = err instanceof Error ? err.message : t('reports.agreementLoadFailed')
   } finally {
     loading.value = false
   }
@@ -119,97 +108,97 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <header class="topbar">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" />
       </button>
-      <h1>Отчёт договора</h1>
-      <button class="icon-btn" type="button" aria-label="Договор" @click="router.push({ name: 'agreement-detail', params: { id: route.params.id } })">
+      <h1>{{ t('reports.agreementReport') }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('reports.agreementLabel')" @click="router.push({ name: 'agreement-detail', params: { id: route.params.id } })">
         <ExternalLink :size="17" />
       </button>
     </header>
 
     <main class="content">
-      <section v-if="loading" class="state">Загрузка...</section>
+      <section v-if="loading" class="state">{{ t('common.loading') }}</section>
       <section v-else-if="error" class="state state-error">{{ error }}</section>
 
       <template v-else-if="summary">
         <section class="hero">
-          <span>Инвестдоговор #{{ summary.agreement_id }} · {{ formatDate(summary.opened_at) }}</span>
-          <div class="currency-switch" role="group" aria-label="Валюта отчёта договора">
+          <span>{{ t('procurements.agreementTitle', { id: summary.agreement_id }) }} · {{ formatDate(summary.opened_at) }}</span>
+          <div class="currency-switch" role="group" :aria-label="t('reports.agreementCurrency')">
             <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
             <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
           </div>
           <strong>{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
-          <small>фактическая прибыль · прогноз {{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</small>
+          <small>{{ t('reports.actualProfit') }} · {{ t('reports.forecast', { amount: formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }) }}</small>
         </section>
 
         <section class="metric-grid">
-          <div><span>Остаток договора</span><strong>{{ balanceLabel(summary.balances) }}</strong></div>
-          <div><span>Выручка</span><strong>{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong></div>
-          <div><span>Себестоимость продаж</span><strong>{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong></div>
-          <div><span>Товар в наличии</span><strong>{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong></div>
-          <div><span>Уже принято</span><strong>{{ formatReportAmount(summary, 'received_landed_cost', summary.received_landed_cost) }}</strong></div>
-          <div><span>Оплачено в пути</span><strong>{{ formatReportAmount(summary, 'pending_prepaid_cost', summary.pending_prepaid_cost) }}</strong></div>
-          <div><span>Продано / остаток</span><strong>{{ summary.quantity_sold }} / {{ summary.remaining_quantity }}</strong></div>
-          <div><span>Приходов</span><strong>{{ summary.procurements_count }}</strong></div>
+          <div><span>{{ t('reports.agreementBalance') }}</span><strong>{{ balanceLabel(summary.balances) }}</strong></div>
+          <div><span>{{ t('reports.revenue') }}</span><strong>{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong></div>
+          <div><span>{{ t('reports.salesCogs') }}</span><strong>{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong></div>
+          <div><span>{{ t('reports.remainingGoods') }}</span><strong>{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong></div>
+          <div><span>{{ t('reports.receivedAlready') }}</span><strong>{{ formatReportAmount(summary, 'received_landed_cost', summary.received_landed_cost) }}</strong></div>
+          <div><span>{{ t('reports.paidInTransit') }}</span><strong>{{ formatReportAmount(summary, 'pending_prepaid_cost', summary.pending_prepaid_cost) }}</strong></div>
+          <div><span>{{ t('reports.soldRemaining') }}</span><strong>{{ summary.quantity_sold }} / {{ summary.remaining_quantity }}</strong></div>
+          <div><span>{{ t('reports.procurementsCount') }}</span><strong>{{ summary.procurements_count }}</strong></div>
         </section>
 
         <section class="section">
           <div class="section-head">
-            <h2>Участники</h2>
+            <h2>{{ t('reports.participants') }}</h2>
             <Users :size="18" />
           </div>
           <article v-for="partner in partners" :key="partner.partner_id" class="row">
             <div>
               <strong>{{ partner.partner_name }}</strong>
               <span>
-                {{ roleLabel(partner.role) }} · внес {{ formatAmount(partner.agreement_contributed, partner.agreement_currency) }}
-                · в товар {{ formatAmount(partner.agreement_allocated, partner.agreement_currency) }}
+                {{ partnerRoleLabel(partner.role) }} · {{ t('reports.contributedShort', { amount: formatAmount(partner.agreement_contributed, partner.agreement_currency) }) }}
+                · {{ t('reports.inGoodsShort', { amount: formatAmount(partner.agreement_allocated, partner.agreement_currency) }) }}
               </span>
             </div>
             <div class="row-side">
               <strong>{{ formatReportAmount(partner, 'profit_pending_payout', partner.profit_pending_payout) }}</strong>
-              <span>к выплате · остаток {{ formatAmount(partner.agreement_available, partner.agreement_currency) }}</span>
+              <span>{{ t('reports.payoutAndBalance', { amount: formatAmount(partner.agreement_available, partner.agreement_currency) }) }}</span>
             </div>
           </article>
         </section>
 
         <section class="section">
           <div class="section-head">
-            <h2>Связанные приходы</h2>
+            <h2>{{ t('reports.linkedProcurements') }}</h2>
             <PackageSearch :size="18" />
           </div>
           <article v-for="procurement in procurements" :key="procurement.procurement_id" class="procurement-row">
             <button class="procurement-toggle" type="button" @click="toggleProcurement(procurement.procurement_id)">
               <div>
-                <strong>#{{ procurement.procurement_id }} · {{ procurement.supplier_name || 'без поставщика' }}</strong>
-                <span>{{ procurementStatusLabel(procurement.status) }} · на складе {{ formatReportAmount(procurement, 'received_landed_cost', procurement.received_landed_cost ?? '0') }} · в пути {{ formatReportAmount(procurement, 'pending_prepaid_cost', procurement.pending_prepaid_cost ?? '0') }}</span>
+                <strong>#{{ procurement.procurement_id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</strong>
+                <span>{{ domainProcurementStatusLabel(procurement.status) }} · {{ t('reports.inStockShort', { amount: formatReportAmount(procurement, 'received_landed_cost', procurement.received_landed_cost ?? '0') }) }} · {{ t('reports.inTransitShort', { amount: formatReportAmount(procurement, 'pending_prepaid_cost', procurement.pending_prepaid_cost ?? '0') }) }}</span>
               </div>
               <div class="row-side">
                 <strong>{{ formatReportAmount(procurement, 'gross_profit', procurement.gross_profit) }}</strong>
-                <span>продано {{ formatReportAmount(procurement, 'cogs', procurement.cogs) }}</span>
+                <span>{{ t('reports.soldShort', { amount: formatReportAmount(procurement, 'cogs', procurement.cogs) }) }}</span>
               </div>
               <ChevronDown class="chevron" :class="{ open: expandedProcurementId === procurement.procurement_id }" :size="16" />
             </button>
             <div v-if="expandedProcurementId === procurement.procurement_id" class="procurement-detail">
-              <div><span>Партии</span><strong>{{ procurement.receive_batches_count ?? 0 }}</strong></div>
-              <div><span>В пути строк</span><strong>{{ procurement.pending_paid_items_count ?? 0 }}</strong></div>
-              <div><span>Черновики</span><strong>{{ procurement.draft_items_count ?? 0 }}</strong></div>
-              <div><span>Остаток</span><strong>{{ formatReportAmount(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}</strong></div>
+              <div><span>{{ t('reports.batches') }}</span><strong>{{ procurement.receive_batches_count ?? 0 }}</strong></div>
+              <div><span>{{ t('reports.transitRows') }}</span><strong>{{ procurement.pending_paid_items_count ?? 0 }}</strong></div>
+              <div><span>{{ t('reports.drafts') }}</span><strong>{{ procurement.draft_items_count ?? 0 }}</strong></div>
+              <div><span>{{ t('reports.remaining') }}</span><strong>{{ formatReportAmount(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}</strong></div>
               <div v-for="batch in procurement.receive_batches ?? []" :key="`batch-${procurement.procurement_id}-${batch.id}`" class="batch-share-row">
-                <span>Партия #{{ batch.id }} · {{ batch.items_count }} поз.</span>
+                <span>{{ t('reports.batchLine', { id: batch.id, count: batch.items_count }) }}</span>
                 <strong>{{ batch.display?.amounts?.total_inventory ? formatAmount(batch.display.amounts.total_inventory, batch.display.currency) : formatAmount(batch.total_inventory_uzs) }}</strong>
                 <small v-for="allocation in batch.capital_allocations" :key="`batch-${batch.id}-${allocation.partner_id}`">
                   {{ displayPartnerName(allocation.partner_name, allocation.role) }}:
-                  кап. {{ formatRatio(allocation.capital_share) }} · приб. {{ formatRatio(allocation.profit_share) }}
+                  {{ t('reports.capitalProfitShort', { capital: formatRatio(allocation.capital_share), profit: formatRatio(allocation.profit_share) }) }}
                 </small>
               </div>
               <button type="button" class="open-report-btn" @click="router.push({ name: 'reports-procurement-profitability', params: { id: procurement.procurement_id } })">
-                Открыть аудит прихода
+                {{ t('reports.openProcurementAudit') }}
               </button>
             </div>
           </article>
-          <p v-if="procurements.length === 0" class="muted">Связанных приходов пока нет.</p>
+          <p v-if="procurements.length === 0" class="muted">{{ t('reports.noLinkedProcurements') }}</p>
         </section>
       </template>
     </main>

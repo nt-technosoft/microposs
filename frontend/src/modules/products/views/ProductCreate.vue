@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Plus, X, Upload, Image as ImageIcon } from 'lucide-vue-next'
 import api from '@/api/client'
 import {
@@ -31,6 +32,7 @@ interface CharacteristicRow {
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const categories = ref<Category[]>([])
 const attributes = ref<Attribute[]>([])
@@ -53,14 +55,14 @@ let rowKey = 1
 
 const errors = ref<Record<string, string>>({})
 
-const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
-  { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
-  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
-  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать на продаже' },
-]
+const pricingModeOptions = computed<Array<{ value: PricingMode; label: string }>>(() => [
+  { value: PricingMode.FIXED_LOCKED, label: t('products.pricingFixed') },
+  { value: PricingMode.DEFAULT_EDITABLE, label: t('products.pricingDefaultEditable') },
+  { value: PricingMode.ASK_EACH_SALE, label: t('products.pricingAskEachSaleLong') },
+])
 
 const categoryOptions = computed(() => ([
-  { value: null, label: 'Без категории' },
+  { value: null, label: t('products.noCategory') },
   ...categories.value.map((category) => ({
     value: category.id,
     label: category.name,
@@ -95,7 +97,7 @@ async function loadBootstrapData(): Promise<void> {
     categories.value = categoryData
     attributes.value = normalizeAttributesPayload(attributesResponse.data)
   } catch {
-    errorMessage.value = 'Не удалось загрузить справочники для формы'
+    errorMessage.value = t('products.loadFormDictionariesFailed')
   }
 }
 
@@ -199,12 +201,12 @@ function clearPhoto(): void {
 function validate(): boolean {
   const nextErrors: Record<string, string> = {}
   if (!productName.value.trim()) {
-    nextErrors.name = 'Введите название товара'
+    nextErrors.name = t('products.nameRequired')
   }
   if (pricingMode.value !== PricingMode.ASK_EACH_SALE) {
     const parsed = Number.parseFloat(basePrice.value)
     if (!Number.isFinite(parsed) || parsed < 0) {
-      nextErrors.price = 'Проверьте базовую цену'
+      nextErrors.price = t('products.priceInvalid')
     }
   }
   errors.value = nextErrors
@@ -271,11 +273,11 @@ async function handleSubmit(): Promise<void> {
       }
     }
 
-    toast.success('Товар успешно создан')
+    toast.success(t('products.createSuccess'))
     router.push({ name: 'products' })
   } catch (error: unknown) {
     const apiError = error as { response?: { data?: { detail?: string } } }
-    errorMessage.value = apiError.response?.data?.detail ?? 'Не удалось создать товар'
+    errorMessage.value = apiError.response?.data?.detail ?? t('products.createFailed')
   } finally {
     isSubmitting.value = false
   }
@@ -290,10 +292,10 @@ onMounted(async () => {
 <template>
   <div class="create-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="20" :stroke-width="1.75" />
       </button>
-      <h1 class="page-title">Новый товар</h1>
+      <h1 class="page-title">{{ t('products.create') }}</h1>
       <div class="header-spacer" aria-hidden="true" />
     </header>
 
@@ -305,28 +307,28 @@ onMounted(async () => {
       <section class="form-section">
         <BaseInput
           v-model="productName"
-          label="Название *"
-          placeholder="Введите название товара"
+          :label="`${t('products.nameLabel')} *`"
+          :placeholder="t('products.namePlaceholder')"
           :error="errors.name"
         />
 
         <div class="input-group">
-          <label class="input-label">Категория</label>
+          <label class="input-label">{{ t('products.categoryFilter') }}</label>
           <BaseSelect
             v-model="selectedCategory"
             :options="categoryOptions"
-            title="Выбор категории"
-            placeholder="Без категории"
+            :title="t('products.chooseCategory')"
+            :placeholder="t('products.noCategory')"
           />
         </div>
 
         <div class="input-group">
-          <label class="input-label">Тип цены</label>
+          <label class="input-label">{{ t('products.priceType') }}</label>
           <BaseSelect
             v-model="pricingMode"
             :options="pricingModeOptions"
-            title="Тип цены"
-            placeholder="Выберите режим"
+            :title="t('products.choosePriceType')"
+            :placeholder="t('products.choosePriceMode')"
             @update:model-value="touchedPricingMode = true"
           />
         </div>
@@ -334,51 +336,51 @@ onMounted(async () => {
         <BaseInput
           v-if="pricingMode !== PricingMode.ASK_EACH_SALE"
           v-model="basePrice"
-          label="Базовая цена *"
+          :label="`${t('products.basePrice')} *`"
           type="number"
           placeholder="0"
           :error="errors.price"
         />
 
         <div class="input-group">
-          <label class="input-label">Описание</label>
+          <label class="input-label">{{ t('products.description') }}</label>
           <textarea
             v-model="description"
             class="description-field"
             rows="3"
-            placeholder="Описание товара"
+            :placeholder="t('products.descriptionPlaceholder')"
           />
         </div>
 
         <div class="photo-block">
-          <label class="input-label">Фото товара</label>
+          <label class="input-label">{{ t('products.productPhoto') }}</label>
           <div class="photo-preview">
-            <img v-if="photoPreview" :src="photoPreview" alt="Предпросмотр фото">
+            <img v-if="photoPreview" :src="photoPreview" :alt="t('products.photoPreviewAlt')">
             <ImageIcon v-else :size="32" :stroke-width="1.5" />
           </div>
           <label class="photo-upload">
             <Upload :size="16" :stroke-width="2" />
-            <span>Загрузить фото</span>
+            <span>{{ t('products.uploadPhoto') }}</span>
             <input type="file" accept="image/*" class="hidden-file" @change="onPhotoChange">
           </label>
           <button v-if="photoFile" type="button" class="remove-photo" @click="clearPhoto">
-            Удалить фото
+            {{ t('products.deletePhoto') }}
           </button>
         </div>
       </section>
 
       <section class="form-section">
         <div class="section-title-row">
-          <span class="section-title">Характеристики</span>
+          <span class="section-title">{{ t('products.templateCharacteristics') }}</span>
           <button type="button" class="tiny-btn" @click="addCharacteristic">
             <Plus :size="14" :stroke-width="2" />
-            Добавить
+            {{ t('common.add') }}
           </button>
         </div>
 
         <div v-for="row in characteristics" :key="row.key" class="characteristic-row">
-          <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
-          <BaseInput v-model="row.value" label="Значение" placeholder="Кожа" />
+          <BaseInput v-model="row.name" :label="t('products.characteristicName')" :placeholder="t('products.materialPlaceholder')" />
+          <BaseInput v-model="row.value" :label="t('products.characteristicValue')" :placeholder="t('products.leatherPlaceholder')" />
           <button type="button" class="remove-btn" @click="removeCharacteristic(row.key)">
             <X :size="16" :stroke-width="2" />
           </button>
@@ -388,8 +390,8 @@ onMounted(async () => {
       <section class="form-section">
         <div class="toggle-row">
           <div class="toggle-text">
-            <span class="toggle-title">Есть варианты</span>
-            <span class="toggle-desc">Размеры, цвета и другие атрибуты</span>
+            <span class="toggle-title">{{ t('products.hasVariants') }}</span>
+            <span class="toggle-desc">{{ t('products.variantsHint') }}</span>
           </div>
           <button
             type="button"
@@ -432,12 +434,12 @@ onMounted(async () => {
                 :value="sa.customInput"
                 type="text"
                 class="custom-input"
-                placeholder="Свое значение"
+                :placeholder="t('products.customValuePlaceholder')"
                 @input="updateCustomInput(sa.attributeId, ($event.target as HTMLInputElement).value)"
                 @keydown="onCustomInputKeydown($event, sa.attributeId)"
               >
               <button type="button" class="tiny-btn" @click="addCustomValue(sa.attributeId)">
-                Добавить
+                {{ t('common.add') }}
               </button>
             </div>
           </div>
@@ -459,10 +461,10 @@ onMounted(async () => {
 
       <div class="footer-actions">
         <BaseButton type="button" variant="secondary" :full-width="true" @click="router.back()">
-          Отмена
+          {{ t('common.cancel') }}
         </BaseButton>
         <BaseButton type="submit" variant="primary" :full-width="true" :loading="isSubmitting || isGeneratingVariants">
-          Создать товар
+          {{ t('products.createProduct') }}
         </BaseButton>
       </div>
     </form>

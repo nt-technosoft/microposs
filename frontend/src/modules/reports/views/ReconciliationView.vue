@@ -2,28 +2,31 @@
 import { onMounted, ref, computed } from 'vue'
 import { ArrowLeft, RefreshCcw, AlertTriangle, CheckCircle2, AlertCircle, Siren, ChevronDown } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 import { fetchLatestReconciliation, type ReconciliationSummary } from '@/api/analytics'
+import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 
 const router = useRouter()
+const { t, locale } = useI18n()
 const loading = ref(false)
 const error = ref<string | null>(null)
 const summary = ref<ReconciliationSummary | null>(null)
 const expandedCheckCode = ref<string | null>(null)
 
 const statusLabel = computed(() => {
-  if (summary.value?.overall_status === 'ok') return 'Все контрольные проверки сошлись'
-  if (summary.value?.overall_status === 'warning') return 'Есть предупреждения по сверке'
-  return 'Найдены расхождения в учёте'
+  if (summary.value?.overall_status === 'ok') return t('reports.reconcile.okTitle')
+  if (summary.value?.overall_status === 'warning') return t('reports.reconcile.warningTitle')
+  return t('reports.reconcile.mismatchTitle')
 })
 
 const statusTone = computed(() => summary.value?.overall_status ?? 'ok')
 
 const statusHint = computed(() => {
-  if (summary.value?.overall_status === 'ok') return 'Деньги, продажи, долги и журналы согласованы.'
-  if (summary.value?.overall_status === 'warning') return 'Есть операционные отклонения, которые стоит проверить.'
-  return 'Ниже показано, какие проверки не сошлись и какие записи затронуты.'
+  if (summary.value?.overall_status === 'ok') return t('reports.reconcile.okHint')
+  if (summary.value?.overall_status === 'warning') return t('reports.reconcile.warningHint')
+  return t('reports.reconcile.mismatchHint')
 })
 
 const orderedChecks = computed(() =>
@@ -35,77 +38,77 @@ const orderedChecks = computed(() =>
 
 const issueChecks = computed(() => orderedChecks.value.filter((check) => check.status !== 'ok'))
 
-const checkCopy: Record<string, { title: string; summary: string; actual: string; expected: string }> = {
+const checkCopy = computed<Record<string, { title: string; summary: string; actual: string; expected: string }>>(() => ({
   sales_settlement: {
-    title: 'Продажи и оплаты',
-    summary: 'Сумма продажи должна быть закрыта оплатой или долгом покупателя.',
-    actual: 'Продажи',
-    expected: 'Оплата + долг',
+    title: t('reports.reconcile.salesSettlementTitle'),
+    summary: t('reports.reconcile.salesSettlementSummary'),
+    actual: t('reports.reconcile.salesSettlementActual'),
+    expected: t('reports.reconcile.salesSettlementExpected'),
   },
   receivable_ledger: {
-    title: 'Долги покупателей',
-    summary: 'Итоговый долг покупателя должен совпадать с историей начислений и погашений.',
-    actual: 'Текущий долг',
-    expected: 'История долга',
+    title: t('reports.reconcile.receivableLedgerTitle'),
+    summary: t('reports.reconcile.receivableLedgerSummary'),
+    actual: t('reports.reconcile.receivableLedgerActual'),
+    expected: t('reports.reconcile.receivableLedgerExpected'),
   },
   cash_accounts_vs_entries: {
-    title: 'Денежные счета',
-    summary: 'Остаток счёта должен совпадать с историей приходов и расходов.',
-    actual: 'Остаток счёта',
-    expected: 'История денег',
+    title: t('reports.reconcile.cashAccountsTitle'),
+    summary: t('reports.reconcile.cashAccountsSummary'),
+    actual: t('reports.reconcile.cashAccountsActual'),
+    expected: t('reports.reconcile.cashAccountsExpected'),
   },
   closed_sessions_expected_cash: {
-    title: 'Ожидаемая касса смен',
-    summary: 'Ожидаемая наличность закрытой смены должна считаться из открытия и продаж.',
-    actual: 'Сохранено',
-    expected: 'Расчёт',
+    title: t('reports.reconcile.sessionExpectedTitle'),
+    summary: t('reports.reconcile.sessionExpectedSummary'),
+    actual: t('reports.reconcile.saved'),
+    expected: t('reports.reconcile.calculation'),
   },
   closed_sessions_cash_difference: {
-    title: 'Разница закрытых смен',
-    summary: 'Разница смены должна равняться фактической кассе минус ожидаемая касса.',
-    actual: 'Сохранено',
-    expected: 'Расчёт',
+    title: t('reports.reconcile.sessionDifferenceTitle'),
+    summary: t('reports.reconcile.sessionDifferenceSummary'),
+    actual: t('reports.reconcile.saved'),
+    expected: t('reports.reconcile.calculation'),
   },
   closed_sessions_nonzero_difference: {
-    title: 'Недостачи и излишки смен',
-    summary: 'Это не ошибка системы, а сигнал: закрытая смена была с разницей по кассе.',
-    actual: 'Сумма расхождений',
-    expected: 'Цель',
+    title: t('reports.reconcile.nonzeroDifferenceTitle'),
+    summary: t('reports.reconcile.nonzeroDifferenceSummary'),
+    actual: t('reports.reconcile.mismatchAmount'),
+    expected: t('reports.reconcile.target'),
   },
   journal_balance: {
-    title: 'Баланс проводок',
-    summary: 'В каждой проводке дебет должен равняться кредиту.',
-    actual: 'Проблемных проводок',
-    expected: 'Цель',
+    title: t('reports.reconcile.journalBalanceTitle'),
+    summary: t('reports.reconcile.journalBalanceSummary'),
+    actual: t('reports.reconcile.badJournals'),
+    expected: t('reports.reconcile.target'),
   },
   sales_journal_revenue: {
-    title: 'Выручка в журнале',
-    summary: 'Выручка завершённых продаж должна быть отражена в финансовом журнале.',
-    actual: 'Продажи',
-    expected: 'Журнал',
+    title: t('reports.reconcile.journalRevenueTitle'),
+    summary: t('reports.reconcile.journalRevenueSummary'),
+    actual: t('reports.reconcile.salesSettlementActual'),
+    expected: t('reports.reconcile.journal'),
   },
   sales_journal_cogs: {
-    title: 'Себестоимость в журнале',
-    summary: 'Себестоимость проданных товаров должна быть отражена в финансовом журнале.',
-    actual: 'Продажи',
-    expected: 'Журнал',
+    title: t('reports.reconcile.journalCogsTitle'),
+    summary: t('reports.reconcile.journalCogsSummary'),
+    actual: t('reports.reconcile.salesSettlementActual'),
+    expected: t('reports.reconcile.journal'),
   },
-}
+}))
 
 function checkTitle(code: string, fallback: string): string {
-  return checkCopy[code]?.title ?? fallback
+  return checkCopy.value[code]?.title ?? fallback
 }
 
 function checkSummary(code: string, fallback: string): string {
-  return checkCopy[code]?.summary ?? fallback
+  return checkCopy.value[code]?.summary ?? fallback
 }
 
 function checkActualLabel(code: string, fallback: string): string {
-  return checkCopy[code]?.actual ?? fallback
+  return checkCopy.value[code]?.actual ?? fallback
 }
 
 function checkExpectedLabel(code: string, fallback: string): string {
-  return checkCopy[code]?.expected ?? fallback
+  return checkCopy.value[code]?.expected ?? fallback
 }
 
 function toggleCheck(code: string): void {
@@ -117,7 +120,11 @@ function formatAmount(value: string): string {
 }
 
 function formatCheckValue(code: string, value: string): string {
-  if (code === 'journal_balance') return `${Number(value || 0).toLocaleString('ru-RU')} шт`
+  if (code === 'journal_balance') {
+    return t('reports.reconcile.pcs', {
+      count: Number(value || 0).toLocaleString(intlLocale(locale.value)),
+    })
+  }
   return formatAmount(value)
 }
 
@@ -127,21 +134,25 @@ function highlightValue(item: { key: string; value: string; currency?: string })
 }
 
 function statusTitle(status: 'ok' | 'warning' | 'mismatch'): string {
-  if (status === 'ok') return 'Сошлось'
-  if (status === 'warning') return 'Внимание'
-  return 'Расхождение'
+  if (status === 'ok') return t('reports.reconcile.statusOk')
+  if (status === 'warning') return t('reports.reconcile.statusWarning')
+  return t('reports.reconcile.statusMismatch')
 }
 
 function refLabel(rawRef: string): string {
   const [type, id] = rawRef.split(':')
   const labels: Record<string, string> = {
-    sale: 'Продажа',
-    customer: 'Покупатель',
-    cash_account: 'Счёт',
-    session: 'Смена',
-    journal: 'Проводка',
+    sale: t('reports.reconcile.refSale'),
+    customer: t('reports.reconcile.refCustomer'),
+    cash_account: t('reports.reconcile.refCashAccount'),
+    session: t('reports.reconcile.refSession'),
+    journal: t('reports.reconcile.refJournal'),
   }
   return `${labels[type] ?? type} #${id ?? ''}`.trim()
+}
+
+function formatGeneratedAt(value: string): string {
+  return new Date(value).toLocaleString(intlLocale(locale.value))
 }
 
 function canOpenRef(rawRef: string): boolean {
@@ -168,7 +179,7 @@ async function load(): Promise<void> {
   try {
     summary.value = await fetchLatestReconciliation()
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить сверку'
+    error.value = err instanceof Error ? err.message : t('reports.reconcile.loadFailed')
   } finally {
     loading.value = false
   }
@@ -180,18 +191,18 @@ onMounted(load)
 <template>
   <div class="reconcile-page">
     <header class="page-header">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="title">Сверка</h1>
-      <button class="icon-btn" type="button" aria-label="Обновить" @click="load">
+      <h1 class="title">{{ t('reports.reconciliation') }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="load">
         <RefreshCcw :size="18" :stroke-width="2" />
       </button>
     </header>
 
     <main class="content">
       <section v-if="loading" class="panel">
-        <p class="muted">Загрузка сверки...</p>
+        <p class="muted">{{ t('reports.reconcile.loading') }}</p>
       </section>
 
       <section v-else-if="error" class="panel error">
@@ -207,10 +218,10 @@ onMounted(load)
             <Siren v-else :size="20" :stroke-width="2" />
           </div>
           <div class="hero-copy">
-            <p class="hero-kicker">Сверка ядра</p>
+            <p class="hero-kicker">{{ t('reports.reconcile.core') }}</p>
             <p class="hero-title">{{ statusLabel }}</p>
             <p class="muted">
-              Обновлено: {{ new Date(summary.generated_at).toLocaleString('ru-RU') }}
+              {{ t('reports.reconcile.updatedAt', { date: formatGeneratedAt(summary.generated_at) }) }}
             </p>
             <p class="muted">{{ statusHint }}</p>
           </div>
@@ -218,25 +229,25 @@ onMounted(load)
 
         <section class="summary-grid">
           <article class="summary-tile">
-            <span class="label">Всего проверок</span>
+            <span class="label">{{ t('reports.reconcile.totalChecks') }}</span>
             <strong class="value">{{ summary.totals.total_checks }}</strong>
           </article>
           <article class="summary-tile">
-            <span class="label">Требуют исправления</span>
+            <span class="label">{{ t('reports.reconcile.needsFix') }}</span>
             <strong class="value danger">{{ summary.totals.mismatch_checks }}</strong>
           </article>
           <article class="summary-tile">
-            <span class="label">Предупреждений</span>
+            <span class="label">{{ t('reports.reconcile.warnings') }}</span>
             <strong class="value warning">{{ summary.totals.warning_checks }}</strong>
           </article>
           <article class="summary-tile">
-            <span class="label">Проблемных записей</span>
+            <span class="label">{{ t('reports.reconcile.affectedRecords') }}</span>
             <strong class="value">{{ summary.totals.affected_records }}</strong>
           </article>
         </section>
 
         <section v-if="issueChecks.length" class="panel issue-panel">
-          <h2 class="section-title">Что не сошлось</h2>
+          <h2 class="section-title">{{ t('reports.reconcile.mismatches') }}</h2>
           <div class="issue-list">
             <article
               v-for="check in issueChecks"
@@ -246,17 +257,22 @@ onMounted(load)
             >
               <div>
                 <strong>{{ checkTitle(check.code, check.title) }}</strong>
-                <span>{{ check.mismatch_count }} записей · разница {{ formatCheckValue(check.code, check.delta_amount) }}</span>
+                <span>
+                  {{ t('reports.reconcile.issueLine', {
+                    count: check.mismatch_count,
+                    delta: formatCheckValue(check.code, check.delta_amount),
+                  }) }}
+                </span>
               </div>
               <button type="button" class="issue-action" @click="toggleCheck(check.code)">
-                Детали
+                {{ t('reports.reconcile.details') }}
               </button>
             </article>
           </div>
         </section>
 
         <section class="panel">
-          <h2 class="section-title">Контрольные метрики</h2>
+          <h2 class="section-title">{{ t('reports.reconcile.controlMetrics') }}</h2>
           <div class="rows">
             <div v-for="item in summary.highlights" :key="item.key" class="row">
               <span>{{ item.label }}</span>
@@ -268,8 +284,8 @@ onMounted(load)
         </section>
 
         <section class="panel">
-          <h2 class="section-title">Проверки</h2>
-          <div v-if="orderedChecks.length === 0" class="muted">Нет данных для сверки</div>
+          <h2 class="section-title">{{ t('reports.reconcile.checks') }}</h2>
+          <div v-if="orderedChecks.length === 0" class="muted">{{ t('reports.reconcile.noData') }}</div>
           <div v-else class="check-list">
             <article
               v-for="check in orderedChecks"
@@ -323,7 +339,7 @@ onMounted(load)
                   </span>
                 </div>
                 <div class="metric-box">
-                  <span class="label">Разница</span>
+                  <span class="label">{{ t('reports.reconcile.delta') }}</span>
                   <strong class="mono" :class="{ danger: check.delta_amount !== '0.00' }">
                     {{ formatCheckValue(check.code, check.delta_amount) }}
                   </strong>
@@ -331,7 +347,9 @@ onMounted(load)
               </div>
 
               <div v-if="check.status !== 'ok' || expandedCheckCode === check.code" class="check-foot">
-                <span class="check-count">Проблемных записей: {{ check.mismatch_count }}</span>
+                <span class="check-count">
+                  {{ t('reports.reconcile.affectedCount', { count: check.mismatch_count }) }}
+                </span>
                 <div v-if="check.sample_refs.length" class="sample-list">
                   <button
                     v-for="sample in check.sample_refs"

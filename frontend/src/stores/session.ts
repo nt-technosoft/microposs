@@ -9,6 +9,7 @@ import {
   openSession as apiOpenSession,
   closeSession as apiCloseSession,
 } from '../api/sales'
+import { translateNow } from '@/i18n'
 import { getApiErrorMessage } from '@/utils/errors'
 import { useCartStore } from '@/stores/cart'
 
@@ -52,7 +53,7 @@ export const useSessionStore = defineStore('session', {
         const fallbackName = (session as PosSession & { location_name?: string }).location_name
         return {
           id: rawLocation,
-          name: fallbackName ?? `Локация #${rawLocation}`,
+          name: fallbackName ?? translateNow('common.locationNumber', { id: rawLocation }),
           kind: 'shop',
           location_type: 'store',
           is_active: true,
@@ -90,7 +91,7 @@ export const useSessionStore = defineStore('session', {
           useCartStore().clear()
         }
       } catch (error: unknown) {
-        this.error = getApiErrorMessage(error, 'Не удалось загрузить смену')
+        this.error = getApiErrorMessage(error, translateNow('sales.loadSessionFailed'))
       } finally {
         this.isLoading = false
       }
@@ -119,7 +120,7 @@ export const useSessionStore = defineStore('session', {
         useCartStore().setLocation(normalizedLocation?.id ?? null)
         return session
       } catch (error: unknown) {
-        this.error = getApiErrorMessage(error, 'Не удалось открыть смену')
+        this.error = getApiErrorMessage(error, translateNow('sales.shiftOpenFailed'))
         throw error
       } finally {
         this.isLoading = false
@@ -128,7 +129,7 @@ export const useSessionStore = defineStore('session', {
 
     async closeSession(actualCash: number, actualCashByCurrency?: Record<string, string | number>): Promise<void> {
       if (!this.currentSession) {
-        this.error = 'Нет активной сессии для закрытия'
+        this.error = translateNow('sales.noActiveSessionToClose')
         return
       }
 
@@ -144,7 +145,7 @@ export const useSessionStore = defineStore('session', {
         this.location = null
         useCartStore().clear()
       } catch (error: unknown) {
-        this.error = getApiErrorMessage(error, 'Не удалось закрыть смену')
+        this.error = getApiErrorMessage(error, translateNow('sales.shiftCloseFailed'))
         throw error
       } finally {
         this.isLoading = false

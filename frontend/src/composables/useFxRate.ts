@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { fetchLatestFxRate } from '@/api/finance'
+import { translateNow } from '@/i18n'
 
 interface UseFxRateOptions {
   baseCurrency?: string
@@ -53,7 +54,7 @@ export function useFxRate(options: UseFxRateOptions = {}) {
       clear()
       error.value = apiErrorMessage(
         err,
-        `Курс ${baseCurrency}/${quoteCurrency} не найден. Синхронизируйте курс или укажите вручную.`,
+        translateNow('finance.rateMissing', { base: baseCurrency, quote: quoteCurrency }),
       )
       throw err
     } finally {

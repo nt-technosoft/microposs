@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Copy, Link, RefreshCcw, Send } from 'lucide-vue-next'
 import {
   createInvestorInvite,
@@ -10,9 +11,11 @@ import {
   type InvestorRelation,
 } from '@/api/core'
 import { useToast } from '@/composables/useToast'
+import { intlLocale } from '@/i18n/format'
 
 const router = useRouter()
 const toast = useToast()
+const { t, locale } = useI18n()
 
 const relations = ref<InvestorRelation[]>([])
 const invites = ref<InvestorInvite[]>([])
@@ -36,7 +39,7 @@ function inviteUrl(invite: InvestorInvite): string {
 
 async function copyInvite(invite: InvestorInvite): Promise<void> {
   await navigator.clipboard.writeText(inviteUrl(invite))
-  toast.success('Ссылка скопирована')
+  toast.success(t('investors.copiedInvite'))
 }
 
 async function loadData(): Promise<void> {
@@ -50,7 +53,7 @@ async function loadData(): Promise<void> {
     relations.value = relationRows
     invites.value = inviteRows
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить инвесторов'
+    errorMessage.value = error instanceof Error ? error.message : t('investors.loadInvestorsFailed')
   } finally {
     isLoading.value = false
   }
@@ -70,14 +73,14 @@ async function createInvite(): Promise<void> {
     email.value = ''
     await copyInvite(invite)
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось создать приглашение'
+    errorMessage.value = error instanceof Error ? error.message : t('investors.createInviteFailed')
   } finally {
     isCreating.value = false
   }
 }
 
 function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString('ru-RU', {
+  return new Date(value).toLocaleDateString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -90,11 +93,11 @@ onMounted(loadData)
 <template>
   <div class="investors-page">
     <header class="page-header">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Инвесторы</h1>
-      <button class="icon-btn" type="button" aria-label="Обновить" @click="loadData">
+      <h1 class="page-title">{{ t('investors.ownerTitle') }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="loadData">
         <RefreshCcw :size="16" :stroke-width="1.75" />
       </button>
     </header>
@@ -102,15 +105,15 @@ onMounted(loadData)
     <main class="content">
       <section class="invite-panel">
         <div class="panel-copy">
-          <h2>Пригласить инвестора</h2>
-          <p>Ссылка прикрепит инвестора к этому бизнесу. После принятия он появится в договорах прихода.</p>
+          <h2>{{ t('investors.inviteInvestor') }}</h2>
+          <p>{{ t('investors.inviteHint') }}</p>
         </div>
         <div class="invite-form">
-          <input v-model="displayName" class="input-field" placeholder="Имя инвестора" />
-          <input v-model="email" class="input-field" type="email" placeholder="Email, если есть" />
+          <input v-model="displayName" class="input-field" :placeholder="t('investors.investorName')" />
+          <input v-model="email" class="input-field" type="email" :placeholder="t('investors.emailOptional')" />
           <button class="primary-btn" type="button" :disabled="isCreating" @click="createInvite">
             <Send :size="16" :stroke-width="2" />
-            <span>{{ isCreating ? 'Создание...' : 'Создать ссылку' }}</span>
+            <span>{{ isCreating ? t('investors.creatingInvite') : t('investors.createInviteLink') }}</span>
           </button>
         </div>
       </section>
@@ -118,32 +121,32 @@ onMounted(loadData)
       <div v-if="errorMessage" class="error-box">{{ errorMessage }}</div>
 
       <section class="section">
-        <h2 class="section-title">Связанные инвесторы</h2>
-        <div v-if="isLoading" class="muted">Загрузка...</div>
-        <div v-else-if="activeRelations.length === 0" class="muted">Пока нет активных инвесторов.</div>
+        <h2 class="section-title">{{ t('investors.linkedInvestors') }}</h2>
+        <div v-if="isLoading" class="muted">{{ t('investors.loading') }}</div>
+        <div v-else-if="activeRelations.length === 0" class="muted">{{ t('investors.noActiveInvestors') }}</div>
         <div v-else class="list">
           <article v-for="relation in activeRelations" :key="relation.id" class="row-item">
             <div>
               <strong>{{ relation.partner_name }}</strong>
-              <span>{{ relation.source === 'INVITE' ? 'По приглашению' : 'Добавлен вручную' }}</span>
+              <span>{{ relation.source === 'INVITE' ? t('investors.inviteSource') : t('investors.manualSource') }}</span>
             </div>
-            <span class="status active">Активен</span>
+            <span class="status active">{{ t('investors.active') }}</span>
           </article>
         </div>
       </section>
 
       <section class="section">
-        <h2 class="section-title">Ожидают принятия</h2>
-        <div v-if="pendingInvites.length === 0" class="muted">Нет активных приглашений.</div>
+        <h2 class="section-title">{{ t('investors.pendingInvites') }}</h2>
+        <div v-if="pendingInvites.length === 0" class="muted">{{ t('investors.noPendingInvites') }}</div>
         <div v-else class="list">
           <article v-for="invite in pendingInvites" :key="invite.id" class="row-item">
             <div>
-              <strong>{{ invite.display_name || invite.email || 'Инвестор' }}</strong>
-              <span>Истекает {{ formatDate(invite.expires_at) }}</span>
+              <strong>{{ invite.display_name || invite.email || t('investors.investorFallback') }}</strong>
+              <span>{{ t('investors.expiresAt', { date: formatDate(invite.expires_at) }) }}</span>
             </div>
             <button class="copy-btn" type="button" @click="copyInvite(invite)">
               <Copy :size="15" :stroke-width="2" />
-              <span>Скопировать</span>
+              <span>{{ t('investors.copy') }}</span>
             </button>
           </article>
         </div>
@@ -152,7 +155,7 @@ onMounted(loadData)
       <section class="section">
         <div class="note-row">
           <Link :size="16" :stroke-width="1.75" />
-          <span>Инвестор получает доступ только к своим отчётам и договорам.</span>
+          <span>{{ t('investors.accessNote') }}</span>
         </div>
       </section>
     </main>

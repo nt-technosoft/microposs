@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { RefreshCcw, RotateCcw, PackageOpen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import { ProcurementStatus, ProcurementType } from '@/types/enums'
 import { fetchProcurements, type ProcurementListItem } from '@/api/partnerships'
 import ProcurementSectionShell from '@/modules/intake/components/ProcurementSectionShell.vue'
+import { intlLocale } from '@/i18n/format'
 import { procurementStatusMeta, procurementTypeMeta, type LabelMeta } from '@/utils/domainLabels'
 
 // ── Router & composables ────────────────────────────────────────────────────
 
 const router = useRouter()
 const toast = useToast()
+const { t, locale } = useI18n()
 
 // ── State ───────────────────────────────────────────────────────────────────
 
@@ -23,13 +26,13 @@ interface FilterChip {
   label: string
 }
 
-const FILTER_CHIPS: FilterChip[] = [
-  { value: 'all', label: 'Все' },
-  { value: ProcurementStatus.OPEN, label: 'Открыт' },
-  { value: ProcurementStatus.PARTIALLY_RECEIVED, label: 'Частично' },
-  { value: ProcurementStatus.RECEIVED, label: 'Завершён' },
-  { value: ProcurementStatus.CLOSED, label: 'Закрыт' },
-]
+const FILTER_CHIPS = computed<FilterChip[]>(() => [
+  { value: 'all', label: t('common.all') },
+  { value: ProcurementStatus.OPEN, label: t('domain.procurementStatus.OPEN') },
+  { value: ProcurementStatus.PARTIALLY_RECEIVED, label: t('domain.procurementStatus.PARTIALLY_RECEIVED') },
+  { value: ProcurementStatus.RECEIVED, label: t('domain.procurementStatus.RECEIVED') },
+  { value: ProcurementStatus.CLOSED, label: t('domain.procurementStatus.CLOSED') },
+])
 
 const procurements = ref<ProcurementListItem[]>([])
 const isLoading = ref(false)
@@ -50,7 +53,7 @@ async function loadProcurementList(): Promise<void> {
 
     procurements.value = await fetchProcurements(params)
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Не удалось загрузить приходы'
+    const message = err instanceof Error ? err.message : t('procurements.loadFailed')
     error.value = message
     toast.error(message)
   } finally {
@@ -78,7 +81,7 @@ function getStatusMeta(status: ProcurementStatus) {
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU', {
+  return new Date(dateStr).toLocaleDateString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'short',
   })
@@ -91,11 +94,7 @@ function totalCost(totalAmount: string): string {
 
 function linesLabel(countRaw: number): string {
   const count = Number.isFinite(countRaw) ? countRaw : 0
-  const mod10 = count % 10
-  const mod100 = count % 100
-  if (mod10 === 1 && mod100 !== 11) return `${count} позиция`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return `${count} позиции`
-  return `${count} позиций`
+  return t('procurements.lineCount', { count })
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
@@ -117,19 +116,19 @@ function onFilterChange(value: StatusFilter): void {
 <template>
   <ProcurementSectionShell
     active-mode="procurements"
-    title="Приходы"
-    primary-label="Новый"
-    primary-aria-label="Новый приход"
+    :title="t('procurements.title')"
+    :primary-label="t('procurements.new')"
+    :primary-aria-label="t('procurements.newProcurementAria')"
     @primary="goToCreate"
   >
     <template #header-actions>
-      <button class="icon-btn" type="button" aria-label="Обновить приходы" @click="loadProcurementList">
+      <button class="icon-btn" type="button" :aria-label="t('procurements.refreshProcurements')" @click="loadProcurementList">
         <RefreshCcw :size="17" />
       </button>
     </template>
 
     <template #summary>
-      <div class="filter-row" role="group" aria-label="Фильтр по статусу">
+      <div class="filter-row" role="group" :aria-label="t('procurements.statusFilter')">
         <button
           v-for="chip in FILTER_CHIPS"
           :key="chip.value"
@@ -149,21 +148,21 @@ function onFilterChange(value: StatusFilter): void {
 
       <div v-else-if="error && filteredProcurements.length === 0" class="state-box state-error">
         <RotateCcw :size="28" :stroke-width="1.5" class="state-icon" />
-        <p class="state-title">Ошибка загрузки</p>
+        <p class="state-title">{{ t('procurements.loadingError') }}</p>
         <p class="state-body">{{ error }}</p>
-        <button class="btn-retry" @click="loadProcurementList">Повторить</button>
+        <button class="btn-retry" @click="loadProcurementList">{{ t('common.retry') }}</button>
       </div>
 
       <div v-else-if="!isLoading && filteredProcurements.length === 0" class="state-box">
         <PackageOpen :size="40" :stroke-width="1.25" class="state-icon-empty" />
-        <p class="state-title">Нет приходов</p>
+        <p class="state-title">{{ t('procurements.noProcurements') }}</p>
         <p class="state-body">
           {{ activeFilter === 'all'
-            ? 'Создайте первый приход товаров'
-            : 'Нет приходов с выбранным статусом' }}
+            ? t('procurements.createFirstProcurement')
+            : t('procurements.noProcurementsByStatus') }}
         </p>
         <button v-if="activeFilter === 'all'" class="btn-retry" @click="goToCreate">
-          Создать приход
+          {{ t('procurements.createProcurement') }}
         </button>
       </div>
 

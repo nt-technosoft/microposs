@@ -102,6 +102,28 @@ class Business(BaseModel):
         return self.name
 
 
+class UserPreference(BaseModel):
+    """Per-user product preferences that should survive across devices."""
+
+    class Locale(models.TextChoices):
+        RU = 'ru', 'Русский'
+        UZ = 'uz', "O'zbekcha"
+        EN = 'en', 'English'
+
+    user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='micropos_preferences',
+    )
+    locale = models.CharField(max_length=8, choices=Locale.choices, default=Locale.RU)
+
+    class Meta:
+        db_table = 'core_user_preference'
+
+    def __str__(self):
+        return f"{self.user_id}: {self.locale}"
+
+
 class Partner(TenantModel):
     """
     Abstract business partner — supertype for investors and operators.

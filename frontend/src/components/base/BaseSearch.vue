@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Search, X } from 'lucide-vue-next'
 
 interface Props {
@@ -9,9 +10,10 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  placeholder: 'Поиск...',
+  placeholder: '',
   debounce: 300,
 })
+const { t } = useI18n()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
@@ -66,8 +68,8 @@ onBeforeUnmount(() => {
       class="search-input"
       type="search"
       :value="modelValue"
-      :placeholder="placeholder"
-      aria-label="Поиск"
+      :placeholder="placeholder || t('common.search')"
+      :aria-label="t('common.search')"
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"
@@ -79,7 +81,7 @@ onBeforeUnmount(() => {
       v-if="modelValue"
       class="search-clear"
       type="button"
-      aria-label="Очистить поиск"
+      :aria-label="t('common.reset')"
       @click="clearInput"
     >
       <X :size="16" :stroke-width="2" />

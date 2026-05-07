@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   ArrowLeft,
   Moon,
@@ -20,17 +21,18 @@ import {
 } from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { supportedLocales, type Locale } from '@/i18n/keys'
+import { updateUserPreferences } from '@/api/auth'
+import { useToast } from '@/composables/useToast'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 const router = useRouter()
+const { t } = useI18n()
 const ui = useUIStore()
 const auth = useAuthStore()
+const toast = useToast()
 
-const localeOptions = [
-  { value: 'ru', label: 'Русский' },
-  { value: 'uz', label: 'Узбекский' },
-  { value: 'en', label: 'Английский' },
-] as const
+const localeOptions = supportedLocales
 
 interface QuickLink {
   name: string
@@ -45,16 +47,16 @@ const workspaceLinks = computed<QuickLink[]>(() => {
   const links: QuickLink[] = []
 
   links.push({
-    name: 'Карта разделов',
-    description: 'Что где находится и какие экраны открываются из контекста',
+    name: t('settings.quickLinks.pageMap'),
+    description: t('settings.quickLinks.pageMapDescription'),
     routeName: 'settings-page-map',
     icon: Map,
   })
 
   if (auth.role === 'owner' || auth.role === 'cashier') {
     links.push({
-      name: 'История продаж',
-      description: 'Все продажи за смену и детали чеков',
+      name: t('settings.quickLinks.salesHistory'),
+      description: t('settings.quickLinks.salesHistoryDescription'),
       routeName: 'sales-history',
       icon: History,
     })
@@ -62,8 +64,8 @@ const workspaceLinks = computed<QuickLink[]>(() => {
 
   if (auth.role === 'owner' || auth.role === 'warehouse') {
     links.push({
-      name: 'Перемещения',
-      description: 'Переводы товаров между точками',
+      name: t('settings.quickLinks.transfers'),
+      description: t('settings.quickLinks.transfersDescription'),
       routeName: 'stock-transfers',
       icon: ArrowRightLeft,
     })
@@ -77,32 +79,32 @@ const managementLinks = computed<QuickLink[]>(() => {
 
   return [
     {
-      name: 'Покупатели',
-      description: 'Долги клиентов и ручные погашения',
+      name: t('settings.quickLinks.customers'),
+      description: t('settings.quickLinks.customersDescription'),
       routeName: 'customers',
       icon: Users,
     },
     {
-      name: 'Поставщики',
-      description: 'Кредиторка и оплаты поставщикам',
+      name: t('settings.quickLinks.suppliers'),
+      description: t('settings.quickLinks.suppliersDescription'),
       routeName: 'suppliers',
       icon: Truck,
     },
     {
-      name: 'Категории',
-      description: 'Структура каталога и шаблоны атрибутов',
+      name: t('settings.quickLinks.categories'),
+      description: t('settings.quickLinks.categoriesDescription'),
       routeName: 'categories',
       icon: FolderTree,
     },
     {
-      name: 'Обмен валют',
-      description: 'Кассовые операции и FX-обмен',
+      name: t('settings.quickLinks.exchange'),
+      description: t('settings.quickLinks.exchangeDescription'),
       routeName: 'finance-exchange',
       icon: Wallet,
     },
     {
-      name: 'Сверка',
-      description: 'Контроль остатков и расхождений',
+      name: t('settings.quickLinks.reconciliation'),
+      description: t('settings.quickLinks.reconciliationDescription'),
       routeName: 'reports-reconciliation',
       icon: Scale,
     },
@@ -117,49 +119,59 @@ function handleLogout(): void {
   auth.logout()
   router.push({ name: 'login' })
 }
+
+async function changeLocale(locale: Locale): Promise<void> {
+  ui.setLocale(locale)
+  try {
+    await updateUserPreferences({ locale })
+    toast.success(t('settings.languageSaved'))
+  } catch {
+    toast.warning(t('settings.languageSaveFailed'))
+  }
+}
 </script>
 
 <template>
   <div class="settings-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Настройки</h1>
+      <h1 class="page-title">{{ t('settings.title') }}</h1>
       <div class="header-spacer" />
     </header>
 
     <main class="content">
       <section class="card">
-        <h2 class="section-title">Внешний вид</h2>
+        <h2 class="section-title">{{ t('settings.appearance') }}</h2>
         <div class="setting-row">
           <div class="setting-meta">
-            <div class="setting-name">Тема</div>
-            <div class="setting-desc">Светлая или тёмная тема интерфейса</div>
+            <div class="setting-name">{{ t('settings.theme') }}</div>
+            <div class="setting-desc">{{ t('settings.themeDescription') }}</div>
           </div>
           <button class="toggle-btn" type="button" @click="ui.toggleTheme()">
             <Sun v-if="!isDark" :size="16" :stroke-width="1.75" />
             <Moon v-else :size="16" :stroke-width="1.75" />
-            <span>{{ isDark ? 'Тёмная' : 'Светлая' }}</span>
+            <span>{{ isDark ? t('settings.darkTheme') : t('settings.lightTheme') }}</span>
           </button>
         </div>
       </section>
 
       <section class="card">
-        <h2 class="section-title">Локализация</h2>
+        <h2 class="section-title">{{ t('settings.localization') }}</h2>
         <div class="setting-row vertical">
           <div class="setting-meta">
-            <div class="setting-name">Язык интерфейса</div>
-            <div class="setting-desc">Язык подписей и системных текстов</div>
+            <div class="setting-name">{{ t('settings.language') }}</div>
+            <div class="setting-desc">{{ t('settings.languageDescription') }}</div>
           </div>
-          <div class="locale-grid" role="group" aria-label="Выбор языка">
+          <div class="locale-grid" role="group" :aria-label="t('settings.language')">
             <button
               v-for="option in localeOptions"
               :key="option.value"
               class="locale-btn"
               :class="{ active: ui.locale === option.value }"
               type="button"
-              @click="ui.setLocale(option.value)"
+              @click="changeLocale(option.value)"
             >
               <Languages :size="14" :stroke-width="1.75" />
               {{ option.label }}
@@ -169,11 +181,11 @@ function handleLogout(): void {
       </section>
 
       <section class="card">
-        <h2 class="section-title">Режимы работы</h2>
+        <h2 class="section-title">{{ t('settings.modes') }}</h2>
         <div class="setting-row">
           <div class="setting-meta">
-            <div class="setting-name">Режим кассира</div>
-            <div class="setting-desc">Оставляет только продажи и скрывает остальные разделы</div>
+            <div class="setting-name">{{ t('settings.cashierMode') }}</div>
+            <div class="setting-desc">{{ t('settings.cashierModeDescription') }}</div>
           </div>
           <label class="switch">
             <input
@@ -187,7 +199,7 @@ function handleLogout(): void {
       </section>
 
       <section v-if="workspaceLinks.length > 0" class="card">
-        <h2 class="section-title">Рабочие разделы</h2>
+        <h2 class="section-title">{{ t('settings.workspace') }}</h2>
         <div class="nav-list">
           <button
             v-for="link in workspaceLinks"
@@ -206,7 +218,7 @@ function handleLogout(): void {
       </section>
 
       <section v-if="managementLinks.length > 0" class="card">
-        <h2 class="section-title">Справочники и контроль</h2>
+        <h2 class="section-title">{{ t('settings.management') }}</h2>
         <div class="nav-list">
           <button
             v-for="link in managementLinks"
@@ -225,26 +237,26 @@ function handleLogout(): void {
       </section>
 
       <section v-if="auth.isOwner" class="card">
-        <h2 class="section-title">Партнёрство</h2>
+        <h2 class="section-title">{{ t('settings.partnership') }}</h2>
         <button class="nav-row" type="button" @click="router.push({ name: 'owner-investors' })">
           <span class="nav-icon"><Users :size="16" :stroke-width="1.75" /></span>
           <span class="setting-meta">
-            <span class="setting-name">Инвесторы</span>
-            <span class="setting-desc">Приглашения и доступные инвесторы бизнеса</span>
+            <span class="setting-name">{{ t('settings.quickLinks.investors') }}</span>
+            <span class="setting-desc">{{ t('settings.quickLinks.investorsDescription') }}</span>
           </span>
         </button>
       </section>
 
       <section class="card danger">
-        <h2 class="section-title">Сессия</h2>
+        <h2 class="section-title">{{ t('settings.session') }}</h2>
         <div class="logout-wrap">
           <BaseButton type="button" variant="danger" size="md" :full-width="true" @click="handleLogout">
             <LogOut :size="16" :stroke-width="2" />
-            <span>Выйти из системы</span>
+            <span>{{ t('settings.logout') }}</span>
           </BaseButton>
           <p class="hint">
             <ShieldCheck :size="14" :stroke-width="1.75" />
-            Доступ к защищённым разделам будет закрыт до повторного входа.
+            {{ t('settings.logoutHint') }}
           </p>
         </div>
       </section>

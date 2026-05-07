@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { FileText, RefreshCcw } from 'lucide-vue-next'
 import { fetchInvestmentAgreements, type InvestmentAgreementListItem } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
@@ -9,6 +10,7 @@ import ProcurementSectionShell from '@/modules/intake/components/ProcurementSect
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const agreements = ref<InvestmentAgreementListItem[]>([])
 const loading = ref(false)
@@ -28,10 +30,10 @@ function balanceLabel(item: InvestmentAgreementListItem): string {
 }
 
 function statusLabel(status: string): string {
-  if (status === 'ACTIVE') return 'Активен'
-  if (status === 'OPEN') return 'Открыт'
-  if (status === 'CLOSED') return 'Закрыт'
-  if (status === 'CANCELLED') return 'Отменён'
+  if (status === 'ACTIVE') return t('domain.agreementStatus.ACTIVE')
+  if (status === 'OPEN') return t('domain.agreementStatus.OPEN')
+  if (status === 'CLOSED') return t('domain.agreementStatus.CLOSED')
+  if (status === 'CANCELLED') return t('domain.agreementStatus.CANCELLED')
   return status
 }
 
@@ -41,7 +43,7 @@ async function load(): Promise<void> {
   try {
     agreements.value = await fetchInvestmentAgreements()
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить инвестдоговоры'
+    error.value = err instanceof Error ? err.message : t('procurements.loadAgreementsFailed')
     toast.error(error.value)
   } finally {
     loading.value = false
@@ -58,13 +60,13 @@ onMounted(load)
 <template>
   <ProcurementSectionShell
     active-mode="agreements"
-    title="Договоры"
-    primary-label="Новый"
-    primary-aria-label="Новый инвестдоговор"
+    :title="t('procurements.agreementsTitle')"
+    :primary-label="t('procurements.new')"
+    :primary-aria-label="t('procurements.newAgreementAria')"
     @primary="goToCreate"
   >
     <template #header-actions>
-      <button class="icon-btn" type="button" aria-label="Обновить договоры" @click="load">
+      <button class="icon-btn" type="button" :aria-label="t('procurements.refreshAgreements')" @click="load">
         <RefreshCcw :size="17" />
       </button>
     </template>
@@ -72,23 +74,23 @@ onMounted(load)
     <template #summary>
       <div class="summary-grid">
         <div class="summary-tile">
-          <span class="summary-label">Активные</span>
+          <span class="summary-label">{{ t('procurements.activeAgreements') }}</span>
           <strong class="summary-value">{{ totals.open }}</strong>
         </div>
         <div class="summary-tile">
-          <span class="summary-label">Плановый бюджет</span>
+          <span class="summary-label">{{ t('procurements.plannedBudget') }}</span>
           <strong class="summary-value">{{ formatPrice(totals.budget, 'USD') }}</strong>
         </div>
       </div>
     </template>
 
     <div class="content">
-      <div v-if="loading" class="state">Загрузка...</div>
+      <div v-if="loading" class="state">{{ t('common.loading') }}...</div>
       <div v-else-if="error" class="state state-error">{{ error }}</div>
       <div v-else-if="agreements.length === 0" class="empty">
         <FileText :size="34" />
-        <strong>Инвестдоговоров пока нет</strong>
-        <span>Создайте договор, внесите деньги и откройте первый связанный приход.</span>
+        <strong>{{ t('procurements.noAgreements') }}</strong>
+        <span>{{ t('procurements.noAgreementsHint') }}</span>
       </div>
 
       <button
@@ -100,8 +102,8 @@ onMounted(load)
         @click="router.push({ name: 'agreement-detail', params: { id: agreement.id } })"
       >
         <div class="row-main">
-          <strong>Инвестдоговор #{{ agreement.id }}</strong>
-          <span>{{ agreement.supplier_name || 'Без поставщика' }} · {{ agreement.procurements_count }} приходов</span>
+          <strong>{{ t('procurements.agreementTitle', { id: agreement.id }) }}</strong>
+          <span>{{ agreement.supplier_name || t('procurements.supplierMissing') }} · {{ t('procurements.procurementsCount', { count: agreement.procurements_count }) }}</span>
         </div>
         <div class="row-side">
           <strong>{{ balanceLabel(agreement) }}</strong>

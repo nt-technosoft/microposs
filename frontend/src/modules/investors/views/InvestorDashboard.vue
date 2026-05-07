@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   ChevronRight,
   Landmark,
@@ -40,6 +41,7 @@ const router = useRouter()
 const route = useRoute()
 const toast = useToast()
 const auth = useAuthStore()
+const { t } = useI18n()
 const {
   rate: latestUsdRate,
   error: latestUsdRateError,
@@ -75,51 +77,60 @@ const previewProcurements = computed(() =>
 const heroConfig = computed(() => {
   if (dashboardMode.value === 'agreements') {
     return {
-      kicker: 'Связанные инвестдоговоры',
-      title: 'Баланс, распределение и остаток по каждому договору.',
+      kicker: t('investors.heroAgreementsKicker'),
+      title: t('investors.heroAgreementsTitle'),
       amount: formatLedgerTotal('capital_net'),
-      foot: `${activeAgreementCount.value} активн. · начислено ${formatLedgerTotal('profit_accrued')}`,
+      foot: t('investors.heroAgreementsFoot', {
+        count: activeAgreementCount.value,
+        amount: formatLedgerTotal('profit_accrued'),
+      }),
     }
   }
 
   if (dashboardMode.value === 'procurements') {
     return {
-      kicker: 'Связанные приходы',
-      title: 'Смотрите, где ваш капитал уже продан, а где ещё лежит в товаре.',
+      kicker: t('investors.heroProcurementsKicker'),
+      title: t('investors.heroProcurementsTitle'),
       amount: formatCapitalState('tracked_cost_uzs'),
-      foot: `${procurements.value.length} приходов · прогноз ${formatCapitalState('projected_partner_profit_uzs')}`,
+      foot: t('investors.heroProcurementsFoot', {
+        count: procurements.value.length,
+        amount: formatCapitalState('projected_partner_profit_uzs'),
+      }),
     }
   }
 
   return {
-      kicker: 'Общий обзор',
-      title: 'Один экран для капитала, прибыли и всех связанных приходов.',
+    kicker: t('investors.heroOverviewKicker'),
+    title: t('investors.heroOverviewTitle'),
     amount: formatLedgerTotal('profit_pending_payout'),
-    foot: `Начислено ${formatLedgerTotal('profit_accrued')} · выплачено ${formatLedgerTotal('dividends_paid')}`,
+    foot: t('investors.accruedPaid', {
+      accrued: formatLedgerTotal('profit_accrued'),
+      paid: formatLedgerTotal('dividends_paid'),
+    }),
   }
 })
 
 const summaryStats = computed(() => [
   {
-    label: 'К выплате',
+    label: t('investors.pendingPayout'),
     value: formatLedgerTotal('profit_pending_payout'),
-    hint: 'Что бизнес должен сейчас',
+    hint: t('investors.businessOwesNow'),
     accent: true,
   },
   {
-    label: 'Вложено',
+    label: t('investors.contributed'),
     value: formatLedgerTotal('capital_in'),
-    hint: 'Все вносы капитала',
+    hint: t('investors.allCapitalContributions'),
   },
   {
-    label: 'В товаре',
+    label: t('investors.inGoods'),
     value: formatCapitalState('tracked_cost_uzs'),
-    hint: 'Капитал, который ещё лежит в остатке',
+    hint: t('investors.capitalStillInStock'),
   },
   {
-    label: 'Прогноз инвестора',
+    label: t('investors.investorForecast'),
     value: formatCapitalState('projected_partner_profit_uzs'),
-    hint: 'Ожидаемая прибыль по остатку',
+    hint: t('investors.expectedProfitOnRemaining'),
   },
 ])
 
@@ -151,7 +162,7 @@ async function setReportCurrency(currency: ReportCurrency): Promise<void> {
       await loadLatestUsdRate()
     } catch {
       reportCurrency.value = 'UZS'
-      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
     }
   }
 }
@@ -180,16 +191,18 @@ function openSettings(): void {
 
 function agreementMeta(agreement: InvestorAgreementListItem): string {
   return [
-    agreement.supplier_name || 'Без поставщика',
+    agreement.supplier_name || t('procurements.supplierMissing'),
     formatShortDate(agreement.opened_at),
-    `${agreement.procurements_count} приход.`,
+    t('investors.procurementsCount', { count: agreement.procurements_count }),
   ].join(' · ')
 }
 
 function procurementMeta(procurement: InvestorProcurementListItem): string {
   return [
-    procurement.supplier_name || 'Без поставщика',
-    procurement.received_at ? `Принят ${formatShortDate(procurement.received_at)}` : `Открыт ${formatShortDate(procurement.opened_at)}`,
+    procurement.supplier_name || t('procurements.supplierMissing'),
+    procurement.received_at
+      ? t('investors.receivedAt', { date: formatShortDate(procurement.received_at) })
+      : t('investors.openedAt', { date: formatShortDate(procurement.opened_at) }),
   ].join(' · ')
 }
 
@@ -223,8 +236,8 @@ async function loadDashboard(): Promise<void> {
       }
     }
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить кабинет инвестора'
-    toast.error('Ошибка загрузки кабинета инвестора')
+    errorMessage.value = error instanceof Error ? error.message : t('investors.dashboardLoadFailed')
+    toast.error(t('investors.dashboardLoadError'))
   } finally {
     isLoading.value = false
   }
@@ -237,16 +250,20 @@ onMounted(loadDashboard)
   <div class="investor-shell">
     <header class="investor-header investor-header--actions">
       <div class="investor-header__copy">
-        <strong class="investor-header__title">Кабинет инвестора</strong>
+        <strong class="investor-header__title">{{ t('investors.dashboard') }}</strong>
         <span class="investor-header__caption">
-          {{ dashboardMode === 'overview' ? 'Общий обзор капитала' : dashboardMode === 'agreements' ? 'Договоры и распределение' : 'Приходы и капитал в товаре' }}
+          {{ dashboardMode === 'overview'
+            ? t('investors.overviewCaption')
+            : dashboardMode === 'agreements'
+              ? t('investors.agreementsCaption')
+              : t('investors.procurementsCaption') }}
         </span>
       </div>
       <div class="investor-header__actions">
-        <button type="button" aria-label="Настройки" @click="openSettings">
+        <button type="button" :aria-label="t('nav.settings')" @click="openSettings">
           <Settings :size="16" :stroke-width="1.75" />
         </button>
-        <button type="button" aria-label="Обновить" @click="loadDashboard">
+        <button type="button" :aria-label="t('common.refresh')" @click="loadDashboard">
           <RefreshCcw :size="16" :stroke-width="1.75" />
         </button>
       </div>
@@ -268,10 +285,9 @@ onMounted(loadDashboard)
       </section>
 
       <section v-else-if="!hasActiveBusinessLink" class="investor-state">
-        <strong>Кабинет пока не подключён</strong>
+        <strong>{{ t('investors.notConnectedTitle') }}</strong>
         <p>
-          Этот investor-аккаунт ещё не связан ни с одним бизнесом.
-          Откройте invite-ссылку от owner и примите её из текущего аккаунта.
+          {{ t('investors.notConnectedText') }}
         </p>
       </section>
 
@@ -281,14 +297,14 @@ onMounted(loadDashboard)
             <span class="investor-hero__kicker">{{ heroConfig.kicker }}</span>
             <h1 class="investor-hero__title">{{ heroConfig.title }}</h1>
             <div class="investor-hero__meta">
-              <span class="investor-chip investor-chip--glass">Связь активна</span>
-              <span class="investor-chip investor-chip--glass">{{ agreements.length }} договоров</span>
-              <span class="investor-chip investor-chip--glass">{{ procurements.length }} приходов</span>
+              <span class="investor-chip investor-chip--glass">{{ t('investors.linkActive') }}</span>
+              <span class="investor-chip investor-chip--glass">{{ t('investors.agreementsCount', { count: agreements.length }) }}</span>
+              <span class="investor-chip investor-chip--glass">{{ t('investors.procurementsCount', { count: procurements.length }) }}</span>
             </div>
           </div>
 
           <div class="investor-hero__value">
-            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+            <div class="investor-currency-switch" role="group" :aria-label="t('investors.metricCurrency')">
               <button type="button" :class="{ active: reportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
               <button type="button" :class="{ active: reportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
             </div>
@@ -297,14 +313,14 @@ onMounted(loadDashboard)
           </div>
         </section>
 
-        <nav class="investor-segments" aria-label="Разделы кабинета инвестора">
+        <nav class="investor-segments" :aria-label="t('investors.dashboardSections')">
           <button
             type="button"
             class="investor-segment"
             :class="{ 'is-active': dashboardMode === 'overview' }"
             @click="openDashboardMode('overview')"
           >
-            Обзор
+            {{ t('reports.overview') }}
           </button>
           <button
             type="button"
@@ -312,7 +328,7 @@ onMounted(loadDashboard)
             :class="{ 'is-active': dashboardMode === 'agreements' }"
             @click="openDashboardMode('agreements')"
           >
-            Договоры
+            {{ t('procurements.agreements') }}
           </button>
           <button
             type="button"
@@ -320,7 +336,7 @@ onMounted(loadDashboard)
             :class="{ 'is-active': dashboardMode === 'procurements' }"
             @click="openDashboardMode('procurements')"
           >
-            Приходы
+            {{ t('procurements.title') }}
           </button>
         </nav>
 
@@ -343,9 +359,9 @@ onMounted(loadDashboard)
         >
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Мои договоры</h2>
+              <h2 class="investor-panel__title">{{ t('investors.myAgreements') }}</h2>
               <p class="investor-panel__hint">
-                Каждый договор показывает общий баланс, поставщика и сколько приходов уже отработало по этой связке.
+                {{ t('investors.myAgreementsHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -354,7 +370,7 @@ onMounted(loadDashboard)
           </div>
 
           <div v-if="previewAgreements.length === 0" class="investor-empty">
-            Инвестдоговоров с вашим участием пока нет.
+            {{ t('investors.noMyAgreements') }}
           </div>
 
           <div v-else class="investor-list">
@@ -367,7 +383,7 @@ onMounted(loadDashboard)
             >
               <div class="investor-list-row__main">
                 <div class="dashboard-row-head">
-                  <strong class="investor-list-row__title">Договор #{{ agreement.id }}</strong>
+                  <strong class="investor-list-row__title">{{ t('investors.agreementNumber', { id: agreement.id }) }}</strong>
                   <span class="investor-chip" :class="`investor-chip--${agreementStatusTone(agreement.status)}`">
                     {{ agreementStatusLabel(agreement.status) }}
                   </span>
@@ -378,7 +394,7 @@ onMounted(loadDashboard)
               <div class="investor-list-row__side dashboard-row-side">
                 <div class="dashboard-row-side__copy">
                   <span class="investor-list-row__value tabular-nums">{{ formatBalanceLabel(agreement.balances) }}</span>
-                  <span class="investor-list-row__caption">Баланс договора</span>
+                  <span class="investor-list-row__caption">{{ t('investors.agreementBalance') }}</span>
                 </div>
                 <ChevronRight class="investor-list-row__chevron" :size="16" :stroke-width="1.9" />
               </div>
@@ -391,7 +407,7 @@ onMounted(loadDashboard)
             class="investor-inline-button"
             @click="openDashboardMode('agreements')"
           >
-            Все договоры
+            {{ t('investors.allAgreements') }}
             <ChevronRight :size="16" :stroke-width="1.9" />
           </button>
         </section>
@@ -402,9 +418,9 @@ onMounted(loadDashboard)
         >
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Мои приходы</h2>
+              <h2 class="investor-panel__title">{{ t('investors.myProcurements') }}</h2>
               <p class="investor-panel__hint">
-                Здесь видно, в каких приходах сейчас лежит капитал, а какие уже закрыли часть прибыли через продажи.
+                {{ t('investors.myProcurementsHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -413,7 +429,7 @@ onMounted(loadDashboard)
           </div>
 
           <div v-if="previewProcurements.length === 0" class="investor-empty">
-            Приходов с вашим участием пока нет.
+            {{ t('investors.noMyProcurements') }}
           </div>
 
           <div v-else class="investor-list">
@@ -438,9 +454,9 @@ onMounted(loadDashboard)
 
               <div class="investor-list-row__side dashboard-row-side">
                 <div class="dashboard-row-side__copy">
-                  <span class="investor-list-row__value">Открыть</span>
+                  <span class="investor-list-row__value">{{ t('common.details') }}</span>
                   <span class="investor-list-row__caption">
-                    {{ procurement.received_at ? 'Есть движение по товару' : 'В процессе закупки' }}
+                    {{ procurement.received_at ? t('investors.goodsMoved') : t('investors.procurementInProgress') }}
                   </span>
                 </div>
                 <ChevronRight class="investor-list-row__chevron" :size="16" :stroke-width="1.9" />
@@ -454,7 +470,7 @@ onMounted(loadDashboard)
             class="investor-inline-button"
             @click="openDashboardMode('procurements')"
           >
-            Все приходы
+            {{ t('investors.allProcurements') }}
             <ChevronRight :size="16" :stroke-width="1.9" />
           </button>
         </section>
@@ -465,9 +481,9 @@ onMounted(loadDashboard)
         >
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Капитал в товаре</h2>
+              <h2 class="investor-panel__title">{{ t('investors.capitalInGoods') }}</h2>
               <p class="investor-panel__hint">
-                Срез по себестоимости и прогнозной выручке помогает быстро понять, сколько капитала уже вернулось, а сколько ещё работает на полке.
+                {{ t('investors.capitalInGoodsHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -477,24 +493,24 @@ onMounted(loadDashboard)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Продано по себестоимости</span>
+              <span class="investor-detail-card__label">{{ t('investors.soldByCost') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
-              <span class="investor-detail-card__hint">Часть капитала уже прошла через продажи.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.soldByCostHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <span class="investor-detail-card__label">{{ t('investors.remainingInGoods') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
-              <span class="investor-detail-card__hint">Себестоимость товаров, которые ещё лежат в остатке.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.remainingInGoodsHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Выручка по проданному</span>
+              <span class="investor-detail-card__label">{{ t('investors.revenueOnSold') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
-              <span class="investor-detail-card__hint">Что продажи уже принесли на этом капитале.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.revenueOnSoldHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Прогноз выручки</span>
+              <span class="investor-detail-card__label">{{ t('investors.revenueForecast') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
-              <span class="investor-detail-card__hint">Потенциальная выручка, если остаток продастся по текущей цене.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.revenueForecastHint') }}</span>
             </article>
           </div>
         </section>
@@ -505,9 +521,9 @@ onMounted(loadDashboard)
         >
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Выплаты и чистый остаток</h2>
+              <h2 class="investor-panel__title">{{ t('investors.payoutsAndNet') }}</h2>
               <p class="investor-panel__hint">
-                Быстрый cash-view по вашему кабинету без перехода в детальные отчёты.
+                {{ t('investors.payoutsAndNetHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -517,34 +533,34 @@ onMounted(loadDashboard)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Чистый капитал</span>
+              <span class="investor-detail-card__label">{{ t('investors.netCapital') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('capital_net') }}</strong>
-              <span class="investor-detail-card__hint">Вносы минус возвраты капитала.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.netCapitalHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Начисленная прибыль</span>
+              <span class="investor-detail-card__label">{{ t('investors.accruedProfit') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatLedgerTotal('profit_accrued') }}</strong>
-              <span class="investor-detail-card__hint">Прибыль, которую система уже отнесла на вас.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.accruedProfitHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Снято возвратами</span>
+              <span class="investor-detail-card__label">{{ t('investors.reversedByReturns') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">{{ formatLedgerTotal('profit_reversed') }}</strong>
-              <span class="investor-detail-card__hint">Прибыль, сторнированная после возврата продажи.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.reversedByReturnsHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Убытки списаний</span>
+              <span class="investor-detail-card__label">{{ t('investors.writeoffLosses') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">{{ formatLedgerTotal('losses_incurred') }}</strong>
-              <span class="investor-detail-card__hint">Списания и утилизации, отнесённые на вашу долю.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.writeoffLossesHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Дивиденды выплачены</span>
+              <span class="investor-detail-card__label">{{ t('investors.dividendsPaid') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('dividends_paid') }}</strong>
-              <span class="investor-detail-card__hint">Фактические выплаты, которые вы уже получили.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.dividendsPaidHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Бизнес должен</span>
+              <span class="investor-detail-card__label">{{ t('investors.businessOwes') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatLedgerTotal('profit_pending_payout') }}</strong>
-              <span class="investor-detail-card__hint">Невыплаченная прибыль на текущий момент.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.businessOwesHint') }}</span>
             </article>
           </div>
         </section>
@@ -552,17 +568,17 @@ onMounted(loadDashboard)
         <section v-if="dashboardMode === 'overview'" class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Что смотреть в первую очередь</h2>
+              <h2 class="investor-panel__title">{{ t('investors.firstLookTitle') }}</h2>
             </div>
             <span class="investor-panel__icon">
               <TrendingUp :size="18" :stroke-width="2" />
             </span>
           </div>
           <p class="investor-note">
-            Если нужно понять, сколько можно выводить сейчас, смотрите «К выплате». Если задача понять, где застрял капитал, идите в «Приходы» и откройте конкретный приход. Если нужен контекст по договору и общему балансу, откройте «Договоры».
+            {{ t('investors.firstLookText') }}
           </p>
           <button type="button" class="investor-link-button" @click="openDashboardMode('procurements')">
-            Перейти в приходы
+            {{ t('investors.goToProcurements') }}
             <PackageSearch :size="16" :stroke-width="1.9" />
           </button>
         </section>

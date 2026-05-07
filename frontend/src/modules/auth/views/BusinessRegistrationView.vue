@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Building2, Lock, Phone, Store, User2 } from 'lucide-vue-next'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { createBusinessRegistrationRequest } from '@/api/core'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const form = reactive({
   first_name: '',
@@ -25,12 +27,12 @@ function goBack() {
 }
 
 function validateForm(): string {
-  if (!form.first_name.trim()) return 'Введите имя'
-  if (!form.last_name.trim()) return 'Введите фамилию'
-  if (!form.phone.trim()) return 'Введите номер телефона'
-  if (!form.business_name.trim()) return 'Введите название бизнеса'
-  if (!form.username.trim()) return 'Введите логин'
-  if (form.password.length < 6) return 'Пароль должен содержать не менее 6 символов'
+  if (!form.first_name.trim()) return t('auth.firstNameRequired')
+  if (!form.last_name.trim()) return t('auth.lastNameRequired')
+  if (!form.phone.trim()) return t('auth.phoneRequired')
+  if (!form.business_name.trim()) return t('auth.businessNameRequired')
+  if (!form.username.trim()) return t('auth.loginRequired')
+  if (form.password.length < 6) return t('auth.passwordMin6')
   return ''
 }
 
@@ -55,7 +57,7 @@ async function handleSubmit() {
       username: form.username.trim(),
       password: form.password,
     })
-    successMessage.value = 'Заявка отправлена. После подтверждения вы сможете войти по этим данным.'
+    successMessage.value = t('auth.registrationSent')
     form.first_name = ''
     form.last_name = ''
     form.phone = ''
@@ -64,7 +66,7 @@ async function handleSubmit() {
     form.password = ''
   } catch (error: unknown) {
     const axiosError = error as { response?: { data?: { detail?: string } } }
-    errorMessage.value = axiosError?.response?.data?.detail || 'Не удалось отправить заявку.'
+    errorMessage.value = axiosError?.response?.data?.detail || t('auth.registrationFailed')
   } finally {
     isSubmitting.value = false
   }
@@ -76,37 +78,37 @@ async function handleSubmit() {
     <div class="registration-shell">
       <button type="button" class="back-button" @click="goBack">
         <ArrowLeft :size="18" stroke-width="1.9" />
-        <span>Ко входу</span>
+        <span>{{ t('auth.backToLogin') }}</span>
       </button>
 
       <section class="hero-panel">
-        <span class="hero-panel__eyebrow">Подключение бизнеса</span>
-        <h1 class="hero-panel__title">Короткая заявка на регистрацию</h1>
+        <span class="hero-panel__eyebrow">{{ t('auth.businessConnection') }}</span>
+        <h1 class="hero-panel__title">{{ t('auth.registrationRequestTitle') }}</h1>
         <p class="hero-panel__text">
-          Оставьте базовые данные. После подтверждения в платформе аккаунт бизнеса станет активным.
+          {{ t('auth.registrationRequestText') }}
         </p>
       </section>
 
       <section class="form-panel">
         <form class="request-form" @submit.prevent="handleSubmit">
           <label class="field">
-            <span class="field__label">Имя</span>
+            <span class="field__label">{{ t('auth.firstName') }}</span>
             <span class="field__control">
               <User2 :size="18" stroke-width="1.8" class="field__icon" />
-              <input v-model="form.first_name" type="text" class="field__input" placeholder="Имя владельца" />
+              <input v-model="form.first_name" type="text" class="field__input" :placeholder="t('auth.ownerFirstNamePlaceholder')" />
             </span>
           </label>
 
           <label class="field">
-            <span class="field__label">Фамилия</span>
+            <span class="field__label">{{ t('auth.lastName') }}</span>
             <span class="field__control">
               <User2 :size="18" stroke-width="1.8" class="field__icon" />
-              <input v-model="form.last_name" type="text" class="field__input" placeholder="Фамилия владельца" />
+              <input v-model="form.last_name" type="text" class="field__input" :placeholder="t('auth.ownerLastNamePlaceholder')" />
             </span>
           </label>
 
           <label class="field">
-            <span class="field__label">Телефон</span>
+            <span class="field__label">{{ t('customers.phone') }}</span>
             <span class="field__control">
               <Phone :size="18" stroke-width="1.8" class="field__icon" />
               <input v-model="form.phone" type="tel" class="field__input" placeholder="+998 __ ___ __ __" />
@@ -114,26 +116,26 @@ async function handleSubmit() {
           </label>
 
           <label class="field">
-            <span class="field__label">Название бизнеса</span>
+            <span class="field__label">{{ t('auth.businessName') }}</span>
             <span class="field__control">
               <Store :size="18" stroke-width="1.8" class="field__icon" />
-              <input v-model="form.business_name" type="text" class="field__input" placeholder="Например, Nur Market" />
+              <input v-model="form.business_name" type="text" class="field__input" :placeholder="t('auth.businessNamePlaceholder')" />
             </span>
           </label>
 
           <label class="field">
-            <span class="field__label">Логин</span>
+            <span class="field__label">{{ t('auth.username') }}</span>
             <span class="field__control">
               <Building2 :size="18" stroke-width="1.8" class="field__icon" />
-              <input v-model="form.username" type="text" class="field__input" placeholder="Логин для входа" />
+              <input v-model="form.username" type="text" class="field__input" :placeholder="t('auth.loginPlaceholder')" />
             </span>
           </label>
 
           <label class="field">
-            <span class="field__label">Пароль</span>
+            <span class="field__label">{{ t('auth.password') }}</span>
             <span class="field__control">
               <Lock :size="18" stroke-width="1.8" class="field__icon" />
-              <input v-model="form.password" type="password" class="field__input" placeholder="Не менее 6 символов" />
+              <input v-model="form.password" type="password" class="field__input" :placeholder="t('auth.passwordCreatePlaceholder')" />
             </span>
           </label>
 
@@ -148,7 +150,7 @@ async function handleSubmit() {
             :disabled="isSubmitting"
             :full-width="true"
           >
-            {{ isSubmitting ? 'Отправка…' : 'Отправить заявку' }}
+            {{ isSubmitting ? t('auth.registrationSubmitting') : t('auth.submitRegistration') }}
           </BaseButton>
         </form>
       </section>

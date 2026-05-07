@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   CheckCircle2,
   LayoutDashboard,
@@ -20,11 +21,13 @@ import {
   type BusinessRegistrationRequestStatus,
 } from '@/api/core'
 import { useAuthStore } from '@/stores/auth'
+import { intlLocale } from '@/i18n/format'
 
 type FilterValue = 'ALL' | BusinessRegistrationRequestStatus
 
 const router = useRouter()
 const auth = useAuthStore()
+const { t, locale } = useI18n()
 
 const requests = ref<BusinessRegistrationRequest[]>([])
 const isLoading = ref(false)
@@ -32,25 +35,25 @@ const loadError = ref('')
 const actionId = ref<number | null>(null)
 const filter = ref<FilterValue>('PENDING')
 
-const filterOptions: Array<{ value: FilterValue, label: string }> = [
-  { value: 'PENDING', label: 'Ожидают' },
-  { value: 'APPROVED', label: 'Подтверждены' },
-  { value: 'REJECTED', label: 'Отклонены' },
-  { value: 'ALL', label: 'Все' },
-]
+const filterOptions = computed<Array<{ value: FilterValue, label: string }>>(() => [
+  { value: 'PENDING', label: t('platformAdmin.filter.pending') },
+  { value: 'APPROVED', label: t('platformAdmin.filter.approved') },
+  { value: 'REJECTED', label: t('platformAdmin.filter.rejected') },
+  { value: 'ALL', label: t('platformAdmin.filter.all') },
+])
 
-const statusMeta: Record<BusinessRegistrationRequestStatus, { label: string, tone: string }> = {
-  PENDING: { label: 'Ожидает', tone: 'pending' },
-  APPROVED: { label: 'Подтверждена', tone: 'approved' },
-  REJECTED: { label: 'Отклонена', tone: 'rejected' },
-}
+const statusMeta = computed<Record<BusinessRegistrationRequestStatus, { label: string, tone: string }>>(() => ({
+  PENDING: { label: t('platformAdmin.status.pending'), tone: 'pending' },
+  APPROVED: { label: t('platformAdmin.status.approved'), tone: 'approved' },
+  REJECTED: { label: t('platformAdmin.status.rejected'), tone: 'rejected' },
+}))
 
-const futureSections = [
-  { label: 'Заявки', icon: ShieldCheck, active: true },
-  { label: 'Бизнесы', icon: Store, active: false },
-  { label: 'Инвесторы', icon: Users, active: false },
-  { label: 'Дашборд', icon: LayoutDashboard, active: false },
-]
+const futureSections = computed(() => [
+  { label: t('platformAdmin.sections.requests'), icon: ShieldCheck, active: true },
+  { label: t('platformAdmin.sections.businesses'), icon: Store, active: false },
+  { label: t('platformAdmin.sections.investors'), icon: Users, active: false },
+  { label: t('platformAdmin.sections.dashboard'), icon: LayoutDashboard, active: false },
+])
 
 const pendingCount = computed(() => requests.value.filter((item) => item.status === 'PENDING').length)
 const approvedCount = computed(() => requests.value.filter((item) => item.status === 'APPROVED').length)
@@ -74,7 +77,7 @@ const visibleRequests = computed(() => {
 
 function formatDateTime(value: string | null) {
   if (!value) return '—'
-  return new Intl.DateTimeFormat('ru-RU', {
+  return new Intl.DateTimeFormat(intlLocale(locale.value), {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
@@ -89,7 +92,7 @@ async function loadRequests() {
   try {
     requests.value = await fetchBusinessRegistrationRequests()
   } catch {
-    loadError.value = 'Не удалось загрузить заявки.'
+    loadError.value = t('platformAdmin.loadFailed')
   } finally {
     isLoading.value = false
   }
@@ -107,7 +110,7 @@ async function approveRequest(requestItem: BusinessRegistrationRequest) {
     const updated = await approveBusinessRegistrationRequest(requestItem.id)
     replaceRequest(updated)
   } catch {
-    loadError.value = 'Не удалось подтвердить заявку.'
+    loadError.value = t('platformAdmin.approveFailed')
   } finally {
     actionId.value = null
   }
@@ -115,7 +118,7 @@ async function approveRequest(requestItem: BusinessRegistrationRequest) {
 
 async function rejectRequest(requestItem: BusinessRegistrationRequest) {
   if (actionId.value !== null) return
-  const reason = window.prompt('Причина отклонения, если нужна', '')
+  const reason = window.prompt(t('platformAdmin.rejectionPrompt'), '')
   if (reason === null) return
 
   actionId.value = requestItem.id
@@ -124,7 +127,7 @@ async function rejectRequest(requestItem: BusinessRegistrationRequest) {
     const updated = await rejectBusinessRegistrationRequest(requestItem.id, reason)
     replaceRequest(updated)
   } catch {
-    loadError.value = 'Не удалось отклонить заявку.'
+    loadError.value = t('platformAdmin.rejectFailed')
   } finally {
     actionId.value = null
   }
@@ -145,16 +148,16 @@ onMounted(() => {
     <div class="platform-admin-shell">
       <section class="admin-hero">
         <div class="admin-hero__content">
-          <span class="admin-hero__eyebrow">Platform admin</span>
-          <h1 class="admin-hero__title">Заявки на подключение</h1>
+          <span class="admin-hero__eyebrow">{{ t('platformAdmin.eyebrow') }}</span>
+          <h1 class="admin-hero__title">{{ t('platformAdmin.title') }}</h1>
           <p class="admin-hero__text">
-            Пока здесь только review новых бизнес-аккаунтов. Остальные разделы оставлены как каркас.
+            {{ t('platformAdmin.text') }}
           </p>
         </div>
 
         <button type="button" class="logout-button" @click="logout">
           <LogOut :size="18" stroke-width="1.9" />
-          <span>Выйти</span>
+          <span>{{ t('platformAdmin.logout') }}</span>
         </button>
       </section>
 
@@ -169,21 +172,21 @@ onMounted(() => {
         >
           <component :is="section.icon" :size="16" stroke-width="1.8" />
           <span>{{ section.label }}</span>
-          <small v-if="!section.active">soon</small>
+          <small v-if="!section.active">{{ t('platformAdmin.soon') }}</small>
         </button>
       </section>
 
       <section class="overview-strip">
         <article class="metric-card">
-          <span class="metric-card__label">Ожидают</span>
+          <span class="metric-card__label">{{ t('platformAdmin.filter.pending') }}</span>
           <strong class="metric-card__value">{{ pendingCount }}</strong>
         </article>
         <article class="metric-card">
-          <span class="metric-card__label">Подтверждены</span>
+          <span class="metric-card__label">{{ t('platformAdmin.filter.approved') }}</span>
           <strong class="metric-card__value">{{ approvedCount }}</strong>
         </article>
         <article class="metric-card">
-          <span class="metric-card__label">Отклонены</span>
+          <span class="metric-card__label">{{ t('platformAdmin.filter.rejected') }}</span>
           <strong class="metric-card__value">{{ rejectedCount }}</strong>
         </article>
       </section>
@@ -205,13 +208,13 @@ onMounted(() => {
 
           <button type="button" class="refresh-button" @click="loadRequests">
             <RefreshCw :size="16" stroke-width="1.9" />
-            <span>Обновить</span>
+            <span>{{ t('common.refresh') }}</span>
           </button>
         </div>
 
         <p v-if="loadError" class="workspace-message workspace-message--error">{{ loadError }}</p>
-        <p v-else-if="isLoading" class="workspace-message">Загрузка заявок…</p>
-        <p v-else-if="visibleRequests.length === 0" class="workspace-message">Заявок в этом статусе пока нет.</p>
+        <p v-else-if="isLoading" class="workspace-message">{{ t('platformAdmin.loadingRequests') }}</p>
+        <p v-else-if="visibleRequests.length === 0" class="workspace-message">{{ t('platformAdmin.noRequests') }}</p>
 
         <div v-else class="request-list">
           <article v-for="item in visibleRequests" :key="item.id" class="request-card">
@@ -229,27 +232,27 @@ onMounted(() => {
 
             <div class="request-card__details">
               <div class="detail-row">
-                <span class="detail-row__label">Логин</span>
+                <span class="detail-row__label">{{ t('platformAdmin.login') }}</span>
                 <span class="detail-row__value">{{ item.username }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-row__label">Телефон</span>
+                <span class="detail-row__label">{{ t('platformAdmin.phone') }}</span>
                 <span class="detail-row__value">{{ item.phone }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-row__label">Создана</span>
+                <span class="detail-row__label">{{ t('platformAdmin.createdAt') }}</span>
                 <span class="detail-row__value">{{ formatDateTime(item.created_at) }}</span>
               </div>
               <div v-if="item.reviewed_at" class="detail-row">
-                <span class="detail-row__label">Проверена</span>
+                <span class="detail-row__label">{{ t('platformAdmin.reviewedAt') }}</span>
                 <span class="detail-row__value">{{ formatDateTime(item.reviewed_at) }}</span>
               </div>
               <div v-if="item.approved_business_name" class="detail-row">
-                <span class="detail-row__label">Созданный бизнес</span>
+                <span class="detail-row__label">{{ t('platformAdmin.createdBusiness') }}</span>
                 <span class="detail-row__value">{{ item.approved_business_name }}</span>
               </div>
               <div v-if="item.rejection_reason" class="detail-row detail-row--stacked">
-                <span class="detail-row__label">Причина отклонения</span>
+                <span class="detail-row__label">{{ t('platformAdmin.rejectionReason') }}</span>
                 <span class="detail-row__value">{{ item.rejection_reason }}</span>
               </div>
             </div>
@@ -262,7 +265,7 @@ onMounted(() => {
                 @click="rejectRequest(item)"
               >
                 <XCircle :size="16" stroke-width="1.8" />
-                Отклонить
+                {{ t('platformAdmin.reject') }}
               </BaseButton>
               <BaseButton
                 :disabled="actionId === item.id"
@@ -270,7 +273,7 @@ onMounted(() => {
                 @click="approveRequest(item)"
               >
                 <CheckCircle2 :size="16" stroke-width="1.8" />
-                Подтвердить
+                {{ t('platformAdmin.approve') }}
               </BaseButton>
             </div>
           </article>

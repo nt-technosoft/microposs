@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Banknote, CreditCard, FileText, Check, UserPlus, User } from 'lucide-vue-next'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
@@ -26,6 +27,7 @@ const salesStore = useSalesStore()
 const customersStore = useCustomersStore()
 const { generateRequestId } = useIdempotency()
 const toast = useToast()
+const { t } = useI18n()
 
 // ==============================
 // View state
@@ -45,11 +47,11 @@ interface PaymentOption {
   icon: typeof Banknote
 }
 
-const paymentOptions: PaymentOption[] = [
-  { value: PaymentMethod.CASH,   label: 'Наличные', icon: Banknote },
-  { value: PaymentMethod.CARD,   label: 'Карта',    icon: CreditCard },
-  { value: PaymentMethod.CREDIT, label: 'В долг',   icon: FileText },
-]
+const paymentOptions = computed<PaymentOption[]>(() => [
+  { value: PaymentMethod.CASH,   label: t('domain.paymentMethod.CASH'), icon: Banknote },
+  { value: PaymentMethod.CARD,   label: t('domain.paymentMethod.CARD'), icon: CreditCard },
+  { value: PaymentMethod.CREDIT, label: t('domain.paymentMethod.CREDIT'), icon: FileText },
+])
 
 const selectedMethod = ref<PaymentMethod>(PaymentMethod.CASH)
 const creditRequired = computed(() => selectedMethod.value === PaymentMethod.CREDIT)
@@ -115,17 +117,17 @@ const canSubmit = computed(
 
 async function confirmSale(): Promise<void> {
   if (creditRequired.value && !selectedCustomer.value) {
-    toast.error('Выберите покупателя для продажи в долг')
+    toast.error(t('sales.chooseCustomerForCredit'))
     return
   }
 
   if (!sessionStore.currentSession) {
-    toast.error('Нет активной кассовой смены')
+    toast.error(t('sales.noActiveSession'))
     return
   }
 
   if (cartStore.hasAvailabilityIssues || cartStore.hasLocationMismatch) {
-    toast.error('Проверь остатки магазина в корзине')
+    toast.error(t('sales.checkCartStock'))
     return
   }
 
@@ -157,7 +159,7 @@ async function confirmSale(): Promise<void> {
     cartStore.clear()
     viewState.value = 'success'
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Не удалось оформить продажу'
+    const message = error instanceof Error ? error.message : t('sales.createSaleFailed')
     toast.error(message)
   }
 }
@@ -199,17 +201,17 @@ function goToHistory(): void {
     <template v-if="viewState === 'checkout'">
       <!-- Header -->
       <header class="checkout-header">
-        <button class="back-btn" aria-label="Назад" @click="goBack">
+        <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
           <ArrowLeft :size="20" :stroke-width="2" />
         </button>
-        <h1 class="checkout-title">Оформление</h1>
+        <h1 class="checkout-title">{{ t('sales.checkoutTitle') }}</h1>
         <div class="header-spacer" />
       </header>
 
       <main class="checkout-content">
         <!-- Amount hero -->
-        <section class="amount-section" aria-label="Сумма к оплате">
-          <p class="amount-label">Сумма к оплате</p>
+        <section class="amount-section" :aria-label="t('sales.amountDue')">
+          <p class="amount-label">{{ t('sales.amountDue') }}</p>
           <div class="amount-totals">
             <strong
               v-for="total in checkoutTotals"
@@ -221,46 +223,40 @@ function goToHistory(): void {
           </div>
           <p class="amount-meta">
             {{ cartStore.itemCount }}
-            {{
-              cartStore.itemCount === 1
-                ? 'товар'
-                : cartStore.itemCount < 5
-                  ? 'товара'
-                  : 'товаров'
-            }}
+            {{ t('sales.itemCount', { count: cartStore.itemCount }) }}
           </p>
         </section>
 
-        <section v-if="!sessionStore.isOpen" class="session-alert" aria-label="Статус смены">
+        <section v-if="!sessionStore.isOpen" class="session-alert" :aria-label="t('common.status')">
           <div class="session-alert__body">
-            <p class="session-alert__title">Нет открытой смены</p>
-            <p class="session-alert__text">Открой смену, чтобы подтвердить продажу.</p>
+            <p class="session-alert__title">{{ t('sales.noOpenShift') }}</p>
+            <p class="session-alert__text">{{ t('sales.shiftRequiredToConfirm') }}</p>
           </div>
           <BaseButton variant="secondary" size="sm" @click="openSession">
-            Открыть смену
+            {{ t('sales.openShift') }}
           </BaseButton>
         </section>
 
         <section
           v-else-if="cartStore.hasAvailabilityIssues || cartStore.hasLocationMismatch"
           class="session-alert"
-          aria-label="Проверка остатков"
+          :aria-label="t('sales.checkShopStock')"
         >
           <div class="session-alert__body">
-            <p class="session-alert__title">Проверь остатки магазина</p>
+            <p class="session-alert__title">{{ t('sales.checkShopStock') }}</p>
             <p class="session-alert__text">
-              В корзине есть позиции сверх доступного остатка или из другой точки продаж.
+              {{ t('sales.stockIssueInCart') }}
             </p>
           </div>
           <BaseButton variant="secondary" size="sm" @click="goBack">
-            Корзина
+            {{ t('sales.cart') }}
           </BaseButton>
         </section>
 
         <!-- Payment method -->
         <section class="section" aria-labelledby="payment-heading">
-          <h2 id="payment-heading" class="section-heading">Способ оплаты</h2>
-          <div class="payment-grid" role="radiogroup" aria-label="Способ оплаты">
+          <h2 id="payment-heading" class="section-heading">{{ t('sales.paymentMethod') }}</h2>
+          <div class="payment-grid" role="radiogroup" :aria-label="t('sales.paymentMethod')">
             <button
               v-for="option in paymentOptions"
               :key="option.value"
@@ -284,8 +280,8 @@ function goToHistory(): void {
         <!-- Customer -->
         <section class="section" aria-labelledby="customer-heading">
           <h2 id="customer-heading" class="section-heading">
-            Покупатель
-            <span v-if="creditRequired" class="required-badge">обязательно</span>
+            {{ t('sales.customer') }}
+            <span v-if="creditRequired" class="required-badge">{{ t('common.required') }}</span>
           </h2>
 
           <!-- Selected customer chip -->
@@ -301,7 +297,7 @@ function goToHistory(): void {
             </div>
             <button
               class="selected-customer__remove"
-              aria-label="Убрать покупателя"
+              :aria-label="t('sales.removeCustomer')"
               @click="deselectCustomer"
             >
               ×
@@ -317,15 +313,15 @@ function goToHistory(): void {
           >
             <UserPlus :size="20" :stroke-width="1.75" aria-hidden="true" />
             <span>
-              {{ creditRequired ? 'Выберите покупателя' : 'Добавить покупателя (опционально)' }}
+              {{ creditRequired ? t('sales.chooseCustomer') : `${t('sales.addCustomerOptional')} (${t('common.optional')})` }}
             </span>
           </button>
         </section>
 
         <!-- Order summary -->
         <section class="section" aria-labelledby="order-heading">
-          <h2 id="order-heading" class="section-heading">Состав заказа</h2>
-          <ul class="order-lines" aria-label="Позиции заказа">
+          <h2 id="order-heading" class="section-heading">{{ t('sales.orderLines') }}</h2>
+          <ul class="order-lines" :aria-label="t('sales.orderLinesAria')">
             <li
               v-for="(item, index) in cartStore.items"
               :key="`${item.product_variant.id}-${index}`"
@@ -334,7 +330,7 @@ function goToHistory(): void {
               <div class="order-line__name-wrap">
                 <span class="order-line__name">{{ item.product_name }}</span>
                 <span v-if="item.price_changed" class="order-line__price-change">
-                  Цена изменена
+                  {{ t('sales.priceChanged') }}
                 </span>
               </div>
               <span class="order-line__qty">× {{ item.quantity }}</span>
@@ -349,7 +345,7 @@ function goToHistory(): void {
             </li>
           </ul>
           <div class="order-total-row">
-            <span class="order-total-label">Итого</span>
+            <span class="order-total-label">{{ t('common.total') }}</span>
             <div class="order-total-values">
               <strong
                 v-for="total in checkoutTotals"
@@ -373,7 +369,7 @@ function goToHistory(): void {
           @click="confirmSale"
         >
           <Check :size="18" :stroke-width="2.5" aria-hidden="true" />
-          Подтвердить продажу
+          {{ t('sales.confirmSale') }}
         </BaseButton>
       </footer>
     </template>

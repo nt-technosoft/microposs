@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeft, Plus, Search, Wallet, AlertCircle } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { createCustomer, fetchCustomers, recordPayment } from '@/api/customers'
 import type { Customer } from '@/types/models'
 import { formatPrice } from '@/utils/currency'
@@ -13,6 +14,7 @@ import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const customers = ref<Customer[]>([])
 const search = ref('')
@@ -44,7 +46,7 @@ async function loadCustomers(): Promise<void> {
     })
     customers.value = response.results
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить покупателей'
+    errorMessage.value = error instanceof Error ? error.message : t('customers.loadFailed')
   } finally {
     isLoading.value = false
   }
@@ -65,11 +67,11 @@ async function submitCreate(): Promise<void> {
       name: createName.value.trim(),
       phone: createPhone.value.trim() || undefined,
     })
-    toast.success('Покупатель создан')
+    toast.success(t('customers.createdShort'))
     createOpen.value = false
     await loadCustomers()
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось создать покупателя')
+    toast.error(error instanceof Error ? error.message : t('customers.createFailed'))
   } finally {
     isCreating.value = false
   }
@@ -92,11 +94,11 @@ async function submitPayment(): Promise<void> {
       amount,
       payment_method: 'cash',
     })
-    toast.success('Оплата зафиксирована')
+    toast.success(t('customers.paymentRecorded'))
     paymentOpen.value = false
     await loadCustomers()
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось зафиксировать оплату')
+    toast.error(error instanceof Error ? error.message : t('customers.paymentFailed'))
   } finally {
     isPaying.value = false
   }
@@ -108,11 +110,11 @@ onMounted(loadCustomers)
 <template>
   <div class="page">
     <header class="header">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="title">Покупатели</h1>
-      <button class="icon-btn" type="button" aria-label="Добавить" @click="openCreate">
+      <h1 class="title">{{ t('customers.title') }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('common.add')" @click="openCreate">
         <Plus :size="18" :stroke-width="2" />
       </button>
     </header>
@@ -125,18 +127,18 @@ onMounted(loadCustomers)
             v-model="search"
             class="search-input"
             type="search"
-            placeholder="Поиск покупателей..."
+            :placeholder="t('customers.searchPlaceholder')"
             @input="loadCustomers"
           />
         </div>
         <label class="checkbox-row">
           <input v-model="debtOnly" type="checkbox" @change="loadCustomers" />
-          <span>Только с долгом</span>
+          <span>{{ t('customers.debtOnly') }}</span>
         </label>
       </section>
 
       <section class="summary">
-        <span>Всего долга покупателей</span>
+        <span>{{ t('customers.totalDebt') }}</span>
         <strong class="tabular-nums">{{ formatPrice(totalDebt) }}</strong>
       </section>
 
@@ -153,9 +155,9 @@ onMounted(loadCustomers)
 
       <AppEmptyState
         v-else-if="customers.length === 0"
-        title="Покупателей не найдено"
-        description="Создайте первого покупателя или измените фильтры"
-        action-label="Добавить покупателя"
+        :title="t('customers.emptyTitle')"
+        :description="t('customers.emptyDescription')"
+        :action-label="t('customers.addCustomer')"
         @action="openCreate"
       />
 
@@ -165,7 +167,7 @@ onMounted(loadCustomers)
             <div class="avatar">{{ customer.name.charAt(0).toUpperCase() }}</div>
             <div class="meta">
               <strong class="name">{{ customer.name }}</strong>
-              <span class="phone">{{ customer.phone || 'Телефон не указан' }}</span>
+              <span class="phone">{{ customer.phone || t('customers.phoneMissing') }}</span>
             </div>
           </div>
           <div class="card-side">
@@ -178,21 +180,21 @@ onMounted(loadCustomers)
               type="button"
               @click="openPayment(customer)"
             >
-              Погасить
+              {{ t('customers.repay') }}
             </button>
           </div>
         </article>
       </section>
     </main>
 
-    <button class="fab" type="button" aria-label="Добавить покупателя" @click="openCreate">
+    <button class="fab" type="button" :aria-label="t('customers.addCustomer')" @click="openCreate">
       <Plus :size="24" :stroke-width="2.2" />
     </button>
 
-    <AppBottomSheet :open="createOpen" title="Новый покупатель" @close="createOpen = false">
+    <AppBottomSheet :open="createOpen" :title="t('customers.newCustomer')" @close="createOpen = false">
       <form class="sheet-form" @submit.prevent="submitCreate">
-        <BaseInput v-model="createName" label="Имя *" placeholder="Например: Али Каримов" />
-        <BaseInput v-model="createPhone" label="Телефон" placeholder="+998 90 000 00 00" />
+        <BaseInput v-model="createName" :label="`${t('customers.name')} *`" :placeholder="t('customers.nameExample')" />
+        <BaseInput v-model="createPhone" :label="t('customers.phone')" placeholder="+998 90 000 00 00" />
         <BaseButton
           type="submit"
           variant="primary"
@@ -201,20 +203,20 @@ onMounted(loadCustomers)
           :loading="isCreating"
           :disabled="isCreating || !createName.trim()"
         >
-          Создать
+          {{ t('common.create') }}
         </BaseButton>
       </form>
     </AppBottomSheet>
 
     <AppBottomSheet
       :open="paymentOpen"
-      :title="selectedCustomer ? `Погашение: ${selectedCustomer.name}` : 'Погашение долга'"
+      :title="selectedCustomer ? t('customers.paymentTitle', { name: selectedCustomer.name }) : t('customers.paymentTitleFallback')"
       @close="paymentOpen = false"
     >
       <form class="sheet-form" @submit.prevent="submitPayment">
         <BaseInput
           v-model="paymentAmount"
-          label="Сумма платежа *"
+          :label="`${t('customers.paymentAmount')} *`"
           type="number"
           placeholder="0"
         />
@@ -226,7 +228,7 @@ onMounted(loadCustomers)
           :loading="isPaying"
           :disabled="isPaying || !paymentAmount"
         >
-          Зафиксировать оплату
+          {{ t('customers.recordPayment') }}
         </BaseButton>
       </form>
     </AppBottomSheet>

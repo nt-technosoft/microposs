@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, BarChart3, Plus, RotateCcw, Send, Wallet } from 'lucide-vue-next'
 import {
   addAgreementContribution,
@@ -15,10 +16,12 @@ import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
 import { partnerRoleLabel, procurementStatusLabel } from '@/utils/domainLabels'
+import { intlLocale } from '@/i18n/format'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t, locale } = useI18n()
 
 const agreement = ref<InvestmentAgreementDetail | null>(null)
 const loading = ref(false)
@@ -52,7 +55,7 @@ const contributedTotal = computed(() => agreement.value?.participant_totals.redu
 const allocatedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) ?? 0)
 
 function formatDate(value: string): string {
-  return new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return new Date(value).toLocaleString(intlLocale(locale.value), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
 function fxRateForCurrency(currency: string): string {
@@ -61,7 +64,7 @@ function fxRateForCurrency(currency: string): string {
 
 function ensureFxRate(currency: string): boolean {
   if (currency !== 'USD' || latestUsdRate.value) return true
-  toast.error(latestUsdRateError.value || 'Сначала синхронизируйте курс USD/UZS')
+  toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
   return false
 }
 
@@ -74,7 +77,7 @@ async function load(): Promise<void> {
     withdrawalPartnerId.value = agreement.value.partners[0]?.partner ?? null
     allocationProcurementId.value = activeProcurements.value[0]?.id ?? null
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить договор'
+    error.value = err instanceof Error ? err.message : t('procurements.agreementLoadFailed')
   } finally {
     loading.value = false
   }
@@ -92,10 +95,10 @@ async function saveContribution(): Promise<void> {
       fx_rate: fxRateForCurrency(contributionCurrency.value),
     })
     contributionAmount.value = ''
-    toast.success('Взнос добавлен')
+    toast.success(t('procurements.contributionAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось добавить взнос')
+    toast.error(err instanceof Error ? err.message : t('procurements.contributionAddFailed'))
   } finally {
     savingContribution.value = false
   }
@@ -111,13 +114,13 @@ async function saveWithdrawal(): Promise<void> {
       amount: withdrawalAmount.value,
       currency: withdrawalCurrency.value,
       fx_rate: fxRateForCurrency(withdrawalCurrency.value),
-      reason: 'Возврат из инвестдоговора',
+      reason: t('procurements.withdrawalReason'),
     })
     withdrawalAmount.value = ''
-    toast.success('Возврат добавлен')
+    toast.success(t('procurements.withdrawalAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось добавить возврат')
+    toast.error(err instanceof Error ? err.message : t('procurements.withdrawalAddFailed'))
   } finally {
     savingWithdrawal.value = false
   }
@@ -146,11 +149,11 @@ async function allocateSuggested(): Promise<void> {
       procurement_id: allocationPreview.value.procurement_id,
       allocations: rows,
     })
-    toast.success('Капитал распределён в приход')
+    toast.success(t('procurements.capitalAllocated'))
     allocationPreview.value = null
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось распределить капитал')
+    toast.error(err instanceof Error ? err.message : t('procurements.capitalAllocateFailed'))
   } finally {
     allocating.value = false
   }
@@ -167,92 +170,92 @@ onMounted(async () => {
 <template>
   <div class="page">
     <header class="topbar">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" />
       </button>
-      <h1>Инвестдоговор #{{ route.params.id }}</h1>
-      <button class="icon-btn" type="button" aria-label="Отчёт" @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })">
+      <h1>{{ t('procurements.agreementTitle', { id: route.params.id }) }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('procurements.report')" @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })">
         <BarChart3 :size="18" />
       </button>
     </header>
 
     <main class="content">
-      <div v-if="loading" class="state">Загрузка...</div>
+      <div v-if="loading" class="state">{{ t('procurements.loading') }}</div>
       <div v-else-if="error" class="state state-error">{{ error }}</div>
 
       <template v-else-if="agreement">
         <section class="hero">
           <div>
-            <span>Свободный остаток</span>
+            <span>{{ t('procurements.freeBalance') }}</span>
             <strong>{{ balanceLabel }}</strong>
           </div>
           <div class="hero-grid">
-            <div><span>Внесено</span><strong>{{ formatPrice(contributedTotal, agreement.currency) }}</strong></div>
-            <div><span>В приходах</span><strong>{{ formatPrice(allocatedTotal, agreement.currency) }}</strong></div>
-            <div><span>Приходов</span><strong>{{ agreement.procurements.length }}</strong></div>
+            <div><span>{{ t('procurements.contributed') }}</span><strong>{{ formatPrice(contributedTotal, agreement.currency) }}</strong></div>
+            <div><span>{{ t('procurements.allocatedToProcurements') }}</span><strong>{{ formatPrice(allocatedTotal, agreement.currency) }}</strong></div>
+            <div><span>{{ t('procurements.procurementsTotal') }}</span><strong>{{ agreement.procurements.length }}</strong></div>
           </div>
         </section>
 
         <section class="panel">
           <div class="section-head">
-            <h2>Участники</h2>
+            <h2>{{ t('procurements.participants') }}</h2>
           </div>
           <div v-for="row in agreement.participant_totals" :key="row.partner_id" class="partner-row">
             <div>
               <strong>{{ row.partner_name }}</strong>
-              <span>{{ partnerRoleLabel(row.role) }} · прибыль {{ (Number(row.planned_profit_share) * 100).toFixed(2) }}%</span>
+              <span>{{ partnerRoleLabel(row.role) }} · {{ t('procurements.profitShareShort', { share: (Number(row.planned_profit_share) * 100).toFixed(2) }) }}</span>
             </div>
             <div>
               <strong>{{ formatPrice(row.available_amount, agreement.currency) }}</strong>
-              <span>доступно</span>
+              <span>{{ t('procurements.available') }}</span>
             </div>
           </div>
         </section>
 
         <section class="panel">
           <div class="section-head">
-            <h2>Пополнение</h2>
+            <h2>{{ t('procurements.contribution') }}</h2>
             <Wallet :size="17" />
           </div>
           <div class="inline-form">
             <select v-model.number="contributionPartnerId">
               <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
             </select>
-            <input v-model="contributionAmount" inputmode="decimal" placeholder="Сумма" />
+            <input v-model="contributionAmount" inputmode="decimal" :placeholder="t('common.amount')" />
             <select v-model="contributionCurrency">
               <option value="USD">USD</option>
               <option value="UZS">UZS</option>
             </select>
           </div>
           <button class="action" type="button" :disabled="savingContribution" @click="saveContribution">
-            <Plus :size="17" /> Добавить взнос
+            <Plus :size="17" /> {{ t('procurements.addContribution') }}
           </button>
         </section>
 
         <section class="panel">
           <div class="section-head">
-            <h2>Возврат из договора</h2>
+            <h2>{{ t('procurements.withdrawalFromAgreement') }}</h2>
             <RotateCcw :size="17" />
           </div>
           <div class="inline-form">
             <select v-model.number="withdrawalPartnerId">
               <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
             </select>
-            <input v-model="withdrawalAmount" inputmode="decimal" placeholder="Сумма" />
+            <input v-model="withdrawalAmount" inputmode="decimal" :placeholder="t('common.amount')" />
             <select v-model="withdrawalCurrency">
               <option value="USD">USD</option>
               <option value="UZS">UZS</option>
             </select>
           </div>
           <button class="action secondary" type="button" :disabled="savingWithdrawal" @click="saveWithdrawal">
-            <RotateCcw :size="17" /> Зафиксировать возврат
+            <RotateCcw :size="17" /> {{ t('procurements.recordWithdrawal') }}
           </button>
         </section>
 
         <section class="panel">
           <div class="section-head">
-            <h2>Связанные приходы</h2>
-            <button type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">Новый</button>
+            <h2>{{ t('procurements.linkedProcurements') }}</h2>
+            <button type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">{{ t('procurements.new') }}</button>
           </div>
           <button
             v-for="procurement in agreement.procurements"
@@ -261,41 +264,41 @@ onMounted(async () => {
             type="button"
             @click="router.push({ name: 'procurement-detail', params: { id: procurement.id } })"
           >
-            <span>#{{ procurement.id }} · {{ procurement.supplier_name || 'без поставщика' }}</span>
+            <span>#{{ procurement.id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</span>
             <strong>{{ procurementStatusLabel(procurement.status) }}</strong>
           </button>
-          <p v-if="agreement.procurements.length === 0" class="muted">Связанных приходов пока нет.</p>
+          <p v-if="agreement.procurements.length === 0" class="muted">{{ t('procurements.noLinkedProcurements') }}</p>
         </section>
 
         <section v-if="activeProcurements.length" class="panel">
           <div class="section-head">
-            <h2>Распределить капитал</h2>
+            <h2>{{ t('procurements.allocateCapital') }}</h2>
             <Send :size="17" />
           </div>
           <div class="inline-form two">
             <select v-model.number="allocationProcurementId">
-              <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">Приход #{{ procurement.id }}</option>
+              <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">{{ t('procurements.procurementNumber', { id: procurement.id }) }}</option>
             </select>
-            <button type="button" @click="loadAllocationPreview">Рассчитать</button>
+            <button type="button" @click="loadAllocationPreview">{{ t('procurements.calculate') }}</button>
           </div>
           <div v-if="allocationPreview" class="allocation-box">
             <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="allocation-row">
               <span>{{ row.partner_name }}</span>
               <strong>{{ formatPrice(row.amount, row.currency) }}</strong>
             </div>
-            <button class="action" type="button" :disabled="allocating" @click="allocateSuggested">Подтвердить распределение</button>
+            <button class="action" type="button" :disabled="allocating" @click="allocateSuggested">{{ t('procurements.confirmAllocation') }}</button>
           </div>
         </section>
 
         <section class="panel">
           <div class="section-head">
-            <h2>История</h2>
+            <h2>{{ t('procurements.history') }}</h2>
             <span>{{ agreement.history.length }}</span>
           </div>
           <article v-for="entry in agreement.history.slice(0, 8)" :key="entry.id" class="history-row">
             <div>
               <strong>{{ entry.title }}</strong>
-              <span>{{ formatDate(entry.date) }} · {{ entry.partner_name || 'система' }}</span>
+              <span>{{ formatDate(entry.date) }} · {{ entry.partner_name || t('procurements.system') }}</span>
             </div>
             <strong>{{ formatPrice(entry.amount, entry.currency) }}</strong>
           </article>

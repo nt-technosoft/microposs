@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, RefreshCcw, Scale, ScrollText, Wallet } from 'lucide-vue-next'
 
 import { fetchInvestorProcurementDetail } from '@/api/investors'
@@ -20,6 +21,7 @@ import { formatPrice } from '@/utils/currency'
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 const {
   rate: latestUsdRate,
   error: latestUsdRateError,
@@ -60,7 +62,7 @@ function entryAmountLabel(entry: InvestorLedgerEntry): string {
 function entrySecondaryHint(entry: InvestorLedgerEntry): string {
   const native = String(entry.currency || 'UZS').toUpperCase()
   if (native === reportCurrency.value) return ''
-  return `Оригинал ${formatPrice(entry.amount, native)}`
+  return t('investors.originalAmount', { amount: formatPrice(entry.amount, native) })
 }
 
 function sourceRefLabel(rawRef: string | null | undefined): string {
@@ -71,15 +73,15 @@ function sourceRefLabel(rawRef: string | null | undefined): string {
   const nested = parts[2]
   const nestedId = parts[3]
   const labels: Record<string, string> = {
-    sale: 'Продажа',
-    sale_line: 'Продажа',
-    return: 'Возврат',
-    risk_event: 'Списание',
-    contribution: 'Взнос',
-    dividend_payment: 'Выплата прибыли',
-    procurement: 'Приход',
+    sale: t('reports.saleAudit.refSale'),
+    sale_line: t('reports.saleAudit.refSaleLine'),
+    return: t('reports.saleAudit.refReturn'),
+    risk_event: t('investors.refWriteoff'),
+    contribution: t('investors.refContribution'),
+    dividend_payment: t('reports.saleAudit.refDividendPayment'),
+    procurement: t('reports.saleAudit.refProcurement'),
   }
-  if (source === 'return' && nested === 'line' && id && nestedId) return `Возврат #${id}`
+  if (source === 'return' && nested === 'line' && id && nestedId) return t('investors.returnNumber', { id })
   if (id) return `${labels[source] ?? source.replaceAll('_', ' ')} #${id}`
   return labels[source] ?? rawRef.replaceAll('_', ' ')
 }
@@ -93,7 +95,7 @@ function entryToneClass(entry: InvestorLedgerEntry): string {
 
 async function loadContract(): Promise<void> {
   if (!Number.isFinite(procurementId.value) || procurementId.value <= 0) {
-    errorMessage.value = 'Некорректный ID прихода'
+    errorMessage.value = t('investors.invalidProcurementId')
     isLoading.value = false
     return
   }
@@ -111,7 +113,7 @@ async function loadContract(): Promise<void> {
       }
     }
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить приход'
+    errorMessage.value = error instanceof Error ? error.message : t('investors.loadProcurementFailed')
   } finally {
     isLoading.value = false
   }
@@ -125,7 +127,7 @@ async function setReportCurrency(currency: 'UZS' | 'USD'): Promise<void> {
       await loadLatestUsdRate()
     } catch {
       reportCurrency.value = 'UZS'
-      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
     }
   }
 }
@@ -136,16 +138,16 @@ onMounted(loadContract)
 <template>
   <div class="investor-shell">
     <header class="investor-header">
-      <button class="investor-header__button" type="button" aria-label="Назад" @click="router.back()">
+      <button class="investor-header__button" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
 
       <div class="investor-header__copy">
-        <strong class="investor-header__title">Деталь прихода</strong>
-        <span class="investor-header__caption">Капитал, товар и журнал начислений</span>
+        <strong class="investor-header__title">{{ t('investors.procurementDetailTitle') }}</strong>
+        <span class="investor-header__caption">{{ t('investors.procurementDetailCaption') }}</span>
       </div>
 
-      <button class="investor-header__button" type="button" aria-label="Обновить" @click="loadContract">
+      <button class="investor-header__button" type="button" :aria-label="t('common.refresh')" @click="loadContract">
         <RefreshCcw :size="16" :stroke-width="1.75" />
       </button>
     </header>
@@ -163,7 +165,7 @@ onMounted(loadContract)
       <template v-else-if="procurement">
         <section class="investor-hero">
           <div class="investor-hero__copy">
-            <span class="investor-hero__kicker">Приход #{{ procurement.id }}</span>
+            <span class="investor-hero__kicker">{{ t('procurements.procurementNumber', { id: procurement.id }) }}</span>
             <h1 class="investor-hero__title">
               {{ procurement.supplier_name || procurementTypeLabel(procurement.procurement_type) }}
             </h1>
@@ -175,13 +177,13 @@ onMounted(loadContract)
                 {{ procurementStatusLabel(procurement.status) }}
               </span>
               <span class="investor-chip investor-chip--glass">
-                Открыт {{ formatDateTime(procurement.opened_at) }}
+                {{ t('investors.openedAt', { date: formatDateTime(procurement.opened_at) }) }}
               </span>
             </div>
           </div>
 
           <div class="investor-hero__value">
-            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+            <div class="investor-currency-switch" role="group" :aria-label="t('investors.metricCurrency')">
               <button type="button" :class="{ active: reportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
               <button type="button" :class="{ active: reportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
             </div>
@@ -189,49 +191,51 @@ onMounted(loadContract)
               {{ formatLedgerTotal('profit_pending_payout') }}
             </strong>
             <span class="investor-hero__foot">
-              Начислено {{ formatLedgerTotal('profit_accrued') }}
-              · вложено {{ formatLedgerTotal('capital_in') }}
+              {{ t('investors.accruedContributed', {
+                accrued: formatLedgerTotal('profit_accrued'),
+                contributed: formatLedgerTotal('capital_in'),
+              }) }}
             </span>
           </div>
         </section>
 
         <section class="investor-summary-band">
           <article class="investor-summary-stat investor-summary-stat--accent">
-            <span class="investor-summary-stat__label">Вложено в приход</span>
+            <span class="investor-summary-stat__label">{{ t('investors.contributedToProcurement') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatLedgerTotal('capital_in') }}
             </strong>
-            <span class="investor-summary-stat__hint">Ваш вклад по этому приходу</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.contributedToProcurementHint') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Чистый капитал</span>
+            <span class="investor-summary-stat__label">{{ t('investors.netCapital') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatLedgerTotal('capital_net') }}
             </strong>
-            <span class="investor-summary-stat__hint">Вносы минус возвраты по приходу</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.netProcurementCapitalHint') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Отслеживается в товаре</span>
+            <span class="investor-summary-stat__label">{{ t('investors.trackedInGoods') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatCapitalState('tracked_cost_uzs') }}
             </strong>
-            <span class="investor-summary-stat__hint">Сколько капитала ещё лежит в остатке</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.capitalStillInStock') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Прогноз прибыли</span>
+            <span class="investor-summary-stat__label">{{ t('investors.profitForecast') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatCapitalState('projected_partner_profit_uzs') }}
             </strong>
-            <span class="investor-summary-stat__hint">Ожидаемая прибыль по остатку</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.expectedProfitOnRemaining') }}</span>
           </article>
         </section>
 
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Картина прихода</h2>
+              <h2 class="investor-panel__title">{{ t('investors.procurementPicture') }}</h2>
               <p class="investor-panel__hint">
-                Базовый статус прихода и текстовый контекст, если owner оставлял заметки.
+                {{ t('investors.procurementPictureHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -241,11 +245,11 @@ onMounted(loadContract)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Поставщик</span>
+              <span class="investor-detail-card__label">{{ t('suppliers.title') }}</span>
               <strong class="investor-detail-card__value">{{ procurement.supplier_name || '—' }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Статус</span>
+              <span class="investor-detail-card__label">{{ t('common.status') }}</span>
               <div class="detail-chip-row">
                 <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
                   {{ procurementStatusLabel(procurement.status) }}
@@ -253,11 +257,11 @@ onMounted(loadContract)
               </div>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Открыт</span>
+              <span class="investor-detail-card__label">{{ t('investors.opened') }}</span>
               <strong class="investor-detail-card__value">{{ formatDateTime(procurement.opened_at) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Принят</span>
+              <span class="investor-detail-card__label">{{ t('investors.received') }}</span>
               <strong class="investor-detail-card__value">{{ formatDateTime(procurement.received_at) }}</strong>
             </article>
           </div>
@@ -270,9 +274,9 @@ onMounted(loadContract)
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Ваш капитал по приходу</h2>
+              <h2 class="investor-panel__title">{{ t('investors.yourProcurementCapital') }}</h2>
               <p class="investor-panel__hint">
-                Здесь собраны все начисления, убытки и выплаты только по вашему участию в этом приходе.
+                {{ t('investors.yourProcurementCapitalHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -282,37 +286,37 @@ onMounted(loadContract)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Начисленная прибыль</span>
+              <span class="investor-detail-card__label">{{ t('investors.accruedProfit') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">
                 {{ formatLedgerTotal('profit_accrued') }}
               </strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">К выплате</span>
+              <span class="investor-detail-card__label">{{ t('investors.pendingPayout') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatLedgerTotal('profit_pending_payout') }}
               </strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Возврат капитала</span>
+              <span class="investor-detail-card__label">{{ t('investors.capitalReturned') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatLedgerTotal('capital_out') }}
               </strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Дивиденды выплачены</span>
+              <span class="investor-detail-card__label">{{ t('investors.dividendsPaid') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatLedgerTotal('dividends_paid') }}
               </strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Убытки</span>
+              <span class="investor-detail-card__label">{{ t('investors.losses') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">
                 {{ formatLedgerTotal('losses_incurred') }}
               </strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Корректировки прибыли</span>
+              <span class="investor-detail-card__label">{{ t('investors.profitAdjustments') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-negative">
                 {{ formatLedgerTotal('profit_reversed') }}
               </strong>
@@ -323,9 +327,9 @@ onMounted(loadContract)
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Капитал в товаре</h2>
+              <h2 class="investor-panel__title">{{ t('investors.capitalInGoods') }}</h2>
               <p class="investor-panel__hint">
-                Отдельно видно, сколько капитала уже вышло через продажи, а сколько ещё лежит в остатке.
+                {{ t('investors.procurementCapitalInGoodsHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -335,23 +339,23 @@ onMounted(loadContract)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Продано по себестоимости</span>
+              <span class="investor-detail-card__label">{{ t('investors.soldByCost') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_cost_uzs') }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <span class="investor-detail-card__label">{{ t('investors.remainingInGoods') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('in_stock_cost_uzs') }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Выручка по проданному</span>
+              <span class="investor-detail-card__label">{{ t('investors.revenueOnSold') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('sold_revenue_uzs') }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Прогноз выручки</span>
+              <span class="investor-detail-card__label">{{ t('investors.revenueForecast') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatCapitalState('projected_revenue_uzs') }}</strong>
             </article>
             <article class="investor-detail-card detail-card--wide">
-              <span class="investor-detail-card__label">Прогноз прибыли инвестора</span>
+              <span class="investor-detail-card__label">{{ t('investors.investorProfitForecast') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">
                 {{ formatCapitalState('projected_partner_profit_uzs') }}
               </strong>
@@ -362,9 +366,9 @@ onMounted(loadContract)
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Журнал операций</h2>
+              <h2 class="investor-panel__title">{{ t('investors.operationJournal') }}</h2>
               <p class="investor-panel__hint">
-                Последовательность проводок, которые меняли ваш капитал или прибыль по этому приходу.
+                {{ t('investors.operationJournalHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -373,7 +377,7 @@ onMounted(loadContract)
           </div>
 
           <div v-if="procurement.investor_ledger.entries.length === 0" class="investor-empty">
-            Записей по приходу пока нет.
+            {{ t('investors.noProcurementEntries') }}
           </div>
 
           <div v-else class="ledger-stack">
@@ -402,7 +406,7 @@ onMounted(loadContract)
       </template>
 
       <section v-else class="investor-state investor-state--error">
-        <p>Приход не найден или недоступен.</p>
+        <p>{{ t('investors.procurementNotFound') }}</p>
       </section>
     </main>
   </div>

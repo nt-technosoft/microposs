@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { UserPlus, Check } from 'lucide-vue-next'
 import { useCustomersStore } from '@/stores/customers'
 import { useToast } from '@/composables/useToast'
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 
 const customersStore = useCustomersStore()
 const toast = useToast()
+const { t } = useI18n()
 
 const customerSearch = ref('')
 const showNewCustomerForm = ref(false)
@@ -59,7 +61,7 @@ function showNewCustomer(): void {
 async function createAndSelectCustomer(): Promise<void> {
   const name = newCustomerName.value.trim()
   if (!name) {
-    toast.error('Введите имя покупателя')
+    toast.error(t('customers.nameRequired'))
     return
   }
 
@@ -70,9 +72,9 @@ async function createAndSelectCustomer(): Promise<void> {
       phone: newCustomerPhone.value.trim() || undefined,
     })
     selectCustomer(customer)
-    toast.success(`Покупатель "${customer.name}" создан`)
+    toast.success(t('customers.created', { name: customer.name }))
   } catch {
-    toast.error('Не удалось создать покупателя')
+    toast.error(t('customers.createFailed'))
   } finally {
     isCreatingCustomer.value = false
   }
@@ -87,12 +89,12 @@ function handleClose(): void {
 </script>
 
 <template>
-  <AppBottomSheet :open="open" title="Выбрать покупателя" @close="handleClose">
+  <AppBottomSheet :open="open" :title="t('customers.selectCustomer')" @close="handleClose">
     <div class="customer-sheet">
       <!-- Search -->
       <BaseSearch
         v-model="customerSearch"
-        placeholder="Поиск по имени или телефону"
+        :placeholder="t('customers.searchByNamePhone')"
         :debounce="300"
         @search="handleSearch"
       />
@@ -100,20 +102,20 @@ function handleClose(): void {
       <!-- New customer form -->
       <Transition name="slide-down">
         <div v-if="showNewCustomerForm" class="new-customer-form">
-          <h4 class="new-customer-form__title">Новый покупатель</h4>
+          <h4 class="new-customer-form__title">{{ t('customers.newCustomer') }}</h4>
           <div class="field">
-            <label class="field__label" for="customer-name">Имя *</label>
+            <label class="field__label" for="customer-name">{{ t('customers.name') }} *</label>
             <input
               id="customer-name"
               v-model="newCustomerName"
               class="field__input"
               type="text"
-              placeholder="Введите имя"
+              :placeholder="t('customers.namePlaceholder')"
               autocomplete="off"
             />
           </div>
           <div class="field">
-            <label class="field__label" for="customer-phone">Телефон</label>
+            <label class="field__label" for="customer-phone">{{ t('customers.phone') }}</label>
             <input
               id="customer-phone"
               v-model="newCustomerPhone"
@@ -129,7 +131,7 @@ function handleClose(): void {
               size="sm"
               @click="showNewCustomerForm = false"
             >
-              Отмена
+              {{ t('common.cancel') }}
             </BaseButton>
             <BaseButton
               variant="primary"
@@ -137,7 +139,7 @@ function handleClose(): void {
               :loading="isCreatingCustomer"
               @click="createAndSelectCustomer"
             >
-              Создать и выбрать
+              {{ t('customers.createAndSelect') }}
             </BaseButton>
           </div>
         </div>
@@ -150,20 +152,20 @@ function handleClose(): void {
         @click="showNewCustomer"
       >
         <UserPlus :size="18" :stroke-width="1.75" />
-        <span>Новый покупатель</span>
+        <span>{{ t('customers.newCustomer') }}</span>
       </button>
 
       <!-- Loading -->
-      <div v-if="customersStore.isLoading" class="sheet-loading" aria-label="Загрузка">
+      <div v-if="customersStore.isLoading" class="sheet-loading" :aria-label="t('common.loading')">
         <div class="sheet-loading__spinner" />
-        <span>Загрузка...</span>
+        <span>{{ t('common.loading') }}...</span>
       </div>
 
       <!-- Customer list -->
       <ul
         v-else-if="filteredCustomers.length > 0"
         class="customer-list"
-        aria-label="Список покупателей"
+        :aria-label="t('customers.listAria')"
       >
         <li
           v-for="customer in filteredCustomers"
@@ -206,15 +208,15 @@ function handleClose(): void {
         v-else-if="!customersStore.isLoading && customerSearch.trim()"
         class="sheet-empty"
       >
-        <p class="sheet-empty__text">Покупатель не найден</p>
+        <p class="sheet-empty__text">{{ t('customers.notFound') }}</p>
         <BaseButton variant="ghost" size="sm" @click="showNewCustomer">
-          Создать нового
+          {{ t('customers.createNew') }}
         </BaseButton>
       </div>
 
       <!-- No customers -->
       <div v-else-if="!customersStore.isLoading" class="sheet-empty">
-        <p class="sheet-empty__text">Нет покупателей</p>
+        <p class="sheet-empty__text">{{ t('customers.empty') }}</p>
       </div>
     </div>
   </AppBottomSheet>

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ShoppingBag, ShoppingCart, ArrowLeft, Trash2, CircleAlert } from 'lucide-vue-next'
 import { useCartStore } from '@/stores/cart'
 import { useSessionStore } from '@/stores/session'
 import { useFxRate } from '@/composables/useFxRate'
 import { useToast } from '@/composables/useToast'
+import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 import BaseButton from '@/components/base/BaseButton.vue'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
@@ -14,6 +16,7 @@ const router = useRouter()
 const cartStore = useCartStore()
 const sessionStore = useSessionStore()
 const toast = useToast()
+const { t, locale } = useI18n()
 const {
   rate: latestUsdRate,
   error: latestUsdRateError,
@@ -36,9 +39,9 @@ const cartBlocked = computed(() =>
 )
 
 const cartBlockReason = computed(() => {
-  if (!sessionStore.isOpen) return 'Откройте кассовую смену'
-  if (cartStore.hasLocationMismatch) return 'Корзина собрана для другой точки продаж'
-  if (cartStore.hasAvailabilityIssues) return 'В корзине есть товары сверх остатка магазина'
+  if (!sessionStore.isOpen) return t('sales.cartBlockedNoSession')
+  if (cartStore.hasLocationMismatch) return t('sales.cartBlockedLocation')
+  if (cartStore.hasAvailabilityIssues) return t('sales.cartBlockedStock')
   return ''
 })
 
@@ -68,7 +71,7 @@ async function setLineCurrency(index: number, currency: 'UZS' | 'USD'): Promise<
     try {
       await loadUsdRate()
     } catch {
-      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      toast.error(latestUsdRateError.value || t('products.usdRateMissing'))
       return
     }
   }
@@ -101,18 +104,18 @@ function cancelClear(): void {
   <div class="cart-view">
     <!-- Header -->
     <header class="cart-header">
-      <button class="back-btn" aria-label="Назад" @click="goBack">
+      <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
         <ArrowLeft :size="20" :stroke-width="2" />
       </button>
-      <h1 class="cart-title">Корзина</h1>
+      <h1 class="cart-title">{{ t('sales.cart') }}</h1>
       <button
         v-if="!cartStore.isEmpty"
         class="clear-btn"
-        aria-label="Очистить корзину"
+        :aria-label="t('sales.clearCart')"
         @click="handleClearRequest"
       >
         <Trash2 :size="18" :stroke-width="1.75" />
-        <span>Очистить</span>
+        <span>{{ t('sales.clearCart') }}</span>
       </button>
       <div v-else class="header-spacer" />
     </header>
@@ -123,11 +126,11 @@ function cancelClear(): void {
         <CircleAlert :size="18" :stroke-width="2" />
       </div>
       <div class="session-warning__body">
-        <p class="session-warning__title">Нет открытой смены</p>
-        <p class="session-warning__text">Откройте кассовую смену, чтобы оформлять продажи</p>
+        <p class="session-warning__title">{{ t('sales.noOpenShift') }}</p>
+        <p class="session-warning__text">{{ t('sales.cartOpenShiftHint') }}</p>
       </div>
       <BaseButton variant="secondary" size="sm" @click="openSession">
-        Открыть смену
+        {{ t('sales.openShift') }}
       </BaseButton>
     </div>
 
@@ -138,10 +141,10 @@ function cancelClear(): void {
         <div class="empty-state__icon-wrap">
           <ShoppingCart :size="56" :stroke-width="1.25" class="empty-state__icon" />
         </div>
-        <h2 class="empty-state__title">Корзина пуста</h2>
-        <p class="empty-state__subtitle">Добавьте товары из каталога</p>
+        <h2 class="empty-state__title">{{ t('sales.emptyCart') }}</h2>
+        <p class="empty-state__subtitle">{{ t('sales.addFromCatalog') }}</p>
         <BaseButton variant="primary" size="md" @click="goBack">
-          Перейти в каталог
+          {{ t('sales.goToCatalog') }}
         </BaseButton>
       </div>
 
@@ -151,7 +154,7 @@ function cancelClear(): void {
         name="cart-item"
         tag="ul"
         class="cart-list"
-        aria-label="Товары в корзине"
+        :aria-label="t('sales.cartItemsAria')"
       >
         <li
           v-for="(item, index) in cartStore.items"
@@ -167,21 +170,21 @@ function cancelClear(): void {
             <div class="cart-item__info">
               <span class="cart-item__name">{{ item.product_name }}</span>
               <span class="cart-item__unit-price">
-                {{ formatPrice(item.operation_unit_price ?? item.unit_price, item.operation_currency ?? 'UZS') }} / шт.
+                {{ formatPrice(item.operation_unit_price ?? item.unit_price, item.operation_currency ?? 'UZS') }} / {{ t('common.pieces') }}
               </span>
               <span
                 v-if="item.operation_currency === 'USD'"
                 class="cart-item__price-change"
               >
-                {{ formatPrice(item.unit_price, 'UZS') }} · курс {{ Number(item.fx_rate || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}
+                {{ formatPrice(item.unit_price, 'UZS') }} · {{ t('finance.rate') }} {{ Number(item.fx_rate || 0).toLocaleString(intlLocale(locale), { maximumFractionDigits: 2 }) }}
               </span>
               <span v-if="item.price_changed" class="cart-item__price-change">
-                База: {{ formatPrice(item.base_price) }}
+                {{ t('common.base') }}: {{ formatPrice(item.base_price) }}
               </span>
             </div>
             <button
               class="cart-item__remove"
-              aria-label="`Удалить ${item.product_name}`"
+              :aria-label="t('sales.removeProduct', { name: item.product_name })"
               @click="handleRemove(index)"
             >
               ×
@@ -225,7 +228,7 @@ function cancelClear(): void {
     <!-- Sticky bottom bar -->
     <footer v-if="!cartStore.isEmpty" class="cart-footer">
       <div class="cart-footer__summary">
-        <span class="cart-footer__label">Итого</span>
+        <span class="cart-footer__label">{{ t('common.total') }}</span>
         <div class="cart-footer__totals">
           <strong
             v-for="total in cartStore.totalsByCurrency"
@@ -245,7 +248,7 @@ function cancelClear(): void {
         :disabled="cartBlocked"
         @click="goToCheckout"
       >
-        Оформить заказ →
+        {{ t('sales.checkoutOrder') }} →
       </BaseButton>
     </footer>
 
@@ -254,14 +257,14 @@ function cancelClear(): void {
       <Transition name="overlay">
         <div v-if="showClearConfirm" class="confirm-overlay" @click.self="cancelClear">
           <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-            <h3 id="confirm-title" class="confirm-dialog__title">Очистить корзину?</h3>
-            <p class="confirm-dialog__text">Все добавленные товары будут удалены.</p>
+            <h3 id="confirm-title" class="confirm-dialog__title">{{ t('sales.clearCartQuestion') }}</h3>
+            <p class="confirm-dialog__text">{{ t('sales.clearCartText') }}</p>
             <div class="confirm-dialog__actions">
               <BaseButton variant="ghost" size="md" @click="cancelClear">
-                Отмена
+                {{ t('common.cancel') }}
               </BaseButton>
               <BaseButton variant="danger" size="md" @click="confirmClear">
-                Очистить
+                {{ t('sales.clearCart') }}
               </BaseButton>
             </div>
           </div>

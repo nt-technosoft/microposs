@@ -19,3 +19,22 @@ class AuthContextTests(APITestCase):
         self.assertEqual(response.data['role'], 'investor')
         self.assertIsNotNone(response.data['active_tenant_id'])
         self.assertEqual(response.data['tenant_name'], 'MicroPOS Workflow')
+        self.assertEqual(response.data['locale'], 'ru')
+
+    def test_user_can_update_locale_preference(self):
+        self.client.force_authenticate(user=User.objects.get(username='owner'))
+
+        response = self.client.patch('/api/v1/auth/preferences/', {'locale': 'uz'}, format='json')
+        me_response = self.client.get('/api/v1/auth/me/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['locale'], 'uz')
+        self.assertEqual(me_response.data['locale'], 'uz')
+
+    def test_invalid_locale_is_rejected(self):
+        self.client.force_authenticate(user=User.objects.get(username='owner'))
+
+        response = self.client.patch('/api/v1/auth/preferences/', {'locale': 'de'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['code'], 'unsupported_locale')

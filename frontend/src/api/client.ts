@@ -17,6 +17,8 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  const locale = localStorage.getItem('microposs_locale') || 'ru'
+  config.headers['Accept-Language'] = locale
   return config
 })
 

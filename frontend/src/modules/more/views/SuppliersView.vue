@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeft, Plus, Search, Truck, AlertCircle } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { createSupplier, fetchSuppliers, recordSupplierPayment } from '@/api/suppliers'
 import type { Supplier } from '@/types/models'
 import { formatPrice } from '@/utils/currency'
@@ -13,6 +14,7 @@ import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const suppliers = ref<Supplier[]>([])
 const search = ref('')
@@ -43,7 +45,7 @@ async function loadSuppliers(): Promise<void> {
     })
     suppliers.value = response.results
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить поставщиков'
+    errorMessage.value = error instanceof Error ? error.message : t('suppliers.loadFailed')
   } finally {
     isLoading.value = false
   }
@@ -66,11 +68,11 @@ async function submitCreate(): Promise<void> {
       phone: createPhone.value.trim() || undefined,
       email: createEmail.value.trim() || undefined,
     })
-    toast.success('Поставщик создан')
+    toast.success(t('suppliers.createdShort'))
     createOpen.value = false
     await loadSuppliers()
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось создать поставщика')
+    toast.error(error instanceof Error ? error.message : t('suppliers.createFailed'))
   } finally {
     isCreating.value = false
   }
@@ -93,11 +95,11 @@ async function submitPayment(): Promise<void> {
       amount,
       payment_method: 'cash',
     })
-    toast.success('Оплата поставщику зафиксирована')
+    toast.success(t('suppliers.paymentRecorded'))
     paymentOpen.value = false
     await loadSuppliers()
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось зафиксировать оплату')
+    toast.error(error instanceof Error ? error.message : t('suppliers.paymentFailed'))
   } finally {
     isPaying.value = false
   }
@@ -109,11 +111,11 @@ onMounted(loadSuppliers)
 <template>
   <div class="page">
     <header class="header">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="title">Поставщики</h1>
-      <button class="icon-btn" type="button" aria-label="Добавить" @click="openCreate">
+      <h1 class="title">{{ t('suppliers.title') }}</h1>
+      <button class="icon-btn" type="button" :aria-label="t('common.add')" @click="openCreate">
         <Plus :size="18" :stroke-width="2" />
       </button>
     </header>
@@ -126,14 +128,14 @@ onMounted(loadSuppliers)
             v-model="search"
             class="search-input"
             type="search"
-            placeholder="Поиск поставщиков..."
+            :placeholder="t('suppliers.searchPlaceholder')"
             @input="loadSuppliers"
           />
         </div>
       </section>
 
       <section class="summary">
-        <span>Общий долг поставщикам</span>
+        <span>{{ t('suppliers.totalPayables') }}</span>
         <strong class="tabular-nums">{{ formatPrice(totalPayables) }}</strong>
       </section>
 
@@ -150,9 +152,9 @@ onMounted(loadSuppliers)
 
       <AppEmptyState
         v-else-if="suppliers.length === 0"
-        title="Поставщиков не найдено"
-        description="Создайте первого поставщика"
-        action-label="Добавить поставщика"
+        :title="t('suppliers.emptyTitle')"
+        :description="t('suppliers.emptyDescription')"
+        :action-label="t('suppliers.addSupplier')"
         @action="openCreate"
       >
         <template #illustration>
@@ -168,7 +170,7 @@ onMounted(loadSuppliers)
             <div class="avatar">{{ supplier.name.charAt(0).toUpperCase() }}</div>
             <div class="meta">
               <strong class="name">{{ supplier.name }}</strong>
-              <span class="phone">{{ supplier.phone || 'Телефон не указан' }}</span>
+              <span class="phone">{{ supplier.phone || t('suppliers.phoneMissing') }}</span>
             </div>
           </div>
           <div class="card-side">
@@ -181,22 +183,22 @@ onMounted(loadSuppliers)
               type="button"
               @click="openPayment(supplier)"
             >
-              Оплатить
+              {{ t('suppliers.pay') }}
             </button>
           </div>
         </article>
       </section>
     </main>
 
-    <button class="fab" type="button" aria-label="Добавить поставщика" @click="openCreate">
+    <button class="fab" type="button" :aria-label="t('suppliers.addSupplier')" @click="openCreate">
       <Plus :size="24" :stroke-width="2.2" />
     </button>
 
-    <AppBottomSheet :open="createOpen" title="Новый поставщик" @close="createOpen = false">
+    <AppBottomSheet :open="createOpen" :title="t('suppliers.newSupplier')" @close="createOpen = false">
       <form class="sheet-form" @submit.prevent="submitCreate">
-        <BaseInput v-model="createName" label="Название *" placeholder="Например: Mega Trade" />
-        <BaseInput v-model="createPhone" label="Телефон" placeholder="+998 90 000 00 00" />
-        <BaseInput v-model="createEmail" label="Email" placeholder="example@mail.com" />
+        <BaseInput v-model="createName" :label="`${t('suppliers.name')} *`" :placeholder="t('suppliers.nameExample')" />
+        <BaseInput v-model="createPhone" :label="t('suppliers.phone')" placeholder="+998 90 000 00 00" />
+        <BaseInput v-model="createEmail" :label="t('suppliers.email')" placeholder="example@mail.com" />
         <BaseButton
           type="submit"
           variant="primary"
@@ -205,20 +207,20 @@ onMounted(loadSuppliers)
           :loading="isCreating"
           :disabled="isCreating || !createName.trim()"
         >
-          Создать
+          {{ t('common.create') }}
         </BaseButton>
       </form>
     </AppBottomSheet>
 
     <AppBottomSheet
       :open="paymentOpen"
-      :title="selectedSupplier ? `Оплата: ${selectedSupplier.name}` : 'Оплата поставщику'"
+      :title="selectedSupplier ? t('suppliers.paymentTitle', { name: selectedSupplier.name }) : t('suppliers.paymentTitleFallback')"
       @close="paymentOpen = false"
     >
       <form class="sheet-form" @submit.prevent="submitPayment">
         <BaseInput
           v-model="paymentAmount"
-          label="Сумма платежа *"
+          :label="`${t('suppliers.paymentAmount')} *`"
           type="number"
           placeholder="0"
         />
@@ -230,7 +232,7 @@ onMounted(loadSuppliers)
           :loading="isPaying"
           :disabled="isPaying || !paymentAmount"
         >
-          Зафиксировать оплату
+          {{ t('suppliers.recordPayment') }}
         </BaseButton>
       </form>
     </AppBottomSheet>

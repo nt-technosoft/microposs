@@ -33,6 +33,10 @@ frontend/src/
 │   ├── useToast.ts
 │   ├── useFxRate.ts
 │   └── ...
+├── i18n/           Переводы интерфейса ru / uz / en
+│   ├── index.ts
+│   ├── keys.ts
+│   └── locales/
 ├── router/
 │   ├── index.ts    router + auth guard
 │   └── routes.ts   маршруты с meta (roles, layout)
@@ -121,6 +125,40 @@ export async function fetchReportSummary(
 
 ### `useUIStore`
 - `simpleSellerMode` — режим упрощённого кассира (только `/sales`)
+- `locale` — язык интерфейса (`ru`, `uz`, `en`), синхронизируется с `vue-i18n` и `localStorage`
+
+---
+
+## Локализация
+
+Frontend использует `vue-i18n`. Русский — базовый язык и fallback, узбекский — латиницей.
+
+### Структура
+```
+src/i18n/
+├── index.ts              # createI18n, messages, setI18nLocale()
+├── keys.ts               # Locale, supportedLocales, fallbackLocale
+└── locales/
+    ├── ru.ts             # исходный смысловой текст
+    ├── uz.ts             # смысловой перевод на O‘zbekcha
+    └── en.ts             # смысловой перевод на English
+```
+
+### Правила ключей
+- Ключи группируются по смысловым доменам: `common`, `nav`, `sales`, `products`, `procurements`, `reports`, `investors`, `settings`.
+- Общие действия хранятся в `common`, но контекстные тексты остаются внутри домена.
+- Не использовать дословный перевод, если он ломает мобильный UI или звучит не как продуктовый интерфейс.
+- Новые UI-тексты добавлять сразу во все три файла. `uz.ts` и `en.ts` типизированы от `ru.ts`, поэтому пропущенные ключи ловятся `vue-tsc`.
+
+### Хранение языка
+- До входа язык хранится в `localStorage` (`microposs_locale`).
+- После входа `/api/v1/auth/me/` возвращает `locale`.
+- Настройки сохраняют язык через `/api/v1/auth/preferences/`.
+- `Accept-Language` отправляется во все API-запросы.
+
+### Что не переводим автоматически
+- Названия товаров, категорий, поставщиков, покупателей и складов, если их ввёл пользователь.
+- Системные fallback-значения вроде `Main Store` нормализуются через label helpers.
 
 ---
 

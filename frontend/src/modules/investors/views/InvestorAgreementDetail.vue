@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ChevronDown, ChevronRight, PackageSearch, RefreshCcw, Scale, Wallet } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 
 import { fetchInvestorAgreementDetail } from '@/api/investors'
 import type { AgreementProfitabilityDetail } from '@/api/finance'
@@ -18,6 +19,7 @@ import { formatPrice } from '@/utils/currency'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 const report = ref<AgreementProfitabilityDetail | null>(null)
 const loading = ref(false)
@@ -91,7 +93,7 @@ function openProcurement(procurementId: number): void {
 
 async function load(): Promise<void> {
   if (!Number.isFinite(agreementId.value) || agreementId.value <= 0) {
-    error.value = 'Некорректный ID договора'
+    error.value = t('investors.invalidAgreementId')
     return
   }
 
@@ -103,7 +105,7 @@ async function load(): Promise<void> {
       selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
     )
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить договор'
+    error.value = err instanceof Error ? err.message : t('investors.loadAgreementFailed')
   } finally {
     loading.value = false
   }
@@ -121,16 +123,16 @@ onMounted(load)
 <template>
   <div class="investor-shell">
     <header class="investor-header">
-      <button class="investor-header__button" type="button" aria-label="Назад" @click="router.back()">
+      <button class="investor-header__button" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
 
       <div class="investor-header__copy">
-        <strong class="investor-header__title">Деталь договора</strong>
-        <span class="investor-header__caption">Ваш баланс, прибыль и связанные приходы</span>
+        <strong class="investor-header__title">{{ t('investors.agreementDetailTitle') }}</strong>
+        <span class="investor-header__caption">{{ t('investors.agreementDetailCaption') }}</span>
       </div>
 
-      <button class="investor-header__button" type="button" aria-label="Обновить" @click="load">
+      <button class="investor-header__button" type="button" :aria-label="t('common.refresh')" @click="load">
         <RefreshCcw :size="16" :stroke-width="1.75" />
       </button>
     </header>
@@ -148,25 +150,25 @@ onMounted(load)
       <template v-else-if="summary">
         <section class="investor-hero">
           <div class="investor-hero__copy">
-            <span class="investor-hero__kicker">Договор #{{ summary.agreement_id }}</span>
+            <span class="investor-hero__kicker">{{ t('investors.agreementNumber', { id: summary.agreement_id }) }}</span>
             <h1 class="investor-hero__title">
-              {{ summary.supplier_name || 'Договор без поставщика' }}
+              {{ summary.supplier_name || t('investors.agreementNoSupplier') }}
             </h1>
             <div class="investor-hero__meta">
               <span class="investor-chip investor-chip--glass">
                 {{ agreementStatusLabel(summary.status) }}
               </span>
               <span class="investor-chip investor-chip--glass">
-                Открыт {{ formatDateTime(summary.opened_at) }}
+                {{ t('investors.openedAt', { date: formatDateTime(summary.opened_at) }) }}
               </span>
               <span class="investor-chip investor-chip--glass">
-                {{ summary.procurements_count }} приходов
+                {{ t('investors.procurementsCount', { count: summary.procurements_count }) }}
               </span>
             </div>
           </div>
 
           <div class="investor-hero__value">
-            <div class="investor-currency-switch" role="group" aria-label="Валюта показателей">
+            <div class="investor-currency-switch" role="group" :aria-label="t('investors.metricCurrency')">
               <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
               <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
             </div>
@@ -174,47 +176,49 @@ onMounted(load)
               {{ formatReportAmount(currentPartner, 'profit_pending_payout', currentPartner?.profit_pending_payout ?? '0') }}
             </strong>
             <span class="investor-hero__foot">
-              Начислено {{ formatReportAmount(currentPartner, 'profit_accrued', currentPartner?.profit_accrued ?? '0') }}
-              · выплачено {{ formatReportAmount(currentPartner, 'dividends_paid', currentPartner?.dividends_paid ?? '0') }}
+              {{ t('investors.accruedPaid', {
+                accrued: formatReportAmount(currentPartner, 'profit_accrued', currentPartner?.profit_accrued ?? '0'),
+                paid: formatReportAmount(currentPartner, 'dividends_paid', currentPartner?.dividends_paid ?? '0'),
+              }) }}
             </span>
           </div>
         </section>
 
         <section class="investor-summary-band">
           <article class="investor-summary-stat investor-summary-stat--accent">
-            <span class="investor-summary-stat__label">Плановый бюджет</span>
+            <span class="investor-summary-stat__label">{{ t('investors.plannedBudget') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatAmount(summary.planned_budget, summary.currency) }}
             </strong>
-            <span class="investor-summary-stat__hint">База всего договора</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.wholeAgreementBase') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Баланс договора</span>
+            <span class="investor-summary-stat__label">{{ t('investors.agreementBalance') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatBalanceLabel(summary.balances) }}
             </strong>
-            <span class="investor-summary-stat__hint">Свободный остаток по всем валютам</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.freeBalanceAllCurrencies') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Ваш остаток</span>
+            <span class="investor-summary-stat__label">{{ t('investors.yourBalance') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">
               {{ formatAmount(currentPartner?.agreement_available ?? '0', currentPartner?.agreement_currency) }}
             </strong>
-            <span class="investor-summary-stat__hint">Не распределён в товар или не выведен</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.notAllocatedOrWithdrawn') }}</span>
           </article>
           <article class="investor-summary-stat">
-            <span class="investor-summary-stat__label">Связанных приходов</span>
+            <span class="investor-summary-stat__label">{{ t('investors.linkedProcurementsCount') }}</span>
             <strong class="investor-summary-stat__value tabular-nums">{{ summary.procurements_count }}</strong>
-            <span class="investor-summary-stat__hint">По ним уже двигается товар и прибыль</span>
+            <span class="investor-summary-stat__hint">{{ t('investors.linkedProcurementsHint') }}</span>
           </article>
         </section>
 
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Ваше участие в договоре</h2>
+              <h2 class="investor-panel__title">{{ t('investors.yourParticipation') }}</h2>
               <p class="investor-panel__hint">
-                Капитал, распределение и прибыль именно по вашей стороне договора.
+                {{ t('investors.yourParticipationHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -224,46 +228,46 @@ onMounted(load)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Плановый вклад</span>
+              <span class="investor-detail-card__label">{{ t('investors.plannedContribution') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatAmount(currentPartner?.planned_capital_share ?? '0', currentPartner?.agreement_currency) }}
               </strong>
-              <span class="investor-detail-card__hint">Сумма, на которую вы изначально входили в договор.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.plannedContributionHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Плановая доля прибыли</span>
+              <span class="investor-detail-card__label">{{ t('investors.plannedProfitShare') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatRatioPercent(currentPartner?.planned_profit_share ?? '0') }}
               </strong>
-              <span class="investor-detail-card__hint">Как договор делит profit между вами и бизнесом.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.plannedProfitShareHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Фактически внесено</span>
+              <span class="investor-detail-card__label">{{ t('investors.actualContributed') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatAmount(currentPartner?.agreement_contributed ?? '0', currentPartner?.agreement_currency) }}
               </strong>
-              <span class="investor-detail-card__hint">Сколько капитала реально поступило в договор.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.actualContributedHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Ушло в товар</span>
+              <span class="investor-detail-card__label">{{ t('investors.allocatedToGoods') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatAmount(currentPartner?.agreement_allocated ?? '0', currentPartner?.agreement_currency) }}
               </strong>
-              <span class="investor-detail-card__hint">Часть капитала, уже распределённая по закупкам.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.allocatedToGoodsHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Оплачено, но ещё в пути</span>
+              <span class="investor-detail-card__label">{{ t('investors.paidButInTransit') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ formatReportAmount(currentPartner, 'pending_prepaid_cost_estimate_uzs', currentPartner?.pending_prepaid_cost_estimate_uzs ?? '0') }}
               </strong>
-              <span class="investor-detail-card__hint">Деньги уже ушли, но товар ещё не принят на склад.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.paidButInTransitHint') }}</span>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">К выплате</span>
+              <span class="investor-detail-card__label">{{ t('investors.pendingPayout') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">
                 {{ formatReportAmount(currentPartner, 'profit_pending_payout', currentPartner?.profit_pending_payout ?? '0') }}
               </strong>
-              <span class="investor-detail-card__hint">Невыплаченная прибыль по вашей стороне.</span>
+              <span class="investor-detail-card__hint">{{ t('investors.pendingPayoutHint') }}</span>
             </article>
           </div>
         </section>
@@ -271,9 +275,9 @@ onMounted(load)
         <section class="investor-panel investor-adjustments-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Возвраты и списания</h2>
+              <h2 class="investor-panel__title">{{ t('investors.returnsWriteoffsTitle') }}</h2>
               <p class="investor-panel__hint">
-                Как возвраты продаж и складские списания изменили вашу прибыль по договору.
+                {{ t('investors.returnsWriteoffsHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -283,25 +287,25 @@ onMounted(load)
 
           <div class="investor-adjustment-strip">
             <article class="investor-adjustment-card investor-adjustment-card--positive">
-              <span>Начислено</span>
+              <span>{{ t('investors.accrued') }}</span>
               <strong class="tabular-nums">
                 {{ formatReportAmount(currentPartner, 'profit_accrued', currentPartner?.profit_accrued ?? '0') }}
               </strong>
             </article>
             <article class="investor-adjustment-card">
-              <span>Снято возвратами</span>
+              <span>{{ t('investors.reversedByReturns') }}</span>
               <strong class="tabular-nums investor-negative">
                 {{ formatReportAmount(currentPartner, 'profit_reversed', currentPartner?.profit_reversed ?? '0') }}
               </strong>
             </article>
             <article class="investor-adjustment-card">
-              <span>Убытки списаний</span>
+              <span>{{ t('investors.writeoffLosses') }}</span>
               <strong class="tabular-nums investor-negative">
                 {{ formatReportAmount(currentPartner, 'losses_incurred', currentPartner?.losses_incurred ?? '0') }}
               </strong>
             </article>
             <article class="investor-adjustment-card investor-adjustment-card--net">
-              <span>Чистый результат</span>
+              <span>{{ t('investors.netResult') }}</span>
               <strong class="tabular-nums">
                 {{ currentPartnerNetProfit }}
               </strong>
@@ -310,17 +314,17 @@ onMounted(load)
 
           <p class="investor-adjustment-note">
             {{ hasCurrentPartnerAdjustments
-              ? 'Эти суммы уже учтены в показателе «К выплате».'
-              : 'Возвратов и списаний по вашей доле пока нет.' }}
+              ? t('investors.adjustmentsIncluded')
+              : t('investors.noAdjustments') }}
           </p>
         </section>
 
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Картина по договору</h2>
+              <h2 class="investor-panel__title">{{ t('investors.agreementPicture') }}</h2>
               <p class="investor-panel__hint">
-                Общий объём товара, себестоимость и уже заработанная прибыль по всей связке.
+                {{ t('investors.agreementPictureHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -330,35 +334,35 @@ onMounted(load)
 
           <div class="investor-grid-2">
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Выручка</span>
+              <span class="investor-detail-card__label">{{ t('reports.revenue') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Себестоимость продаж</span>
+              <span class="investor-detail-card__label">{{ t('reports.salesCogs') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Фактическая прибыль</span>
+              <span class="investor-detail-card__label">{{ t('reports.factualProfit') }}</span>
               <strong class="investor-detail-card__value tabular-nums investor-positive">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Ожидаемая прибыль</span>
+              <span class="investor-detail-card__label">{{ t('investors.expectedProfit') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Уже принято на склад</span>
+              <span class="investor-detail-card__label">{{ t('investors.receivedToStock') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'received_landed_cost', summary.received_landed_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Осталось в товаре</span>
+              <span class="investor-detail-card__label">{{ t('investors.remainingInGoods') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Оплачено в пути</span>
+              <span class="investor-detail-card__label">{{ t('investors.paidInTransit') }}</span>
               <strong class="investor-detail-card__value tabular-nums">{{ formatReportAmount(summary, 'pending_prepaid_cost', summary.pending_prepaid_cost) }}</strong>
             </article>
             <article class="investor-detail-card">
-              <span class="investor-detail-card__label">Продано / осталось</span>
+              <span class="investor-detail-card__label">{{ t('reports.soldRemaining') }}</span>
               <strong class="investor-detail-card__value tabular-nums">
                 {{ summary.quantity_sold }} / {{ summary.remaining_quantity }}
               </strong>
@@ -369,9 +373,9 @@ onMounted(load)
         <section class="investor-panel">
           <div class="investor-panel__head">
             <div class="investor-panel__copy">
-              <h2 class="investor-panel__title">Связанные приходы</h2>
+              <h2 class="investor-panel__title">{{ t('investors.linkedProcurements') }}</h2>
               <p class="investor-panel__hint">
-                По каждому приходу можно быстро посмотреть статус, прибыль и перейти в детальный investor-аудит.
+                {{ t('investors.linkedProcurementsDetailHint') }}
               </p>
             </div>
             <span class="investor-panel__icon">
@@ -380,7 +384,7 @@ onMounted(load)
           </div>
 
           <div v-if="procurements.length === 0" class="investor-empty">
-            Связанных приходов пока нет.
+            {{ t('investors.noLinkedProcurements') }}
           </div>
 
           <div v-else class="investor-list agreement-list">
@@ -400,7 +404,7 @@ onMounted(load)
                     </span>
                   </div>
                   <span class="investor-list-row__meta">
-                    {{ procurement.supplier_name || 'Без поставщика' }}
+                    {{ procurement.supplier_name || t('procurements.supplierMissing') }}
                     · {{ formatDateTime(procurement.received_at || procurement.opened_at) }}
                   </span>
                 </div>
@@ -408,7 +412,7 @@ onMounted(load)
                 <div class="investor-list-row__side agreement-row__side">
                   <div class="agreement-row__side-copy">
                     <span class="investor-list-row__value tabular-nums">{{ formatReportAmount(procurement, 'gross_profit', procurement.gross_profit) }}</span>
-                    <span class="investor-list-row__caption">Факт. прибыль</span>
+                    <span class="investor-list-row__caption">{{ t('reports.factualProfit') }}</span>
                   </div>
                   <ChevronDown
                     class="agreement-row__chevron"
@@ -422,41 +426,41 @@ onMounted(load)
               <div v-if="expandedProcurementId === procurement.procurement_id" class="agreement-row__details">
                 <div class="investor-grid-2">
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">Уже на складе</span>
+                    <span class="investor-detail-card__label">{{ t('investors.alreadyInStock') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">
                       {{ formatReportAmount(procurement, 'received_landed_cost', procurement.received_landed_cost ?? '0') }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">В пути</span>
+                    <span class="investor-detail-card__label">{{ t('procurements.inTransit') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">
                       {{ formatReportAmount(procurement, 'pending_prepaid_cost', procurement.pending_prepaid_cost ?? '0') }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">Остаток в товаре</span>
+                    <span class="investor-detail-card__label">{{ t('investors.remainingInGoods') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">
                       {{ formatReportAmount(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">Ожидаемая прибыль</span>
+                    <span class="investor-detail-card__label">{{ t('investors.expectedProfit') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">
                       {{ formatReportAmount(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}
                     </strong>
                   </article>
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">Продано</span>
+                    <span class="investor-detail-card__label">{{ t('investors.sold') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">{{ procurement.quantity_sold }}</strong>
                   </article>
                   <article class="investor-detail-card">
-                    <span class="investor-detail-card__label">Остаток</span>
+                    <span class="investor-detail-card__label">{{ t('reports.remaining') }}</span>
                     <strong class="investor-detail-card__value tabular-nums">{{ procurement.remaining_quantity }}</strong>
                   </article>
                 </div>
 
                 <button type="button" class="investor-link-button" @click="openProcurement(procurement.procurement_id)">
-                  Открыть деталь прихода
+                  {{ t('investors.openProcurementDetail') }}
                   <ChevronRight :size="16" :stroke-width="1.9" />
                 </button>
               </div>

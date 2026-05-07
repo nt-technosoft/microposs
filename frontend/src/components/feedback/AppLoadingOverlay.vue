@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+
 interface Props {
   show: boolean
   message?: string
 }
 
 withDefaults(defineProps<Props>(), {
-  message: 'Загрузка...',
+  message: '',
 })
+
+const { t } = useI18n()
 </script>
 
 <template>
@@ -17,13 +21,13 @@ withDefaults(defineProps<Props>(), {
         class="overlay"
         role="status"
         aria-live="polite"
-        :aria-label="message"
+        :aria-label="message || t('common.loading')"
       >
         <div class="overlay-content">
           <div class="spinner" aria-hidden="true">
             <div class="spinner-ring" />
           </div>
-          <p class="overlay-message">{{ message }}</p>
+          <p class="overlay-message">{{ message || t('common.loading') }}</p>
         </div>
       </div>
     </Transition>

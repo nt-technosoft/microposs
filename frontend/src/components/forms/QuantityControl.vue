@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Minus, Plus } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 
 interface Props {
   modelValue: number
@@ -15,6 +16,8 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   'update:modelValue': [value: number]
 }>()
+
+const { t } = useI18n()
 
 function decrement() {
   if (props.modelValue > props.min) {
@@ -34,7 +37,7 @@ function increment() {
     <button
       class="qty-btn"
       :disabled="modelValue <= min"
-      aria-label="Уменьшить"
+      :aria-label="t('common.decrease')"
       @click="decrement"
     >
       <Minus :size="16" :stroke-width="2" />
@@ -43,7 +46,7 @@ function increment() {
     <button
       class="qty-btn"
       :disabled="modelValue >= max"
-      aria-label="Увеличить"
+      :aria-label="t('common.increase')"
       @click="increment"
     >
       <Plus :size="16" :stroke-width="2" />

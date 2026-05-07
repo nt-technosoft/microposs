@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { CheckCircle, ShoppingCart, History } from 'lucide-vue-next'
 import BaseButton from '@/components/base/BaseButton.vue'
 import PriceDisplay from '@/components/data/PriceDisplay.vue'
@@ -8,6 +9,7 @@ interface Props {
 }
 
 defineProps<Props>()
+const { t } = useI18n()
 
 const emit = defineEmits<{
   newSale: []
@@ -21,18 +23,18 @@ const emit = defineEmits<{
       <div class="success-checkmark" aria-hidden="true">
         <CheckCircle :size="80" :stroke-width="1.5" class="success-checkmark__icon" />
       </div>
-      <h1 class="success-title">Продажа оформлена!</h1>
-      <p class="success-subtitle">Спасибо за покупку</p>
+      <h1 class="success-title">{{ t('sales.saleSuccessTitle') }}</h1>
+      <p class="success-subtitle">{{ t('sales.saleSuccessSubtitle') }}</p>
       <PriceDisplay :amount="totalAmount" size="xl" class="success-amount" />
     </div>
     <div class="success-screen__actions">
       <BaseButton variant="primary" size="lg" :full-width="true" @click="emit('newSale')">
         <ShoppingCart :size="18" :stroke-width="2" />
-        Новая продажа
+        {{ t('sales.newSale') }}
       </BaseButton>
       <BaseButton variant="ghost" size="md" :full-width="true" @click="emit('history')">
         <History :size="18" :stroke-width="1.75" />
-        История продаж
+        {{ t('sales.history') }}
       </BaseButton>
     </div>
   </div>

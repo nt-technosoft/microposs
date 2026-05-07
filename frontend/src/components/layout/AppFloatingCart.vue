@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useCartStore } from '@/stores/cart'
 import { ShoppingCart } from 'lucide-vue-next'
 import { formatPrice } from '@/utils/currency'
 
 const router = useRouter()
+const { t } = useI18n()
 const cart = useCartStore()
 
 const isVisible = computed(() => !cart.isEmpty)
@@ -22,7 +24,7 @@ function goToCart() {
     <button
       v-if="isVisible"
       class="floating-cart"
-      aria-label="Открыть корзину"
+      :aria-label="t('sales.cart')"
       @click="goToCart"
     >
       <ShoppingCart :size="20" :stroke-width="1.75" />

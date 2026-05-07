@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ShoppingCart, ChevronRight, Package } from 'lucide-vue-next'
 import type { Product } from '@/types/models'
 import PriceDisplay from '@/components/data/PriceDisplay.vue'
@@ -14,6 +15,7 @@ const props = withDefaults(defineProps<Props>(), {
   inCartQuantity: 0,
   locationScoped: true,
 })
+const { t } = useI18n()
 
 const emit = defineEmits<{
   'add-to-cart': [product: Product]
@@ -67,11 +69,13 @@ const stockAtLocation = computed(() => {
 
 const stockStatusLabel = computed(() => {
   if (!props.locationScoped) {
-    return totalStock.value > 0 ? `Всего ${totalStock.value} шт` : 'Нет в наличии'
+    return totalStock.value > 0
+      ? t('sales.stockTotal', { count: totalStock.value })
+      : t('sales.outOfStock')
   }
-  if (stockAtLocation.value > 0) return `${stockAtLocation.value} шт в магазине`
-  if (totalStock.value > 0) return 'На складе · нет в магазине'
-  return 'Нет в наличии'
+  if (stockAtLocation.value > 0) return t('sales.stockInShop', { count: stockAtLocation.value })
+  if (totalStock.value > 0) return t('sales.warehouseOnly')
+  return t('sales.outOfStock')
 })
 
 const isUnavailableForSale = computed(() => stockAtLocation.value <= 0)
@@ -102,7 +106,7 @@ function onActionClick(event: MouseEvent) {
   >
     <!-- In-cart indicator chip -->
     <Transition name="cart-badge">
-      <div v-if="inCartQuantity > 0" class="cart-badge" aria-label="`В корзине: ${inCartQuantity}`">
+      <div v-if="inCartQuantity > 0" class="cart-badge" :aria-label="t('sales.inCart', { count: inCartQuantity })">
         {{ inCartQuantity }}
       </div>
     </Transition>
@@ -138,7 +142,7 @@ function onActionClick(event: MouseEvent) {
           {{ stockStatusLabel }}
         </span>
         <span v-if="product.has_variants" class="meta-pill">
-          Вариативный
+          {{ t('sales.variableProduct') }}
         </span>
       </div>
     </div>
@@ -147,11 +151,11 @@ function onActionClick(event: MouseEvent) {
     <button
       class="product-action"
       :class="{ 'product-action--select': product.has_variants || isUnavailableForSale }"
-      :aria-label="product.has_variants || isUnavailableForSale ? `Открыть ${product.name}` : `Добавить ${product.name} в корзину`"
+      :aria-label="product.has_variants || isUnavailableForSale ? t('sales.openProduct', { name: product.name }) : t('sales.addToCart', { name: product.name })"
       @click="onActionClick"
     >
       <template v-if="product.has_variants || isUnavailableForSale">
-        <span class="action-label">{{ product.has_variants ? 'Выбрать' : 'Подробнее' }}</span>
+        <span class="action-label">{{ product.has_variants ? t('sales.choose') : t('common.details') }}</span>
         <ChevronRight :size="16" :stroke-width="2" />
       </template>
       <template v-else>

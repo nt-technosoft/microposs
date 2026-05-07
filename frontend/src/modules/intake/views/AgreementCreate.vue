@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Save } from 'lucide-vue-next'
 import { createInvestmentAgreement } from '@/api/partnerships'
 import { fetchPartners, type Partner } from '@/api/core'
@@ -9,6 +10,7 @@ import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 const { generateRequestId } = useIdempotency()
 
 const partners = ref<Partner[]>([])
@@ -46,19 +48,19 @@ const mudarabaRatio = computed(() => {
 })
 const investorOptions = computed(() => partners.value.filter((partner) => partner.role === 'INVESTOR'))
 const operatorOptions = computed(() => partners.value.filter((partner) => partner.role === 'OPERATOR'))
-const investorPartnerName = computed(() => investorOptions.value.find((partner) => partner.id === investorId.value)?.display_name ?? 'Инвестор')
-const operatorPartnerName = computed(() => operatorOptions.value.find((partner) => partner.id === operatorId.value)?.display_name ?? 'Бизнес')
+const investorPartnerName = computed(() => investorOptions.value.find((partner) => partner.id === investorId.value)?.display_name ?? t('procurements.investor'))
+const operatorPartnerName = computed(() => operatorOptions.value.find((partner) => partner.id === operatorId.value)?.display_name ?? t('procurements.business'))
 
 function isPercentOutOfRange(value: number): boolean {
   return !Number.isFinite(value) || value < 0 || value > 100
 }
 
 const ratioError = computed(() => {
-  if (plannedBudgetValue.value <= 0) return 'Укажите бюджет договора'
-  if (isPercentOutOfRange(investorCapitalPercentValue.value)) return 'Доля капитала инвестора должна быть от 0 до 100%'
-  if (isPercentOutOfRange(investorProfitPercentValue.value)) return 'Доля прибыли инвестора должна быть от 0 до 100%'
-  if (!Number.isFinite(mudarabaRatio.value)) return 'Невозможно рассчитать коэффициент при нулевой доле капитала инвестора'
-  if (mudarabaRatio.value < 0 || mudarabaRatio.value > 1) return 'Доля прибыли инвестора не может превышать его долю капитала'
+  if (plannedBudgetValue.value <= 0) return t('procurements.budgetRequired')
+  if (isPercentOutOfRange(investorCapitalPercentValue.value)) return t('procurements.capitalShareRange')
+  if (isPercentOutOfRange(investorProfitPercentValue.value)) return t('procurements.profitShareRange')
+  if (!Number.isFinite(mudarabaRatio.value)) return t('procurements.capitalShareZero')
+  if (mudarabaRatio.value < 0 || mudarabaRatio.value > 1) return t('procurements.profitOverCapital')
   return ''
 })
 
@@ -71,7 +73,7 @@ async function load(): Promise<void> {
 async function submit(): Promise<void> {
   error.value = ''
   if (!investorId.value || !operatorId.value) {
-    error.value = 'Выберите инвестора и бизнес'
+    error.value = t('procurements.chooseInvestorAndBusiness')
     return
   }
   if (ratioError.value) {
@@ -101,10 +103,10 @@ async function submit(): Promise<void> {
         },
       ],
     })
-    toast.success('Инвестдоговор создан')
+    toast.success(t('procurements.agreementCreated'))
     router.push({ name: 'agreement-detail', params: { id: agreement.id } })
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Не удалось создать договор'
+    error.value = err instanceof Error ? err.message : t('procurements.agreementCreateFailed')
   } finally {
     saving.value = false
   }
@@ -116,41 +118,41 @@ onMounted(load)
 <template>
   <div class="page">
     <header class="topbar">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" />
       </button>
-      <h1>Новый инвестдоговор</h1>
+      <h1>{{ t('procurements.newInvestmentAgreement') }}</h1>
       <span />
     </header>
 
     <main class="content">
       <section class="panel">
-        <h2>Участники</h2>
+        <h2>{{ t('procurements.participants') }}</h2>
         <label>
-          <span>Инвестор</span>
+          <span>{{ t('procurements.investor') }}</span>
           <select v-model.number="investorId">
-            <option :value="null">Выберите инвестора</option>
+            <option :value="null">{{ t('procurements.chooseInvestor') }}</option>
             <option v-for="partner in investorOptions" :key="partner.id" :value="partner.id">{{ partner.display_name }}</option>
           </select>
         </label>
         <label>
-          <span>Бизнес</span>
+          <span>{{ t('procurements.business') }}</span>
           <select v-model.number="operatorId">
-            <option :value="null">Выберите бизнес</option>
+            <option :value="null">{{ t('procurements.chooseBusiness') }}</option>
             <option v-for="partner in operatorOptions" :key="partner.id" :value="partner.id">{{ partner.display_name }}</option>
           </select>
         </label>
       </section>
 
       <section class="panel">
-        <h2>Формула</h2>
+        <h2>{{ t('procurements.formula') }}</h2>
         <div class="grid-2">
           <label>
-            <span>Бюджет</span>
+            <span>{{ t('procurements.budget') }}</span>
             <input v-model="plannedBudget" inputmode="decimal" />
           </label>
           <label>
-            <span>Валюта</span>
+            <span>{{ t('common.currency') }}</span>
             <select v-model="currency">
               <option value="USD">USD</option>
               <option value="UZS">UZS</option>
@@ -159,11 +161,11 @@ onMounted(load)
         </div>
         <div class="grid-2">
           <label>
-            <span>Капитал инвестора, %</span>
+            <span>{{ t('procurements.investorCapitalPercent') }}</span>
             <input v-model="investorCapitalPercent" inputmode="decimal" />
           </label>
           <label>
-            <span>Прибыль инвестора, %</span>
+            <span>{{ t('procurements.investorProfitPercent') }}</span>
             <input v-model="investorProfitPercentInput" inputmode="decimal" />
           </label>
         </div>
@@ -171,30 +173,30 @@ onMounted(load)
           <div class="summary-card">
             <span class="summary-kicker">{{ investorPartnerName }}</span>
             <strong>{{ investorCapital.toFixed(2) }} {{ currency }}</strong>
-            <small>капитал {{ formatPercentPreview(investorCapitalPercentValue) }}% · прибыль {{ formatPercentPreview(investorProfitPercentValue) }}%</small>
+            <small>{{ t('procurements.capitalProfitLine', { capital: formatPercentPreview(investorCapitalPercentValue), profit: formatPercentPreview(investorProfitPercentValue) }) }}</small>
           </div>
           <div class="summary-card">
             <span class="summary-kicker">{{ operatorPartnerName }}</span>
             <strong>{{ operatorCapital.toFixed(2) }} {{ currency }}</strong>
-            <small>капитал {{ formatPercentPreview(operatorCapitalPercentValue) }}% · прибыль {{ formatPercentPreview(operatorProfitPercentValue) }}%</small>
+            <small>{{ t('procurements.capitalProfitLine', { capital: formatPercentPreview(operatorCapitalPercentValue), profit: formatPercentPreview(operatorProfitPercentValue) }) }}</small>
           </div>
         </div>
         <div class="formula-strip">
-          <span>Коэффициент Mudaraba рассчитывается автоматически</span>
+          <span>{{ t('procurements.mudarabaAuto') }}</span>
           <strong class="tabular-nums">{{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(6) : '—' }}</strong>
         </div>
         <p v-if="ratioError" class="error error-inline">{{ ratioError }}</p>
       </section>
 
       <section class="panel">
-        <h2>Заметка</h2>
-        <textarea v-model="notes" rows="3" placeholder="Например, первая партия товара по договору Устоз + бизнес" />
+        <h2>{{ t('procurements.note') }}</h2>
+        <textarea v-model="notes" rows="3" :placeholder="t('procurements.agreementNotePlaceholder')" />
       </section>
 
       <p v-if="error" class="error">{{ error }}</p>
       <button class="primary" type="button" :disabled="saving" @click="submit">
         <Save :size="18" />
-        {{ saving ? 'Сохраняю...' : 'Создать договор' }}
+        {{ saving ? t('procurements.savingAgreement') : t('procurements.createAgreement') }}
       </button>
     </main>
   </div>

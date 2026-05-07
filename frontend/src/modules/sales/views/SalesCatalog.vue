@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ShoppingCart, Package, Store, Wallet, ReceiptText, Clock3, LayoutGrid, Rows3, ChevronRight, Search, ChevronDown } from 'lucide-vue-next'
 import { fetchProductVariants } from '@/api/catalog'
 import { fetchLocations } from '@/api/inventory'
@@ -24,6 +25,7 @@ import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
 const route = useRoute()
+const { t, locale } = useI18n()
 const productsStore = useProductsStore()
 const cartStore = useCartStore()
 const sessionStore = useSessionStore()
@@ -101,7 +103,7 @@ const expectedCashByCurrency = computed<Record<string, number>>(() => {
 })
 const openedAtLabel = computed(() => {
   if (!activeSession.value?.opened_at) return ''
-  return new Intl.DateTimeFormat('ru-RU', {
+  return new Intl.DateTimeFormat(locale.value === 'en' ? 'en-US' : locale.value === 'uz' ? 'uz-Latn-UZ' : 'ru-RU', {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -121,14 +123,14 @@ const closeUsdDifference = computed(() => {
 const closeDifferenceMeta = computed(() => {
   if (closeDifference.value === 0) {
     return {
-      label: 'Без расхождения',
+      label: t('sales.noMismatch'),
       tone: 'ok' as const,
     }
   }
 
   return closeDifference.value > 0
-    ? { label: 'Излишек', tone: 'positive' as const }
-    : { label: 'Недостача', tone: 'warning' as const }
+    ? { label: t('sales.surplus'), tone: 'positive' as const }
+    : { label: t('sales.shortage'), tone: 'warning' as const }
 })
 
 function inCartQuantity(product: Product): number {
@@ -246,14 +248,14 @@ function productTrace(product: Product): string {
 function stockLabel(product: Product): string {
   const stock = productStock(product)
   if (!activeSession.value) {
-    return stock > 0 ? `Всего ${stock}` : 'Нет в наличии'
+    return stock > 0 ? t('sales.stockTotal', { count: stock }) : t('sales.outOfStock')
   }
-  if (stock > 0) return `${stock} в магазине`
-  return productTotalStock(product) > 0 ? 'На складе · нет в магазине' : 'Нет в наличии'
+  if (stock > 0) return t('sales.stockInShop', { count: stock })
+  return productTotalStock(product) > 0 ? t('sales.warehouseOnly') : t('sales.outOfStock')
 }
 
 const viewModeButtonLabel = computed(() =>
-  catalogViewMode.value === 'grid' ? 'Переключить на список' : 'Переключить на сетку',
+  catalogViewMode.value === 'grid' ? t('sales.switchToList') : t('sales.switchToGrid'),
 )
 
 const viewModeButtonIcon = computed(() =>
@@ -265,16 +267,16 @@ const searchVisible = computed(() => searchExpanded.value || searchQuery.value.t
 const sessionCompactNote = computed(() => {
   if (activeSession.value) {
     const parts = [
-      sessionStore.location?.name || 'Точка продаж',
+      sessionStore.location?.name || t('sales.salesPoint'),
       openedAtLabel.value,
     ].filter(Boolean)
     return parts.join(' · ')
   }
-  return 'Открой смену, чтобы начать продажи.'
+  return t('sales.openShiftHint')
 })
 
 const sessionToggleLabel = computed(() =>
-  sessionDetailsExpanded.value ? 'Скрыть детали смены' : 'Показать детали смены',
+  sessionDetailsExpanded.value ? t('sales.hideShiftDetails') : t('sales.showShiftDetails'),
 )
 
 function triggerFlash(productId: number) {
@@ -295,7 +297,7 @@ async function onAddToCart(product: Product | null | undefined) {
   }
 
   if (!activeSession.value?.location?.id) {
-    toast.warning('Открой смену в магазине, чтобы добавлять товары')
+    toast.warning(t('sales.openShopShiftToAdd'))
     openSessionSheet()
     return
   }
@@ -332,7 +334,7 @@ async function onAddToCart(product: Product | null | undefined) {
   }
 
   if (inCartQuantity(product) >= availableStock) {
-    toast.warning('В магазине больше нет доступного остатка')
+    toast.warning(t('sales.noShopStockLeft'))
     return
   }
 
@@ -394,7 +396,7 @@ async function loadLocations(): Promise<void> {
       openForm.value.locationId = shopLocations.value[0].id
     }
   } catch (error: unknown) {
-    toast.error(getApiErrorMessage(error, 'Не удалось загрузить точки продаж'))
+    toast.error(getApiErrorMessage(error, t('sales.locationsLoadFailed')))
   } finally {
     isLoadingLocations.value = false
   }
@@ -436,13 +438,13 @@ async function submitOpenSession(): Promise<void> {
   openFormError.value = ''
 
   if (!openForm.value.locationId) {
-    openFormError.value = 'Выбери точку продаж'
+    openFormError.value = t('sales.chooseSalesPoint')
     return
   }
 
   const openingCash = Number(openForm.value.openingCash || '0')
   if (!Number.isFinite(openingCash) || openingCash < 0) {
-    openFormError.value = 'Проверь стартовую наличность'
+    openFormError.value = t('sales.checkOpeningCash')
     return
   }
 
@@ -450,9 +452,9 @@ async function submitOpenSession(): Promise<void> {
     await sessionStore.openSession(openForm.value.locationId, openingCash)
     closeOpenSessionSheet()
     await productsStore.fetchProducts(true)
-    toast.success('Смена открыта')
+    toast.success(t('sales.shiftOpened'))
   } catch (error: unknown) {
-    openFormError.value = getApiErrorMessage(error, 'Не удалось открыть смену')
+    openFormError.value = getApiErrorMessage(error, t('sales.shiftOpenFailed'))
   }
 }
 
@@ -461,7 +463,7 @@ async function submitCloseSession(): Promise<void> {
 
   const actualCash = Number(closeForm.value.actualCash || '0')
   if (!Number.isFinite(actualCash) || actualCash < 0) {
-    closeFormError.value = 'Проверь фактическую наличность'
+    closeFormError.value = t('sales.checkActualCash')
     return
   }
 
@@ -474,9 +476,9 @@ async function submitCloseSession(): Promise<void> {
     await sessionStore.closeSession(actualCash, actualByCurrency)
     closeCloseSessionSheet()
     await productsStore.fetchProducts(true)
-    toast.success('Смена закрыта')
+    toast.success(t('sales.shiftClosed'))
   } catch (error: unknown) {
-    closeFormError.value = getApiErrorMessage(error, 'Не удалось закрыть смену')
+    closeFormError.value = getApiErrorMessage(error, t('sales.shiftCloseFailed'))
   }
 }
 
@@ -551,11 +553,11 @@ onBeforeUnmount(() => {
 
     <!-- ===== Sticky header ===== -->
     <header class="catalog-header">
-      <h1 class="header-title">Каталог товаров</h1>
+      <h1 class="header-title">{{ t('sales.catalogTitle') }}</h1>
 
       <button
         class="cart-btn"
-        :aria-label="`Корзина, ${cartItemCount} товаров`"
+        :aria-label="t('sales.cartAria', { count: cartItemCount })"
         @click="goToCart"
       >
         <ShoppingCart :size="22" :stroke-width="1.75" />
@@ -583,7 +585,7 @@ onBeforeUnmount(() => {
             class="toolbar-icon-btn"
             :class="{ 'toolbar-icon-btn--active': searchVisible }"
             type="button"
-            aria-label="Поиск товаров"
+            :aria-label="t('sales.searchPlaceholder')"
             @click="toggleSearch"
           >
             <Search :size="16" :stroke-width="2" />
@@ -604,7 +606,7 @@ onBeforeUnmount(() => {
         <div v-if="searchVisible" class="search-panel">
           <BaseSearch
             v-model="searchQuery"
-            placeholder="Поиск товаров..."
+            :placeholder="t('sales.searchPlaceholder')"
             :debounce="300"
             @search="onSearch"
           />
@@ -618,13 +620,13 @@ onBeforeUnmount(() => {
         <div class="session-card__header">
           <div class="session-card__title-wrap">
             <h2 id="session-heading" class="session-card__title">
-              {{ activeSession ? 'Смена открыта' : 'Смена не открыта' }}
+              {{ activeSession ? t('sales.sessionOpen') : t('sales.sessionClosed') }}
             </h2>
             <p class="session-card__compact-note">{{ sessionCompactNote }}</p>
           </div>
           <div class="session-card__header-actions">
             <span class="session-badge" :class="{ 'session-badge--open': !!activeSession }">
-              {{ activeSession ? 'Открыта' : 'Закрыта' }}
+              {{ activeSession ? t('sales.openBadge') : t('sales.closedBadge') }}
             </span>
             <button
               class="session-toggle-btn"
@@ -646,7 +648,7 @@ onBeforeUnmount(() => {
               :full-width="true"
               @click="openCloseSessionSheet"
             >
-              Закрыть смену
+              {{ t('sales.closeShift') }}
             </BaseButton>
           </div>
 
@@ -655,7 +657,7 @@ onBeforeUnmount(() => {
               <div class="session-meta">
                 <span class="session-meta__item">
                   <Store :size="16" :stroke-width="1.8" />
-                  {{ sessionStore.location?.name || 'Точка продаж' }}
+                  {{ sessionStore.location?.name || t('sales.salesPoint') }}
                 </span>
                 <span class="session-meta__item">
                   <Clock3 :size="16" :stroke-width="1.8" />
@@ -665,19 +667,19 @@ onBeforeUnmount(() => {
 
               <div class="session-stats">
                 <div class="session-stat">
-                  <span class="session-stat__label">Старт</span>
+                  <span class="session-stat__label">{{ t('sales.startCash') }}</span>
                   <span class="session-stat__value">{{ formatSessionAmount(activeSession.opening_cash) }}</span>
                 </div>
                 <div class="session-stat">
-                  <span class="session-stat__label">Наличные продажи</span>
+                  <span class="session-stat__label">{{ t('sales.cashSales') }}</span>
                   <span class="session-stat__value">{{ formatSessionAmount(cashSalesTotal) }}</span>
                 </div>
                 <div class="session-stat">
-                  <span class="session-stat__label">Ожидается в кассе</span>
+                  <span class="session-stat__label">{{ t('sales.expectedCash') }}</span>
                   <span class="session-stat__value">{{ formatSessionAmount(expectedCashPreview) }}</span>
                 </div>
                 <div class="session-stat">
-                  <span class="session-stat__label">Продаж</span>
+                  <span class="session-stat__label">{{ t('sales.salesCount') }}</span>
                   <span class="session-stat__value">{{ activeSession.sales_count ?? 0 }}</span>
                 </div>
               </div>
@@ -694,17 +696,17 @@ onBeforeUnmount(() => {
               :disabled="isLoadingLocations || shopLocations.length === 0"
               @click="openSessionSheet"
             >
-              Открыть смену
+              {{ t('sales.openShift') }}
             </BaseButton>
           </div>
 
           <Transition name="session-collapse">
             <div v-if="sessionDetailsExpanded" class="session-details">
               <p class="session-card__description">
-                Открой кассовую смену, чтобы оформлять продажи и видеть сверку по кассе.
+                {{ t('sales.shiftDescription') }}
               </p>
               <p v-if="!isLoadingLocations && shopLocations.length === 0" class="session-card__hint">
-                Нет активной точки продаж. Сначала создай или включи магазин в локациях.
+                {{ t('sales.noSalesPoint') }}
               </p>
             </div>
           </Transition>
@@ -715,7 +717,7 @@ onBeforeUnmount(() => {
       <div
         v-if="productsStore.isLoading && productsStore.products.length === 0"
         class="product-grid"
-        aria-label="Загрузка товаров"
+        :aria-label="t('sales.loadingProducts')"
         aria-busy="true"
       >
         <AppSkeletonCard v-for="n in SKELETON_COUNT" :key="n" />
@@ -724,9 +726,9 @@ onBeforeUnmount(() => {
       <!-- Empty state -->
       <AppEmptyState
         v-else-if="!productsStore.isLoading && productsStore.products.length === 0"
-        title="Товары не найдены"
-        description="Попробуйте изменить поисковый запрос или выбрать другую категорию"
-        action-label="Сбросить фильтры"
+        :title="t('sales.noProducts')"
+        :description="t('sales.noProductsDescription')"
+        :action-label="t('sales.resetFilters')"
         @action="resetFilters"
       >
         <template #illustration>
@@ -742,7 +744,7 @@ onBeforeUnmount(() => {
           v-if="catalogViewMode === 'grid'"
           class="product-grid"
           role="list"
-          aria-label="Список товаров"
+          :aria-label="t('sales.productList')"
         >
           <div
             v-for="product in sortedCatalogProducts"
@@ -770,7 +772,7 @@ onBeforeUnmount(() => {
                 >
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                <span class="added-label">Добавлено</span>
+                <span class="added-label">{{ t('sales.added') }}</span>
               </div>
             </Transition>
 
@@ -788,7 +790,7 @@ onBeforeUnmount(() => {
           v-else
           class="product-compact-list"
           role="list"
-          aria-label="Компактный список товаров"
+          :aria-label="t('sales.compactProductList')"
         >
           <article
             v-for="product in sortedCatalogProducts"
@@ -826,7 +828,7 @@ onBeforeUnmount(() => {
               <div class="compact-product-bottomline">
                 <strong class="compact-product-price">{{ formatPrice(productPrice(product), 'UZS') }}</strong>
                 <span v-if="inCartQuantity(product) > 0" class="compact-cart-badge">
-                  В корзине {{ inCartQuantity(product) }}
+                  {{ t('sales.inCartShort', { count: inCartQuantity(product) }) }}
                 </span>
               </div>
             </div>
@@ -834,7 +836,7 @@ onBeforeUnmount(() => {
             <button
               class="compact-product-action"
               :class="{ 'compact-product-action--select': product.has_variants || productStock(product) <= 0 }"
-              :aria-label="product.has_variants || productStock(product) <= 0 ? `Открыть ${product.name}` : `Добавить ${product.name}`"
+              :aria-label="product.has_variants || productStock(product) <= 0 ? t('sales.openProduct', { name: product.name }) : t('sales.addToCart', { name: product.name })"
               @click.stop="product.has_variants || productStock(product) <= 0 ? onViewDetail(product) : onAddToCart(product)"
             >
               <template v-if="product.has_variants || productStock(product) <= 0">
@@ -852,7 +854,7 @@ onBeforeUnmount(() => {
         <div
           v-if="productsStore.isLoading"
           :class="catalogViewMode === 'grid' ? 'product-grid load-more-grid' : 'product-compact-list load-more-grid'"
-          aria-label="Загрузка ещё товаров"
+          :aria-label="t('sales.loadingMoreProducts')"
           aria-busy="true"
         >
           <AppSkeletonCard v-for="n in 2" :key="`lm-${n}`" />
@@ -864,18 +866,18 @@ onBeforeUnmount(() => {
 
     </main>
 
-    <AppBottomSheet :open="openSheetOpen" title="Открыть смену" @close="closeOpenSessionSheet">
+    <AppBottomSheet :open="openSheetOpen" :title="t('sales.openShift')" @close="closeOpenSessionSheet">
       <form class="session-sheet" @submit.prevent="submitOpenSession">
         <BaseSelect
           v-model="openForm.locationId"
-          title="Точка продаж"
-          placeholder="Выберите точку продаж"
+          :title="t('sales.salesPoint')"
+          :placeholder="t('sales.selectSalesPoint')"
           :options="locationOptions"
           :disabled="isLoadingLocations || shopLocations.length === 0"
         />
         <BaseInput
           v-model="openForm.openingCash"
-          label="Стартовая наличность"
+          :label="t('sales.openingCash')"
           type="number"
           placeholder="0"
         />
@@ -886,32 +888,32 @@ onBeforeUnmount(() => {
           :full-width="true"
           :loading="sessionStore.isLoading"
         >
-          Открыть смену
+          {{ t('sales.openShift') }}
         </BaseButton>
       </form>
     </AppBottomSheet>
 
-    <AppBottomSheet :open="closeSheetOpen" title="Закрыть смену" @close="closeCloseSessionSheet">
+    <AppBottomSheet :open="closeSheetOpen" :title="t('sales.closeShift')" @close="closeCloseSessionSheet">
       <form class="session-sheet" @submit.prevent="submitCloseSession">
         <div class="close-summary">
           <div class="close-summary__row">
             <span class="close-summary__label">
               <Store :size="16" :stroke-width="1.8" />
-              Точка
+              {{ t('sales.point') }}
             </span>
-            <span class="close-summary__value">{{ sessionStore.location?.name || 'Точка продаж' }}</span>
+            <span class="close-summary__value">{{ sessionStore.location?.name || t('sales.salesPoint') }}</span>
           </div>
           <div class="close-summary__row">
             <span class="close-summary__label">
               <Wallet :size="16" :stroke-width="1.8" />
-              Старт
+              {{ t('sales.startCash') }}
             </span>
             <span class="close-summary__value">{{ formatSessionAmount(activeSession?.opening_cash ?? 0) }}</span>
           </div>
           <div class="close-summary__row">
             <span class="close-summary__label">
               <ReceiptText :size="16" :stroke-width="1.8" />
-              Наличные продажи
+              {{ t('sales.cashSales') }}
             </span>
             <span class="close-summary__value">
               {{ formatSessionCurrencyAmount(cashSalesByCurrency.UZS || 0, 'UZS') }}
@@ -919,7 +921,7 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <div class="close-summary__row">
-            <span class="close-summary__label">Ожидается в кассе</span>
+            <span class="close-summary__label">{{ t('sales.expectedCash') }}</span>
             <span class="close-summary__value">
               {{ formatSessionCurrencyAmount(expectedCashByCurrency.UZS || 0, 'UZS') }}
               <template v-if="expectedCashByCurrency.USD"> · {{ formatSessionCurrencyAmount(expectedCashByCurrency.USD, 'USD') }}</template>
@@ -929,14 +931,14 @@ onBeforeUnmount(() => {
 
         <BaseInput
           v-model="closeForm.actualCash"
-          label="Фактическая наличность"
+          :label="t('sales.actualCash')"
           type="number"
           placeholder="0"
         />
         <BaseInput
           v-if="expectedCashByCurrency.USD || closeForm.actualCashUsd"
           v-model="closeForm.actualCashUsd"
-          label="Фактическая наличность, USD"
+          :label="t('sales.actualCashUsd')"
           type="number"
           placeholder="0"
         />
@@ -954,7 +956,7 @@ onBeforeUnmount(() => {
           :full-width="true"
           :loading="sessionStore.isLoading"
         >
-          Закрыть смену
+          {{ t('sales.closeShift') }}
         </BaseButton>
       </form>
     </AppBottomSheet>

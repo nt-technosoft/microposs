@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, ChevronDown, ExternalLink, PackageSearch, Scale, Wallet } from 'lucide-vue-next'
 
 import {
@@ -10,9 +11,12 @@ import {
 } from '@/api/finance'
 import { fetchProcurement, type ProcurementDetail } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
+import { intlLocale } from '@/i18n/format'
+import { partnerRoleLabel, procurementStatusLabel, procurementTypeLabel } from '@/utils/domainLabels'
 
 const route = useRoute()
 const router = useRouter()
+const { t, locale } = useI18n()
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -46,39 +50,22 @@ function formatReportAmount(
 
 function formatPercent(value: string | number | null | undefined): string {
   const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '0'))
-  return `${numeric.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%`
+  return `${numeric.toLocaleString(intlLocale(locale.value), { maximumFractionDigits: 2 })}%`
 }
 
 function formatRatioPercent(value: string | number | null | undefined): string {
   const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '0'))
-  return `${(numeric * 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%`
+  return `${(numeric * 100).toLocaleString(intlLocale(locale.value), { maximumFractionDigits: 2 })}%`
 }
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
-  return new Date(value).toLocaleString('ru-RU', {
+  return new Date(value).toLocaleString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'long',
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function procurementTypeLabel(type: string | null | undefined): string {
-  if (type === 'PARTNERSHIP') return 'Партнёрская закупка'
-  if (type === 'MUSHARAKA') return 'Мушарака'
-  if (type === 'OWN_FUNDS') return 'Свои средства'
-  if (type === 'DISTRIBUTOR') return 'Дистрибьютор'
-  return type || '—'
-}
-
-function procurementStatusLabel(status: string | null | undefined): string {
-  if (status === 'PARTIALLY_RECEIVED') return 'Частично оприходована'
-  if (status === 'RECEIVED') return 'Завершена'
-  if (status === 'OPEN') return 'Открыта'
-  if (status === 'CLOSED') return 'Закрыта'
-  if (status === 'CANCELLED') return 'Отменена'
-  return status || '—'
 }
 
 function historyAmountClass(kind: string): string {
@@ -112,7 +99,7 @@ let _currencyTimer: ReturnType<typeof setTimeout> | null = null
 
 async function load(): Promise<void> {
   if (!Number.isFinite(procurementId.value) || procurementId.value <= 0) {
-    error.value = 'Некорректный ID закупки'
+    error.value = t('reports.invalidProcurementId')
     return
   }
 
@@ -135,7 +122,7 @@ async function load(): Promise<void> {
     procurementDetail.value = procurementPayload
   } catch (err: unknown) {
     if ((err as { name?: string })?.name === 'CanceledError') return
-    error.value = err instanceof Error ? err.message : 'Не удалось загрузить аудит закупки'
+    error.value = err instanceof Error ? err.message : t('reports.procurementAuditLoadFailed')
   } finally {
     loading.value = false
   }
@@ -160,22 +147,22 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <header class="page-header">
-      <button class="icon-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
       <div class="header-copy">
-        <h1 class="title">Аудит закупки</h1>
-        <p class="subtitle">Реализованная и ожидаемая прибыль по одному приходу</p>
+        <h1 class="title">{{ t('reports.procurementAudit') }}</h1>
+        <p class="subtitle">{{ t('reports.procurementAuditSubtitle') }}</p>
       </div>
       <button class="ghost-btn" type="button" @click="openOperationalCard">
         <ExternalLink :size="14" :stroke-width="2" />
-        Приход
+        {{ t('reports.operationalProcurement') }}
       </button>
     </header>
 
     <main class="content">
       <section v-if="loading" class="hero">
-        <p class="muted">Собираю прибыльность закупки...</p>
+        <p class="muted">{{ t('reports.loadingProcurementAudit') }}</p>
       </section>
 
       <section v-else-if="error" class="hero hero--error">
@@ -185,40 +172,40 @@ onBeforeUnmount(() => {
       <template v-else-if="summary && procurementDetail">
         <section class="hero">
           <div class="hero-copy">
-            <p class="hero-kicker">Приход #{{ summary.procurement_id }}</p>
-            <h2 class="hero-title">{{ summary.supplier_name || 'Закупка без поставщика' }}</h2>
+            <p class="hero-kicker">{{ t('reports.procurementNumber', { id: summary.procurement_id }) }}</p>
+            <h2 class="hero-title">{{ summary.supplier_name || t('reports.procurementNoSupplier') }}</h2>
             <div class="hero-meta">
-              <span>{{ procurementTypeLabel(summary.procurement_type) }}</span>
-              <span>{{ procurementStatusLabel(summary.status) }}</span>
+              <span>{{ procurementTypeLabel(summary.procurement_type ?? '') }}</span>
+              <span>{{ procurementStatusLabel(summary.status ?? '') }}</span>
               <span>{{ formatDateTime(summary.received_at || summary.opened_at) }}</span>
             </div>
           </div>
           <div class="hero-value">
-            <div class="report-currency-switch" role="group" aria-label="Валюта аудита">
+            <div class="report-currency-switch" role="group" :aria-label="t('reports.procurementAuditCurrency')">
               <button type="button" :class="{ active: activeReportCurrency === 'UZS' }" @click="setReportCurrency('UZS')">UZS</button>
               <button type="button" :class="{ active: activeReportCurrency === 'USD' }" @click="setReportCurrency('USD')">USD</button>
             </div>
-            <span class="hero-label">Факт. прибыль</span>
+            <span class="hero-label">{{ t('reports.factualProfit') }}</span>
             <strong class="hero-amount tabular-nums">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
-            <span class="hero-note">Прогноз {{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</span>
+            <span class="hero-note">{{ t('reports.forecast', { amount: formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }) }}</span>
           </div>
         </section>
 
         <section class="summary-band">
           <article class="summary-metric">
-            <span class="metric-label">Выручка</span>
+            <span class="metric-label">{{ t('reports.revenue') }}</span>
             <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'revenue', summary.revenue) }}</strong>
           </article>
           <article class="summary-metric">
-            <span class="metric-label">Себестоимость</span>
+            <span class="metric-label">{{ t('reports.cogs') }}</span>
             <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'cogs', summary.cogs) }}</strong>
           </article>
           <article class="summary-metric">
-            <span class="metric-label">В остатке</span>
+            <span class="metric-label">{{ t('reports.remaining') }}</span>
             <strong class="metric-value tabular-nums">{{ formatReportAmount(summary, 'remaining_landed_cost', summary.remaining_landed_cost) }}</strong>
           </article>
           <article class="summary-metric">
-            <span class="metric-label">Продано / остаток</span>
+            <span class="metric-label">{{ t('reports.soldRemaining') }}</span>
             <strong class="metric-value tabular-nums">{{ summary.quantity_sold }} / {{ summary.remaining_quantity }}</strong>
           </article>
         </section>
@@ -226,35 +213,35 @@ onBeforeUnmount(() => {
         <section class="section">
           <div class="section-head">
             <div>
-              <p class="section-kicker">Формула закупки</p>
-              <h3 class="section-title">Итог</h3>
+              <p class="section-kicker">{{ t('reports.formulaProcurement') }}</p>
+              <h3 class="section-title">{{ t('reports.result') }}</h3>
             </div>
             <Scale :size="18" :stroke-width="2" class="section-icon" />
           </div>
 
           <div class="formula-list">
             <div class="formula-row">
-              <span>Фактическая прибыль</span>
+              <span>{{ t('reports.factualProfit') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'gross_profit', summary.gross_profit) }}</strong>
             </div>
             <div class="formula-row">
-              <span>Инвесторы из факта</span>
+              <span>{{ t('reports.investorsActual') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'investor_profit', summary.investor_profit) }}</strong>
             </div>
             <div class="formula-row">
-              <span>Бизнес из факта</span>
+              <span>{{ t('reports.businessActual') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'business_profit', summary.business_profit) }}</strong>
             </div>
             <div class="formula-row">
-              <span>Прогноз по остатку</span>
+              <span>{{ t('reports.forecastRemaining') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'projected_gross_profit', summary.projected_gross_profit) }}</strong>
             </div>
             <div class="formula-row">
-              <span>Инвесторы из прогноза</span>
+              <span>{{ t('reports.investorsForecast') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'projected_investor_profit', summary.projected_investor_profit) }}</strong>
             </div>
             <div class="formula-row">
-              <span>Бизнес из прогноза</span>
+              <span>{{ t('reports.businessForecast') }}</span>
               <strong class="mono">{{ formatReportAmount(summary, 'projected_business_profit', summary.projected_business_profit) }}</strong>
             </div>
           </div>
@@ -264,7 +251,7 @@ onBeforeUnmount(() => {
           <div class="section-head">
             <div>
               <p class="section-kicker">Purchase line → sold → remaining</p>
-              <h3 class="section-title">Строки закупки</h3>
+              <h3 class="section-title">{{ t('reports.purchaseLines') }}</h3>
             </div>
             <PackageSearch :size="18" :stroke-width="2" class="section-icon" />
           </div>
@@ -280,17 +267,17 @@ onBeforeUnmount(() => {
                 <div class="item-main">
                   <div class="item-title-row">
                     <strong class="item-title">{{ item.product_name }}</strong>
-                    <span class="item-badge">{{ item.purchased_quantity }} шт.</span>
+                    <span class="item-badge">{{ t('reports.pcsShort', { count: item.purchased_quantity }) }}</span>
                   </div>
                   <div class="item-meta">
-                    <span>Продано {{ item.sold_quantity }}</span>
-                    <span>Остаток {{ item.remaining_quantity }}</span>
-                    <span>Маржа {{ formatPercent(item.margin_percent) }}</span>
+                    <span>{{ t('reports.soldCount', { count: item.sold_quantity }) }}</span>
+                    <span>{{ t('reports.remainingCount', { count: item.remaining_quantity }) }}</span>
+                    <span>{{ t('reports.marginValue', { value: formatPercent(item.margin_percent) }) }}</span>
                   </div>
                 </div>
                 <div class="item-side">
                   <strong class="item-profit tabular-nums">{{ formatReportAmount(item, 'gross_profit', item.gross_profit) }}</strong>
-                  <span class="item-projection">Прогноз {{ formatReportAmount(item, 'projected_gross_profit', item.projected_gross_profit) }}</span>
+                  <span class="item-projection">{{ t('reports.forecast', { amount: formatReportAmount(item, 'projected_gross_profit', item.projected_gross_profit) }) }}</span>
                   <ChevronDown :size="16" :stroke-width="1.8" class="item-chevron" :class="{ open: expandedItemId === item.procurement_item_id }" />
                 </div>
               </button>
@@ -298,15 +285,15 @@ onBeforeUnmount(() => {
               <div v-if="expandedItemId === item.procurement_item_id" class="item-details">
                 <div class="detail-grid">
                   <div class="detail-box">
-                    <span class="detail-label">Закупка / landed</span>
+                    <span class="detail-label">{{ t('reports.purchaseLanded') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'unit_purchase_price', item.unit_purchase_price) }} / {{ formatReportAmount(item, 'landed_cost_per_unit', item.landed_cost_per_unit) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Текущая цена</span>
+                    <span class="detail-label">{{ t('reports.currentPrice') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'current_unit_price', item.current_unit_price) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Факт выручки / COGS</span>
+                    <span class="detail-label">{{ t('reports.revenueCogsFact') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'revenue', item.revenue) }} / {{ formatReportAmount(item, 'cogs', item.cogs) }}</strong>
                   </div>
                   <div class="detail-box">
@@ -314,19 +301,19 @@ onBeforeUnmount(() => {
                     <strong class="mono">{{ formatPercent(item.markup_percent) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Инвестор / бизнес</span>
+                    <span class="detail-label">{{ t('reports.investorBusiness') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'investor_profit', item.investor_profit) }} / {{ formatReportAmount(item, 'business_profit', item.business_profit) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Остаток / прогноз</span>
+                    <span class="detail-label">{{ t('reports.remainingForecast') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'remaining_landed_cost', item.remaining_landed_cost) }} / {{ formatReportAmount(item, 'projected_revenue', item.projected_revenue) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Прогноз инвестора</span>
+                    <span class="detail-label">{{ t('reports.investorForecast') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'projected_investor_profit', item.projected_investor_profit) }}</strong>
                   </div>
                   <div class="detail-box">
-                    <span class="detail-label">Прогноз бизнеса</span>
+                    <span class="detail-label">{{ t('reports.businessForecastLabel') }}</span>
                     <strong class="mono">{{ formatReportAmount(item, 'projected_business_profit', item.projected_business_profit) }}</strong>
                   </div>
                 </div>
@@ -339,7 +326,7 @@ onBeforeUnmount(() => {
           <div class="section-head">
             <div>
               <p class="section-kicker">Ownership and balance</p>
-              <h3 class="section-title">Капитал и движения</h3>
+              <h3 class="section-title">{{ t('reports.capitalAndMovements') }}</h3>
             </div>
             <Wallet :size="18" :stroke-width="2" class="section-icon" />
           </div>
@@ -349,25 +336,25 @@ onBeforeUnmount(() => {
               <div class="participant-main">
                 <div class="participant-title-row">
                   <strong class="participant-name">{{ participant.partner_name }}</strong>
-                  <span class="participant-badge">{{ participant.role === 'INVESTOR' ? 'Инвестор' : 'Бизнес' }}</span>
+                  <span class="participant-badge">{{ partnerRoleLabel(participant.role) }}</span>
                 </div>
                 <div class="participant-meta">
-                  <span>План {{ formatAmount(participant.planned_capital_share, participant.contract_currency) }}</span>
-                  <span>Внёс {{ formatAmount(participant.contributed_amount, participant.contract_currency) }}</span>
-                  <span>Нетто {{ formatAmount(participant.net_capital, participant.contract_currency) }}</span>
+                  <span>{{ t('reports.planAmount', { amount: formatAmount(participant.planned_capital_share, participant.contract_currency) }) }}</span>
+                  <span>{{ t('reports.contributedAmount', { amount: formatAmount(participant.contributed_amount, participant.contract_currency) }) }}</span>
+                  <span>{{ t('reports.netAmount', { amount: formatAmount(participant.net_capital, participant.contract_currency) }) }}</span>
                 </div>
               </div>
               <div class="participant-side">
                 <strong class="mono">{{ formatRatioPercent(participant.actual_capital_share) }}</strong>
-                <span class="participant-side-note">Профит {{ formatRatioPercent(participant.planned_profit_share) }}</span>
+                <span class="participant-side-note">{{ t('reports.profitShort', { value: formatRatioPercent(participant.planned_profit_share) }) }}</span>
               </div>
             </article>
           </div>
 
           <div v-if="visibleHistory.length" class="history-list">
             <div class="history-head">
-              <span class="section-kicker">Последние движения</span>
-              <button class="inline-link" type="button" @click="openOperationalCard">Полная история</button>
+              <span class="section-kicker">{{ t('reports.lastMovements') }}</span>
+              <button class="inline-link" type="button" @click="openOperationalCard">{{ t('reports.fullHistory') }}</button>
             </div>
             <article v-for="entry in visibleHistory" :key="entry.id" class="history-row">
               <div class="history-main">

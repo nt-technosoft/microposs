@@ -3,6 +3,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { translateNow } from '@/i18n'
 import type { Sale } from '../types/models'
 import type { SaleCreatePayload, ReturnCreatePayload, SaleReturn } from '../api/sales'
 import { useSessionStore } from './session'
@@ -73,7 +74,7 @@ export const useSalesStore = defineStore('sales', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось загрузить список продаж'
+          : translateNow('sales.loadingError')
       } finally {
         this.isLoading = false
       }
@@ -89,7 +90,7 @@ export const useSalesStore = defineStore('sales', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось загрузить данные продажи'
+          : translateNow('sales.saleDetailsFailed')
         throw error
       } finally {
         this.isLoading = false
@@ -117,7 +118,7 @@ export const useSalesStore = defineStore('sales', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось создать продажу'
+          : translateNow('sales.createSaleFailed')
         throw error
       } finally {
         this.isCreating = false
@@ -140,7 +141,7 @@ export const useSalesStore = defineStore('sales', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось обработать возврат'
+          : translateNow('sales.returnFailed')
         throw error
       } finally {
         this.isLoading = false

@@ -6,7 +6,9 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '@/api/client'
 import { UserRole } from '@/types/enums'
+import { isLocale, type Locale } from '@/i18n/keys'
 import { useSessionStore } from './session'
+import { useUIStore } from './ui'
 
 interface User {
   id: number
@@ -14,6 +16,7 @@ interface User {
   role: UserRole | null
   active_tenant_id: number | null
   tenant_name: string
+  locale: Locale
 }
 
 interface CurrentUserResponse {
@@ -22,6 +25,7 @@ interface CurrentUserResponse {
   role: string | null
   active_tenant_id: number | null
   tenant_name: string
+  locale?: string
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -66,6 +70,11 @@ export const useAuthStore = defineStore('auth', () => {
       role: normalizedRole,
       active_tenant_id: data.active_tenant_id ?? null,
       tenant_name: data.tenant_name ?? '',
+      locale: isLocale(data.locale) ? data.locale : 'ru',
+    }
+    const ui = useUIStore()
+    if (isLocale(data.locale) && ui.locale !== data.locale) {
+      ui.setLocale(data.locale)
     }
     if (data.active_tenant_id !== null && data.active_tenant_id !== undefined) {
       localStorage.setItem('active_tenant_id', String(data.active_tenant_id))

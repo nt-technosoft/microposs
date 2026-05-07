@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
 import { fetchLots } from '@/api/inventory'
@@ -17,6 +18,7 @@ import PriceDisplay from '@/components/data/PriceDisplay.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 
 // ===== Route + store =====
@@ -26,6 +28,7 @@ const cartStore = useCartStore()
 const sessionStore = useSessionStore()
 const authStore = useAuthStore()
 const toast = useToast()
+const { t, locale } = useI18n()
 const {
   rate: latestUsdRate,
   error: latestUsdRateError,
@@ -50,7 +53,7 @@ const writeoffSheetOpen = ref(false)
 const writeoffLots = ref<Lot[]>([])
 const selectedWriteoffKey = ref('')
 const writeoffQuantity = ref(1)
-const writeoffReason = ref('Списание товара')
+const writeoffReason = ref(t('products.writeoffReasonDefault'))
 const writeoffNegligence = ref(false)
 const writeoffPreview = ref<WriteoffPreview | null>(null)
 const writeoffLoading = ref(false)
@@ -173,8 +176,8 @@ const fxSnapshot = computed(() => (
 const currencyTrace = computed(() => {
   if (selectedCurrency.value !== 'USD') return ''
   const fx = Number.parseFloat(latestUsdRate.value)
-  if (!Number.isFinite(fx) || fx <= 0) return latestUsdRateError.value || 'Курс USD/UZS не загружен'
-  return `${operationUnitPrice.value.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} $ · курс ${fx.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}`
+  if (!Number.isFinite(fx) || fx <= 0) return latestUsdRateError.value || t('products.usdRateNotLoaded')
+  return `${operationUnitPrice.value.toLocaleString(intlLocale(locale.value), { maximumFractionDigits: 2 })} $ · ${t('finance.rate')} ${fx.toLocaleString(intlLocale(locale.value), { maximumFractionDigits: 2 })}`
 })
 
 const activeLocationId = computed(() => sessionStore.currentSession?.location?.id ?? null)
@@ -232,13 +235,13 @@ const storageStock = computed(() => {
 
 const stockStateLabel = computed(() => {
   if (!activeLocationId.value) {
-    if (totalStock.value <= 0) return 'Нет в наличии'
-    if (shopStock.value > 0) return 'Есть в магазине'
-    return 'Есть в наличии'
+    if (totalStock.value <= 0) return t('sales.outOfStock')
+    if (shopStock.value > 0) return t('products.inShopAvailable')
+    return t('products.inStockAvailable')
   }
-  if (shopStock.value > 0) return 'Доступно в магазине'
-  if (storageStock.value > 0) return 'Есть на складе'
-  return 'Нет в наличии'
+  if (shopStock.value > 0) return t('products.availableInShop')
+  if (storageStock.value > 0) return t('products.availableInWarehouse')
+  return t('sales.outOfStock')
 })
 
 const canAddToCart = computed((): boolean => {
@@ -271,12 +274,12 @@ const categoryLabel = computed((): string | null => {
 
 const addButtonLabel = computed((): string => {
   if (!activeLocationId.value) {
-    return totalStock.value > 0 ? 'Открыть смену для продажи' : 'Нет в наличии'
+    return totalStock.value > 0 ? t('products.openShiftForSale') : t('sales.outOfStock')
   }
   if (!product.value?.has_variants || matchedVariant.value) {
-    return `В корзину`
+    return t('products.addToCartShort')
   }
-  return 'Выберите вариант'
+  return t('products.selectVariant')
 })
 
 const canWriteOff = computed(() => authStore.isOwner && !!matchedVariant.value && totalStock.value > 0)
@@ -296,7 +299,7 @@ const writeoffOptions = computed(() => {
         key: `${lot.id}:${stock.warehouse}`,
         lotId: lot.id,
         warehouseId: stock.warehouse,
-        label: `${stock.warehouse_name} · партия #${lot.id}`,
+        label: `${stock.warehouse_name} · ${t('products.batchFallback', { id: lot.id })}`,
         quantity: stock.quantity_remaining,
       })
     }
@@ -309,9 +312,9 @@ const selectedWriteoffOption = computed(() => (
 ))
 
 function formatStock(stock: number | undefined): string {
-  if (!Number.isFinite(stock)) return '0 шт'
-  if ((stock ?? 0) <= 0) return 'Нет в наличии'
-  return `${stock} шт`
+  if (!Number.isFinite(stock)) return `0 ${t('common.pieces')}`
+  if ((stock ?? 0) <= 0) return t('sales.outOfStock')
+  return `${stock} ${t('common.pieces')}`
 }
 
 function openVariantSheet(): void {
@@ -401,7 +404,7 @@ async function selectSaleCurrency(currency: 'UZS' | 'USD') {
     try {
       await loadUsdRate()
     } catch {
-      toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+      toast.error(latestUsdRateError.value || t('products.usdRateMissing'))
       return
     }
   }
@@ -439,7 +442,7 @@ async function refreshWriteoffPreview(): Promise<void> {
       negligence: writeoffNegligence.value,
     })
   } catch (error) {
-    writeoffError.value = error instanceof Error ? error.message : 'Не удалось рассчитать списание'
+    writeoffError.value = error instanceof Error ? error.message : t('products.writeoffCalcFailed')
   } finally {
     writeoffLoading.value = false
   }
@@ -460,7 +463,7 @@ async function openWriteoffSheet(): Promise<void> {
     writeoffQuantity.value = 1
     await refreshWriteoffPreview()
   } catch (error) {
-    writeoffError.value = error instanceof Error ? error.message : 'Не удалось загрузить партии'
+    writeoffError.value = error instanceof Error ? error.message : t('products.writeoffLotsLoadFailed')
   } finally {
     writeoffLoading.value = false
   }
@@ -495,11 +498,11 @@ async function submitWriteoff(): Promise<void> {
       reason: writeoffReason.value,
       negligence: writeoffNegligence.value,
     })
-    toast.success('Списание зафиксировано')
+    toast.success(t('products.writeoffDone'))
     closeWriteoffSheet()
     await loadProduct()
   } catch (error) {
-    writeoffError.value = error instanceof Error ? error.message : 'Не удалось списать товар'
+    writeoffError.value = error instanceof Error ? error.message : t('products.writeoffFailed')
   } finally {
     writeoffSubmitting.value = false
   }
@@ -510,7 +513,7 @@ async function submitWriteoff(): Promise<void> {
 async function loadProduct() {
   const id = Number(route.params.id)
   if (Number.isNaN(id)) {
-    loadError.value = 'Неверный идентификатор товара'
+    loadError.value = t('products.invalidProductId')
     isLoading.value = false
     return
   }
@@ -552,7 +555,7 @@ async function loadProduct() {
       }
     }
   } catch {
-    loadError.value = 'Не удалось загрузить товар. Попробуйте ещё раз.'
+    loadError.value = t('products.productLoadFailed')
   } finally {
     isLoading.value = false
   }
@@ -568,17 +571,17 @@ onMounted(() => {
 
     <!-- ===== Header ===== -->
     <header class="detail-header">
-      <button class="back-btn" aria-label="Назад" @click="goBack">
+      <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
         <ArrowLeft :size="20" :stroke-width="2" />
       </button>
       <h1 class="header-title">
-        {{ product?.name ?? 'Товар' }}
+        {{ product?.name ?? t('products.product') }}
       </h1>
       <div class="header-spacer" aria-hidden="true" />
     </header>
 
     <!-- ===== Loading state ===== -->
-    <div v-if="isLoading" class="detail-loading" aria-busy="true" aria-label="Загрузка товара">
+    <div v-if="isLoading" class="detail-loading" aria-busy="true" :aria-label="t('products.loadingProduct')">
       <div class="skeleton-hero" />
       <div class="skeleton-body">
         <div class="skeleton-line skeleton-line--title" />
@@ -596,7 +599,7 @@ onMounted(() => {
       <Package :size="48" :stroke-width="1.25" class="error-icon" />
       <p class="error-message">{{ loadError }}</p>
       <button class="error-retry-btn" @click="loadProduct">
-        Попробовать снова
+        {{ t('products.retryProduct') }}
       </button>
     </div>
 
@@ -655,7 +658,7 @@ onMounted(() => {
               class="attr-group"
             >
               <p class="attr-name">{{ attrName }}</p>
-              <div class="attr-chips" role="group" :aria-label="`Выбор: ${attrName}`">
+              <div class="attr-chips" role="group" :aria-label="`${t('common.select')}: ${attrName}`">
                 <button
                   v-for="value in attributeOptions[attrName]"
                   :key="value"
@@ -679,7 +682,7 @@ onMounted(() => {
               @click="openVariantSheet"
             >
               <ListTree :size="16" :stroke-width="2" />
-              Список вариантов
+              {{ t('products.variantsList') }}
             </button>
           </div>
         </template>
@@ -687,25 +690,25 @@ onMounted(() => {
         <!-- ===== Price + stock ===== -->
         <div class="price-stock-section">
           <div class="price-row">
-            <span class="price-label">Цена</span>
+            <span class="price-label">{{ t('products.price') }}</span>
             <PriceDisplay :amount="lineBasePrice.toFixed(2)" size="lg" />
           </div>
 
           <div class="mode-row">
-            <span class="price-label">Режим</span>
+            <span class="price-label">{{ t('products.mode') }}</span>
             <span class="mode-badge">
               {{
                 pricingMode === PricingMode.FIXED_LOCKED
-                  ? 'Фиксированная'
+                  ? t('products.pricingFixed')
                   : pricingMode === PricingMode.ASK_EACH_SALE
-                    ? 'Спрашивать'
-                    : 'Редактируемая'
+                    ? t('products.pricingAskEachSale')
+                    : t('products.pricingEditable')
               }}
             </span>
           </div>
 
-          <div class="currency-row" aria-label="Валюта продажи">
-            <span class="price-label">Валюта</span>
+          <div class="currency-row" :aria-label="t('products.saleCurrency')">
+            <span class="price-label">{{ t('products.currency') }}</span>
             <div class="currency-toggle">
               <button
                 type="button"
@@ -728,7 +731,7 @@ onMounted(() => {
             <BaseInput
               v-model="unitPriceInput"
               type="number"
-              :label="selectedCurrency === 'USD' ? 'Цена продажи, $' : 'Цена продажи, UZS'"
+              :label="selectedCurrency === 'USD' ? t('products.salePriceUsd') : t('products.salePriceUzs')"
               placeholder="0"
             />
             <p v-if="currencyTrace" class="currency-trace">{{ currencyTrace }}</p>
@@ -738,14 +741,14 @@ onMounted(() => {
             <BaseSelect
               v-model="selectedDiscountReasonId"
               :options="discountReasonOptions"
-              title="Причина скидки"
-              placeholder="Выберите причину"
+              :title="t('products.discountReason')"
+              :placeholder="t('products.chooseDiscountReason')"
             />
           </div>
 
-          <div class="stock-breakdown" aria-label="Остатки товара">
+          <div class="stock-breakdown" :aria-label="t('products.stocks')">
             <div class="stock-breakdown__header">
-              <span class="stock-label">Остатки</span>
+              <span class="stock-label">{{ t('products.stocks') }}</span>
               <span
                 class="stock-state"
                 :class="{ 'stock-state--warning': shopStock <= 0 && totalStock > 0, 'stock-state--empty': totalStock <= 0 }"
@@ -755,15 +758,15 @@ onMounted(() => {
             </div>
             <div class="stock-breakdown__grid">
               <div class="stock-metric">
-                <span>Всего</span>
+                <span>{{ t('products.totalStock') }}</span>
                 <strong>{{ formatStock(totalStock) }}</strong>
               </div>
               <div class="stock-metric">
-                <span>В магазине</span>
+                <span>{{ t('products.inShop') }}</span>
                 <strong :class="{ 'stock-value--empty': shopStock <= 0 }">{{ formatStock(shopStock) }}</strong>
               </div>
               <div class="stock-metric">
-                <span>На складе</span>
+                <span>{{ t('products.inWarehouse') }}</span>
                 <strong>{{ formatStock(storageStock) }}</strong>
               </div>
             </div>
@@ -774,7 +777,7 @@ onMounted(() => {
               @click="goToTransfers"
             >
               <ArrowRightLeft :size="15" :stroke-width="2" />
-              Переместить в магазин
+              {{ t('products.moveToShop') }}
             </button>
             <button
               v-if="canWriteOff"
@@ -782,7 +785,7 @@ onMounted(() => {
               type="button"
               @click="openWriteoffSheet"
             >
-              Списать товар
+              {{ t('products.writeoffProduct') }}
             </button>
           </div>
         </div>
@@ -790,7 +793,7 @@ onMounted(() => {
         <!-- ===== Quantity + add to cart ===== -->
         <div class="cart-section">
           <div class="qty-row">
-            <span class="qty-label">Количество</span>
+            <span class="qty-label">{{ t('products.quantity') }}</span>
             <QuantityControl
               v-model="quantity"
               :min="1"
@@ -814,9 +817,9 @@ onMounted(() => {
             </Transition>
             <span class="btn-label">
               <Transition name="btn-text" mode="out-in">
-                <span v-if="isAdded" key="added">Добавлено!</span>
+                <span v-if="isAdded" key="added">{{ t('products.addedBang') }}</span>
                 <span v-else-if="!canAddToCart && product.has_variants && !matchedVariant" key="select">
-                  Выберите вариант
+                  {{ t('products.selectVariant') }}
                 </span>
                 <span v-else-if="canOpenSessionFromDetail" key="session">
                   {{ addButtonLabel }}
@@ -838,7 +841,7 @@ onMounted(() => {
 
     <AppBottomSheet
       :open="variantSheetOpen"
-      title="Варианты товара"
+      :title="t('products.variantsTitle')"
       @close="variantSheetOpen = false"
     >
       <div class="variant-sheet-list">
@@ -869,12 +872,12 @@ onMounted(() => {
 
     <AppBottomSheet
       :open="writeoffSheetOpen"
-      title="Списание товара"
+      :title="t('products.writeoffTitle')"
       @close="closeWriteoffSheet"
     >
       <div class="writeoff-sheet">
         <label class="writeoff-field">
-          <span>Партия и место</span>
+          <span>{{ t('products.lotAndLocation') }}</span>
           <select
             v-model="selectedWriteoffKey"
             class="writeoff-select"
@@ -885,13 +888,13 @@ onMounted(() => {
               :key="option.key"
               :value="option.key"
             >
-              {{ option.label }} · доступно {{ option.quantity }} шт.
+              {{ option.label }} · {{ t('products.availableQty', { count: option.quantity }) }}
             </option>
           </select>
         </label>
 
         <label class="writeoff-field">
-          <span>Количество</span>
+          <span>{{ t('common.quantity') }}</span>
           <input
             class="writeoff-input"
             type="number"
@@ -903,12 +906,12 @@ onMounted(() => {
         </label>
 
         <label class="writeoff-field">
-          <span>Причина</span>
+          <span>{{ t('common.reason') }}</span>
           <input
             v-model="writeoffReason"
             class="writeoff-input"
             type="text"
-            placeholder="Например, брак или потеря"
+            :placeholder="t('products.writeoffReasonPlaceholder')"
           >
         </label>
 
@@ -918,17 +921,17 @@ onMounted(() => {
             type="checkbox"
             @change="refreshWriteoffPreview"
           >
-          <span>Убыток по вине бизнеса</span>
+          <span>{{ t('products.negligenceLossBusiness') }}</span>
         </label>
 
         <div class="writeoff-effect">
           <div>
-            <span>Сумма убытка</span>
+            <span>{{ t('products.lossAmount') }}</span>
             <strong>{{ formatPrice(writeoffPreview?.loss_amount || 0) }}</strong>
           </div>
           <div>
-            <span>Доступно</span>
-            <strong>{{ selectedWriteoffOption?.quantity || 0 }} шт.</strong>
+            <span>{{ t('common.available') }}</span>
+            <strong>{{ selectedWriteoffOption?.quantity || 0 }} {{ t('common.pieces') }}</strong>
           </div>
         </div>
 
@@ -939,8 +942,8 @@ onMounted(() => {
           :disabled="writeoffSubmitting || writeoffLoading || !selectedWriteoffOption"
           @click="submitWriteoff"
         >
-          <span v-if="writeoffSubmitting">Списываем…</span>
-          <span v-else>Подтвердить списание</span>
+          <span v-if="writeoffSubmitting">{{ t('products.writeoffSubmitting') }}</span>
+          <span v-else>{{ t('products.confirmWriteoff') }}</span>
         </button>
       </div>
     </AppBottomSheet>

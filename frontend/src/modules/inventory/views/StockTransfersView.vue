@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Package2, RefreshCw } from 'lucide-vue-next'
 import { fetchLocations, fetchLots, fetchStockMovements, transferStock } from '@/api/inventory'
 import type { Location, Lot, StockMovement } from '@/types/models'
@@ -8,10 +9,12 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import { useToast } from '@/composables/useToast'
+import { intlLocale } from '@/i18n/format'
 import { getApiErrorMessage } from '@/utils/errors'
 
 const router = useRouter()
 const toast = useToast()
+const { t, locale } = useI18n()
 
 const isLoading = ref(true)
 const isSubmitting = ref(false)
@@ -42,7 +45,7 @@ const activeLocations = computed(() =>
 const sourceOptions = computed(() =>
   activeLocations.value.map((location) => ({
     value: location.id,
-    label: `${location.name} · ${location.kind === 'storage' ? 'Склад' : 'Магазин'}`,
+    label: `${location.name} · ${location.kind === 'storage' ? t('inventory.warehouse') : t('inventory.shop')}`,
   })),
 )
 
@@ -51,7 +54,7 @@ const destinationOptions = computed(() =>
     .filter((location) => location.id !== form.value.fromWarehouseId)
     .map((location) => ({
       value: location.id,
-      label: `${location.name} · ${location.kind === 'storage' ? 'Склад' : 'Магазин'}`,
+      label: `${location.name} · ${location.kind === 'storage' ? t('inventory.warehouse') : t('inventory.shop')}`,
     })),
 )
 
@@ -66,9 +69,9 @@ const selectedDestination = computed(() =>
 const directionLabel = computed(() => {
   const sourceKind = selectedSource.value?.kind
   const destinationKind = selectedDestination.value?.kind
-  if (sourceKind === 'storage' && destinationKind === 'shop') return 'Со склада в магазин'
-  if (sourceKind === 'shop' && destinationKind === 'storage') return 'Из магазина на склад'
-  return 'Между точками хранения'
+  if (sourceKind === 'storage' && destinationKind === 'shop') return t('inventory.fromWarehouseToShop')
+  if (sourceKind === 'shop' && destinationKind === 'storage') return t('inventory.fromShopToWarehouse')
+  return t('inventory.betweenLocations')
 })
 
 function lotAvailableQuantity(lot: Lot): number {
@@ -77,7 +80,7 @@ function lotAvailableQuantity(lot: Lot): number {
 }
 
 function lotLabel(lot: Lot): string {
-  return `${lot.product_variant_name || `Лот #${lot.id}`} · ${lotAvailableQuantity(lot)} шт`
+  return `${lot.product_variant_name || t('inventory.lotFallback', { id: lot.id })} · ${lotAvailableQuantity(lot)} ${t('common.pieces')}`
 }
 
 const lotOptions = computed(() =>
@@ -118,7 +121,7 @@ const transferCandidatesEmpty = computed(() =>
 const hasMoreTransfers = computed(() => recentTransfers.value.length < transferTotal.value)
 
 function formatDate(date: string): string {
-  return new Intl.DateTimeFormat('ru-RU', {
+  return new Intl.DateTimeFormat(intlLocale(locale.value), {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -127,7 +130,7 @@ function formatDate(date: string): string {
 }
 
 function formatFullDate(date: string): string {
-  return new Intl.DateTimeFormat('ru-RU', {
+  return new Intl.DateTimeFormat(intlLocale(locale.value), {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -137,13 +140,13 @@ function formatFullDate(date: string): string {
 }
 
 function movementTitle(movement: StockMovement): string {
-  return movement.lot_product_name || `Партия #${movement.lot}`
+  return movement.lot_product_name || t('inventory.batchSource', { id: movement.lot })
 }
 
 function movementSource(movement: StockMovement): string {
-  if (movement.lot_procurement_id) return `Приход #${movement.lot_procurement_id}`
-  if (movement.lot_receipt_id) return `Документ #${movement.lot_receipt_id}`
-  return `Партия #${movement.lot}`
+  if (movement.lot_procurement_id) return t('inventory.procurementSource', { id: movement.lot_procurement_id })
+  if (movement.lot_receipt_id) return t('inventory.documentSource', { id: movement.lot_receipt_id })
+  return t('inventory.batchSource', { id: movement.lot })
 }
 
 function toggleTransferDetails(id: number): void {
@@ -165,7 +168,7 @@ async function loadTransferHistory({ reset = false } = {}): Promise<void> {
     transferTotal.value = response.count
     transferPage.value = nextPage
   } catch (error: unknown) {
-    const message = getApiErrorMessage(error, 'Не удалось загрузить историю перемещений')
+    const message = getApiErrorMessage(error, t('inventory.loadHistoryFailed'))
     if (reset) loadError.value = message
     else toast.error(message)
   } finally {
@@ -199,7 +202,7 @@ async function loadLocationsAndMovements(): Promise<void> {
       form.value.toWarehouseId = defaultDestination?.id ?? null
     }
   } catch (error: unknown) {
-    loadError.value = getApiErrorMessage(error, 'Не удалось загрузить перемещения')
+    loadError.value = getApiErrorMessage(error, t('inventory.loadTransfersFailed'))
   } finally {
     isLoading.value = false
   }
@@ -225,7 +228,7 @@ async function loadLotsForSource(): Promise<void> {
       form.value.lotId = lots.value[0]?.id ?? null
     }
   } catch (error: unknown) {
-    formError.value = getApiErrorMessage(error, 'Не удалось загрузить доступные партии')
+    formError.value = getApiErrorMessage(error, t('inventory.loadLotsFailed'))
     lots.value = []
     form.value.lotId = null
   } finally {
@@ -245,11 +248,11 @@ async function submitTransfer(): Promise<void> {
       to_warehouse_id: Number(form.value.toWarehouseId),
       quantity: Number(form.value.quantity),
     })
-    toast.success('Перемещение проведено')
+    toast.success(t('inventory.transferDone'))
     form.value.quantity = '1'
     await Promise.all([loadLotsForSource(), loadLocationsAndMovements()])
   } catch (error: unknown) {
-    formError.value = getApiErrorMessage(error, 'Не удалось провести перемещение')
+    formError.value = getApiErrorMessage(error, t('inventory.submitFailed'))
   } finally {
     isSubmitting.value = false
   }
@@ -298,19 +301,19 @@ onMounted(async () => {
 <template>
   <div class="transfer-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="goBack">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="goBack">
         <ArrowLeft :size="20" :stroke-width="2" />
       </button>
       <div class="page-headings">
-        <h1 class="page-title">Перемещение</h1>
-        <p class="page-subtitle">Перенос товара со склада в магазин и обратно.</p>
+        <h1 class="page-title">{{ t('inventory.transferTitle') }}</h1>
+        <p class="page-subtitle">{{ t('inventory.transferSubtitle') }}</p>
       </div>
     </header>
 
     <div class="content">
       <section class="panel">
         <div class="section-title-row">
-          <h2 class="section-title">Новая операция</h2>
+          <h2 class="section-title">{{ t('inventory.newOperation') }}</h2>
           <button class="ghost-refresh" type="button" @click="loadLocationsAndMovements">
             <RefreshCw :size="16" :stroke-width="2" />
           </button>
@@ -327,8 +330,8 @@ onMounted(async () => {
           <BaseSelect
             v-model="form.fromWarehouseId"
             :options="sourceOptions"
-            title="Источник"
-            placeholder="Выбери точку отправления"
+            :title="t('inventory.source')"
+            :placeholder="t('inventory.chooseSource')"
           />
 
           <div class="swap-row">
@@ -340,27 +343,27 @@ onMounted(async () => {
           <BaseSelect
             v-model="form.toWarehouseId"
             :options="destinationOptions"
-            title="Назначение"
-            placeholder="Выбери точку назначения"
+            :title="t('inventory.destination')"
+            :placeholder="t('inventory.chooseDestination')"
           />
 
           <BaseSelect
             v-model="form.lotId"
             :options="lotOptions"
-            title="Какая партия"
-            placeholder="Выбери товар для перемещения"
+            :title="t('inventory.batch')"
+            :placeholder="t('inventory.chooseLot')"
             :disabled="isLoadingLots || lotOptions.length === 0"
           />
 
           <BaseInput
             v-model="form.quantity"
-            label="Количество"
+            :label="t('common.quantity')"
             type="number"
-            placeholder="Например, 10"
+            :placeholder="t('inventory.quantityExample')"
           />
 
           <p v-if="selectedLot" class="helper-text">
-            Доступно к перемещению: <strong>{{ selectedLotAvailable }}</strong>
+            {{ t('inventory.availableToMove', { count: selectedLotAvailable }) }}
           </p>
 
           <div v-if="formError" class="inline-error">{{ formError }}</div>
@@ -371,14 +374,14 @@ onMounted(async () => {
             :disabled="!canSubmit || isSubmitting"
             @click="submitTransfer"
           >
-            {{ isSubmitting ? 'Сохраняем...' : 'Провести перемещение' }}
+            {{ isSubmitting ? t('inventory.transferSubmitting') : t('inventory.transferSubmit') }}
           </button>
         </div>
 
         <AppEmptyState
           v-if="transferCandidatesEmpty"
-          title="Нет доступных партий"
-          description="На выбранной точке сейчас нечего перемещать."
+          :title="t('inventory.noLotsTitle')"
+          :description="t('inventory.noLotsDescription')"
         >
           <template #illustration>
             <div class="empty-icon">
@@ -391,9 +394,9 @@ onMounted(async () => {
       <section class="panel">
         <div class="section-title-row">
           <div class="section-heading">
-            <h2 class="section-title">История перемещений</h2>
+            <h2 class="section-title">{{ t('inventory.historyTitle') }}</h2>
             <p v-if="transferTotal > 0" class="section-meta">
-              Показано {{ recentTransfers.length }} из {{ transferTotal }}
+              {{ t('inventory.shownOf', { shown: recentTransfers.length, total: transferTotal }) }}
             </p>
           </div>
           <button class="ghost-refresh" type="button" @click="loadTransferHistory({ reset: true })">
@@ -401,7 +404,7 @@ onMounted(async () => {
           </button>
         </div>
         <div v-if="recentTransfers.length === 0" class="history-empty">
-          Перемещений пока нет.
+          {{ t('inventory.noTransfers') }}
         </div>
         <ul v-else class="history-list">
           <li
@@ -417,26 +420,26 @@ onMounted(async () => {
             >
               <div class="history-main">
                 <span class="history-product">{{ movementTitle(movement) }}</span>
-                <strong class="history-qty">{{ movement.quantity }} шт</strong>
+                <strong class="history-qty">{{ movement.quantity }} {{ t('common.pieces') }}</strong>
               </div>
               <div class="history-sub">
-                <span>{{ movement.from_location_name || 'Источник' }} → {{ movement.to_location_name || 'Назначение' }}</span>
+                <span>{{ movement.from_location_name || t('inventory.source') }} → {{ movement.to_location_name || t('inventory.destination') }}</span>
                 <ChevronDown class="history-chevron" :size="16" :stroke-width="2" />
               </div>
             </button>
 
             <div v-if="expandedTransferId === movement.id" class="history-details">
               <div class="detail-row">
-                <span>Источник партии</span>
+                <span>{{ t('inventory.batchOrigin') }}</span>
                 <strong>{{ movementSource(movement) }}</strong>
               </div>
               <div class="detail-row">
-                <span>Дата</span>
+                <span>{{ t('common.date') }}</span>
                 <strong>{{ formatFullDate(movement.created_at) }}</strong>
               </div>
               <div v-if="movement.lot_landed_cost_per_unit" class="detail-row">
-                <span>Себестоимость</span>
-                <strong>{{ movement.lot_landed_cost_per_unit }} / шт</strong>
+                <span>{{ t('reports.cogs') }}</span>
+                <strong>{{ t('inventory.costPerUnit', { amount: movement.lot_landed_cost_per_unit }) }}</strong>
               </div>
             </div>
           </li>
@@ -448,7 +451,7 @@ onMounted(async () => {
           :disabled="isLoadingMoreTransfers"
           @click="loadTransferHistory()"
         >
-          {{ isLoadingMoreTransfers ? 'Загружаем...' : 'Показать ещё' }}
+          {{ isLoadingMoreTransfers ? t('common.loadingMore') : t('common.loadMore') }}
         </button>
       </section>
     </div>

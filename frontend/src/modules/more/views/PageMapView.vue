@@ -2,6 +2,7 @@
 import type { Component } from 'vue'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   ArrowLeft,
   BarChart3,
@@ -40,96 +41,97 @@ interface PageMapSection {
 
 const router = useRouter()
 const auth = useAuthStore()
+const { t } = useI18n()
 
-const sections: PageMapSection[] = [
+const sections = computed<PageMapSection[]>(() => [
   {
-    title: 'Продажи',
-    description: 'Касса, корзина, оформление, история и аудит чеков.',
+    title: t('pageMap.sections.sales.title'),
+    description: t('pageMap.sections.sales.description'),
     icon: ShoppingBag,
     primaryRouteName: 'sales-catalog',
     items: [
-      { title: 'Каталог продажи', description: 'Главный экран кассира.', routeName: 'sales-catalog', roles: [UserRole.OWNER, UserRole.CASHIER] },
-      { title: 'Корзина и оформление', description: 'Открываются из каталога после выбора товара.', contextual: true, roles: [UserRole.OWNER, UserRole.CASHIER] },
-      { title: 'История продаж', description: 'Все чеки, возвраты и детали продажи.', routeName: 'sales-history', roles: [UserRole.OWNER, UserRole.CASHIER] },
-      { title: 'Аудит продажи', description: 'Открывается из истории или блока прибыльности продаж.', contextual: true, roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.sales.catalog'), description: t('pageMap.sections.sales.catalogDescription'), routeName: 'sales-catalog', roles: [UserRole.OWNER, UserRole.CASHIER] },
+      { title: t('pageMap.sections.sales.cart'), description: t('pageMap.sections.sales.cartDescription'), contextual: true, roles: [UserRole.OWNER, UserRole.CASHIER] },
+      { title: t('pageMap.sections.sales.history'), description: t('pageMap.sections.sales.historyDescription'), routeName: 'sales-history', roles: [UserRole.OWNER, UserRole.CASHIER] },
+      { title: t('pageMap.sections.sales.audit'), description: t('pageMap.sections.sales.auditDescription'), contextual: true, roles: [UserRole.OWNER] },
     ],
   },
   {
-    title: 'Товары и склад',
-    description: 'Каталог, категории, остатки и перемещения между точками.',
+    title: t('pageMap.sections.products.title'),
+    description: t('pageMap.sections.products.description'),
     icon: Package,
     primaryRouteName: 'products',
     items: [
-      { title: 'Товары', description: 'Список товаров и редактирование карточек.', routeName: 'products', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
-      { title: 'Создание товара', description: 'Открывается из списка товаров.', routeName: 'product-create', roles: [UserRole.OWNER] },
-      { title: 'Категории', description: 'Структура каталога и шаблоны атрибутов.', routeName: 'categories', roles: [UserRole.OWNER] },
-      { title: 'Перемещения', description: 'Перевод остатков между складом и магазином.', routeName: 'stock-transfers', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: t('pageMap.sections.products.list'), description: t('pageMap.sections.products.listDescription'), routeName: 'products', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: t('pageMap.sections.products.create'), description: t('pageMap.sections.products.createDescription'), routeName: 'product-create', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.products.categories'), description: t('pageMap.sections.products.categoriesDescription'), routeName: 'categories', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.products.transfers'), description: t('pageMap.sections.products.transfersDescription'), routeName: 'stock-transfers', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
     ],
   },
   {
-    title: 'Приход',
-    description: 'Закупки, договор, баланс, оприходование и аналитика по закупке.',
+    title: t('pageMap.sections.procurements.title'),
+    description: t('pageMap.sections.procurements.description'),
     icon: Download,
     primaryRouteName: 'procurement-list',
     items: [
-      { title: 'Список приходов', description: 'Все закупки и их текущий статус.', routeName: 'procurement-list', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
-      { title: 'Инвестдоговоры', description: 'Общий бюджет, взносы и несколько связанных приходов.', routeName: 'agreement-list', roles: [UserRole.OWNER] },
-      { title: 'Создание прихода', description: 'Новый приход, договор и строки закупки.', routeName: 'procurement-create', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
-      { title: 'Создание инвестдоговора', description: 'Плановый бюджет и участники партнёрской сделки.', routeName: 'agreement-create', roles: [UserRole.OWNER] },
-      { title: 'Карточка прихода', description: 'Открывается из списка приходов.', contextual: true, roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
-      { title: 'Карточка инвестдоговора', description: 'Открывается из списка инвестдоговоров.', contextual: true, roles: [UserRole.OWNER] },
-      { title: 'Аудит закупки', description: 'Прибыль, остаток, прогноз и распределение.', contextual: true, roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.procurements.list'), description: t('pageMap.sections.procurements.listDescription'), routeName: 'procurement-list', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: t('pageMap.sections.procurements.agreements'), description: t('pageMap.sections.procurements.agreementsDescription'), routeName: 'agreement-list', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.procurements.create'), description: t('pageMap.sections.procurements.createDescription'), routeName: 'procurement-create', roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: t('pageMap.sections.procurements.agreementCreate'), description: t('pageMap.sections.procurements.agreementCreateDescription'), routeName: 'agreement-create', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.procurements.detail'), description: t('pageMap.sections.procurements.detailDescription'), contextual: true, roles: [UserRole.OWNER, UserRole.WAREHOUSE] },
+      { title: t('pageMap.sections.procurements.agreementDetail'), description: t('pageMap.sections.procurements.agreementDetailDescription'), contextual: true, roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.procurements.audit'), description: t('pageMap.sections.procurements.auditDescription'), contextual: true, roles: [UserRole.OWNER] },
     ],
   },
   {
-    title: 'Отчёты',
-    description: 'Управленческие цифры, сверка, прибыльность и объяснение расчётов.',
+    title: t('pageMap.sections.reports.title'),
+    description: t('pageMap.sections.reports.description'),
     icon: BarChart3,
     primaryRouteName: 'reports',
     items: [
-      { title: 'Панель отчётов', description: 'Финансы, прибыльность продаж, товаров и закупок.', routeName: 'reports', roles: [UserRole.OWNER] },
-      { title: 'Сверка', description: 'Контроль структурных и операционных расхождений.', routeName: 'reports-reconciliation', roles: [UserRole.OWNER] },
-      { title: 'Обмен валют', description: 'Кассовые операции и FX-обмен.', routeName: 'finance-exchange', roles: [UserRole.OWNER] },
-      { title: 'Отчёт инвестдоговора', description: 'Агрегация связанных приходов, капитала и прибыли.', contextual: true, roles: [UserRole.OWNER] },
-      { title: 'Drill-down отчёты', description: 'Открываются из строк продаж и закупок.', contextual: true, roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.reports.dashboard'), description: t('pageMap.sections.reports.dashboardDescription'), routeName: 'reports', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.reports.reconciliation'), description: t('pageMap.sections.reports.reconciliationDescription'), routeName: 'reports-reconciliation', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.reports.exchange'), description: t('pageMap.sections.reports.exchangeDescription'), routeName: 'finance-exchange', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.reports.agreementReport'), description: t('pageMap.sections.reports.agreementReportDescription'), contextual: true, roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.reports.drilldown'), description: t('pageMap.sections.reports.drilldownDescription'), contextual: true, roles: [UserRole.OWNER] },
     ],
   },
   {
-    title: 'Контрагенты',
-    description: 'Покупатели, поставщики, долги и партнёрский доступ.',
+    title: t('pageMap.sections.counterparties.title'),
+    description: t('pageMap.sections.counterparties.description'),
     icon: Users,
     primaryRouteName: 'customers',
     items: [
-      { title: 'Покупатели', description: 'Долги клиентов и ручные погашения.', routeName: 'customers', roles: [UserRole.OWNER] },
-      { title: 'Поставщики', description: 'Кредиторка и оплаты поставщикам.', routeName: 'suppliers', roles: [UserRole.OWNER] },
-      { title: 'Инвесторы', description: 'Приглашения и доступ инвесторов бизнеса.', routeName: 'owner-investors', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.counterparties.customers'), description: t('pageMap.sections.counterparties.customersDescription'), routeName: 'customers', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.counterparties.suppliers'), description: t('pageMap.sections.counterparties.suppliersDescription'), routeName: 'suppliers', roles: [UserRole.OWNER] },
+      { title: t('pageMap.sections.counterparties.investors'), description: t('pageMap.sections.counterparties.investorsDescription'), routeName: 'owner-investors', roles: [UserRole.OWNER] },
     ],
   },
   {
-    title: 'Кабинет инвестора',
-    description: 'Прозрачность капитала, прибыли и закупок инвестора.',
+    title: t('pageMap.sections.investor.title'),
+    description: t('pageMap.sections.investor.description'),
     icon: CircleDollarSign,
     primaryRouteName: 'investor-dashboard',
     items: [
-      { title: 'Сводка инвестора', description: 'Капитал, прибыль, выплаты и остаток в товаре.', routeName: 'investor-dashboard', roles: [UserRole.INVESTOR] },
-      { title: 'Мои инвестдоговоры', description: 'Договоры, остаток в бюджете, товар и прибыль.', routeName: 'investor-agreements', roles: [UserRole.INVESTOR] },
-      { title: 'Инвесторский договор', description: 'Открывается из сводки инвестора.', contextual: true, roles: [UserRole.INVESTOR] },
-      { title: 'Инвесторский приход', description: 'Открывается из сводки инвестора.', contextual: true, roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.dashboard'), description: t('pageMap.sections.investor.dashboardDescription'), routeName: 'investor-dashboard', roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.agreements'), description: t('pageMap.sections.investor.agreementsDescription'), routeName: 'investor-agreements', roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.agreement'), description: t('pageMap.sections.investor.agreementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.procurement'), description: t('pageMap.sections.investor.procurementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
     ],
   },
   {
-    title: 'Система',
-    description: 'Настройки интерфейса, режимы работы и карта разделов.',
+    title: t('pageMap.sections.system.title'),
+    description: t('pageMap.sections.system.description'),
     icon: Settings,
     primaryRouteName: 'settings',
     items: [
-      { title: 'Настройки', description: 'Тема, язык, режим кассира и быстрые входы.', routeName: 'settings', roles: [UserRole.OWNER, UserRole.CASHIER, UserRole.WAREHOUSE, UserRole.INVESTOR] },
-      { title: 'Карта разделов', description: 'Текущий экран со структурой продукта.', routeName: 'settings-page-map', roles: [UserRole.OWNER, UserRole.CASHIER, UserRole.WAREHOUSE, UserRole.INVESTOR] },
+      { title: t('pageMap.sections.system.settings'), description: t('pageMap.sections.system.settingsDescription'), routeName: 'settings', roles: [UserRole.OWNER, UserRole.CASHIER, UserRole.WAREHOUSE, UserRole.INVESTOR] },
+      { title: t('pageMap.sections.system.map'), description: t('pageMap.sections.system.mapDescription'), routeName: 'settings-page-map', roles: [UserRole.OWNER, UserRole.CASHIER, UserRole.WAREHOUSE, UserRole.INVESTOR] },
     ],
   },
-]
+])
 
-const visibleSections = computed(() => sections)
+const visibleSections = sections
 
 function canSee(roles: UserRole[]): boolean {
   return Boolean(auth.role && roles.includes(auth.role))
@@ -168,10 +170,10 @@ function openItem(item: PageMapItem): void {
 <template>
   <div class="page-map">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Карта разделов</h1>
+      <h1 class="page-title">{{ t('pageMap.title') }}</h1>
       <div class="header-spacer" />
     </header>
 
@@ -181,8 +183,8 @@ function openItem(item: PageMapItem): void {
           <Map :size="20" :stroke-width="1.8" />
         </div>
         <div>
-          <h2>Что где находится</h2>
-          <p>Основные разделы открываются напрямую. Контекстные экраны появляются из конкретной продажи, товара или прихода.</p>
+          <h2>{{ t('pageMap.introTitle') }}</h2>
+          <p>{{ t('pageMap.introText') }}</p>
         </div>
       </section>
 
@@ -197,10 +199,10 @@ function openItem(item: PageMapItem): void {
             v-if="section.primaryRouteName && canOpenSection(section)"
             class="section-open"
             type="button"
-            :aria-label="`Открыть ${section.title}`"
+            :aria-label="`${t('pageMap.open')} ${section.title}`"
             @click="openRoute(section.primaryRouteName)"
           >
-            Открыть
+            {{ t('pageMap.open') }}
           </button>
         </div>
 
@@ -208,7 +210,7 @@ function openItem(item: PageMapItem): void {
           <article v-for="item in section.items" :key="`${section.title}-${item.title}`" class="page-row">
             <span class="page-marker" :class="{ 'page-marker--context': item.contextual }">
               <LockKeyhole v-if="item.contextual" :size="13" :stroke-width="1.8" />
-              <ReceiptText v-else-if="section.title === 'Отчёты'" :size="13" :stroke-width="1.8" />
+              <ReceiptText v-else-if="section.primaryRouteName === 'reports'" :size="13" :stroke-width="1.8" />
               <Boxes v-else :size="13" :stroke-width="1.8" />
             </span>
             <span class="page-copy">
@@ -220,12 +222,12 @@ function openItem(item: PageMapItem): void {
               v-if="canOpenItem(item)"
               class="page-open"
               type="button"
-              :aria-label="`Открыть ${item.title}`"
+              :aria-label="`${t('pageMap.open')} ${item.title}`"
               @click="openItem(item)"
             >
-              Перейти
+              {{ t('pageMap.go') }}
             </button>
-            <span v-else class="context-label">{{ item.contextual ? 'из контекста' : 'нет доступа' }}</span>
+            <span v-else class="context-label">{{ item.contextual ? t('pageMap.fromContext') : t('pageMap.noAccess') }}</span>
           </article>
         </div>
       </section>

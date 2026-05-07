@@ -1,32 +1,34 @@
+import { translateNow } from '@/i18n'
+
 /**
- * Human-friendly Russian labels for system values coming from import/API.
+ * Human-friendly labels for system values coming from import/API.
  * We keep source values intact in DB and only normalize display text.
  */
 
-const LOCATION_LABELS: Record<string, string> = {
-  ASOSIY: 'Основной склад',
-  'MAIN WAREHOUSE': 'Основной склад',
-  WAREHOUSE: 'Склад',
-  DOKON: 'Основной магазин',
-  'MAIN STORE': 'Основной магазин',
-  STORE: 'Магазин',
+const LOCATION_KEYS: Record<string, string> = {
+  ASOSIY: 'domain.locationFallback.ASOSIY',
+  'MAIN WAREHOUSE': 'domain.locationFallback.MAIN_WAREHOUSE',
+  WAREHOUSE: 'domain.locationFallback.WAREHOUSE',
+  DOKON: 'domain.locationFallback.DOKON',
+  'MAIN STORE': 'domain.locationFallback.MAIN_STORE',
+  STORE: 'domain.locationFallback.STORE',
 }
 
-const RECONCILIATION_KEYS: Record<string, string> = {
-  cash_balance: 'Остатки по кассе и банку',
-  inventory_by_location: 'Остатки по складам',
-  receivables_total_uzs: 'Дебиторская задолженность',
-  payables_total_uzs: 'Кредиторская задолженность',
-  sales_revenue_uzs: 'Выручка от продаж',
-  sales_cogs_uzs: 'Себестоимость продаж',
-  gross_profit_uzs: 'Валовая прибыль',
+const RECONCILIATION_LABEL_KEYS: Record<string, string> = {
+  cash_balance: 'domain.reconciliation.cash_balance',
+  inventory_by_location: 'domain.reconciliation.inventory_by_location',
+  receivables_total_uzs: 'domain.reconciliation.receivables_total_uzs',
+  payables_total_uzs: 'domain.reconciliation.payables_total_uzs',
+  sales_revenue_uzs: 'domain.reconciliation.sales_revenue_uzs',
+  sales_cogs_uzs: 'domain.reconciliation.sales_cogs_uzs',
+  gross_profit_uzs: 'domain.reconciliation.gross_profit_uzs',
 }
 
-const GAP_CATEGORIES: Record<string, string> = {
-  parse: 'Ошибки чтения',
-  mapping: 'Ошибки сопоставления',
-  domain: 'Нарушение доменных правил',
-  other: 'Прочие ошибки',
+const GAP_CATEGORY_KEYS: Record<string, string> = {
+  parse: 'domain.gapCategory.parse',
+  mapping: 'domain.gapCategory.mapping',
+  domain: 'domain.gapCategory.domain',
+  other: 'domain.gapCategory.other',
 }
 
 function normalizeKey(value: string): string {
@@ -35,13 +37,16 @@ function normalizeKey(value: string): string {
 
 export function toRussianLocationLabel(name: string): string {
   const normalized = normalizeKey(name)
-  return LOCATION_LABELS[normalized] ?? name
+  const key = LOCATION_KEYS[normalized]
+  return key ? translateNow(key) : name
 }
 
 export function toRussianReconciliationKey(key: string): string {
-  return RECONCILIATION_KEYS[key] ?? key
+  const labelKey = RECONCILIATION_LABEL_KEYS[key]
+  return labelKey ? translateNow(labelKey) : key
 }
 
 export function toRussianGapCategory(key: string): string {
-  return GAP_CATEGORIES[key] ?? key
+  const labelKey = GAP_CATEGORY_KEYS[key]
+  return labelKey ? translateNow(labelKey) : key
 }

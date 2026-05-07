@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Package, Plus, ChevronRight, FolderTree, ArrowRightLeft } from 'lucide-vue-next'
 import { fetchProducts, fetchCategories } from '@/api/catalog'
 import type { Product, Category } from '@/types/models'
@@ -10,6 +11,7 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 
 const router = useRouter()
+const { t, locale } = useI18n()
 
 // --- State ---
 const products = ref<Product[]>([])
@@ -28,7 +30,7 @@ const PAGE_SIZE = 20
 const isEmpty = computed(() => !isLoading.value && products.value.length === 0)
 
 const categoryOptions = computed(() => ([
-  { value: '' as const, label: 'Все категории' },
+  { value: '' as const, label: t('products.allCategories') },
   ...categories.value.map((category) => ({
     value: category.id,
     label: category.name,
@@ -65,7 +67,7 @@ function productTrace(product: Product): string {
   if (categoryName) parts.push(categoryName)
   if (product.has_variants) {
     const count = getVariantCount(product)
-    parts.push(`${count} ${count === 1 ? 'вариант' : count < 5 ? 'варианта' : 'вариантов'}`)
+    parts.push(t('products.variantCount', { count }))
   }
   parts.push(`SKU ${getDisplaySku(product)}`)
   return parts.join(' · ')
@@ -78,8 +80,8 @@ function stockBadgeVariant(stock: number): 'error' | 'warning' | null {
 }
 
 function stockBadgeLabel(stock: number): string {
-  if (stock === 0) return 'Нет в наличии'
-  if (stock < 5) return 'Мало'
+  if (stock === 0) return t('sales.outOfStock')
+  if (stock < 5) return t('products.lowStock')
   return ''
 }
 
@@ -96,7 +98,8 @@ function formatPrice(price: string | null): string {
   if (!price) return '—'
   const num = parseFloat(price)
   if (isNaN(num)) return price
-  return num.toLocaleString('ru-RU') + ' сум'
+  const intlLocale = locale.value === 'en' ? 'en-US' : locale.value === 'uz' ? 'uz-Latn-UZ' : 'ru-RU'
+  return `${num.toLocaleString(intlLocale)} UZS`
 }
 
 // --- Data fetching ---
@@ -135,7 +138,7 @@ async function loadProducts(reset = false): Promise<void> {
     products.value = reset ? [...incoming] : [...products.value, ...incoming]
     hasMore.value = response.next !== null
   } catch (error: unknown) {
-    errorMessage.value = 'Не удалось загрузить товары. Попробуйте ещё раз.'
+    errorMessage.value = t('products.loadFailed')
   } finally {
     isLoading.value = false
     isLoadingMore.value = false
@@ -182,29 +185,29 @@ onMounted(async () => {
   <div class="product-list-page">
     <!-- Header -->
     <header class="page-header">
-      <h1 class="page-title">Товары</h1>
+      <h1 class="page-title">{{ t('products.title') }}</h1>
       <div class="header-actions">
         <button
           class="header-icon-btn"
-          aria-label="Управление категориями"
+          :aria-label="t('products.manageCategories')"
           @click="navigateToCategories"
         >
           <FolderTree :size="18" :stroke-width="2" />
         </button>
         <button
           class="header-icon-btn"
-          aria-label="Перемещения между точками"
+          :aria-label="t('products.transfers')"
           @click="navigateToTransfers"
         >
           <ArrowRightLeft :size="18" :stroke-width="2" />
         </button>
         <button
           class="header-add-btn"
-          aria-label="Добавить товар"
+          :aria-label="t('products.add')"
           @click="navigateToCreate"
         >
           <Plus :size="20" :stroke-width="2" />
-          <span class="header-add-label">Добавить</span>
+          <span class="header-add-label">{{ t('common.add') }}</span>
         </button>
       </div>
     </header>
@@ -213,7 +216,7 @@ onMounted(async () => {
     <div class="filters-bar">
       <BaseSearch
         v-model="searchQuery"
-        placeholder="Поиск товаров..."
+        :placeholder="t('products.searchPlaceholder')"
         :debounce="300"
         @search="onSearch"
       />
@@ -221,8 +224,8 @@ onMounted(async () => {
         v-model="selectedCategory"
         class="category-select"
         :options="categoryOptions"
-        title="Фильтр по категории"
-        placeholder="Все категории"
+        :title="t('products.categoryFilter')"
+        :placeholder="t('products.allCategories')"
         @update:model-value="onCategoryChange"
       />
     </div>
@@ -247,9 +250,9 @@ onMounted(async () => {
     <!-- Empty state -->
     <AppEmptyState
       v-else-if="isEmpty"
-      title="Товаров нет"
-      description="Добавьте первый товар в каталог"
-      action-label="Добавить товар"
+      :title="t('products.noProducts')"
+      :description="t('products.noProductsDescription')"
+      :action-label="t('products.add')"
       @action="navigateToCreate"
     >
       <template #illustration>
@@ -268,7 +271,7 @@ onMounted(async () => {
         :class="{ 'product-row--inactive': !product.is_active }"
         role="button"
         tabindex="0"
-        :aria-label="`${product.name}, перейти к редактированию`"
+        :aria-label="t('products.editAria', { name: product.name })"
         @click="navigateToProduct(product)"
         @keydown.enter="navigateToProduct(product)"
         @keydown.space.prevent="navigateToProduct(product)"
@@ -289,7 +292,7 @@ onMounted(async () => {
           <div class="product-bottom">
             <span class="product-price">{{ formatPrice(product.base_price) }}</span>
             <span v-if="productStock(product) > 0" class="product-stock">
-              {{ productStock(product) }} в наличии
+              {{ t('products.inStock', { count: productStock(product) }) }}
             </span>
             <BaseBadge
               v-if="stockBadgeVariant(productStock(product))"
@@ -319,14 +322,14 @@ onMounted(async () => {
         @click="loadMore"
       >
         <span v-if="isLoadingMore" class="load-more-spinner" aria-hidden="true" />
-        <span v-else>Загрузить ещё</span>
+        <span v-else>{{ t('products.loadMore') }}</span>
       </button>
     </div>
 
     <!-- FAB -->
     <button
       class="fab"
-      aria-label="Добавить товар"
+      :aria-label="t('products.add')"
       @click="navigateToCreate"
     >
       <Plus :size="24" :stroke-width="2" />

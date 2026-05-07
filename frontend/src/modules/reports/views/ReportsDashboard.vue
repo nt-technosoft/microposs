@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { TrendingUp, TrendingDown, ShoppingCart, ArrowDownCircle, ArrowUpCircle, ChevronDown } from 'lucide-vue-next'
 import {
   fetchReportSummary,
@@ -17,7 +18,12 @@ import type { PayablesSummaryItem } from '@/api/suppliers'
 import type { StockSummaryItem } from '@/api/inventory'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
+import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
+import {
+  procurementStatusLabel as domainProcurementStatusLabel,
+  procurementTypeLabel as domainProcurementTypeLabel,
+} from '@/utils/domainLabels'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -30,13 +36,14 @@ type ReportCurrency = 'UZS' | 'USD'
 
 interface PeriodOption {
   value: Period
-  label: string
+  labelKey: string
 }
 
 // ── Composables ─────────────────────────────────────────────────────────────
 
 const toast = useToast()
 const router = useRouter()
+const { t, locale } = useI18n()
 const {
   rate: latestUsdRate,
   error: latestUsdRateError,
@@ -88,11 +95,11 @@ const isComputing = ref(false)
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PERIOD_OPTIONS: PeriodOption[] = [
-  { value: 'today', label: 'Сегодня' },
-  { value: 'week', label: 'Неделя' },
-  { value: 'month', label: 'Месяц' },
-  { value: 'all', label: 'Весь период' },
-  { value: 'custom', label: 'Диапазон' },
+  { value: 'today', labelKey: 'reports.period.today' },
+  { value: 'week', labelKey: 'reports.period.week' },
+  { value: 'month', labelKey: 'reports.period.month' },
+  { value: 'all', labelKey: 'reports.period.all' },
+  { value: 'custom', labelKey: 'reports.period.custom' },
 ]
 const ANALYTICS_PREVIEW_LIMIT = 5
 const DEBT_PREVIEW_LIMIT = 3
@@ -215,9 +222,12 @@ const hiddenDebtorsCount = computed(() =>
 )
 
 const selectedPeriodLabel = computed(
-  () => PERIOD_OPTIONS.find((o) => o.value === period.value)?.label ?? '',
+  () => {
+    const option = PERIOD_OPTIONS.find((o) => o.value === period.value)
+    return option ? t(option.labelKey) : ''
+  },
 )
-const periodLabelLower = computed(() => selectedPeriodLabel.value.toLowerCase())
+const periodLabelLower = computed(() => selectedPeriodLabel.value.toLocaleLowerCase(intlLocale(locale.value)))
 const overallMargin = computed(() => (
   metrics.value.revenue > 0
     ? (metrics.value.profit / metrics.value.revenue) * 100
@@ -271,7 +281,7 @@ async function setReportCurrency(currency: ReportCurrency): Promise<void> {
         await loadLatestUsdRate()
       } catch {
         reportCurrency.value = 'UZS'
-        toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+        toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
         return
       }
     }
@@ -406,7 +416,7 @@ const visibleProcurementProfitability = computed(() =>
 )
 
 function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('ru-RU', {
+  return new Date(value).toLocaleString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -417,7 +427,7 @@ function formatDateTime(value: string): string {
 function formatPercent(value: string | number): string {
   const numeric = typeof value === 'number' ? value : parseFloat(value)
   if (!Number.isFinite(numeric)) return '0.00%'
-  return `${numeric.toFixed(2)}%`
+  return `${numeric.toLocaleString(intlLocale(locale.value), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }
 
 function setSalesSort(next: SalesSort): void {
@@ -459,23 +469,16 @@ function toggleProcurementExpanded(id: number): void {
 }
 
 function paymentMethodsLabel(methods: string[]): string {
-  return methods.length ? methods.join(', ') : 'Без метода оплаты'
+  if (!methods.length) return t('reports.noPaymentMethod')
+  return methods.map((method) => t(`domain.paymentMethod.${method}`)).join(', ')
 }
 
 function procurementTypeLabel(type: string): string {
-  if (type === 'PARTNERSHIP') return 'Партнёрский'
-  if (type === 'MUSHARAKA') return 'Мушарака'
-  if (type === 'OWN_FUNDS') return 'Свои деньги'
-  return type
+  return domainProcurementTypeLabel(type)
 }
 
 function procurementStatusLabel(status: string): string {
-  if (status === 'PARTIALLY_RECEIVED') return 'Частично оприходован'
-  if (status === 'RECEIVED') return 'Завершён'
-  if (status === 'OPEN') return 'Открыт'
-  if (status === 'CLOSED') return 'Закрыт'
-  if (status === 'CANCELLED') return 'Отменён'
-  return status
+  return domainProcurementStatusLabel(status)
 }
 
 function procurementDateLabel(procurement: ProcurementProfitabilityRow): string {
@@ -545,8 +548,8 @@ async function loadSummary(): Promise<void> {
     }
   } catch (err: unknown) {
     if ((err as { name?: string })?.name === 'CanceledError') return
-    errorSummary.value = err instanceof Error ? err.message : 'Ошибка загрузки'
-    toast.error('Не удалось загрузить данные отчёта')
+    errorSummary.value = err instanceof Error ? err.message : t('reports.loadFailed')
+    toast.error(t('reports.loadFailed'))
   } finally {
     loadingSummary.value = false
     loadingCashFlow.value = false
@@ -641,7 +644,7 @@ function openProcurementAudit(procurementId: number): void {
 
     <!-- ── Header ─────────────────────────────────────────────── -->
     <header class="page-header">
-      <h1 class="page-title">Отчёты</h1>
+      <h1 class="page-title">{{ t('reports.title') }}</h1>
 
       <div class="period-selector">
         <button
@@ -666,7 +669,7 @@ function openProcurementAudit(procurementId: number): void {
               :aria-selected="period === opt.value"
               @click="onPeriodSelect(opt.value)"
             >
-              {{ opt.label }}
+              {{ t(opt.labelKey) }}
             </li>
           </ul>
         </Transition>
@@ -676,16 +679,16 @@ function openProcurementAudit(procurementId: number): void {
     <section v-if="period === 'custom'" class="custom-range">
       <div class="custom-range-fields">
         <label class="custom-range-label">
-          <span>С</span>
+          <span>{{ t('reports.from') }}</span>
           <input v-model="customDateFrom" class="custom-range-input" type="date" />
         </label>
         <label class="custom-range-label">
-          <span>По</span>
+          <span>{{ t('reports.to') }}</span>
           <input v-model="customDateTo" class="custom-range-input" type="date" />
         </label>
       </div>
       <button class="custom-range-apply" type="button" @click="applyCustomRange">
-        Применить
+        {{ t('common.apply') }}
       </button>
     </section>
 
@@ -704,12 +707,12 @@ function openProcurementAudit(procurementId: number): void {
 
       <div v-else-if="errorSummary && summaries.length === 0" class="error-box">
         <p class="error-text">{{ errorSummary }}</p>
-        <button class="btn-retry" @click="loadSummary">Повторить</button>
+        <button class="btn-retry" @click="loadSummary">{{ t('common.retry') }}</button>
       </div>
 
       <template v-else>
         <div v-if="isComputing" class="computing-notice">
-          Данные обновляются в фоне — страница обновится автоматически
+          {{ t('reports.backgroundRefresh') }}
         </div>
 
         <section class="overview-panel">
@@ -719,7 +722,7 @@ function openProcurementAudit(procurementId: number): void {
             </div>
 
             <div class="overview-actions">
-              <div class="currency-switch" role="group" aria-label="Валюта отчёта">
+              <div class="currency-switch" role="group" :aria-label="t('reports.reportCurrency')">
                 <button
                   type="button"
                   class="currency-switch__btn"
@@ -738,39 +741,39 @@ function openProcurementAudit(procurementId: number): void {
                 </button>
               </div>
               <button class="action-pill" type="button" @click="openCurrencyExchange">
-                Обмен
+                {{ t('finance.exchange') }}
               </button>
               <button class="action-pill" type="button" @click="openReconciliation">
-                Сверка
+                {{ t('reports.reconciliation') }}
               </button>
             </div>
           </div>
 
           <div class="overview-grid">
             <article class="overview-primary">
-              <span class="metric-label">Выручка</span>
+              <span class="metric-label">{{ t('reports.revenue') }}</span>
               <strong class="overview-primary-value tabular-nums">{{ formatReportPrice(metrics.revenue) }}</strong>
               <div class="overview-primary-meta">
-                <span>{{ metrics.salesCount }} продаж</span>
-                <span>{{ metrics.salesDays }} дней с продажами</span>
-                <span>Возвраты {{ metrics.returnsCount }} · {{ formatReportPrice(metrics.returns) }}</span>
+                <span>{{ t('reports.salesCountLine', { count: metrics.salesCount }) }}</span>
+                <span>{{ t('reports.salesDaysLine', { count: metrics.salesDays }) }}</span>
+                <span>{{ t('reports.returnsLine', { count: metrics.returnsCount, amount: formatReportPrice(metrics.returns) }) }}</span>
               </div>
             </article>
 
             <article class="metric-tile metric-tile--profit">
-              <span class="metric-label">Валовая прибыль</span>
+              <span class="metric-label">{{ t('reports.grossProfit') }}</span>
               <strong class="metric-value tabular-nums">{{ formatReportPrice(metrics.profit) }}</strong>
-              <span class="metric-note">Себестоимость {{ formatReportPrice(metrics.cogs) }}</span>
+              <span class="metric-note">{{ t('reports.cogsLine', { amount: formatReportPrice(metrics.cogs) }) }}</span>
             </article>
 
             <article class="metric-tile">
-              <span class="metric-label">Маржа</span>
+              <span class="metric-label">{{ t('reports.margin') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPercent(overallMargin) }}</strong>
-              <span class="metric-note">По выручке за {{ periodLabelLower }}</span>
+              <span class="metric-note">{{ t('reports.marginForPeriod', { period: periodLabelLower }) }}</span>
             </article>
 
             <article class="metric-tile">
-              <span class="metric-label">Денежные счета</span>
+              <span class="metric-label">{{ t('reports.cashAccounts') }}</span>
               <div v-if="nativeCashByCurrency.length" class="cash-native-list">
                 <strong
                   v-for="item in nativeCashByCurrency"
@@ -781,24 +784,24 @@ function openProcurementAudit(procurementId: number): void {
                 </strong>
               </div>
               <strong v-else class="metric-value tabular-nums">{{ formatPrice(0) }}</strong>
-              <span class="metric-note">Нативные остатки без смешивания валют</span>
+              <span class="metric-note">{{ t('reports.nativeBalancesNoMix') }}</span>
             </article>
 
             <article class="metric-tile">
-              <span class="metric-label">Склад</span>
+              <span class="metric-label">{{ t('reports.stock') }}</span>
               <strong class="metric-value tabular-nums">{{ formatReportPrice(inventoryTotals.value) }}</strong>
-              <span class="metric-note">{{ inventoryTotals.qty }} шт. на остатке</span>
+              <span class="metric-note">{{ t('reports.stockQtyLine', { count: inventoryTotals.qty }) }}</span>
             </article>
           </div>
 
           <div class="overview-footer">
-            <span class="overview-footer-label">Контрольные метрики</span>
+            <span class="overview-footer-label">{{ t('reports.controlMetrics') }}</span>
             <div class="inline-chip-list">
-              <span class="inline-chip">Дебиторка {{ formatReportPrice(totalDebt) }}</span>
-              <span class="inline-chip">Кредиторка {{ formatReportPrice(totalPayables) }}</span>
-              <span class="inline-chip">Возвраты {{ formatReportPrice(metrics.returns) }}</span>
-              <span class="inline-chip">Списания {{ formatReportPrice(metrics.writeoffs) }}</span>
-              <span v-if="loadingParity" class="inline-chip">Обновляю остатки...</span>
+              <span class="inline-chip">{{ t('reports.receivablesLine', { amount: formatReportPrice(totalDebt) }) }}</span>
+              <span class="inline-chip">{{ t('reports.payablesLine', { amount: formatReportPrice(totalPayables) }) }}</span>
+              <span class="inline-chip">{{ t('reports.returnsAmountLine', { amount: formatReportPrice(metrics.returns) }) }}</span>
+              <span class="inline-chip">{{ t('reports.writeoffsLine', { amount: formatReportPrice(metrics.writeoffs) }) }}</span>
+              <span v-if="loadingParity" class="inline-chip">{{ t('reports.updatingBalances') }}</span>
             </div>
           </div>
         </section>
@@ -808,10 +811,10 @@ function openProcurementAudit(procurementId: number): void {
             <article class="workspace-card">
               <div class="card-head">
                 <div>
-                  <h3 class="card-title">Движение наличных</h3>
+                  <h3 class="card-title">{{ t('finance.cashFlow') }}</h3>
                 </div>
                 <span class="status-chip" :class="cashFlowTotals.net < 0 ? 'status-chip--danger' : 'status-chip--positive'">
-                  {{ cashFlowTotals.net < 0 ? 'Отток' : 'Приток' }}
+                  {{ cashFlowTotals.net < 0 ? t('finance.outflow') : t('finance.inflow') }}
                 </span>
               </div>
 
@@ -828,7 +831,7 @@ function openProcurementAudit(procurementId: number): void {
                     <ArrowDownCircle :size="18" :stroke-width="1.75" />
                   </div>
                   <div class="money-meta">
-                    <span class="money-label">Приход</span>
+                    <span class="money-label">{{ t('finance.inflow') }}</span>
                   </div>
                   <strong class="money-value money-value--in tabular-nums">{{ formatReportPrice(cashFlowTotals.inflows) }}</strong>
                 </div>
@@ -838,9 +841,9 @@ function openProcurementAudit(procurementId: number): void {
                     <ArrowUpCircle :size="18" :stroke-width="1.75" />
                   </div>
                   <div class="money-meta">
-                    <span class="money-label">Расход</span>
+                    <span class="money-label">{{ t('finance.outflow') }}</span>
                     <span v-if="metrics.returns > 0" class="money-caption">
-                      включая возвраты {{ formatReportPrice(metrics.returns) }}
+                      {{ t('reports.includingReturns', { amount: formatReportPrice(metrics.returns) }) }}
                     </span>
                   </div>
                   <strong class="money-value money-value--out tabular-nums">{{ formatReportPrice(cashFlowTotals.outflows) }}</strong>
@@ -850,8 +853,8 @@ function openProcurementAudit(procurementId: number): void {
 
                 <div class="money-row money-row--total">
                   <div class="money-meta">
-                    <span class="money-label">Чистый поток</span>
-                    <span class="money-caption">Итог за {{ periodLabelLower }}</span>
+                    <span class="money-label">{{ t('finance.netFlow') }}</span>
+                    <span class="money-caption">{{ t('reports.periodTotal', { period: periodLabelLower }) }}</span>
                   </div>
                   <strong
                     class="money-value money-value--total tabular-nums"
@@ -865,7 +868,7 @@ function openProcurementAudit(procurementId: number): void {
               </div>
 
               <div v-if="nativeCashByCurrency.length" class="card-foot">
-                <span class="card-caption">Нативные остатки по валютам</span>
+                <span class="card-caption">{{ t('reports.nativeBalancesByCurrency') }}</span>
                 <div class="inline-chip-list">
                   <span
                     v-for="item in nativeCashByCurrency"
@@ -881,29 +884,29 @@ function openProcurementAudit(procurementId: number): void {
             <article class="workspace-card">
               <div class="card-head">
                 <div>
-                  <h3 class="card-title">Долги и склад</h3>
+                  <h3 class="card-title">{{ t('reports.debtsAndStock') }}</h3>
                 </div>
               </div>
 
               <div class="obligation-grid">
                 <div class="obligation-tile">
-                  <span class="metric-label">Дебиторка</span>
+                  <span class="metric-label">{{ t('reports.receivables') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatReportPrice(totalDebt) }}</strong>
                 </div>
                 <div class="obligation-tile">
-                  <span class="metric-label">Кредиторка</span>
+                  <span class="metric-label">{{ t('reports.payables') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatReportPrice(totalPayables) }}</strong>
                 </div>
                 <div class="obligation-tile">
-                  <span class="metric-label">Склад по себестоимости</span>
+                  <span class="metric-label">{{ t('reports.stockAtCost') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatReportPrice(inventoryTotals.value) }}</strong>
                 </div>
                 <div class="obligation-tile">
-                  <span class="metric-label">Остаток в штуках</span>
+                  <span class="metric-label">{{ t('reports.remainingPieces') }}</span>
                   <strong class="metric-value tabular-nums">{{ inventoryTotals.qty }}</strong>
                 </div>
                 <div v-if="metrics.writeoffs > 0" class="obligation-tile">
-                  <span class="metric-label">Списания</span>
+                  <span class="metric-label">{{ t('investors.writeoffs') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatReportPrice(metrics.writeoffs) }}</strong>
                 </div>
               </div>
@@ -912,7 +915,7 @@ function openProcurementAudit(procurementId: number): void {
 
               <div class="list-block">
                 <div class="list-head">
-                  <span class="card-caption">Топ должников</span>
+                  <span class="card-caption">{{ t('reports.topDebtors') }}</span>
                   <span class="card-caption">{{ sortedDebtors.length }}</span>
                 </div>
 
@@ -933,7 +936,7 @@ function openProcurementAudit(procurementId: number): void {
                       <div class="debtor-info">
                         <span class="debtor-name">{{ debtor.name }}</span>
                         <span class="debtor-phone">
-                          {{ debtExpanded ? (debtor.phone || 'Без номера') : 'Покупатель' }}
+                          {{ debtExpanded ? (debtor.phone || t('reports.noPhone')) : t('customers.customer') }}
                         </span>
                       </div>
                       <strong class="debtor-amount tabular-nums">{{ formatReportPrice(debtor.outstanding_balance) }}</strong>
@@ -946,13 +949,13 @@ function openProcurementAudit(procurementId: number): void {
                     class="expand-btn expand-btn--soft"
                     @click="toggleDebtExpanded"
                   >
-                    {{ debtExpanded ? 'Свернуть список' : `Показать ещё ${hiddenDebtorsCount}` }}
+                    {{ debtExpanded ? t('reports.collapseList') : t('reports.showMoreCount', { count: hiddenDebtorsCount }) }}
                   </button>
                 </template>
 
                 <div v-else class="empty-inline">
                   <ShoppingCart :size="18" :stroke-width="1.5" />
-                  <span>Нет задолженностей покупателей</span>
+                  <span>{{ t('reports.noCustomerDebts') }}</span>
                 </div>
               </div>
             </article>
@@ -962,18 +965,18 @@ function openProcurementAudit(procurementId: number): void {
         <section class="workspace-board">
           <div class="workspace-head workspace-head--analytics">
             <div>
-              <h2 class="workspace-title">Прибыльность</h2>
-              <p class="workspace-note">Итог сверху, лидеры ниже. Детали только по нажатию.</p>
+              <h2 class="workspace-title">{{ t('reports.profitability') }}</h2>
+              <p class="workspace-note">{{ t('reports.profitabilityHint') }}</p>
             </div>
 
-            <div class="analytics-switch" role="tablist" aria-label="Тип прибыльности">
+            <div class="analytics-switch" role="tablist" :aria-label="t('reports.profitabilityType')">
               <button
                 type="button"
                 class="analytics-switch-btn"
                 :class="{ active: analyticsView === 'sales' }"
                 @click="setAnalyticsView('sales')"
               >
-                Продажи
+                {{ t('sales.history') }}
               </button>
               <button
                 type="button"
@@ -981,7 +984,7 @@ function openProcurementAudit(procurementId: number): void {
                 :class="{ active: analyticsView === 'products' }"
                 @click="setAnalyticsView('products')"
               >
-                Товары
+                {{ t('products.title') }}
               </button>
               <button
                 type="button"
@@ -989,12 +992,12 @@ function openProcurementAudit(procurementId: number): void {
                 :class="{ active: analyticsView === 'procurements' }"
                 @click="setAnalyticsView('procurements')"
               >
-                Закупки
+                {{ t('procurements.title') }}
               </button>
             </div>
           </div>
 
-          <p v-if="loadingAnalytics" class="workspace-note">Собираю аналитический срез...</p>
+          <p v-if="loadingAnalytics" class="workspace-note">{{ t('reports.loadingAnalytics') }}</p>
 
           <template
             v-else-if="
@@ -1008,22 +1011,23 @@ function openProcurementAudit(procurementId: number): void {
             <div class="summary-strip">
               <template v-if="analyticsView === 'sales'">
                 <div class="summary-card summary-card--primary">
-                  <span class="metric-label">Валовая прибыль</span>
+                  <span class="metric-label">{{ t('reports.grossProfit') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
                   <span class="metric-note">
-                    Маржа {{
+                    {{ t('reports.marginValue', {
+                      value:
                       formatPercent(
                         salesProfitabilityTotals.revenue > 0
                           ? (salesProfitabilityTotals.grossProfit / salesProfitabilityTotals.revenue) * 100
                           : 0,
                       )
-                    }}
+                    }) }}
                   </span>
                 </div>
                 <div class="summary-card">
-                  <span class="metric-label">Выручка</span>
+                  <span class="metric-label">{{ t('reports.revenue') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(salesProfitabilityTotals.revenue, reportCurrency) }}</strong>
-                  <span class="metric-note">Себестоимость {{ formatPrice(salesProfitabilityTotals.cogs, reportCurrency) }}</span>
+                  <span class="metric-note">{{ t('reports.cogsLine', { amount: formatPrice(salesProfitabilityTotals.cogs, reportCurrency) }) }}</span>
                 </div>
                 <div class="summary-footer">
                   <button
@@ -1031,24 +1035,24 @@ function openProcurementAudit(procurementId: number): void {
                     class="expand-btn expand-btn--soft"
                     @click="salesSummaryExpanded = !salesSummaryExpanded"
                   >
-                    {{ salesSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                    {{ salesSummaryExpanded ? t('reports.hideMetrics') : t('reports.moreMetrics') }}
                   </button>
                   <div v-if="salesSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Инвестор {{ formatPrice(salesProfitabilityTotals.investorProfit, reportCurrency) }}</span>
-                    <span class="inline-chip inline-chip--muted">Бизнес {{ formatPrice(salesProfitabilityTotals.businessProfit, reportCurrency) }}</span>
-                    <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.lineCount }} строк</span>
-                    <span class="inline-chip inline-chip--muted">{{ salesProfitabilityTotals.quantitySold }} шт.</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.investorLine', { amount: formatPrice(salesProfitabilityTotals.investorProfit, reportCurrency) }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.businessLine', { amount: formatPrice(salesProfitabilityTotals.businessProfit, reportCurrency) }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.linesCount', { count: salesProfitabilityTotals.lineCount }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.pcsShort', { count: salesProfitabilityTotals.quantitySold }) }}</span>
                   </div>
                 </div>
               </template>
 
               <template v-else-if="analyticsView === 'products'">
                 <div class="summary-card summary-card--primary">
-                  <span class="metric-label">Факт. прибыль</span>
+                  <span class="metric-label">{{ t('reports.factualProfit') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
                 </div>
                 <div class="summary-card">
-                  <span class="metric-label">Прогноз прибыли</span>
+                  <span class="metric-label">{{ t('reports.profitForecast') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(productProfitabilityTotals.projectedGrossProfit, reportCurrency) }}</strong>
                 </div>
                 <div class="summary-footer">
@@ -1057,26 +1061,29 @@ function openProcurementAudit(procurementId: number): void {
                     class="expand-btn expand-btn--soft"
                     @click="productsSummaryExpanded = !productsSummaryExpanded"
                   >
-                    {{ productsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                    {{ productsSummaryExpanded ? t('reports.hideMetrics') : t('reports.moreMetrics') }}
                   </button>
                   <div v-if="productsSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Продажи {{ formatPrice(productProfitabilityTotals.revenue, reportCurrency) }}</span>
-                    <span class="inline-chip inline-chip--muted">Остаток {{ formatPrice(productProfitabilityTotals.remainingLandedCost, reportCurrency) }}</span>
-                    <span class="inline-chip inline-chip--muted">{{ productProfitabilityTotals.remainingQuantity }} шт. в остатке</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.salesAmountLine', { amount: formatPrice(productProfitabilityTotals.revenue, reportCurrency) }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.remainingAmountLine', { amount: formatPrice(productProfitabilityTotals.remainingLandedCost, reportCurrency) }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.remainingQtyLine', { count: productProfitabilityTotals.remainingQuantity }) }}</span>
                   </div>
                 </div>
               </template>
 
               <template v-else>
                 <div class="summary-card summary-card--primary">
-                  <span class="metric-label">Факт. прибыль</span>
+                  <span class="metric-label">{{ t('reports.factualProfit') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.grossProfit, reportCurrency) }}</strong>
-                  <span class="metric-note">Инвестор {{ formatPrice(procurementProfitabilityTotals.investorProfit, reportCurrency) }} · бизнес {{ formatPrice(procurementProfitabilityTotals.businessProfit, reportCurrency) }}</span>
+                  <span class="metric-note">{{ t('reports.investorBusinessLine', {
+                    investor: formatPrice(procurementProfitabilityTotals.investorProfit, reportCurrency),
+                    business: formatPrice(procurementProfitabilityTotals.businessProfit, reportCurrency),
+                  }) }}</span>
                 </div>
                 <div class="summary-card">
-                  <span class="metric-label">Прогноз прибыли</span>
+                  <span class="metric-label">{{ t('reports.profitForecast') }}</span>
                   <strong class="metric-value tabular-nums">{{ formatPrice(procurementProfitabilityTotals.projectedGrossProfit, reportCurrency) }}</strong>
-                  <span class="metric-note">Остаток {{ formatPrice(procurementProfitabilityTotals.remainingLandedCost, reportCurrency) }}</span>
+                  <span class="metric-note">{{ t('reports.remainingAmountLine', { amount: formatPrice(procurementProfitabilityTotals.remainingLandedCost, reportCurrency) }) }}</span>
                 </div>
                 <div class="summary-footer">
                   <button
@@ -1084,13 +1091,13 @@ function openProcurementAudit(procurementId: number): void {
                     class="expand-btn expand-btn--soft"
                     @click="procurementsSummaryExpanded = !procurementsSummaryExpanded"
                   >
-                    {{ procurementsSummaryExpanded ? 'Скрыть показатели' : 'Ещё показатели' }}
+                    {{ procurementsSummaryExpanded ? t('reports.hideMetrics') : t('reports.moreMetrics') }}
                   </button>
                   <div v-if="procurementsSummaryExpanded" class="summary-support">
-                    <span class="inline-chip inline-chip--muted">Выручка {{ formatPrice(procurementProfitabilityTotals.revenue, reportCurrency) }}</span>
-                    <span class="inline-chip inline-chip--muted">Продано {{ procurementProfitabilityTotals.quantitySold }} шт.</span>
-                    <span class="inline-chip inline-chip--muted">В остатке {{ procurementProfitabilityTotals.remainingQuantity }} шт.</span>
-                    <span class="inline-chip inline-chip--muted">Прогноз инвестора {{ formatPrice(procurementProfitabilityTotals.projectedInvestorProfit, reportCurrency) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.revenueLine', { amount: formatPrice(procurementProfitabilityTotals.revenue, reportCurrency) }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.soldPcsLine', { count: procurementProfitabilityTotals.quantitySold }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.inStockPcsLine', { count: procurementProfitabilityTotals.remainingQuantity }) }}</span>
+                    <span class="inline-chip inline-chip--muted">{{ t('reports.investorForecastLine', { amount: formatPrice(procurementProfitabilityTotals.projectedInvestorProfit, reportCurrency) }) }}</span>
                   </div>
                 </div>
               </template>
@@ -1101,16 +1108,16 @@ function openProcurementAudit(procurementId: number): void {
                 v-if="analyticsView === 'sales'"
                 class="segment-control"
                 role="tablist"
-                aria-label="Сортировка продаж"
+                :aria-label="t('reports.salesSorting')"
               >
                 <button type="button" class="segment-btn" :class="{ active: salesSort === 'profit' }" @click="setSalesSort('profit')">
-                  По прибыли
+                  {{ t('reports.sortByProfit') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: salesSort === 'margin' }" @click="setSalesSort('margin')">
-                  По марже
+                  {{ t('reports.sortByMargin') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: salesSort === 'revenue' }" @click="setSalesSort('revenue')">
-                  По выручке
+                  {{ t('reports.sortByRevenue') }}
                 </button>
               </div>
 
@@ -1118,16 +1125,16 @@ function openProcurementAudit(procurementId: number): void {
                 v-else-if="analyticsView === 'products'"
                 class="segment-control"
                 role="tablist"
-                aria-label="Сортировка товаров"
+                :aria-label="t('reports.productsSorting')"
               >
                 <button type="button" class="segment-btn" :class="{ active: productSort === 'profit' }" @click="setProductSort('profit')">
-                  По прибыли
+                  {{ t('reports.sortByProfit') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: productSort === 'projected' }" @click="setProductSort('projected')">
-                  По прогнозу
+                  {{ t('reports.sortByForecast') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: productSort === 'remaining' }" @click="setProductSort('remaining')">
-                  По остатку
+                  {{ t('reports.sortByRemaining') }}
                 </button>
               </div>
 
@@ -1135,25 +1142,25 @@ function openProcurementAudit(procurementId: number): void {
                 v-else
                 class="segment-control"
                 role="tablist"
-                aria-label="Сортировка закупок"
+                :aria-label="t('reports.procurementsSorting')"
               >
                 <button type="button" class="segment-btn" :class="{ active: procurementSort === 'profit' }" @click="setProcurementSort('profit')">
-                  По прибыли
+                  {{ t('reports.sortByProfit') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: procurementSort === 'projected' }" @click="setProcurementSort('projected')">
-                  По прогнозу
+                  {{ t('reports.sortByForecast') }}
                 </button>
                 <button type="button" class="segment-btn" :class="{ active: procurementSort === 'remaining' }" @click="setProcurementSort('remaining')">
-                  По остатку
+                  {{ t('reports.sortByRemaining') }}
                 </button>
               </div>
 
               <span class="workspace-note">
                 {{ analyticsView === 'sales'
-                  ? `${salesProfitabilitySorted.length} продаж в срезе · детали по нажатию`
+                  ? t('reports.salesInSlice', { count: salesProfitabilitySorted.length })
                   : analyticsView === 'products'
-                    ? `${productProfitabilitySorted.length} товаров в срезе · детали по нажатию`
-                    : `${procurementProfitabilitySorted.length} закупок в срезе · детали по нажатию`
+                    ? t('reports.productsInSlice', { count: productProfitabilitySorted.length })
+                    : t('reports.procurementsInSlice', { count: procurementProfitabilitySorted.length })
                 }}
               </span>
             </div>
@@ -1162,12 +1169,12 @@ function openProcurementAudit(procurementId: number): void {
               <div class="analytics-table-note">
                 <span>{{
                   analyticsView === 'sales'
-                    ? 'Лидеры по сортировке'
+                    ? t('reports.sortLeaders')
                     : analyticsView === 'products'
-                      ? 'Товары-лидеры'
-                      : 'Закупки-лидеры'
+                      ? t('reports.productLeaders')
+                      : t('reports.procurementLeaders')
                 }}</span>
-                <span>Строка открывает детали</span>
+                <span>{{ t('reports.rowOpensDetails') }}</span>
               </div>
 
               <template v-if="analyticsView === 'sales'">
@@ -1180,16 +1187,16 @@ function openProcurementAudit(procurementId: number): void {
                   <button type="button" class="analytics-toggle" @click="toggleSaleExpanded(sale.sale_id)">
                     <div class="analytics-main">
                       <div class="analytics-title-row">
-                        <strong class="analytics-title">Продажа #{{ sale.sale_id }}</strong>
-                        <span class="analytics-badge">{{ sale.line_count }} строк</span>
+                        <strong class="analytics-title">{{ t('reports.saleAudit.saleNumber', { id: sale.sale_id }) }}</strong>
+                        <span class="analytics-badge">{{ t('reports.linesCount', { count: sale.line_count }) }}</span>
                       </div>
                       <span class="analytics-meta">{{ formatDateTime(sale.date) }} · {{ sale.location_name }}</span>
-                      <span class="analytics-meta">{{ sale.quantity_sold }} шт. · {{ sale.customer_name || 'Без клиента' }}</span>
+                      <span class="analytics-meta">{{ t('reports.pcsShort', { count: sale.quantity_sold }) }} · {{ sale.customer_name || t('reports.saleAudit.noCustomer') }}</span>
                     </div>
                     <div class="analytics-side">
                       <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(sale, 'gross_profit', sale.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
-                        <span class="analytics-trend">Маржа {{ formatPercent(sale.margin_percent) }}</span>
+                        <span class="analytics-trend">{{ t('reports.marginValue', { value: formatPercent(sale.margin_percent) }) }}</span>
                         <ChevronDown
                           :size="16"
                           :stroke-width="1.8"
@@ -1201,13 +1208,13 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedSaleId === sale.sale_id" class="analytics-details">
-                    <span class="detail-chip">Выручка {{ formatRowReportPrice(sale, 'revenue', sale.revenue) }}</span>
-                    <span class="detail-chip">Себестоимость {{ formatRowReportPrice(sale, 'cogs', sale.cogs) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(sale, 'investor_profit', sale.investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(sale, 'business_profit', sale.business_profit) }}</span>
+                    <span class="detail-chip">{{ t('reports.revenueLine', { amount: formatRowReportPrice(sale, 'revenue', sale.revenue) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.cogsLine', { amount: formatRowReportPrice(sale, 'cogs', sale.cogs) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.investorLine', { amount: formatRowReportPrice(sale, 'investor_profit', sale.investor_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.businessLine', { amount: formatRowReportPrice(sale, 'business_profit', sale.business_profit) }) }}</span>
                     <span class="detail-chip">{{ paymentMethodsLabel(sale.payment_methods) }}</span>
                     <button type="button" class="detail-chip detail-chip--action" @click.stop="openSaleExplanation(sale.sale_id)">
-                      Аудит продажи
+                      {{ t('reports.saleAudit.title') }}
                     </button>
                   </div>
                 </article>
@@ -1224,15 +1231,15 @@ function openProcurementAudit(procurementId: number): void {
                     <div class="analytics-main">
                       <div class="analytics-title-row">
                         <strong class="analytics-title">{{ product.product_name }}</strong>
-                        <span class="analytics-badge">{{ product.quantity_sold }} продано</span>
+                        <span class="analytics-badge">{{ t('reports.soldPcsLine', { count: product.quantity_sold }) }}</span>
                       </div>
-                      <span class="analytics-meta">Остаток {{ product.remaining_quantity }} шт.</span>
-                      <span class="analytics-meta">Цена {{ formatRowReportPrice(product, 'current_unit_price', product.current_unit_price) }}</span>
+                      <span class="analytics-meta">{{ t('reports.remainingQtyLine', { count: product.remaining_quantity }) }}</span>
+                      <span class="analytics-meta">{{ t('reports.priceLine', { amount: formatRowReportPrice(product, 'current_unit_price', product.current_unit_price) }) }}</span>
                     </div>
                     <div class="analytics-side">
                       <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(product, 'gross_profit', product.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
-                        <span class="analytics-trend">Маржа {{ formatPercent(product.margin_percent) }}</span>
+                        <span class="analytics-trend">{{ t('reports.marginValue', { value: formatPercent(product.margin_percent) }) }}</span>
                         <ChevronDown
                           :size="16"
                           :stroke-width="1.8"
@@ -1244,12 +1251,12 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedProductId === product.product_variant_id" class="analytics-details">
-                    <span class="detail-chip">Продажи {{ formatRowReportPrice(product, 'revenue', product.revenue) }}</span>
-                    <span class="detail-chip">Факт {{ formatRowReportPrice(product, 'gross_profit', product.gross_profit) }}</span>
-                    <span class="detail-chip">Остаток {{ formatRowReportPrice(product, 'remaining_landed_cost', product.remaining_landed_cost) }}</span>
-                    <span class="detail-chip">Прогноз {{ formatRowReportPrice(product, 'projected_gross_profit', product.projected_gross_profit) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(product, 'projected_investor_profit', product.projected_investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(product, 'projected_business_profit', product.projected_business_profit) }}</span>
+                    <span class="detail-chip">{{ t('reports.salesAmountLine', { amount: formatRowReportPrice(product, 'revenue', product.revenue) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.actualLine', { amount: formatRowReportPrice(product, 'gross_profit', product.gross_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.remainingAmountLine', { amount: formatRowReportPrice(product, 'remaining_landed_cost', product.remaining_landed_cost) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.forecastLine', { amount: formatRowReportPrice(product, 'projected_gross_profit', product.projected_gross_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.investorLine', { amount: formatRowReportPrice(product, 'projected_investor_profit', product.projected_investor_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.businessLine', { amount: formatRowReportPrice(product, 'projected_business_profit', product.projected_business_profit) }) }}</span>
                   </div>
                 </article>
               </template>
@@ -1264,16 +1271,16 @@ function openProcurementAudit(procurementId: number): void {
                   <button type="button" class="analytics-toggle" @click="toggleProcurementExpanded(procurement.procurement_id)">
                     <div class="analytics-main">
                       <div class="analytics-title-row">
-                        <strong class="analytics-title">Приход #{{ procurement.procurement_id }}</strong>
+                        <strong class="analytics-title">{{ t('procurements.procurementNumber', { id: procurement.procurement_id }) }}</strong>
                         <span class="analytics-badge">{{ procurement.item_count }} SKU</span>
                       </div>
-                      <span class="analytics-meta">{{ procurementDateLabel(procurement) }} · {{ procurement.supplier_name || 'Без поставщика' }}</span>
-                      <span class="analytics-meta">{{ procurementStatusLabel(procurement.status) }} · {{ procurement.quantity_sold }} прод. · {{ procurement.remaining_quantity }} ост.</span>
+                      <span class="analytics-meta">{{ procurementDateLabel(procurement) }} · {{ procurement.supplier_name || t('procurements.supplierMissing') }}</span>
+                      <span class="analytics-meta">{{ procurementStatusLabel(procurement.status) }} · {{ t('reports.soldShortCount', { count: procurement.quantity_sold }) }} · {{ t('reports.remainingShortCount', { count: procurement.remaining_quantity }) }}</span>
                     </div>
                     <div class="analytics-side">
                       <strong class="analytics-amount tabular-nums">{{ formatRowReportPrice(procurement, 'gross_profit', procurement.gross_profit) }}</strong>
                       <span class="analytics-side-meta">
-                        <span class="analytics-trend">Прогноз {{ formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}</span>
+                        <span class="analytics-trend">{{ t('reports.forecastLine', { amount: formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }) }}</span>
                         <ChevronDown
                           :size="16"
                           :stroke-width="1.8"
@@ -1287,17 +1294,17 @@ function openProcurementAudit(procurementId: number): void {
                   <div v-if="expandedProcurementId === procurement.procurement_id" class="analytics-details">
                     <span class="detail-chip">{{ procurementTypeLabel(procurement.procurement_type) }}</span>
                     <span class="detail-chip">{{ procurementStatusLabel(procurement.status) }}</span>
-                    <span class="detail-chip">Выручка {{ formatRowReportPrice(procurement, 'revenue', procurement.revenue) }}</span>
-                    <span class="detail-chip">Себестоимость {{ formatRowReportPrice(procurement, 'cogs', procurement.cogs) }}</span>
-                    <span class="detail-chip">Факт {{ formatRowReportPrice(procurement, 'gross_profit', procurement.gross_profit) }}</span>
-                    <span class="detail-chip">Инвестор {{ formatRowReportPrice(procurement, 'investor_profit', procurement.investor_profit) }}</span>
-                    <span class="detail-chip">Бизнес {{ formatRowReportPrice(procurement, 'business_profit', procurement.business_profit) }}</span>
-                    <span class="detail-chip">Остаток {{ formatRowReportPrice(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }}</span>
-                    <span class="detail-chip">Прогноз {{ formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }}</span>
-                    <span class="detail-chip">Инв. прогноз {{ formatRowReportPrice(procurement, 'projected_investor_profit', procurement.projected_investor_profit) }}</span>
-                    <span class="detail-chip">Бизн. прогноз {{ formatRowReportPrice(procurement, 'projected_business_profit', procurement.projected_business_profit) }}</span>
+                    <span class="detail-chip">{{ t('reports.revenueLine', { amount: formatRowReportPrice(procurement, 'revenue', procurement.revenue) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.cogsLine', { amount: formatRowReportPrice(procurement, 'cogs', procurement.cogs) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.actualLine', { amount: formatRowReportPrice(procurement, 'gross_profit', procurement.gross_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.investorLine', { amount: formatRowReportPrice(procurement, 'investor_profit', procurement.investor_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.businessLine', { amount: formatRowReportPrice(procurement, 'business_profit', procurement.business_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.remainingAmountLine', { amount: formatRowReportPrice(procurement, 'remaining_landed_cost', procurement.remaining_landed_cost) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.forecastLine', { amount: formatRowReportPrice(procurement, 'projected_gross_profit', procurement.projected_gross_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.investorForecastLine', { amount: formatRowReportPrice(procurement, 'projected_investor_profit', procurement.projected_investor_profit) }) }}</span>
+                    <span class="detail-chip">{{ t('reports.businessForecastLine', { amount: formatRowReportPrice(procurement, 'projected_business_profit', procurement.projected_business_profit) }) }}</span>
                     <button type="button" class="detail-chip detail-chip--action" @click.stop="openProcurementAudit(procurement.procurement_id)">
-                      Аудит закупки
+                      {{ t('reports.procurementAudit') }}
                     </button>
                   </div>
                 </article>
@@ -1326,20 +1333,20 @@ function openProcurementAudit(procurementId: number): void {
                 analyticsView === 'sales'
                   ? (
                     salesExpanded
-                      ? 'Свернуть продажи'
-                      : `Показать ещё ${salesProfitabilitySorted.length - visibleSalesProfitability.length} продаж`
+                      ? t('reports.collapseSales')
+                      : t('reports.showMoreSales', { count: salesProfitabilitySorted.length - visibleSalesProfitability.length })
                   )
                   : (
                     analyticsView === 'products'
                       ? (
                         productsExpanded
-                          ? 'Свернуть товары'
-                          : `Показать ещё ${productProfitabilitySorted.length - visibleProductProfitability.length} товаров`
+                          ? t('reports.collapseProducts')
+                          : t('reports.showMoreProducts', { count: productProfitabilitySorted.length - visibleProductProfitability.length })
                       )
                       : (
                         procurementsExpanded
-                          ? 'Свернуть закупки'
-                          : `Показать ещё ${procurementProfitabilitySorted.length - visibleProcurementProfitability.length} закупок`
+                          ? t('reports.collapseProcurements')
+                          : t('reports.showMoreProcurements', { count: procurementProfitabilitySorted.length - visibleProcurementProfitability.length })
                       )
                   )
               }}
@@ -1348,10 +1355,10 @@ function openProcurementAudit(procurementId: number): void {
 
           <p v-else class="workspace-note">
             {{ analyticsView === 'sales'
-              ? 'За выбранный период завершённых продаж нет.'
+              ? t('reports.noSalesForPeriod')
               : analyticsView === 'products'
-                ? 'Пока нет данных по товарам.'
-                : 'Пока нет данных по закупкам.'
+                ? t('reports.noProductData')
+                : t('reports.noProcurementData')
             }}
           </p>
         </section>

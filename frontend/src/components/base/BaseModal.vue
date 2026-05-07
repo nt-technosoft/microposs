@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { watch, onBeforeUnmount, ref, nextTick } from 'vue'
 import { X } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 
 let activeBodyLocks = 0
 
@@ -21,6 +22,7 @@ const emit = defineEmits<{
 const modalRef = ref<HTMLElement | null>(null)
 const firstFocusable = ref<HTMLElement | null>(null)
 const lastFocusable = ref<HTMLElement | null>(null)
+const { t } = useI18n()
 let bodyLockedByThisModal = false
 
 const focusableSelectors = [
@@ -121,7 +123,7 @@ onBeforeUnmount(() => {
             <h2 class="modal-title">{{ title }}</h2>
             <button
               class="modal-close"
-              aria-label="Закрыть"
+              :aria-label="t('common.close')"
               @click="emit('close')"
             >
               <X :size="20" :stroke-width="1.75" />

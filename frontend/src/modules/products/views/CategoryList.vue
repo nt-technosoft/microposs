@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Plus, FolderTree, AlertCircle, Pencil } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import api from '@/api/client'
@@ -25,6 +26,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
+import { intlLocale } from '@/i18n/format'
 
 type CategoryRecord = Category & {
   parent?: number | null
@@ -51,6 +53,7 @@ interface TemplateCharacteristicRow {
 
 const router = useRouter()
 const toast = useToast()
+const { t, locale } = useI18n()
 
 const categories = ref<CategoryRecord[]>([])
 const attributes = ref<Attribute[]>([])
@@ -70,21 +73,21 @@ const templateAttributes = ref<TemplateAttributeRow[]>([])
 const templateCharacteristics = ref<TemplateCharacteristicRow[]>([])
 let rowKey = 1
 
-const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
-  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
-  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать' },
-  { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
-]
+const pricingModeOptions = computed<Array<{ value: PricingMode; label: string }>>(() => [
+  { value: PricingMode.DEFAULT_EDITABLE, label: t('products.pricingDefaultEditable') },
+  { value: PricingMode.ASK_EACH_SALE, label: t('products.pricingAskEachSale') },
+  { value: PricingMode.FIXED_LOCKED, label: t('products.pricingFixed') },
+])
 
-const applyModeOptions = [
-  { value: false, label: 'Только новые товары' },
-  { value: true, label: 'Применить ко всем товарам категории' },
-]
+const applyModeOptions = computed(() => [
+  { value: false, label: t('products.onlyNewProducts') },
+  { value: true, label: t('products.applyAllCategoryProducts') },
+])
 
-const boolOptions = [
-  { value: true, label: 'Да' },
-  { value: false, label: 'Нет' },
-]
+const boolOptions = computed(() => [
+  { value: true, label: t('common.yes') },
+  { value: false, label: t('common.no') },
+])
 
 function getParentId(category: CategoryRecord): number | null {
   if (typeof category.parent === 'number') return category.parent
@@ -103,7 +106,7 @@ const orderedCategories = computed<CategoryNode[]>(() => {
   }
 
   for (const group of byParent.values()) {
-    group.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+    group.sort((a, b) => a.name.localeCompare(b.name, intlLocale(locale.value)))
   }
 
   const result: CategoryNode[] = []
@@ -121,7 +124,7 @@ const orderedCategories = computed<CategoryNode[]>(() => {
 })
 
 const parentSelectOptions = computed(() => ([
-  { value: null, label: 'Без родителя' },
+  { value: null, label: t('products.noParentCategory') },
   ...categories.value.map((category) => ({
     value: category.id,
     label: category.name,
@@ -142,7 +145,7 @@ async function loadCategories(): Promise<void> {
     const data = await fetchCategories()
     categories.value = data as CategoryRecord[]
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить категории'
+    errorMessage.value = error instanceof Error ? error.message : t('products.loadCategoriesFailed')
   } finally {
     isLoading.value = false
   }
@@ -200,6 +203,12 @@ function removeTemplateCharacteristic(key: number): void {
   templateCharacteristics.value = templateCharacteristics.value.filter((row) => row.key !== key)
 }
 
+function pricingModeLabel(mode: PricingMode | string): string {
+  if (mode === PricingMode.FIXED_LOCKED) return t('products.pricingFixed')
+  if (mode === PricingMode.ASK_EACH_SALE) return t('products.pricingAskEachSale')
+  return t('products.pricingDefaultEditable')
+}
+
 function openCreateSheet(): void {
   resetForm()
   formSheetOpen.value = true
@@ -234,14 +243,14 @@ async function openEditSheet(categoryId: number): Promise<void> {
       sort_order: item.sort_order ?? 0,
     }))
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось открыть категорию')
+    toast.error(error instanceof Error ? error.message : t('products.openCategoryFailed'))
     formSheetOpen.value = false
   }
 }
 
 async function saveCategory(): Promise<void> {
   if (!formName.value.trim()) {
-    toast.error('Укажите название категории')
+    toast.error(t('products.categoryNameRequired'))
     return
   }
 
@@ -285,11 +294,11 @@ async function saveCategory(): Promise<void> {
       apply_characteristics: applyCharacteristics.value,
     })
 
-    toast.success(editingCategoryId.value ? 'Категория обновлена' : 'Категория создана')
+    toast.success(editingCategoryId.value ? t('products.categoryUpdated') : t('products.categoryCreated'))
     formSheetOpen.value = false
     await loadCategories()
   } catch (error: unknown) {
-    toast.error(error instanceof Error ? error.message : 'Не удалось сохранить категорию')
+    toast.error(error instanceof Error ? error.message : t('products.categorySaveFailed'))
   } finally {
     isSaving.value = false
   }
@@ -303,11 +312,11 @@ onMounted(async () => {
 <template>
   <div class="categories-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Категории</h1>
-      <button class="add-btn" type="button" aria-label="Добавить категорию" @click="openCreateSheet">
+      <h1 class="page-title">{{ t('products.categories') }}</h1>
+      <button class="add-btn" type="button" :aria-label="t('products.addCategory')" @click="openCreateSheet">
         <Plus :size="18" :stroke-width="2" />
       </button>
     </header>
@@ -322,14 +331,14 @@ onMounted(async () => {
       <div v-else-if="errorMessage" class="error-banner" role="alert">
         <AlertCircle :size="16" :stroke-width="1.75" />
         <span>{{ errorMessage }}</span>
-        <button class="retry-btn" type="button" @click="loadCategories">Повторить</button>
+        <button class="retry-btn" type="button" @click="loadCategories">{{ t('common.retry') }}</button>
       </div>
 
       <AppEmptyState
         v-else-if="orderedCategories.length === 0"
-        title="Категорий пока нет"
-        description="Создайте первую категорию для каталога"
-        action-label="Создать категорию"
+        :title="t('products.noCategories')"
+        :description="t('products.noCategoriesDescription')"
+        :action-label="t('products.createCategory')"
         @action="openCreateSheet"
       >
         <template #illustration>
@@ -351,7 +360,7 @@ onMounted(async () => {
             <div class="category-info">
               <span class="category-name">{{ node.item.name }}</span>
               <span class="category-meta">
-                {{ node.item.products_count ?? 0 }} товаров · {{ node.item.default_pricing_mode }}
+                {{ t('products.productsCount', { count: node.item.products_count ?? 0 }) }} · {{ pricingModeLabel(node.item.default_pricing_mode) }}
               </span>
             </div>
             <Pencil :size="16" :stroke-width="2" class="edit-icon" />
@@ -360,89 +369,89 @@ onMounted(async () => {
       </div>
     </main>
 
-    <button class="fab" type="button" aria-label="Добавить категорию" @click="openCreateSheet">
+    <button class="fab" type="button" :aria-label="t('products.addCategory')" @click="openCreateSheet">
       <Plus :size="24" :stroke-width="2.2" />
     </button>
 
     <AppBottomSheet
       :open="formSheetOpen"
-      :title="editingCategoryId ? 'Редактирование категории' : 'Новая категория'"
+      :title="editingCategoryId ? t('products.editCategory') : t('products.newCategory')"
       @close="formSheetOpen = false"
     >
       <form class="create-form" @submit.prevent="saveCategory">
-        <BaseInput v-model="formName" label="Название *" placeholder="Например: Обувь" />
+        <BaseInput v-model="formName" :label="`${t('products.categoryName')} *`" :placeholder="t('products.categoryNamePlaceholder')" />
 
-        <label class="field-label">Родительская категория</label>
+        <label class="field-label">{{ t('products.parentCategory') }}</label>
         <BaseSelect
           v-model="formParent"
           :options="parentSelectOptions"
-          title="Родительская категория"
-          placeholder="Без родителя"
+          :title="t('products.parentCategory')"
+          :placeholder="t('products.noParentCategory')"
         />
 
-        <label class="field-label">Ценовой режим категории</label>
+        <label class="field-label">{{ t('products.categoryPricingMode') }}</label>
         <BaseSelect
           v-model="formPricingMode"
           :options="pricingModeOptions"
-          title="Ценовой режим"
-          placeholder="Выберите режим"
+          :title="t('products.pricingModeTitle')"
+          :placeholder="t('products.chooseMode')"
         />
 
         <div class="template-block">
           <div class="template-header">
-            <span class="field-label">Шаблонные атрибуты</span>
-            <button class="tiny-action" type="button" @click="addTemplateAttribute">+ Атрибут</button>
+            <span class="field-label">{{ t('products.templateAttributes') }}</span>
+            <button class="tiny-action" type="button" @click="addTemplateAttribute">+ {{ t('products.addAttribute') }}</button>
           </div>
-          <div v-if="templateAttributes.length === 0" class="template-empty">Атрибуты не заданы</div>
+          <div v-if="templateAttributes.length === 0" class="template-empty">{{ t('products.noTemplateAttributes') }}</div>
           <div v-for="row in templateAttributes" :key="row.key" class="template-row">
             <BaseSelect
               v-model="row.attribute"
               :options="attributeOptions"
-              title="Атрибут"
-              placeholder="Выберите атрибут"
+              :title="t('products.attribute')"
+              :placeholder="t('products.chooseAttribute')"
             />
             <BaseSelect
               v-model="row.is_variant_generating"
               :options="boolOptions"
-              title="Генерировать SKU"
-              placeholder="Генерировать SKU"
+              :title="t('products.generateSku')"
+              :placeholder="t('products.generateSku')"
             />
-            <button class="tiny-remove" type="button" @click="removeTemplateAttribute(row.key)">Удалить</button>
+            <button class="tiny-remove" type="button" @click="removeTemplateAttribute(row.key)">{{ t('products.removeRow') }}</button>
           </div>
         </div>
 
         <div class="template-block">
           <div class="template-header">
-            <span class="field-label">Шаблонные характеристики</span>
-            <button class="tiny-action" type="button" @click="addTemplateCharacteristic">+ Характеристика</button>
+            <span class="field-label">{{ t('products.templateCharacteristics') }}</span>
+            <button class="tiny-action" type="button" @click="addTemplateCharacteristic">+ {{ t('products.addCharacteristic') }}</button>
           </div>
-          <div v-if="templateCharacteristics.length === 0" class="template-empty">Характеристики не заданы</div>
+          <div v-if="templateCharacteristics.length === 0" class="template-empty">{{ t('products.noTemplateCharacteristics') }}</div>
           <div v-for="row in templateCharacteristics" :key="row.key" class="template-row">
-            <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
-            <BaseInput v-model="row.default_value" label="Значение" placeholder="Кожа" />
-            <button class="tiny-remove" type="button" @click="removeTemplateCharacteristic(row.key)">Удалить</button>
+            <BaseInput v-model="row.name" :label="t('products.categoryName')" :placeholder="t('products.materialPlaceholder')" />
+            <BaseInput v-model="row.default_value" :label="t('products.value')" :placeholder="t('products.leatherPlaceholder')" />
+            <button class="tiny-remove" type="button" @click="removeTemplateCharacteristic(row.key)">{{ t('products.removeRow') }}</button>
           </div>
         </div>
 
-        <label class="field-label">Применение изменений</label>
+        <label class="field-label">{{ t('products.applyChanges') }}</label>
         <BaseSelect
           v-model="applyToExisting"
           :options="applyModeOptions"
-          title="Применение изменений"
-          placeholder="Выберите режим"
+          :title="t('products.applyChanges')"
+          :placeholder="t('products.chooseMode')"
         />
         <div v-if="applyToExisting" class="apply-block">
           <BaseSelect
             v-model="applyPricingMode"
             :options="boolOptions"
-            title="Применить pricing mode"
-            placeholder="Применить pricing mode"
+            :title="t('products.applyPricingMode')"
+            :placeholder="t('products.applyPricingMode')"
           />
           <BaseSelect
             v-model="applyCharacteristics"
             :options="boolOptions"
-            title="Применить характеристики"
-            placeholder="Применить характеристики"
+            :title="t('products.applyCharacteristics')"
+            :placeholder="t('products.applyCharacteristics')"
           />
         </div>
 
@@ -454,7 +463,7 @@ onMounted(async () => {
           :loading="isSaving"
           :disabled="isSaving || !formName.trim()"
         >
-          {{ editingCategoryId ? 'Сохранить' : 'Создать категорию' }}
+          {{ editingCategoryId ? t('common.save') : t('products.createCategory') }}
         </BaseButton>
       </form>
     </AppBottomSheet>

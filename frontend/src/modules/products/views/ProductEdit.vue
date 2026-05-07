@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Plus, X, Upload, Image as ImageIcon } from 'lucide-vue-next'
 import api from '@/api/client'
 import {
@@ -26,6 +27,7 @@ interface CharacteristicRow {
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const product = ref<Product | null>(null)
 const categories = ref<Category[]>([])
@@ -44,14 +46,14 @@ const photoPreview = ref<string | null>(null)
 const photoFile = ref<File | null>(null)
 let rowKey = 1
 
-const pricingModeOptions: Array<{ value: PricingMode; label: string }> = [
-  { value: PricingMode.FIXED_LOCKED, label: 'Фиксированная' },
-  { value: PricingMode.DEFAULT_EDITABLE, label: 'По умолчанию, можно менять' },
-  { value: PricingMode.ASK_EACH_SALE, label: 'Всегда спрашивать на продаже' },
-]
+const pricingModeOptions = computed<Array<{ value: PricingMode; label: string }>>(() => [
+  { value: PricingMode.FIXED_LOCKED, label: t('products.pricingFixed') },
+  { value: PricingMode.DEFAULT_EDITABLE, label: t('products.pricingDefaultEditable') },
+  { value: PricingMode.ASK_EACH_SALE, label: t('products.pricingAskEachSaleLong') },
+])
 
 const categoryOptions = computed(() => ([
-  { value: null, label: 'Без категории' },
+  { value: null, label: t('products.noCategory') },
   ...categories.value.map((category) => ({
     value: category.id,
     label: category.name,
@@ -101,16 +103,16 @@ async function removePhoto(): Promise<void> {
     await deleteProductPhoto(id)
     photoFile.value = null
     photoPreview.value = null
-    toast.success('Фото удалено')
+    toast.success(t('products.photoDeleted'))
   } catch {
-    toast.error('Не удалось удалить фото')
+    toast.error(t('products.photoDeleteFailed'))
   }
 }
 
 async function loadData(): Promise<void> {
   const id = Number(route.params.id)
   if (!Number.isFinite(id)) {
-    errorMessage.value = 'Некорректный ID товара'
+    errorMessage.value = t('products.invalidProductId')
     isLoading.value = false
     return
   }
@@ -142,7 +144,7 @@ async function loadData(): Promise<void> {
       addCharacteristic()
     }
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить товар'
+    errorMessage.value = error instanceof Error ? error.message : t('products.productLoadFailed')
   } finally {
     isLoading.value = false
   }
@@ -150,13 +152,13 @@ async function loadData(): Promise<void> {
 
 function validate(): boolean {
   if (!name.value.trim()) {
-    errorMessage.value = 'Введите название товара'
+    errorMessage.value = t('products.nameRequired')
     return false
   }
   if (showBasePrice.value) {
     const parsed = Number.parseFloat(basePrice.value)
     if (!Number.isFinite(parsed) || parsed < 0) {
-      errorMessage.value = 'Проверьте базовую цену'
+      errorMessage.value = t('products.priceInvalid')
       return false
     }
   }
@@ -191,10 +193,10 @@ async function saveProduct(): Promise<void> {
       await uploadProductPhoto(id, photoFile.value)
     }
 
-    toast.success('Товар сохранён')
+    toast.success(t('products.saveSuccess'))
     router.push({ name: 'products' })
   } catch (error: unknown) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось сохранить товар'
+    errorMessage.value = error instanceof Error ? error.message : t('products.saveFailed')
   } finally {
     isSaving.value = false
   }
@@ -215,10 +217,10 @@ onMounted(loadData)
 <template>
   <div class="edit-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Редактирование товара</h1>
+      <h1 class="page-title">{{ t('products.editTitle') }}</h1>
       <div class="header-spacer" />
     </header>
 
@@ -233,80 +235,80 @@ onMounted(loadData)
         <span>{{ errorMessage }}</span>
       </div>
 
-      <BaseInput v-model="name" label="Название товара *" placeholder="Введите название" />
+      <BaseInput v-model="name" :label="`${t('products.nameLabel')} *`" :placeholder="t('products.namePlaceholder')" />
 
       <div class="field-group">
-        <label class="input-label">Описание</label>
+        <label class="input-label">{{ t('products.description') }}</label>
         <textarea
           v-model="description"
           class="textarea-field"
           rows="3"
-          placeholder="Описание товара"
+          :placeholder="t('products.descriptionPlaceholder')"
         />
       </div>
 
       <div class="field-group">
-        <label class="input-label">Категория</label>
+        <label class="input-label">{{ t('products.categoryFilter') }}</label>
         <BaseSelect
           v-model="selectedCategory"
           :options="categoryOptions"
-          title="Выбор категории"
-          placeholder="Без категории"
+          :title="t('products.chooseCategory')"
+          :placeholder="t('products.noCategory')"
         />
       </div>
 
       <div class="field-group">
-        <label class="input-label">Тип цены</label>
+        <label class="input-label">{{ t('products.priceType') }}</label>
         <BaseSelect
           v-model="pricingMode"
           :options="pricingModeOptions"
-          title="Выбор типа цены"
-          placeholder="Тип цены"
+          :title="t('products.choosePriceType')"
+          :placeholder="t('products.priceType')"
         />
       </div>
 
       <BaseInput
         v-if="showBasePrice"
         v-model="basePrice"
-        label="Базовая цена"
+        :label="t('products.basePrice')"
         type="number"
         placeholder="0"
       />
 
       <div class="photo-block">
-        <label class="input-label">Фото товара</label>
+        <label class="input-label">{{ t('products.productPhoto') }}</label>
         <div class="photo-preview">
-          <img v-if="photoPreview" :src="photoPreview" alt="Фото товара">
+          <img v-if="photoPreview" :src="photoPreview" :alt="t('products.productPhoto')">
           <ImageIcon v-else :size="32" :stroke-width="1.5" />
         </div>
         <label class="photo-upload">
           <Upload :size="16" :stroke-width="2" />
-          <span>Загрузить новое фото</span>
+          <span>{{ t('products.uploadNewPhoto') }}</span>
           <input type="file" accept="image/*" class="hidden-file" @change="onPhotoChange">
         </label>
         <button v-if="photoPreview" type="button" class="remove-photo" @click="removePhoto">
-          Удалить фото
+          {{ t('products.deletePhoto') }}
         </button>
       </div>
 
       <div class="section-title-row">
-        <span class="input-label">Характеристики</span>
+        <span class="input-label">{{ t('products.templateCharacteristics') }}</span>
         <button type="button" class="tiny-btn" @click="addCharacteristic()">
           <Plus :size="14" :stroke-width="2" />
-          Добавить
+          {{ t('common.add') }}
         </button>
       </div>
 
       <div v-for="row in characteristics" :key="row.key" class="characteristic-row">
-        <BaseInput v-model="row.name" label="Название" placeholder="Материал" />
-        <BaseInput v-model="row.value" label="Значение" placeholder="Кожа" />
+        <BaseInput v-model="row.name" :label="t('products.characteristicName')" :placeholder="t('products.materialPlaceholder')" />
+        <BaseInput v-model="row.value" :label="t('products.characteristicValue')" :placeholder="t('products.leatherPlaceholder')" />
         <button type="button" class="tiny-remove" @click="removeCharacteristic(row.key)">
           <X :size="14" :stroke-width="2" />
         </button>
       </div>
 
       <label class="toggle-row">
-        <span class="toggle-label">Товар активен</span>
+        <span class="toggle-label">{{ t('products.productActive') }}</span>
         <input v-model="isActive" class="toggle-input" type="checkbox">
       </label>
 
@@ -318,7 +320,7 @@ onMounted(loadData)
         :loading="isSaving"
         :disabled="isSaving"
       >
-        Сохранить
+        {{ t('common.save') }}
       </BaseButton>
     </form>
   </div>

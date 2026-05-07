@@ -3,6 +3,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { translateNow } from '@/i18n'
 import type { Customer } from '../types/models'
 import type {
   DebtSummaryItem,
@@ -67,7 +68,7 @@ export const useCustomersStore = defineStore('customers', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось загрузить список покупателей'
+          : translateNow('customers.loadFailed')
       } finally {
         this.isLoading = false
       }
@@ -83,7 +84,7 @@ export const useCustomersStore = defineStore('customers', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось загрузить сводку долгов'
+          : translateNow('customers.debtSummaryFailed')
       } finally {
         this.isLoading = false
       }
@@ -100,7 +101,7 @@ export const useCustomersStore = defineStore('customers', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось создать покупателя'
+          : translateNow('customers.createFailed')
         throw error
       } finally {
         this.isLoading = false
@@ -142,7 +143,7 @@ export const useCustomersStore = defineStore('customers', {
       } catch (error: unknown) {
         this.error = error instanceof Error
           ? error.message
-          : 'Не удалось зафиксировать оплату'
+          : translateNow('customers.paymentFailed')
         throw error
       } finally {
         this.isLoading = false

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { SlidersHorizontal, RotateCcw } from 'lucide-vue-next'
 import { useSalesStore } from '@/stores/sales'
 import { useSessionStore } from '@/stores/session'
@@ -10,6 +11,7 @@ import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { PaymentMethod, SaleStatus } from '@/types/enums'
 import type { Sale, SaleLine, SalePayment } from '@/types/models'
 import { fetchReturnPreview, type ReturnReason, type ReturnResolution, type SaleReturnPreview } from '@/api/sales'
+import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 
 // ── Stores & composables ────────────────────────────────────────────────────
@@ -19,6 +21,7 @@ const sessionStore = useSessionStore()
 const authStore = useAuthStore()
 const toast = useToast()
 const router = useRouter()
+const { t, locale } = useI18n()
 
 // ── Filter state ────────────────────────────────────────────────────────────
 
@@ -29,14 +32,14 @@ interface FilterChip {
   label: string
 }
 
-const FILTER_CHIPS: FilterChip[] = [
-  { value: 'all', label: 'Все' },
-  { value: PaymentMethod.CASH, label: 'Наличные' },
-  { value: PaymentMethod.CARD, label: 'Карта' },
-  { value: PaymentMethod.TRANSFER, label: 'Перевод' },
-  { value: PaymentMethod.CREDIT, label: 'В долг' },
-  { value: 'mixed', label: 'Смешанные' },
-]
+const FILTER_CHIPS = computed<FilterChip[]>(() => [
+  { value: 'all', label: t('common.all') },
+  { value: PaymentMethod.CASH, label: t('domain.paymentMethod.CASH') },
+  { value: PaymentMethod.CARD, label: t('domain.paymentMethod.CARD') },
+  { value: PaymentMethod.TRANSFER, label: t('domain.paymentMethod.TRANSFER') },
+  { value: PaymentMethod.CREDIT, label: t('domain.paymentMethod.CREDIT') },
+  { value: 'mixed', label: t('sales.mixedPayments') },
+])
 
 const activeFilter = ref<FilterOption>('all')
 
@@ -165,10 +168,10 @@ function formatDateKey(dateStr: string): string {
   const yesterday = new Date()
   yesterday.setDate(today.getDate() - 1)
 
-  if (isSameDay(date, today)) return 'Сегодня'
-  if (isSameDay(date, yesterday)) return 'Вчера'
+  if (isSameDay(date, today)) return t('sales.today')
+  if (isSameDay(date, yesterday)) return t('sales.yesterday')
 
-  return date.toLocaleDateString('ru-RU', {
+  return date.toLocaleDateString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'long',
     year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined,
@@ -186,14 +189,14 @@ function isSameDay(a: Date, b: Date): boolean {
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
 function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString('ru-RU', {
+  return new Date(dateStr).toLocaleTimeString(intlLocale(locale.value), {
     hour: '2-digit',
     minute: '2-digit',
   })
 }
 
 function formatDateTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleString('ru-RU', {
+  return new Date(dateStr).toLocaleString(intlLocale(locale.value), {
     day: 'numeric',
     month: 'long',
     hour: '2-digit',
@@ -207,36 +210,32 @@ function itemsLabel(sale: Sale): string {
   const countFromList = (sale as Sale & { lines_count?: number }).lines_count ?? 0
   const count = hasLines ? countFromLines : countFromList
 
-  const mod10 = count % 10
-  const mod100 = count % 100
-  if (mod10 === 1 && mod100 !== 11) return `${count} товар`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return `${count} товара`
-  return `${count} товаров`
+  return t('sales.itemCount', { count })
 }
 
 function paymentLabel(method: PaymentMethod | string | undefined): string {
   const normalized = normalizePaymentMethod(method)
   const map: Record<string, string> = {
-    [PaymentMethod.CASH]: 'Наличные',
-    [PaymentMethod.CARD]: 'Карта',
-    [PaymentMethod.TRANSFER]: 'Перевод',
-    [PaymentMethod.CREDIT]: 'В долг',
-    [PaymentMethod.CASH_LEGACY]: 'Наличные',
-    [PaymentMethod.CARD_LEGACY]: 'Карта',
-    [PaymentMethod.CREDIT_LEGACY]: 'В долг',
+    [PaymentMethod.CASH]: t('domain.paymentMethod.CASH'),
+    [PaymentMethod.CARD]: t('domain.paymentMethod.CARD'),
+    [PaymentMethod.TRANSFER]: t('domain.paymentMethod.TRANSFER'),
+    [PaymentMethod.CREDIT]: t('domain.paymentMethod.CREDIT'),
+    [PaymentMethod.CASH_LEGACY]: t('domain.paymentMethod.CASH'),
+    [PaymentMethod.CARD_LEGACY]: t('domain.paymentMethod.CARD'),
+    [PaymentMethod.CREDIT_LEGACY]: t('domain.paymentMethod.CREDIT'),
   }
-  if (!normalized) return 'Не указано'
+  if (!normalized) return t('common.notSpecified')
   return map[normalized] ?? normalized
 }
 
 function paymentMethodsLabel(methods: string[]): string {
-  if (!methods.length) return 'Не указано'
+  if (!methods.length) return t('common.notSpecified')
   return methods.map((method) => paymentLabel(method)).join(' + ')
 }
 
 function paymentBadgeLabel(sale: Sale): string {
   const methods = salePaymentMethods(sale)
-  if (methods.length > 1) return 'Смешанная'
+  if (methods.length > 1) return t('sales.mixedPayments')
   return paymentLabel(methods[0])
 }
 
@@ -266,7 +265,7 @@ function paymentAmountTrace(payment: SalePayment): string {
 
   const fxRate = Number.parseFloat(payment.fx_rate || '')
   if (Number.isFinite(fxRate) && fxRate > 0) {
-    return `${amount} • курс ${fxRate.toFixed(2)}`
+    return `${amount} • ${t('finance.rate')} ${fxRate.toFixed(2)}`
   }
   return amount
 }
@@ -302,15 +301,15 @@ function lineDisplayName(line: SaleLine): string {
     }
 
     if ('id' in variant && variant.id) {
-      return `Вариант #${variant.id}`
+      return t('products.variantFallback', { id: variant.id })
     }
   }
 
   if (typeof variant === 'number') {
-    return `Вариант #${variant}`
+    return t('products.variantFallback', { id: variant })
   }
 
-  return `Позиция #${line.id}`
+  return t('products.positionFallback', { id: line.id })
 }
 
 function operationTrace(sale: Sale): string {
@@ -326,7 +325,7 @@ function operationTrace(sale: Sale): string {
   const opStr = formatPrice(opAmount, currency)
   const fnStr = Number.isFinite(functional) ? formatPrice(functional) : ''
   if (Number.isFinite(fxRate) && fnStr) {
-    return `${opStr} • курс ${fxRate.toFixed(2)} • ${fnStr}`
+    return `${opStr} • ${t('finance.rate')} ${fxRate.toFixed(2)} • ${fnStr}`
   }
   return fnStr ? `${opStr} • ${fnStr}` : opStr
 }
@@ -342,7 +341,7 @@ function toNumber(value: string | number | null | undefined): number {
 
 function formatPercent(value: string | number | null | undefined): string {
   const amount = toNumber(value)
-  return `${amount.toLocaleString('ru-RU', {
+  return `${amount.toLocaleString(intlLocale(locale.value), {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })}%`
@@ -402,9 +401,9 @@ function saleMarginPercent(sale: Sale): string {
 
 function sessionMetaLabel(): string {
   if (!activeSession.value) {
-    return 'Открытая смена не найдена, поэтому ниже показаны все продажи.'
+    return t('sales.noOpenShiftHistory')
   }
-  return `${sessionStore.location?.name || 'Точка продаж'} • ${formatDateTime(activeSession.value.opened_at)}`
+  return `${sessionStore.location?.name || t('sales.salesPoint')} • ${formatDateTime(activeSession.value.opened_at)}`
 }
 
 // ── Sale detail ─────────────────────────────────────────────────────────────
@@ -420,7 +419,7 @@ async function openDetail(sale: Sale): Promise<void> {
       await salesStore.fetchSale(sale.id)
       selectedSale.value = salesStore.currentSale
     } catch {
-      toast.error('Не удалось загрузить детали продажи')
+      toast.error(t('sales.saleDetailsFailed'))
     } finally {
       detailLoading.value = false
     }
@@ -475,7 +474,7 @@ async function refreshReturnPreview(): Promise<void> {
       lines: selectedReturnLines(),
     })
   } catch (error) {
-    returnError.value = error instanceof Error ? error.message : 'Не удалось рассчитать возврат'
+    returnError.value = error instanceof Error ? error.message : t('sales.returnPreviewFailed')
   } finally {
     returnLoading.value = false
   }
@@ -523,12 +522,12 @@ async function confirmReturn(): Promise<void> {
   if (!selectedSale.value || returnSubmitting.value) return
   const lines = selectedReturnLines()
   if (lines.length === 0) {
-    returnError.value = 'Выберите хотя бы одну позицию для возврата.'
+    returnError.value = t('sales.selectReturnLine')
     return
   }
   const refundPayment = preferredRefundPayment()
   if (selectedReturnAmountUzs() > 0 && Number(refundPayment.amount) <= 0) {
-    returnError.value = 'Не удалось рассчитать сумму возврата.'
+    returnError.value = t('sales.refundCalcFailed')
     return
   }
   returnSubmitting.value = true
@@ -541,10 +540,10 @@ async function confirmReturn(): Promise<void> {
       refund_payments: selectedReturnAmountUzs() > 0 ? [refundPayment] : [],
     })
     selectedSale.value = salesStore.currentSale
-    toast.success('Возврат оформлен')
+    toast.success(t('sales.returnDone'))
     closeReturnSheet()
   } catch (error) {
-    returnError.value = error instanceof Error ? error.message : 'Не удалось оформить возврат'
+    returnError.value = error instanceof Error ? error.message : t('sales.returnFailed')
   } finally {
     returnSubmitting.value = false
   }
@@ -562,14 +561,14 @@ function openExplanation(): void {
   <div class="history-page">
     <!-- ── Sticky header ─────────────────────────────────────── -->
     <header class="page-header">
-      <h1 class="page-title">История продаж</h1>
-      <button class="icon-btn" aria-label="Фильтры" disabled>
+      <h1 class="page-title">{{ t('sales.history') }}</h1>
+      <button class="icon-btn" :aria-label="t('sales.filterByPayment')" disabled>
         <SlidersHorizontal :size="20" :stroke-width="1.75" />
       </button>
     </header>
 
     <!-- ── Payment filter chips ──────────────────────────────── -->
-    <div class="filter-row" role="group" aria-label="Фильтр по способу оплаты">
+    <div class="filter-row" role="group" :aria-label="t('sales.filterByPayment')">
       <button
         v-for="chip in FILTER_CHIPS"
         :key="chip.value"
@@ -584,13 +583,13 @@ function openExplanation(): void {
     <section class="session-summary" :class="{ 'session-summary--inactive': !hasActiveSession }">
       <div class="session-summary__header">
         <div class="session-summary__title-wrap">
-          <p class="session-summary__eyebrow">Смена и оплаты</p>
+          <p class="session-summary__eyebrow">{{ t('sales.shiftAndPayments') }}</p>
           <h2 class="session-summary__title">
-            {{ hasActiveSession && activeSession ? `Смена #${activeSession.id}` : 'История без открытой смены' }}
+            {{ hasActiveSession && activeSession ? t('sales.shiftNumber', { id: activeSession.id }) : t('sales.historyWithoutOpenShift') }}
           </h2>
         </div>
         <span class="session-summary__badge" :class="{ 'session-summary__badge--open': hasActiveSession }">
-          {{ hasActiveSession ? 'Открыта' : 'Все продажи' }}
+          {{ hasActiveSession ? t('sales.openBadge') : t('sales.allSales') }}
         </span>
       </div>
 
@@ -598,25 +597,25 @@ function openExplanation(): void {
 
       <div v-if="hasActiveSession && activeSession" class="session-summary__grid">
         <div class="session-summary__metric">
-          <span class="session-summary__label">Старт</span>
+          <span class="session-summary__label">{{ t('sales.startCash') }}</span>
           <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.opening_cash) }}</strong>
         </div>
         <div class="session-summary__metric">
-          <span class="session-summary__label">Наличные продажи</span>
+          <span class="session-summary__label">{{ t('sales.cashSales') }}</span>
           <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.cash_sales_total || '0') }}</strong>
         </div>
         <div class="session-summary__metric">
-          <span class="session-summary__label">Ожидается в кассе</span>
+          <span class="session-summary__label">{{ t('sales.expectedCash') }}</span>
           <strong class="session-summary__value tabular-nums">{{ formatPrice(activeSession.expected_cash || activeSession.opening_cash) }}</strong>
         </div>
         <div class="session-summary__metric">
-          <span class="session-summary__label">Продаж</span>
+          <span class="session-summary__label">{{ t('sales.salesCount') }}</span>
           <strong class="session-summary__value tabular-nums">{{ activeSession.sales_count ?? 0 }}</strong>
         </div>
       </div>
 
       <p class="session-summary__hint">
-        Фильтры ниже учитывают и смешанные оплаты, а не только первый платёж продажи.
+        {{ t('sales.filterHint') }}
       </p>
     </section>
 
@@ -634,21 +633,21 @@ function openExplanation(): void {
       <!-- Error state -->
       <div v-else-if="salesStore.error && filteredSales.length === 0" class="state-box state-error">
         <RotateCcw :size="28" :stroke-width="1.5" class="state-icon" />
-        <p class="state-title">Ошибка загрузки</p>
+        <p class="state-title">{{ t('sales.loadingError') }}</p>
         <p class="state-body">{{ salesStore.error }}</p>
-        <button class="btn-retry" @click="loadSales(1)">Повторить</button>
+        <button class="btn-retry" @click="loadSales(1)">{{ t('common.retry') }}</button>
       </div>
 
       <!-- Empty state -->
       <div v-else-if="!salesStore.isLoading && filteredSales.length === 0" class="state-box">
-        <p class="state-title">Продаж нет</p>
+        <p class="state-title">{{ t('sales.noSales') }}</p>
         <p class="state-body">
           {{
             activeFilter === 'all'
               ? hasActiveSession
-                ? 'В этой сессии ещё нет продаж'
-                : 'Продаж пока нет'
-              : 'Нет продаж с выбранным способом оплаты'
+                ? t('sales.noSalesInSession')
+                : t('sales.noSalesYet')
+              : t('sales.noSalesForPayment')
           }}
         </p>
       </div>
@@ -662,7 +661,7 @@ function openExplanation(): void {
         >
           <div class="group-label">
             <span class="group-date">{{ group.label }}</span>
-            <span class="group-count">{{ group.count }} {{ group.count === 1 ? 'продажа' : group.count <= 4 ? 'продажи' : 'продаж' }}</span>
+            <span class="group-count">{{ t('sales.saleCount', { count: group.count }) }}</span>
           </div>
 
           <button
@@ -675,8 +674,8 @@ function openExplanation(): void {
               <div class="sale-id-row">
                 <span class="sale-id">#{{ sale.id }}</span>
                 <span class="sale-time">{{ formatTime(sale.created_at) }}</span>
-                <span v-if="isReturned(sale)" class="badge badge-return">Возврат</span>
-                <span v-else-if="isPartiallyReturned(sale)" class="badge badge-return">Частично</span>
+                <span v-if="isReturned(sale)" class="badge badge-return">{{ t('sales.returnedBadge') }}</span>
+                <span v-else-if="isPartiallyReturned(sale)" class="badge badge-return">{{ t('sales.partiallyReturnedBadge') }}</span>
               </div>
               <span class="sale-items">{{ itemsLabel(sale) }}</span>
             </div>
@@ -702,8 +701,8 @@ function openExplanation(): void {
           :disabled="salesStore.isLoading"
           @click="loadMore"
         >
-          <span v-if="salesStore.isLoading">Загрузка…</span>
-          <span v-else>Загрузить ещё</span>
+          <span v-if="salesStore.isLoading">{{ t('common.loadingMore') }}</span>
+          <span v-else>{{ t('common.loadMore') }}</span>
         </button>
       </template>
     </div>
@@ -711,7 +710,7 @@ function openExplanation(): void {
     <!-- ── Sale detail bottom sheet ──────────────────────────── -->
     <AppBottomSheet
       :open="detailOpen"
-      :title="selectedSale ? `Продажа #${selectedSale.id}` : ''"
+      :title="selectedSale ? t('sales.saleTitle', { id: selectedSale.id }) : ''"
       @close="closeDetail"
     >
       <template v-if="detailLoading">
@@ -737,10 +736,10 @@ function openExplanation(): void {
 
         <!-- Returned banner -->
         <div v-if="isReturned(selectedSale)" class="detail-return-banner">
-          Продажа возвращена
+          {{ t('sales.saleReturned') }}
         </div>
         <div v-else-if="isPartiallyReturned(selectedSale)" class="detail-return-banner">
-          По продаже уже был частичный возврат
+          {{ t('sales.salePartiallyReturned') }}
         </div>
 
         <!-- Line items -->
@@ -763,7 +762,7 @@ function openExplanation(): void {
 
         <!-- Total -->
         <div class="detail-total">
-          <span class="total-label">Итого</span>
+          <span class="total-label">{{ t('common.total') }}</span>
           <span class="total-amount tabular-nums">{{ formatPrice(selectedSale.total_amount) }}</span>
         </div>
         <p v-if="operationTrace(selectedSale)" class="detail-trace">
@@ -773,7 +772,7 @@ function openExplanation(): void {
         <section class="payment-card">
           <div class="payment-card__header">
             <div class="payment-card__heading">
-              <span class="payment-card__title">Оплата</span>
+              <span class="payment-card__title">{{ t('sales.payment') }}</span>
               <span class="payment-card__subtitle">{{ paymentSummaryLabel(selectedSale) }}</span>
             </div>
             <strong class="payment-card__total tabular-nums">{{ formatPrice(selectedSale.total_amount) }}</strong>
@@ -794,15 +793,15 @@ function openExplanation(): void {
           </div>
 
           <p v-else class="payment-card__empty">
-            Отдельная разбивка оплат для этой продажи не загружена.
+            {{ t('sales.paymentBreakdownMissing') }}
           </p>
         </section>
 
         <section class="profitability-card">
           <div class="profitability-header">
             <div class="profitability-heading">
-              <span class="profitability-title">Прибыльность продажи</span>
-              <span class="profitability-subtitle">Валовая прибыль</span>
+              <span class="profitability-title">{{ t('sales.saleProfitability') }}</span>
+              <span class="profitability-subtitle">{{ t('reports.grossProfit') }}</span>
             </div>
             <strong
               class="profitability-profit tabular-nums"
@@ -814,27 +813,27 @@ function openExplanation(): void {
 
           <div class="profitability-grid">
             <div class="profitability-metric">
-              <span class="metric-label">Выручка</span>
+              <span class="metric-label">{{ t('reports.revenue') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPrice(saleRevenue(selectedSale)) }}</strong>
             </div>
             <div class="profitability-metric">
-              <span class="metric-label">Закупочная себестоимость</span>
+              <span class="metric-label">{{ t('sales.purchaseCost') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPrice(salePurchaseCost(selectedSale)) }}</strong>
             </div>
             <div class="profitability-metric">
-              <span class="metric-label">Полная себестоимость</span>
+              <span class="metric-label">{{ t('sales.landedCost') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPrice(saleLandedCost(selectedSale)) }}</strong>
             </div>
             <div class="profitability-metric">
-              <span class="metric-label">Маржа %</span>
+              <span class="metric-label">{{ t('sales.marginPercent') }}</span>
               <strong class="metric-value tabular-nums">{{ saleMarginPercent(selectedSale) }}</strong>
             </div>
             <div class="profitability-metric">
-              <span class="metric-label">Инвесторы</span>
+              <span class="metric-label">{{ t('sales.investors') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPrice(saleInvestorProfit(selectedSale)) }}</strong>
             </div>
             <div class="profitability-metric">
-              <span class="metric-label">Бизнес</span>
+              <span class="metric-label">{{ t('sales.business') }}</span>
               <strong class="metric-value tabular-nums">{{ formatPrice(saleBusinessProfit(selectedSale)) }}</strong>
             </div>
           </div>
@@ -845,7 +844,7 @@ function openExplanation(): void {
           class="btn-explain"
           @click="openExplanation"
         >
-          Почему эта цифра такая
+          {{ t('sales.explainAmount') }}
         </button>
 
         <!-- Return button -->
@@ -854,14 +853,14 @@ function openExplanation(): void {
           :disabled="isReturned(selectedSale)"
           @click="openReturnSheet"
         >
-          Оформить возврат
+          {{ t('sales.returnSale') }}
         </button>
       </template>
     </AppBottomSheet>
 
     <AppBottomSheet
       :open="returnOpen"
-      title="Возврат продажи"
+      :title="t('sales.returnSaleTitle')"
       @close="closeReturnSheet"
     >
       <div class="return-sheet">
@@ -871,23 +870,23 @@ function openExplanation(): void {
             :class="{ active: returnResolution === 'RESTOCK' }"
             @click="updateReturnResolution('RESTOCK')"
           >
-            Вернуть на склад
+            {{ t('sales.returnToStock') }}
           </button>
           <button
             class="return-mode__option"
             :class="{ active: returnResolution === 'DISPOSE' }"
             @click="updateReturnResolution('DISPOSE')"
           >
-            Списать брак
+            {{ t('sales.disposeDefect') }}
           </button>
         </div>
 
         <label class="return-field">
-          <span>Причина</span>
+          <span>{{ t('common.reason') }}</span>
           <select v-model="returnReason" class="return-select">
-            <option value="CLIENT_REFUSE">Отказ клиента</option>
-            <option value="DEFECT">Брак</option>
-            <option value="OTHER">Другое</option>
+            <option value="CLIENT_REFUSE">{{ t('sales.clientRefuse') }}</option>
+            <option value="DEFECT">{{ t('sales.defect') }}</option>
+            <option value="OTHER">{{ t('sales.otherReason') }}</option>
           </select>
         </label>
 
@@ -900,7 +899,7 @@ function openExplanation(): void {
             <div class="return-line__main">
               <strong>{{ line.product_name }}</strong>
               <span>
-                Продано {{ line.sold_quantity }} · доступно {{ line.available_quantity }}
+                {{ t('sales.soldAvailable', { sold: line.sold_quantity, available: line.available_quantity }) }}
               </span>
             </div>
             <input
@@ -916,11 +915,11 @@ function openExplanation(): void {
 
         <div class="return-effect">
           <div>
-            <span>К возврату клиенту</span>
+            <span>{{ t('sales.refundToCustomer') }}</span>
             <strong>{{ formatPrice(returnPreview?.selected.refund_amount_uzs || 0) }}</strong>
           </div>
           <div>
-            <span>{{ returnResolution === 'RESTOCK' ? 'Вернётся в себестоимость' : 'Убыток списания' }}</span>
+            <span>{{ returnResolution === 'RESTOCK' ? t('sales.restockCogs') : t('sales.disposalLoss') }}</span>
             <strong>
               {{ formatPrice(returnResolution === 'RESTOCK'
                 ? (returnPreview?.selected.restock_cogs_uzs || 0)
@@ -928,18 +927,18 @@ function openExplanation(): void {
             </strong>
           </div>
           <div>
-            <span>Сторно прибыли</span>
+            <span>{{ t('sales.profitReversal') }}</span>
             <strong>{{ formatPrice(returnPreview?.selected.profit_reversal_uzs || 0) }}</strong>
           </div>
         </div>
 
         <label class="return-field">
-          <span>Как вернуть деньги</span>
+          <span>{{ t('sales.refundMethod') }}</span>
           <select v-model="returnRefundMethod" class="return-select">
-            <option :value="PaymentMethod.CASH">Наличные</option>
-            <option :value="PaymentMethod.CARD">Карта</option>
-            <option :value="PaymentMethod.TRANSFER">Перевод</option>
-            <option value="RECEIVABLE_OFFSET">Зачёт долга</option>
+            <option :value="PaymentMethod.CASH">{{ t('domain.paymentMethod.CASH') }}</option>
+            <option :value="PaymentMethod.CARD">{{ t('domain.paymentMethod.CARD') }}</option>
+            <option :value="PaymentMethod.TRANSFER">{{ t('domain.paymentMethod.TRANSFER') }}</option>
+            <option value="RECEIVABLE_OFFSET">{{ t('sales.receivableOffset') }}</option>
           </select>
         </label>
 
@@ -950,8 +949,8 @@ function openExplanation(): void {
           :disabled="returnSubmitting || returnLoading || selectedReturnLines().length === 0"
           @click="confirmReturn"
         >
-          <span v-if="returnSubmitting">Оформляем…</span>
-          <span v-else>Подтвердить возврат</span>
+          <span v-if="returnSubmitting">{{ t('sales.returnSubmitting') }}</span>
+          <span v-else>{{ t('sales.confirmReturn') }}</span>
         </button>
       </div>
     </AppBottomSheet>

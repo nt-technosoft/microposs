@@ -7,6 +7,7 @@ import { createPinia } from 'pinia'
 
 import App from './App.vue'
 import router from './router'
+import { getStoredLocale, i18n, setI18nLocale } from './i18n'
 
 // Styles (order matters)
 import './assets/styles/tokens.css'
@@ -34,6 +35,9 @@ const app = createApp(App)
 const pinia = createPinia()
 
 app.use(pinia)
+app.use(i18n)
 app.use(router)
+
+setI18nLocale(getStoredLocale())
 
 app.mount('#app')

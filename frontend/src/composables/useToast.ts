@@ -3,8 +3,8 @@
  *
  * Usage:
  *   const toast = useToast()
- *   toast.success('Сохранено!')
- *   toast.error('Что-то пошло не так')
+ *   toast.success('Saved')
+ *   toast.error('Something went wrong')
  *
  * Mount <AppToastContainer /> once in App.vue to display toasts.
  */

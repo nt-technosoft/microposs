@@ -4,9 +4,10 @@
 
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
+import { fallbackLocale, isLocale, type Locale } from '@/i18n/keys'
+import { setI18nLocale } from '@/i18n'
 
 type Theme = 'light' | 'dark'
-type Locale = 'ru' | 'uz' | 'en'
 
 export const useUIStore = defineStore('ui', () => {
   const theme = ref<Theme>(loadTheme())
@@ -23,7 +24,8 @@ export const useUIStore = defineStore('ui', () => {
 
   watch(locale, (newLocale) => {
     localStorage.setItem('microposs_locale', newLocale)
-  })
+    setI18nLocale(newLocale)
+  }, { immediate: true })
 
   watch(simpleSellerMode, (enabled) => {
     localStorage.setItem('microposs_simple_seller_mode', String(enabled))
@@ -58,7 +60,8 @@ export const useUIStore = defineStore('ui', () => {
   }
 
   function loadLocale(): Locale {
-    return (localStorage.getItem('microposs_locale') as Locale) || 'ru'
+    const stored = localStorage.getItem('microposs_locale')
+    return isLocale(stored) ? stored : fallbackLocale
   }
 
   function loadSimpleSellerMode(): boolean {

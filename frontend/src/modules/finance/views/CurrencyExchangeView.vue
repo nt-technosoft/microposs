@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, RefreshCcw, ArrowRightLeft, AlertCircle } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
@@ -16,6 +17,7 @@ import { useFxRate } from '@/composables/useFxRate'
 
 const router = useRouter()
 const toast = useToast()
+const { t } = useI18n()
 
 const accounts = ref<CashAccountRecord[]>([])
 const isLoading = ref(true)
@@ -160,7 +162,7 @@ async function loadLatestRate(): Promise<void> {
   try {
     await loadLatestUsdUzsRate()
   } catch {
-    formError.value = latestUsdUzsRateError.value || 'Не удалось загрузить курс USD/UZS'
+    formError.value = latestUsdUzsRateError.value || t('finance.loadRateFailed')
   }
 }
 
@@ -172,19 +174,19 @@ async function loadAccounts(): Promise<void> {
 async function submit(): Promise<void> {
   formError.value = null
   if (!fromAccount.value || !toAccount.value) {
-    formError.value = 'Выберите счета для обмена'
+    formError.value = t('finance.chooseExchangeAccounts')
     return
   }
   if (fromAccount.value.currency === toAccount.value.currency) {
-    formError.value = 'Счета должны быть в разных валютах'
+    formError.value = t('finance.differentCurrencyAccounts')
     return
   }
   if (fromAmountNumber.value <= 0) {
-    formError.value = 'Укажите сумму списания'
+    formError.value = t('finance.debitAmountRequired')
     return
   }
   if (rateNumber.value <= 0 || pairRateNumber.value <= 0) {
-    formError.value = 'Укажите корректный курс'
+    formError.value = t('finance.rateInvalid')
     return
   }
 
@@ -197,12 +199,12 @@ async function submit(): Promise<void> {
       rate: pairRateNumber.value.toFixed(6),
       notes: notes.value.trim(),
     })
-    toast.success('Обмен валют проведён')
+    toast.success(t('finance.exchangeDone'))
     fromAmount.value = ''
     notes.value = ''
     await loadAccounts()
   } catch (error: unknown) {
-    formError.value = error instanceof Error ? error.message : 'Не удалось провести обмен'
+    formError.value = error instanceof Error ? error.message : t('finance.exchangeFailed')
     toast.error(formError.value)
   } finally {
     isSaving.value = false
@@ -213,11 +215,11 @@ async function submitTopUp(): Promise<void> {
   topUpError.value = null
   const amount = Number.parseFloat(topUpAmount.value)
   if (!topUpAccount.value) {
-    topUpError.value = 'Выберите счёт пополнения'
+    topUpError.value = t('finance.chooseTopUpAccount')
     return
   }
   if (!Number.isFinite(amount) || amount <= 0) {
-    topUpError.value = 'Укажите сумму пополнения'
+    topUpError.value = t('finance.topUpAmountRequired')
     return
   }
 
@@ -229,11 +231,11 @@ async function submitTopUp(): Promise<void> {
       to_account_id: topUpAccount.value.id,
       notes: topUpNotes.value.trim(),
     })
-    toast.success('Счёт пополнен')
+    toast.success(t('finance.accountToppedUp'))
     closeTopUpSheet()
     await loadAccounts()
   } catch (error: unknown) {
-    topUpError.value = error instanceof Error ? error.message : 'Не удалось пополнить счёт'
+    topUpError.value = error instanceof Error ? error.message : t('finance.topUpFailed')
     toast.error(topUpError.value)
   } finally {
     isSavingTopUp.value = false
@@ -245,7 +247,7 @@ onMounted(async () => {
   try {
     await Promise.all([loadLatestRate(), loadAccounts()])
   } catch {
-    formError.value = 'Не удалось загрузить счета'
+    formError.value = t('finance.loadAccountsFailed')
   } finally {
     isLoading.value = false
   }
@@ -255,41 +257,41 @@ onMounted(async () => {
 <template>
   <div class="exchange-page">
     <header class="page-header">
-      <button class="back-btn" type="button" aria-label="Назад" @click="router.back()">
+      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="18" :stroke-width="2" />
       </button>
-      <h1 class="page-title">Обмен валют</h1>
+      <h1 class="page-title">{{ t('finance.exchange') }}</h1>
       <div class="header-spacer" />
     </header>
 
     <main class="content">
       <section class="card intro-card">
-        <span class="kicker">Правило</span>
-        <strong>Неявной конвертации нет</strong>
-        <p>Деньги живут по своим валютам. Обмен оформляется отдельной операцией между денежными счетами.</p>
+        <span class="kicker">{{ t('finance.exchangeRule') }}</span>
+        <strong>{{ t('finance.noImplicitConversion') }}</strong>
+        <p>{{ t('finance.exchangeRuleText') }}</p>
       </section>
 
       <section v-if="isLoading" class="card muted">
-        Загружаю денежные счета...
+        {{ t('finance.loadingCashAccounts') }}
       </section>
 
       <section v-else-if="!hasExchangePair" class="card empty-state">
         <AlertCircle :size="20" :stroke-width="1.75" />
         <div>
-          <strong>Недостаточно счетов для обмена</strong>
-          <p>Нужен хотя бы один счёт в UZS и один счёт в USD.</p>
+          <strong>{{ t('finance.notEnoughAccounts') }}</strong>
+          <p>{{ t('finance.needUsdUzsAccounts') }}</p>
         </div>
       </section>
 
       <template v-if="hasExchangePair">
         <section class="card form-card">
           <div class="field-group">
-            <label class="field-label">Списать со счёта</label>
+            <label class="field-label">{{ t('finance.withdrawFromAccount') }}</label>
             <BaseSelect
               v-model="fromAccountId"
               :options="fromOptions"
-              title="Счёт списания"
-              placeholder="Выберите счёт"
+              :title="t('finance.debitAccount')"
+              :placeholder="t('finance.chooseAccount')"
             />
           </div>
 
@@ -298,18 +300,18 @@ onMounted(async () => {
           </div>
 
           <div class="field-group">
-            <label class="field-label">Зачислить на счёт</label>
+            <label class="field-label">{{ t('finance.creditToAccount') }}</label>
             <BaseSelect
               v-model="toAccountId"
               :options="toOptions"
-              title="Счёт зачисления"
-              placeholder="Выберите счёт"
+              :title="t('finance.creditAccount')"
+              :placeholder="t('finance.chooseAccount')"
             />
           </div>
 
           <div class="field-row">
             <div class="field-group">
-              <label class="field-label">Сумма списания</label>
+              <label class="field-label">{{ t('finance.debitAmount') }}</label>
               <input
                 v-model="fromAmount"
                 class="input-field"
@@ -320,7 +322,7 @@ onMounted(async () => {
             </div>
 
             <div class="field-group">
-              <label class="field-label">Курс USD/UZS</label>
+              <label class="field-label">{{ t('finance.usdUzsRate') }}</label>
               <div class="rate-field">
                 <input
                   v-model="rate"
@@ -332,7 +334,7 @@ onMounted(async () => {
                 />
                 <button class="rate-reset" type="button" @click="syncRate">
                   <RefreshCcw :size="14" :stroke-width="2" />
-                  Курс
+                  {{ t('finance.useRate') }}
                 </button>
               </div>
             </div>
@@ -340,18 +342,18 @@ onMounted(async () => {
 
           <div class="helper-card">
             <div class="helper-row">
-              <span>Справочный USD/UZS</span>
+              <span>{{ t('finance.referenceUsdUzs') }}</span>
               <strong class="tabular-nums">
-                {{ latestUsdUzsRate ? trimTrailingZeros(latestUsdUzsRate) : 'Нет курса' }}
+                {{ latestUsdUzsRate ? trimTrailingZeros(latestUsdUzsRate) : t('finance.noRate') }}
               </strong>
             </div>
             <p v-if="latestUsdUzsRateError" class="helper-error">{{ latestUsdUzsRateError }}</p>
             <div class="helper-row">
-              <span>Направление обмена</span>
+              <span>{{ t('finance.exchangeDirection') }}</span>
               <strong class="tabular-nums">{{ exchangeDirectionHint }}</strong>
             </div>
             <div class="helper-row">
-              <span>Будет зачислено</span>
+              <span>{{ t('finance.willBeCredited') }}</span>
               <strong class="tabular-nums">
                 {{ toAccount ? formatPrice(previewToAmount, toAccount.currency) : '—' }}
               </strong>
@@ -359,12 +361,12 @@ onMounted(async () => {
           </div>
 
           <div class="field-group">
-            <label class="field-label">Комментарий</label>
+            <label class="field-label">{{ t('common.comment') }}</label>
             <input
               v-model="notes"
               class="input-field"
               type="text"
-              placeholder="Например, обмен для оплаты расходов в UZS"
+              :placeholder="t('finance.commentPlaceholder')"
             />
           </div>
 
@@ -376,9 +378,9 @@ onMounted(async () => {
 
         <section class="card account-card">
           <div class="card-head">
-            <h2 class="section-title">Денежные счета</h2>
+            <h2 class="section-title">{{ t('finance.cashAccounts') }}</h2>
             <button class="link-btn" type="button" @click="openTopUpSheet()">
-              Пополнить счёт
+              {{ t('finance.topUpAccount') }}
             </button>
           </div>
           <div class="account-list">
@@ -390,7 +392,7 @@ onMounted(async () => {
               <div class="account-actions">
                 <strong class="tabular-nums">{{ formatPrice(account.balance, account.currency) }}</strong>
                 <button class="mini-link" type="button" @click="openTopUpSheet(account.id)">
-                  Пополнить
+                  {{ t('finance.topUpAccount') }}
                 </button>
               </div>
             </div>
@@ -400,9 +402,9 @@ onMounted(async () => {
 
       <section v-else-if="activeAccounts.length" class="card account-card">
         <div class="card-head">
-          <h2 class="section-title">Денежные счета</h2>
+          <h2 class="section-title">{{ t('finance.cashAccounts') }}</h2>
           <button class="link-btn" type="button" @click="openTopUpSheet()">
-            Пополнить счёт
+            {{ t('finance.topUpAccount') }}
           </button>
         </div>
         <div class="account-list">
@@ -414,7 +416,7 @@ onMounted(async () => {
             <div class="account-actions">
               <strong class="tabular-nums">{{ formatPrice(account.balance, account.currency) }}</strong>
               <button class="mini-link" type="button" @click="openTopUpSheet(account.id)">
-                Пополнить
+                {{ t('finance.topUpAccount') }}
               </button>
             </div>
           </div>
@@ -424,29 +426,29 @@ onMounted(async () => {
 
     <footer v-if="hasExchangePair" class="footer">
       <button class="submit-btn" type="button" :disabled="isSaving" @click="submit">
-        {{ isSaving ? 'Провожу обмен…' : 'Провести обмен' }}
+        {{ isSaving ? t('finance.exchangeSubmitting') : t('finance.exchangeSubmit') }}
       </button>
     </footer>
 
-    <AppBottomSheet :open="topUpSheetOpen" title="Пополнить денежный счёт" @close="closeTopUpSheet">
+    <AppBottomSheet :open="topUpSheetOpen" :title="t('finance.topUpAccountTitle')" @close="closeTopUpSheet">
       <form class="sheet-form" @submit.prevent="submitTopUp">
         <div class="field-group">
-          <label class="field-label">Счёт</label>
+          <label class="field-label">{{ t('finance.account') }}</label>
           <BaseSelect
             v-model="topUpAccountId"
             :options="fromOptions"
-            title="Выбор счёта"
-            placeholder="Выберите счёт"
+            :title="t('finance.accountChoice')"
+            :placeholder="t('finance.chooseAccount')"
           />
         </div>
 
         <div class="field-row">
           <div class="field-group">
-            <label class="field-label">Сумма</label>
+            <label class="field-label">{{ t('common.amount') }}</label>
             <input v-model="topUpAmount" class="input-field" type="number" min="0" placeholder="0" />
           </div>
           <div class="field-group">
-            <label class="field-label">Валюта</label>
+            <label class="field-label">{{ t('finance.currency') }}</label>
             <div class="static-field">
               <strong>{{ topUpAccount?.currency ?? '—' }}</strong>
             </div>
@@ -454,8 +456,8 @@ onMounted(async () => {
         </div>
 
         <div class="field-group">
-          <label class="field-label">Комментарий</label>
-          <input v-model="topUpNotes" class="input-field" type="text" placeholder="Например, завёл наличные для обмена" />
+          <label class="field-label">{{ t('common.comment') }}</label>
+          <input v-model="topUpNotes" class="input-field" type="text" :placeholder="t('finance.topUpCommentPlaceholder')" />
         </div>
 
         <div v-if="topUpError" class="error-box">
@@ -464,7 +466,7 @@ onMounted(async () => {
         </div>
 
         <button class="submit-btn" type="submit" :disabled="isSavingTopUp">
-          {{ isSavingTopUp ? 'Пополняю…' : 'Пополнить счёт' }}
+          {{ isSavingTopUp ? t('finance.topUpSubmitting') : t('finance.topUpAccount') }}
         </button>
       </form>
     </AppBottomSheet>

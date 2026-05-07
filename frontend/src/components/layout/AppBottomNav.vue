@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
 import {
@@ -13,23 +14,24 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const auth = useAuthStore()
 const ui = useUIStore()
 
 interface NavItem {
   name: string
-  label: string
+  labelKey: string
   icon: typeof ShoppingBag
   path: string
   roles: string[]
 }
 
 const allTabs: NavItem[] = [
-  { name: 'sales', label: 'Продажа', icon: ShoppingBag, path: '/sales', roles: ['owner', 'cashier'] },
-  { name: 'products', label: 'Товары', icon: Package, path: '/products', roles: ['owner', 'warehouse'] },
-  { name: 'procurements', label: 'Приход', icon: Download, path: '/procurements', roles: ['owner', 'warehouse'] },
-  { name: 'reports', label: 'Отчёты', icon: BarChart3, path: '/reports', roles: ['owner'] },
-  { name: 'more', label: 'Ещё', icon: Settings, path: '/settings', roles: ['owner', 'cashier', 'warehouse'] },
+  { name: 'sales', labelKey: 'nav.sales', icon: ShoppingBag, path: '/sales', roles: ['owner', 'cashier'] },
+  { name: 'products', labelKey: 'nav.products', icon: Package, path: '/products', roles: ['owner', 'warehouse'] },
+  { name: 'procurements', labelKey: 'nav.procurements', icon: Download, path: '/procurements', roles: ['owner', 'warehouse'] },
+  { name: 'reports', labelKey: 'nav.reports', icon: BarChart3, path: '/reports', roles: ['owner'] },
+  { name: 'more', labelKey: 'nav.more', icon: Settings, path: '/settings', roles: ['owner', 'cashier', 'warehouse'] },
 ]
 
 const visibleTabs = computed(() => {
@@ -52,18 +54,18 @@ function navigate(tab: NavItem) {
 </script>
 
 <template>
-  <nav class="bottom-nav safe-area-bottom" aria-label="Main navigation">
+  <nav class="bottom-nav safe-area-bottom" :aria-label="t('nav.main')">
     <button
       v-for="tab in visibleTabs"
       :key="tab.name"
       class="nav-item"
       :class="{ active: isActive(tab) }"
-      :aria-label="tab.label"
+      :aria-label="t(tab.labelKey)"
       :aria-current="isActive(tab) ? 'page' : undefined"
       @click="navigate(tab)"
     >
       <component :is="tab.icon" :size="22" :stroke-width="1.75" class="nav-icon" />
-      <span class="nav-label">{{ tab.label }}</span>
+      <span class="nav-label">{{ t(tab.labelKey) }}</span>
     </button>
   </nav>
 </template>

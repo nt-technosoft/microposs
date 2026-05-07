@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { X } from 'lucide-vue-next'
 
 let activeBodyLocks = 0
@@ -12,6 +13,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   title: '',
 })
+const { t } = useI18n()
 
 const emit = defineEmits<{
   close: []
@@ -61,7 +63,7 @@ function onBackdropClick() {
             <h3 class="sheet-title">{{ title }}</h3>
             <button
               class="sheet-close"
-              aria-label="Закрыть"
+              :aria-label="t('common.close')"
               @click="emit('close')"
             >
               <X :size="20" :stroke-width="1.75" />

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Check, ChevronDown } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 
@@ -20,10 +21,11 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  placeholder: 'Выберите значение',
+  placeholder: '',
   title: '',
   disabled: false,
 })
+const { t } = useI18n()
 
 const emit = defineEmits<{
   'update:modelValue': [value: SelectValue]
@@ -35,8 +37,8 @@ const selectedOption = computed(() =>
   props.options.find((option) => Object.is(option.value, props.modelValue)) ?? null,
 )
 
-const displayLabel = computed(() => selectedOption.value?.label ?? props.placeholder)
-const sheetTitle = computed(() => props.title || props.placeholder)
+const displayLabel = computed(() => selectedOption.value?.label ?? (props.placeholder || t('common.select')))
+const sheetTitle = computed(() => props.title || props.placeholder || t('common.select'))
 
 function openSheet(): void {
   if (!props.disabled) {

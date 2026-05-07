@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Wallet, Handshake, Users, AlertCircle, Plus, Trash2, UserPlus, ChevronDown, RefreshCcw } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useIdempotency } from '@/composables/useIdempotency'
@@ -26,11 +27,12 @@ const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const { generateRequestId } = useIdempotency()
+const { t } = useI18n()
 
 interface TypeCard {
   type: ProcurementType
-  label: string
-  description: string
+  labelKey: string
+  descriptionKey: string
   icon: typeof Wallet
   disabled?: boolean
 }
@@ -38,35 +40,45 @@ interface TypeCard {
 const TYPE_CARDS: TypeCard[] = [
   {
     type: ProcurementType.OWN_FUNDS,
-    label: 'Свои деньги',
-    description: 'Рабочий путь без партнёрского контракта',
+    labelKey: 'domain.procurementType.OWN_FUNDS',
+    descriptionKey: 'procurements.create.typeOwnFundsDesc',
     icon: Wallet,
   },
   {
     type: ProcurementType.PARTNERSHIP,
-    label: 'Партнёрский',
-    description: 'Капитал и прибыль по договорённости партнёров',
+    labelKey: 'domain.procurementType.PARTNERSHIP',
+    descriptionKey: 'procurements.create.typePartnershipDesc',
     icon: Handshake,
   },
   {
     type: ProcurementType.MUSHARAKA,
-    label: 'Мушарака',
-    description: 'Прибыль следует долям капитала',
+    labelKey: 'domain.procurementType.MUSHARAKA',
+    descriptionKey: 'procurements.create.typeMusharakaDesc',
     icon: Users,
   },
 ]
 
 const EXPENSE_TYPE_OPTIONS = [
-  { value: 'CUSTOMS', label: 'Растаможка' },
-  { value: 'LOGISTICS', label: 'Логистика' },
-  { value: 'FEE', label: 'Комиссия' },
-  { value: 'OTHER', label: 'Другое' },
+  { value: 'CUSTOMS', labelKey: 'domain.expenseType.CUSTOMS' },
+  { value: 'LOGISTICS', labelKey: 'domain.expenseType.LOGISTICS' },
+  { value: 'FEE', labelKey: 'domain.expenseType.FEE' },
+  { value: 'OTHER', labelKey: 'domain.expenseType.OTHER' },
 ]
 
 const ALLOCATION_OPTIONS = [
-  { value: 'BY_VALUE', label: 'По стоимости' },
-  { value: 'BY_QUANTITY', label: 'По количеству' },
+  { value: 'BY_VALUE', labelKey: 'domain.allocationMethod.BY_VALUE' },
+  { value: 'BY_QUANTITY', labelKey: 'domain.allocationMethod.BY_QUANTITY' },
 ]
+
+const expenseTypeOptions = computed(() => EXPENSE_TYPE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: t(option.labelKey),
+})))
+
+const allocationOptions = computed(() => ALLOCATION_OPTIONS.map((option) => ({
+  value: option.value,
+  label: t(option.labelKey),
+})))
 
 const selectedType = ref<ProcurementType>(ProcurementType.OWN_FUNDS)
 const selectedSupplierId = ref<number | null>(null)
@@ -285,7 +297,7 @@ async function loadLatestUsdRate(): Promise<void> {
   try {
     await loadLatestUsdRateFromApi()
   } catch {
-    toast.error(latestUsdRateError.value || 'Курс USD/UZS не найден')
+    toast.error(latestUsdRateError.value || t('products.usdRateMissing'))
   }
 }
 
@@ -438,7 +450,7 @@ function normalizeTextInput(value: unknown): string {
 async function createQuickProduct(): Promise<void> {
   const name = normalizeTextInput(quickProductName.value)
   if (!name) {
-    quickProductError.value = 'Введите название товара'
+    quickProductError.value = t('products.nameRequired')
     return
   }
 
@@ -458,7 +470,7 @@ async function createQuickProduct(): Promise<void> {
       : await fetchProductVariants(product.id)
     const createdVariant = variants.find((variant) => variant.is_active !== false) ?? variants[0]
     if (!createdVariant) {
-      quickProductError.value = 'Товар создан, но вариант не найден'
+      quickProductError.value = t('procurements.create.productCreatedNoVariant')
       return
     }
 
@@ -489,13 +501,13 @@ async function createQuickProduct(): Promise<void> {
       ]
     }
 
-    toast.success('Товар создан и добавлен в приход')
+    toast.success(t('procurements.create.productCreatedAdded'))
     closeQuickProductCreator()
   } catch (error: unknown) {
     const apiError = error as { response?: { data?: { detail?: string; name?: string[] } } }
     quickProductError.value = apiError.response?.data?.detail
       ?? apiError.response?.data?.name?.[0]
-      ?? 'Не удалось создать товар'
+      ?? t('products.createFailed')
   } finally {
     isCreatingQuickProduct.value = false
   }
@@ -504,7 +516,7 @@ async function createQuickProduct(): Promise<void> {
 async function createQuickSupplier(): Promise<void> {
   const name = normalizeTextInput(quickSupplierName.value)
   if (!name) {
-    quickSupplierError.value = 'Введите название поставщика'
+    quickSupplierError.value = t('procurements.create.supplierNameRequired')
     return
   }
 
@@ -518,13 +530,13 @@ async function createQuickSupplier(): Promise<void> {
     })
     suppliers.value = [supplier, ...suppliers.value.filter((item) => item.id !== supplier.id)]
     selectedSupplierId.value = supplier.id
-    toast.success('Поставщик создан')
+    toast.success(t('procurements.create.supplierCreated'))
     closeQuickSupplierCreator()
   } catch (error: unknown) {
     const apiError = error as { response?: { data?: { detail?: string; name?: string[] } } }
     quickSupplierError.value = apiError.response?.data?.detail
       ?? apiError.response?.data?.name?.[0]
-      ?? 'Не удалось создать поставщика'
+      ?? t('procurements.create.supplierCreateFailed')
   } finally {
     isCreatingQuickSupplier.value = false
   }
@@ -553,7 +565,7 @@ function selectVariant(variant: ProductVariant): void {
   })
 
   if (duplicateExists) {
-    toast.error('Этот товар уже добавлен в закупку')
+    toast.error(t('procurements.create.duplicateVariant'))
     return
   }
 
@@ -793,7 +805,7 @@ async function loadExistingDraft(): Promise<void> {
   try {
     const procurement = await fetchProcurement(editingProcurementId.value)
     if (procurement.status !== 'OPEN') {
-      throw new Error('Редактировать можно только открытый приход')
+      throw new Error(t('procurements.create.onlyOpenEditable'))
     }
     populateFormFromProcurement(procurement)
   } finally {
@@ -804,29 +816,29 @@ async function loadExistingDraft(): Promise<void> {
 function validate() {
   const seenVariantIds = new Set<number>()
   for (const line of lines.value) {
-    if (!line.variant) return 'Выберите товар в каждой строке'
-    if (seenVariantIds.has(line.variant.id)) return 'Один и тот же товар нельзя добавлять в закупку дважды'
+    if (!line.variant) return t('procurements.create.validationChooseEveryProduct')
+    if (seenVariantIds.has(line.variant.id)) return t('procurements.create.validationDuplicateProduct')
     seenVariantIds.add(line.variant.id)
-    if (!line.quantity || parseFloat(line.quantity) <= 0) return 'Укажите количество'
-    if (!line.cost_per_unit || parseFloat(line.cost_per_unit) <= 0) return 'Укажите цену закупки'
-    if (showFxField(line.currency) && getFxRateValue(line.currency, line.fx_rate) <= 0) return 'Укажите курс для валютной строки товара'
+    if (!line.quantity || parseFloat(line.quantity) <= 0) return t('procurements.create.validationQuantity')
+    if (!line.cost_per_unit || parseFloat(line.cost_per_unit) <= 0) return t('procurements.create.validationPurchasePrice')
+    if (showFxField(line.currency) && getFxRateValue(line.currency, line.fx_rate) <= 0) return t('procurements.create.validationItemFxRate')
   }
   for (const expense of expenses.value) {
-    if (!expense.amount || parseFloat(expense.amount) <= 0) return 'Укажите сумму расхода'
-    if (showFxField(expense.currency) && getFxRateValue(expense.currency, expense.fx_rate) <= 0) return 'Укажите курс для валютного расхода'
+    if (!expense.amount || parseFloat(expense.amount) <= 0) return t('procurements.create.validationExpenseAmount')
+    if (showFxField(expense.currency) && getFxRateValue(expense.currency, expense.fx_rate) <= 0) return t('procurements.create.validationExpenseFxRate')
   }
   if (isPartnershipType.value) {
-    if (contractRows.value.some((row) => !row.partner_id)) return 'Выберите всех партнёров'
-    if (new Set(contractRows.value.map((row) => row.partner_id)).size !== contractRows.value.length) return 'Партнёры в договоре не должны повторяться'
-    if (!contractRows.value.some((row) => row.role === 'OPERATOR')) return 'Не найден бизнес-участник договора'
-    if (!contractRows.value.some((row) => row.role === 'INVESTOR')) return 'В договоре нужен инвестор'
-    if (plannedBudgetAmount.value <= 0) return 'Укажите плановый бюджет договора'
-    if (capitalPercentTotal.value <= 0) return 'Укажите капитал партнёров'
-    if (Math.abs(capitalPercentTotal.value - 100) > 0.0001) return 'Доли капитала должны дать 100%'
-    if (Math.abs(profitTotal.value - 100) > 0.01) return 'Доли прибыли должны дать 100%'
-    if (!Number.isFinite(mudarabaRatio.value) || mudarabaRatio.value < 0 || mudarabaRatio.value > 1) return 'Формула прибыли не сходится с капиталом'
+    if (contractRows.value.some((row) => !row.partner_id)) return t('procurements.create.validationChoosePartners')
+    if (new Set(contractRows.value.map((row) => row.partner_id)).size !== contractRows.value.length) return t('procurements.create.validationUniquePartners')
+    if (!contractRows.value.some((row) => row.role === 'OPERATOR')) return t('procurements.create.validationBusinessMissing')
+    if (!contractRows.value.some((row) => row.role === 'INVESTOR')) return t('procurements.create.validationInvestorMissing')
+    if (plannedBudgetAmount.value <= 0) return t('procurements.create.validationPlannedBudget')
+    if (capitalPercentTotal.value <= 0) return t('procurements.create.validationCapital')
+    if (Math.abs(capitalPercentTotal.value - 100) > 0.0001) return t('procurements.create.validationCapitalTotal')
+    if (Math.abs(profitTotal.value - 100) > 0.01) return t('procurements.create.validationProfitTotal')
+    if (!Number.isFinite(mudarabaRatio.value) || mudarabaRatio.value < 0 || mudarabaRatio.value > 1) return t('procurements.create.validationMudaraba')
     const investorProfitPercent = investorProfitShare.value * 100
-    if (Math.abs(investorProfitPercent - expectedProfitByRole.value.investor * 100) > 0.05) return 'Доля инвестора не соответствует формуле договора'
+    if (Math.abs(investorProfitPercent - expectedProfitByRole.value.investor * 100) > 0.05) return t('procurements.create.validationInvestorProfitFormula')
   }
   return ''
 }
@@ -880,10 +892,10 @@ async function saveDraft(): Promise<void> {
       ? await updateProcurement(editingProcurementId.value, payload)
       : await createProcurement(payload)
 
-    toast.success(isEditMode.value ? 'Приход обновлён' : 'Приход открыт')
+    toast.success(isEditMode.value ? t('procurements.create.updated') : t('procurements.create.opened'))
     await router.push({ name: 'procurement-detail', params: { id: procurement.id } })
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : (isEditMode.value ? 'Не удалось обновить приход' : 'Не удалось открыть приход')
+    const msg = err instanceof Error ? err.message : (isEditMode.value ? t('procurements.create.updateFailed') : t('procurements.create.openFailed'))
     formError.value = msg
     toast.error(msg)
   } finally {
@@ -910,7 +922,7 @@ onMounted(async () => {
     }
     await loadExistingDraft()
   } catch {
-    toast.error('Ошибка загрузки справочных данных')
+    toast.error(t('products.loadFormDictionariesFailed'))
   } finally {
     isLoadingRefs.value = false
   }
@@ -920,26 +932,26 @@ onMounted(async () => {
 <template>
   <div class="create-page">
     <header class="page-header">
-      <button class="btn-back" aria-label="Назад" @click="router.back()">
+      <button class="btn-back" :aria-label="t('common.back')" @click="router.back()">
         <ArrowLeft :size="20" :stroke-width="1.75" />
       </button>
-      <h1 class="page-title">{{ isEditMode ? 'Редактирование прихода' : 'Новый приход' }}</h1>
+      <h1 class="page-title">{{ isEditMode ? t('procurements.create.editTitle') : t('procurements.create.newTitle') }}</h1>
       <div class="header-spacer" />
     </header>
 
     <div class="form-body">
       <section v-if="linkedAgreement" class="linked-agreement-strip">
         <div>
-          <span>Источник капитала</span>
-          <strong>Инвестдоговор #{{ linkedAgreement.id }}</strong>
+          <span>{{ t('procurements.create.capitalSource') }}</span>
+          <strong>{{ t('procurements.agreementTitle', { id: linkedAgreement.id }) }}</strong>
         </div>
         <button type="button" @click="router.push({ name: 'agreement-detail', params: { id: linkedAgreement.id } })">
-          Открыть
+          {{ t('common.details') }}
         </button>
       </section>
 
       <section class="form-section">
-        <h2 class="section-title">Тип закупки</h2>
+        <h2 class="section-title">{{ t('procurements.create.procurementType') }}</h2>
         <div class="type-grid">
           <button
             v-for="card in TYPE_CARDS"
@@ -952,47 +964,47 @@ onMounted(async () => {
             <div class="type-card-icon">
               <component :is="card.icon" :size="22" :stroke-width="1.75" />
             </div>
-            <span class="type-card-label">{{ card.label }}</span>
-            <span class="type-card-desc">{{ card.description }}</span>
+            <span class="type-card-label">{{ t(card.labelKey) }}</span>
+            <span class="type-card-desc">{{ t(card.descriptionKey) }}</span>
           </button>
         </div>
       </section>
 
       <section v-if="isPartnershipType" class="form-section">
         <div class="section-header">
-          <h2 class="section-title">Договор</h2>
+          <h2 class="section-title">{{ t('procurements.agreement') }}</h2>
           <button class="btn-add-investor" type="button" @click="openInvestorInvitePage">
             <UserPlus :size="16" :stroke-width="2" />
-            Добавить инвестора
+            {{ t('procurements.create.addInvestor') }}
           </button>
         </div>
 
         <div v-if="!hasLinkedInvestors" class="investor-empty">
           <div class="investor-empty-copy">
-            <strong>Связанных инвесторов пока нет</strong>
-            <span>Создайте ссылку приглашения. После принятия инвестор появится в списке и сможет видеть свои отчёты.</span>
+            <strong>{{ t('procurements.create.noLinkedInvestors') }}</strong>
+            <span>{{ t('procurements.create.noLinkedInvestorsHint') }}</span>
           </div>
           <button class="investor-empty-action" type="button" @click="openInvestorInvitePage">
             <UserPlus :size="16" :stroke-width="2" />
-            Создать приглашение
+            {{ t('procurements.create.createInvite') }}
           </button>
         </div>
 
         <div class="agreement-layout">
           <div class="agreement-panel">
             <div class="field-group">
-              <label class="field-label">Инвестор</label>
+              <label class="field-label">{{ t('procurements.investor') }}</label>
               <BaseSelect
                 :model-value="investorContractRow?.partner_id ?? null"
                 :options="investorOptions"
-                title="Выбор инвестора"
-                placeholder="Выберите инвестора"
+                :title="t('procurements.chooseInvestor')"
+                :placeholder="t('procurements.chooseInvestor')"
                 @update:model-value="(value) => updateContractRole('INVESTOR', 'partner_id', value as number | null)"
               />
             </div>
 
             <div class="field-group">
-              <label class="field-label">Плановый бюджет договора</label>
+              <label class="field-label">{{ t('procurements.create.plannedAgreementBudget') }}</label>
               <div class="money-field">
                 <input
                   v-model="plannedBudget"
@@ -1010,23 +1022,23 @@ onMounted(async () => {
             </div>
 
             <div v-if="isEditMode && procurementTotalInContractCurrency > 0" class="agreement-budget-card">
-              <span>Текущая сумма добавленных позиций</span>
+              <span>{{ t('procurements.create.currentAddedAmount') }}</span>
               <strong class="tabular-nums">{{ formatPrice(procurementTotalInContractCurrency, normalizeCurrency(contractCurrency)) }}</strong>
             </div>
 
             <div class="formula-note">
-              <span>Валюта договора задаёт расчётную валюту долей. План фиксирует капитал и прибыль. Если фактический вклад отличается, прибыль пересчитывается по коэффициенту Mudaraba.</span>
+              <span>{{ t('procurements.create.formulaNote') }}</span>
             </div>
 
             <div class="agreement-input-table">
               <div class="agreement-input-head">
                 <span />
-                <span>Инвестор</span>
-                <span>Бизнес</span>
+                <span>{{ t('procurements.investor') }}</span>
+                <span>{{ t('procurements.business') }}</span>
               </div>
 
               <div class="agreement-input-row">
-                <strong>Капитал %</strong>
+                <strong>{{ t('procurements.create.capitalPercent') }}</strong>
                 <div class="field-group">
                   <input
                     type="number"
@@ -1052,7 +1064,7 @@ onMounted(async () => {
               </div>
 
               <div class="agreement-input-row">
-                <strong>Прибыль %</strong>
+                <strong>{{ t('procurements.create.profitPercent') }}</strong>
                 <div class="field-group">
                   <input
                     type="number"
@@ -1079,7 +1091,7 @@ onMounted(async () => {
             </div>
 
             <div class="formula-strip">
-              <span>Коэффициент Mudaraba</span>
+              <span>{{ t('procurements.create.mudarabaRatio') }}</span>
               <strong class="tabular-nums">{{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(6) : '—' }}</strong>
             </div>
 
@@ -1091,12 +1103,12 @@ onMounted(async () => {
                 @click="isRecalculationOpen = !isRecalculationOpen"
               >
                 <span class="recalculation-toggle-copy">
-                  <span class="panel-kicker">Перерасчёт</span>
-                  <strong>Факт может отличаться от плана</strong>
-                  <span>Перед закрытием сделки доли можно выровнять или оставить фактический вклад и пересчитать прибыль.</span>
+                  <span class="panel-kicker">{{ t('procurements.create.recalculation') }}</span>
+                  <strong>{{ t('procurements.create.recalculationTitle') }}</strong>
+                  <span>{{ t('procurements.create.recalculationHint') }}</span>
                 </span>
                 <span class="recalculation-toggle-action">
-                  {{ isRecalculationOpen ? 'Скрыть' : 'Правила' }}
+                  {{ isRecalculationOpen ? t('common.close') : t('procurements.create.rules') }}
                   <ChevronDown class="recalculation-chevron" :size="18" :stroke-width="2" />
                 </span>
               </button>
@@ -1104,22 +1116,22 @@ onMounted(async () => {
               <div v-if="isRecalculationOpen" class="recalculation-details">
                 <div class="rule-list">
                   <div>
-                    <strong>1. План фиксируется в договоре</strong>
-                    <span>Капитал и прибыль задают коэффициент Mudaraba: прибыль инвестора / доля капитала инвестора.</span>
+                    <strong>{{ t('procurements.create.rulePlanTitle') }}</strong>
+                    <span>{{ t('procurements.create.rulePlanText') }}</span>
                   </div>
                   <div>
-                    <strong>2. Факт проверяется при закрытии</strong>
-                    <span>Если внесённые доли капитала отличаются от плана, система показывает отклонение перед закрытием сделки.</span>
+                    <strong>{{ t('procurements.create.ruleFactTitle') }}</strong>
+                    <span>{{ t('procurements.create.ruleFactText') }}</span>
                   </div>
                   <div>
-                    <strong>3. Есть два варианта</strong>
-                    <span>Партнёры могут выровнять капитал до плана или оставить фактические доли и пересчитать прибыль по прежнему коэффициенту.</span>
+                    <strong>{{ t('procurements.create.ruleOptionsTitle') }}</strong>
+                    <span>{{ t('procurements.create.ruleOptionsText') }}</span>
                   </div>
                 </div>
 
                 <div class="split-control">
                   <div class="split-header">
-                    <span>Фактическая доля капитала инвестора</span>
+                    <span>{{ t('procurements.create.actualInvestorCapital') }}</span>
                     <strong class="tabular-nums">{{ formatPercent(simulatedInvestorCapitalPercent) }}</strong>
                   </div>
                   <input
@@ -1133,30 +1145,30 @@ onMounted(async () => {
                     @input="(e) => setSimulationCapitalPercent((e.target as HTMLInputElement).value)"
                   />
                   <div class="range-labels">
-                    <span>Бизнес {{ formatPercent(100 - simulatedInvestorCapitalPercent) }}</span>
-                    <span>Инвестор {{ formatPercent(simulatedInvestorCapitalPercent) }}</span>
+                    <span>{{ t('procurements.create.businessWithShare', { share: formatPercent(100 - simulatedInvestorCapitalPercent) }) }}</span>
+                    <span>{{ t('procurements.create.investorWithShare', { share: formatPercent(simulatedInvestorCapitalPercent) }) }}</span>
                   </div>
                 </div>
 
                 <div class="simulation-result">
                   <div>
-                    <span>Прибыль инвестора</span>
+                    <span>{{ t('procurements.create.investorProfit') }}</span>
                     <strong class="tabular-nums">{{ formatPercent(simulatedInvestorProfitPercent) }}</strong>
                   </div>
                   <div>
-                    <span>Прибыль бизнеса</span>
+                    <span>{{ t('procurements.create.businessProfit') }}</span>
                     <strong class="tabular-nums">{{ formatPercent(simulatedOperatorProfitPercent) }}</strong>
                   </div>
                 </div>
 
                 <div class="recalculation-note" :class="{ active: hasSimulationDelta }">
                   <span v-if="hasSimulationDelta">
-                    Отклонение капитала инвестора {{ formatSignedPercent(simulationCapitalDelta) }} изменит его прибыль на {{ formatSignedPercent(simulationProfitDelta) }}.
+                    {{ t('procurements.create.recalculationDelta', { capital: formatSignedPercent(simulationCapitalDelta), profit: formatSignedPercent(simulationProfitDelta) }) }}
                   </span>
                   <span v-else>
-                    Сейчас симуляция совпадает с планом договора.
+                    {{ t('procurements.create.recalculationMatchesPlan') }}
                   </span>
-                  <button type="button" @click="resetSimulation">Сбросить</button>
+                  <button type="button" @click="resetSimulation">{{ t('common.reset') }}</button>
                 </div>
               </div>
             </div>
@@ -1166,67 +1178,67 @@ onMounted(async () => {
 
       <section v-if="isEditMode" class="form-section">
         <div class="section-header">
-          <h2 class="section-title">Поставщик</h2>
+          <h2 class="section-title">{{ t('suppliers.supplier') }}</h2>
           <button class="btn-add-small" type="button" @click="openQuickSupplierCreator">
             <Plus :size="14" :stroke-width="2.5" />
-            Добавить поставщика
+            {{ t('procurements.create.addSupplier') }}
           </button>
         </div>
         <div class="field-group">
-          <label class="field-label">Поставщик можно выбрать позже</label>
-          <BaseSelect v-model="selectedSupplierId" :options="supplierOptions" title="Выбор поставщика" placeholder="Без поставщика" :disabled="isLoadingRefs" />
+          <label class="field-label">{{ t('procurements.create.supplierCanChooseLater') }}</label>
+          <BaseSelect v-model="selectedSupplierId" :options="supplierOptions" :title="t('procurements.create.supplierSelectTitle')" :placeholder="t('procurements.supplierMissing')" :disabled="isLoadingRefs" />
         </div>
         <p class="empty-inline">
-          Склад оприходования выбирается позже, когда приход будет готов к этапу receive.
+          {{ t('procurements.create.warehouseChosenLater') }}
         </p>
       </section>
 
       <section v-if="isEditMode" class="form-section">
         <div class="section-header">
-          <h2 class="section-title">Товары</h2>
+          <h2 class="section-title">{{ t('products.title') }}</h2>
           <div class="section-actions">
             <button class="btn-add-small" type="button" @click="openQuickProductCreator()">
               <Plus :size="14" :stroke-width="2.5" />
-              Создать товар
+              {{ t('products.createProduct') }}
             </button>
             <button class="btn-add-small" type="button" @click="addEmptyLine">
               <Plus :size="14" :stroke-width="2.5" />
-              Добавить строку
+              {{ t('procurements.create.addLine') }}
             </button>
           </div>
         </div>
 
         <div v-if="lines.length === 0" class="empty-inline">
-          Товары можно добавить после открытия прихода.
+          {{ t('procurements.create.itemsCanAddAfterOpen') }}
         </div>
 
         <div v-else class="line-list">
           <div v-for="line in lines" :key="line.id" class="line-row">
             <div class="line-row-top">
               <button class="picker-btn line-product-btn" type="button" @click="openVariantPicker(line.id)">
-                {{ line.variant ? variantDisplay(line.variant) : 'Выбрать товар' }}
+                {{ line.variant ? variantDisplay(line.variant) : t('products.selectVariant') }}
               </button>
-              <button class="btn-delete line-delete" type="button" aria-label="Удалить строку" @click="removeLine(line.id)">
+              <button class="btn-delete line-delete" type="button" :aria-label="t('procurements.create.removeLine')" @click="removeLine(line.id)">
                 <Trash2 :size="16" :stroke-width="2" />
               </button>
             </div>
 
             <div class="line-row-main">
               <div class="field-group">
-                <label class="micro-label">Кол-во</label>
+                <label class="micro-label">{{ t('common.quantity') }}</label>
                 <input
                   type="number"
                   class="input-field line-input"
                   :value="line.quantity"
                   min="0"
                   placeholder="1"
-                  aria-label="Количество"
+                  :aria-label="t('common.quantity')"
                   @input="(e) => updateLine(line.id, 'quantity', (e.target as HTMLInputElement).value)"
                 />
               </div>
 
               <div class="field-group line-price-cell">
-                <label class="micro-label">Цена закупки</label>
+                <label class="micro-label">{{ t('procurements.create.purchasePrice') }}</label>
                 <div class="money-field">
                   <input
                     type="number"
@@ -1234,14 +1246,14 @@ onMounted(async () => {
                     :value="line.cost_per_unit"
                     min="0"
                     step="0.000001"
-                    placeholder="Цена"
-                    aria-label="Цена закупки"
+                    :placeholder="t('products.price')"
+                    :aria-label="t('procurements.create.purchasePrice')"
                     @input="(e) => updateLine(line.id, 'cost_per_unit', (e.target as HTMLInputElement).value)"
                   />
                   <button
                     type="button"
                     class="currency-toggle"
-                    :aria-label="`Сменить валюту строки. Сейчас ${normalizeCurrency(line.currency)}`"
+                    :aria-label="t('procurements.create.changeLineCurrency', { currency: normalizeCurrency(line.currency) })"
                     @click="toggleLineCurrency(line.id)"
                   >
                     <span class="currency-toggle-code">{{ normalizeCurrency(line.currency) }}</span>
@@ -1253,15 +1265,15 @@ onMounted(async () => {
 
             <div v-if="showFxField(line.currency)" class="line-row-extra">
               <div class="field-group">
-                <label class="micro-label">Курс {{ formatCurrencyTotalLabel(line.currency) }}</label>
+                <label class="micro-label">{{ t('procurements.create.rateLabel', { currency: formatCurrencyTotalLabel(line.currency) }) }}</label>
                 <input
                   type="number"
                   class="input-field line-input"
                   :value="line.fx_rate"
                   min="0"
                   step="0.0001"
-                  placeholder="Введите курс"
-                  aria-label="Курс валюты"
+                  :placeholder="t('procurements.create.enterRate')"
+                  :aria-label="t('procurements.create.fxRate')"
                   @input="(e) => updateLine(line.id, 'fx_rate', (e.target as HTMLInputElement).value)"
                 />
               </div>
@@ -1272,46 +1284,46 @@ onMounted(async () => {
 
       <section v-if="isEditMode" class="form-section">
         <div class="section-header">
-          <h2 class="section-title">Расходы прихода</h2>
+          <h2 class="section-title">{{ t('procurements.create.procurementExpenses') }}</h2>
           <button class="btn-add-small" type="button" @click="addExpense">
             <Plus :size="14" :stroke-width="2.5" />
-            Добавить
+            {{ t('common.add') }}
           </button>
         </div>
 
         <div v-if="expenses.length === 0" class="empty-inline">
-          Дополнительных расходов нет.
+          {{ t('procurements.create.noExtraExpenses') }}
         </div>
 
         <div v-for="expense in expenses" :key="expense.id" class="participant-card">
           <div class="participant-header">
-            <span class="participant-num">Расход</span>
-            <button class="btn-delete" type="button" aria-label="Удалить расход" @click="removeExpense(expense.id)">
+            <span class="participant-num">{{ t('procurements.create.expense') }}</span>
+            <button class="btn-delete" type="button" :aria-label="t('procurements.create.removeExpense')" @click="removeExpense(expense.id)">
               <Trash2 :size="16" :stroke-width="2" />
             </button>
           </div>
           <div class="field-row">
             <div class="field-group flex-1">
-              <label class="field-label">Тип</label>
+              <label class="field-label">{{ t('common.type') }}</label>
               <BaseSelect
                 :model-value="expense.expense_type"
-                :options="EXPENSE_TYPE_OPTIONS"
-                title="Тип расхода"
+                :options="expenseTypeOptions"
+                :title="t('procurements.create.expenseType')"
                 @update:model-value="(value) => updateExpense(expense.id, 'expense_type', String(value))"
               />
             </div>
             <div class="field-group flex-1">
-              <label class="field-label">Разносить</label>
+              <label class="field-label">{{ t('procurements.create.allocateBy') }}</label>
               <BaseSelect
                 :model-value="expense.allocation_method"
-                :options="ALLOCATION_OPTIONS"
-                title="Метод распределения"
+                :options="allocationOptions"
+                :title="t('procurements.create.allocationMethod')"
                 @update:model-value="(value) => updateExpense(expense.id, 'allocation_method', String(value))"
               />
             </div>
           </div>
           <div class="field-group">
-            <label class="field-label">Сумма</label>
+            <label class="field-label">{{ t('common.amount') }}</label>
             <div class="money-field">
               <input
                 type="number"
@@ -1324,7 +1336,7 @@ onMounted(async () => {
               <button
                 type="button"
                 class="currency-toggle"
-                :aria-label="`Сменить валюту расхода. Сейчас ${normalizeCurrency(expense.currency)}`"
+                :aria-label="t('procurements.create.changeExpenseCurrency', { currency: normalizeCurrency(expense.currency) })"
                 @click="toggleExpenseCurrency(expense.id)"
               >
                 <span class="currency-toggle-code">{{ normalizeCurrency(expense.currency) }}</span>
@@ -1333,53 +1345,53 @@ onMounted(async () => {
             </div>
           </div>
           <div v-if="showFxField(expense.currency)" class="field-group">
-            <label class="field-label">Курс {{ formatCurrencyTotalLabel(expense.currency) }}</label>
+            <label class="field-label">{{ t('procurements.create.rateLabel', { currency: formatCurrencyTotalLabel(expense.currency) }) }}</label>
             <input
               type="number"
               class="input-field"
               :value="expense.fx_rate"
               min="0"
               step="0.0001"
-              placeholder="Введите курс"
+              :placeholder="t('procurements.create.enterRate')"
               @input="(e) => updateExpense(expense.id, 'fx_rate', (e.target as HTMLInputElement).value)"
             />
           </div>
           <div class="field-group">
-            <label class="field-label">Комментарий</label>
+            <label class="field-label">{{ t('common.comment') }}</label>
             <input class="input-field" :value="expense.notes" @input="(e) => updateExpense(expense.id, 'notes', (e.target as HTMLInputElement).value)" />
           </div>
         </div>
       </section>
 
       <section v-if="isEditMode" class="form-section">
-        <h2 class="section-title">Итого</h2>
+        <h2 class="section-title">{{ t('common.total') }}</h2>
         <div v-if="hasForeignCurrency" class="summary-hint">
-          Итог считается в эквиваленте UZS по курсам, указанным в строках товаров и расходов.
+          {{ t('procurements.create.totalUzsHint') }}
         </div>
         <div class="summary-card">
-          <span>Товары</span>
+          <span>{{ t('products.title') }}</span>
           <strong class="tabular-nums">{{ formatPrice(grandTotal) }}</strong>
         </div>
         <div class="summary-card summary-card-muted">
-          <span>Расходы</span>
+          <span>{{ t('procurements.expenses') }}</span>
           <strong class="tabular-nums">{{ formatPrice(expenseTotal) }}</strong>
         </div>
         <div class="summary-card">
-          <span>К оплате</span>
+          <span>{{ t('procurements.create.toPay') }}</span>
           <strong class="tabular-nums">{{ formatPrice(procurementTotal) }}</strong>
         </div>
       </section>
 
       <section class="form-section">
-        <h2 class="section-title">Заметки</h2>
-        <textarea v-model="notes" class="textarea-field" rows="4" placeholder="Комментарий к закупке" />
+        <h2 class="section-title">{{ t('procurements.create.notes') }}</h2>
+        <textarea v-model="notes" class="textarea-field" rows="4" :placeholder="t('procurements.create.notesPlaceholder')" />
       </section>
 
       <section v-if="!isEditMode" class="form-section">
         <div class="agreement-panel">
           <div class="agreement-panel-header">
-            <strong>Что будет дальше</strong>
-            <span class="type-card-desc">После открытия прихода ты попадёшь в рабочее пространство прихода: баланс, товары, расходы, оплата и receive.</span>
+            <strong>{{ t('procurements.create.nextStepTitle') }}</strong>
+            <span class="type-card-desc">{{ t('procurements.create.nextStepText') }}</span>
           </div>
         </div>
       </section>
@@ -1392,20 +1404,20 @@ onMounted(async () => {
 
     <footer class="footer-actions">
       <button class="btn-primary" :disabled="isSaving || isLoadingDraft" @click="saveDraft">
-        {{ isSaving ? (isEditMode ? 'Сохранение…' : 'Открытие…') : (isEditMode ? 'Сохранить изменения' : 'Открыть приход') }}
+        {{ isSaving ? (isEditMode ? t('common.saving') : t('procurements.create.opening')) : (isEditMode ? t('procurements.create.saveChanges') : t('procurements.create.openProcurement')) }}
       </button>
     </footer>
 
-    <AppBottomSheet :open="variantSheetOpen" title="Выбор товара" @close="closeVariantPicker">
+    <AppBottomSheet :open="variantSheetOpen" :title="t('products.selectVariant')" @close="closeVariantPicker">
       <div class="sheet-body">
         <div class="sheet-actions">
-          <input v-model="variantSearch" class="input-field" type="text" placeholder="Поиск товара" />
+          <input v-model="variantSearch" class="input-field" type="text" :placeholder="t('procurements.create.searchProduct')" />
           <button class="btn-add-small" type="button" @click="openQuickProductCreator(activeLineId)">
             <Plus :size="14" :stroke-width="2.5" />
-            Новый
+            {{ t('common.new') }}
           </button>
         </div>
-        <BaseSelect v-model="variantSearchCategory" :options="[{ value: null, label: 'Все категории' }, ...categoryOptions]" title="Категория" placeholder="Фильтр по категории" />
+        <BaseSelect v-model="variantSearchCategory" :options="[{ value: null, label: t('products.allCategories') }, ...categoryOptions]" :title="t('products.categoryName')" :placeholder="t('procurements.create.categoryFilter')" />
         <div class="variant-list">
           <button v-for="variant in filteredVariants" :key="variant.id" class="variant-row" @click="selectVariant(variant)">
             <span>{{ variantDisplay(variant) }}</span>
@@ -1415,7 +1427,7 @@ onMounted(async () => {
       </div>
     </AppBottomSheet>
 
-    <AppBottomSheet :open="quickProductSheetOpen" title="Быстрое создание товара" @close="closeQuickProductCreator">
+    <AppBottomSheet :open="quickProductSheetOpen" :title="t('procurements.create.quickProductTitle')" @close="closeQuickProductCreator">
       <form class="quick-product-form" @submit.prevent="createQuickProduct">
         <div v-if="quickProductError" class="error-box">
           <AlertCircle :size="18" :stroke-width="1.75" />
@@ -1423,32 +1435,32 @@ onMounted(async () => {
         </div>
 
         <div class="field-group">
-          <label class="field-label">Название *</label>
-          <input v-model="quickProductName" class="input-field" type="text" placeholder="Например, iPhone 15 Pro" />
+          <label class="field-label">{{ t('products.nameLabel') }} *</label>
+          <input v-model="quickProductName" class="input-field" type="text" :placeholder="t('procurements.create.productNamePlaceholder')" />
         </div>
 
         <div class="field-group">
-          <label class="field-label">Категория</label>
+          <label class="field-label">{{ t('products.categoryName') }}</label>
           <BaseSelect
             v-model="quickProductCategoryId"
-            :options="[{ value: null, label: 'Без категории' }, ...categoryOptions]"
-            title="Категория товара"
-            placeholder="Без категории"
+            :options="[{ value: null, label: t('products.noCategory') }, ...categoryOptions]"
+            :title="t('products.chooseCategory')"
+            :placeholder="t('products.noCategory')"
           />
         </div>
 
         <div class="field-group">
-          <label class="field-label">Базовая цена</label>
+          <label class="field-label">{{ t('products.basePrice') }}</label>
           <input v-model="quickProductBasePrice" class="input-field" type="number" min="0" placeholder="0" />
         </div>
 
         <button class="btn-primary" type="submit" :disabled="isCreatingQuickProduct">
-          {{ isCreatingQuickProduct ? 'Создание…' : 'Создать и добавить' }}
+          {{ isCreatingQuickProduct ? t('procurements.create.creating') : t('procurements.create.createAndAdd') }}
         </button>
       </form>
     </AppBottomSheet>
 
-    <AppBottomSheet :open="quickSupplierSheetOpen" title="Быстрое создание поставщика" @close="closeQuickSupplierCreator">
+    <AppBottomSheet :open="quickSupplierSheetOpen" :title="t('procurements.create.quickSupplierTitle')" @close="closeQuickSupplierCreator">
       <form class="quick-product-form" @submit.prevent="createQuickSupplier">
         <div v-if="quickSupplierError" class="error-box">
           <AlertCircle :size="18" :stroke-width="1.75" />
@@ -1456,12 +1468,12 @@ onMounted(async () => {
         </div>
 
         <div class="field-group">
-          <label class="field-label">Название *</label>
-          <input v-model="quickSupplierName" class="input-field" type="text" placeholder="Например, Shenzhen Trade Co." />
+          <label class="field-label">{{ t('products.characteristicName') }} *</label>
+          <input v-model="quickSupplierName" class="input-field" type="text" :placeholder="t('procurements.create.supplierNamePlaceholder')" />
         </div>
 
         <div class="field-group">
-          <label class="field-label">Телефон</label>
+          <label class="field-label">{{ t('auth.phone') }}</label>
           <input v-model="quickSupplierPhone" class="input-field" type="text" placeholder="+998 90 000 00 00" />
         </div>
 
@@ -1471,7 +1483,7 @@ onMounted(async () => {
         </div>
 
         <button class="btn-primary" type="submit" :disabled="isCreatingQuickSupplier">
-          {{ isCreatingQuickSupplier ? 'Создание…' : 'Создать и выбрать' }}
+          {{ isCreatingQuickSupplier ? t('procurements.create.creating') : t('procurements.create.createAndChoose') }}
         </button>
       </form>
     </AppBottomSheet>
