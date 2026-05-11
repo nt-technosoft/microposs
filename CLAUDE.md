@@ -1,9 +1,18 @@
 # MicroPOS — Project Instructions
 
 ## Overview
-MicroPOS — mobile-first POS platform for small retail businesses with Islamic partnership financing support (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
+MicroPOS / **Sherik POS** — mobile-first POS platform for small retail businesses with Islamic partnership financing support (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
 
-**Documentation:** See `docs/` for full technical and business-logic reference.
+**Positioning:** не «ещё один POS», а финансово-партнёрский слой поверх ритейла. Автоматический partnership accounting, FIFO-распределение прибыли/убытков, прозрачные dashboards для инвесторов и партнёров.
+
+## Documentation Map
+
+- 🗺️ **[docs/ROADMAP.md](./docs/ROADMAP.md)** — центральная карта крупных задач (эпиков). Обновляется руками. Открывай в первую очередь, когда садишься за работу.
+- 📁 **[docs/roadmap/](./docs/roadmap/)** — детали по каждому эпику (текущее состояние, фазы, чек-листы, открытые вопросы)
+- 🏛️ **[docs/architecture.md](./docs/architecture.md)** — техническая архитектура (модули, паттерны)
+- 🧩 **[docs/domain/](./docs/domain/)** — бизнес-домены (что они делают сейчас)
+- 🎯 **[AGENTS.md](./AGENTS.md)** — entrypoint для всех LLM-инструментов (Cursor/Codex/etc.)
+- 💼 **[presentation/](./presentation/)** — pitch-материалы и стратегические документы (Sharia certification research, Billz proposal)
 
 ## Architecture
 - **Monorepo**: `backend/` (Django) + `frontend/` (Vue.js 3)
@@ -54,3 +63,13 @@ MicroPOS — mobile-first POS platform for small retail businesses with Islamic 
 - Rewrite feature-domain: screens, flows, contracts, stores, and adapters still tied to legacy `Receipt`, `InvestorSummary`, and old orchestration.
 - `Receipt` is being replaced by `Procurement` in product and UX terminology.
 - PR-12 (Excel mapping/final cleanup) is a separate discovery/design track under direct user control, not a default continuation of PR-10/11.
+
+## Roadmap Protocol
+
+When working on a task:
+1. Open [`docs/ROADMAP.md`](./docs/ROADMAP.md) — figure out which epic your task belongs to
+2. Open the epic file (`docs/roadmap/E0X-*.md`) — read the «Открытые вопросы» and «Задачи» sections
+3. Mark completed sub-tasks as `[x]` in the epic checklist
+4. Move resolved open questions to «Решённые вопросы (история)» with the date
+5. New large theme → new epic via [`docs/roadmap/_template.md`](./docs/roadmap/_template.md)
+6. Don't duplicate implementation details in `CLAUDE.md` or `AGENTS.md` — keep all live work in epic files

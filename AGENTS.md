@@ -1,9 +1,30 @@
 # MicroPOS — Agent Instructions
 
 ## Overview
-MicroPOS — mobile-first POS platform for small retail businesses with Islamic partnership financing (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
+MicroPOS / **Sherik POS** — mobile-first платформа: финансово-партнёрский слой для retail-бизнеса с поддержкой исламского партнёрского финансирования (Мударабá, Мушарáка), консигнации, мульти-локаций и мульти-валют.
+
+Это **не «ещё один POS»**. Это слой, который автоматически ведёт партнёрский учёт: фиксация долей в момент прихода товара, FIFO-распределение прибыли и убытков, прозрачные dashboard'ы для инвесторов и партнёров.
 
 **Full documentation:** `docs/README.md` → links to all domain docs.
+
+## 🗺️ Active Roadmap
+
+**Центральная карта крупных задач:** [`docs/ROADMAP.md`](./docs/ROADMAP.md) — обзорная таблица всех эпиков, статусы и прогресс.
+
+**Текущие эпики:**
+- E01 — Suppliers & Procurement (расширенная модель) → [doc](./docs/roadmap/E01-suppliers-procurement.md)
+- E02 — Product–Supplier Links → [doc](./docs/roadmap/E02-product-supplier-links.md)
+- E03 — Real Value Reporting (Net Asset View) → [doc](./docs/roadmap/E03-real-value-reporting.md)
+- E04 — Contract Types Formalization → [doc](./docs/roadmap/E04-contract-types.md)
+- E05 — Zakat Calculation → [doc](./docs/roadmap/E05-zakat.md)
+- E06 — Sharia Certification → [doc](./docs/roadmap/E06-sharia-certification.md)
+
+**Roadmap-протокол** (для любого LLM-инструмента, работающего с задачами):
+1. Открой [`docs/ROADMAP.md`](./docs/ROADMAP.md) → определи свой эпик
+2. Открой файл эпика → читай «Открытые вопросы» и «Задачи»
+3. Сделанные подзадачи отмечай `[x]` в чек-листе
+4. Решённые открытые вопросы — переноси в «Решённые вопросы (история)» с датой
+5. Новая крупная тема → новый эпик по [`docs/roadmap/_template.md`](./docs/roadmap/_template.md)
 
 ## Quick Reference
 
