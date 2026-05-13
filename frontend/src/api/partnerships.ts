@@ -1,5 +1,303 @@
 import api from './client'
 
+export type WorkspaceStatus = 'OPEN' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CLOSED' | 'CANCELLED'
+export type WorkspaceFundingSource = 'OWN_FUNDS' | 'PARTNERSHIP'
+export type WorkspaceSettlementType = 'PREPAID' | 'PARTIAL' | 'DEFERRED' | 'INSTALLMENT' | 'CONSIGNMENT'
+export type WorkspaceSectionKey = 'overview' | 'source' | 'items' | 'settlement' | 'capital' | 'receive' | 'history'
+export type WorkspaceFlowStepKey =
+  | 'purchase_intent'
+  | 'supplier_settlement'
+  | 'funding'
+  | 'payment_obligation'
+  | 'goods_receipt'
+  | 'history'
+export type WorkspaceActionKey =
+  | 'UPDATE_SOURCE'
+  | 'UPDATE_ITEMS'
+  | 'UPDATE_EXPENSES'
+  | 'UPDATE_SETTLEMENT'
+  | 'CREATE_INVESTMENT_AGREEMENT'
+  | 'LINK_INVESTMENT_AGREEMENT'
+  | 'RECORD_CAPITAL_CONTRIBUTION'
+  | 'ALLOCATE_CAPITAL'
+  | 'PAY_COSTS'
+  | 'PAY_SUPPLIER_PAYABLE'
+  | 'GENERATE_INSTALLMENT_SCHEDULE'
+  | 'RECEIVE_BATCH'
+  | 'AMEND_SETTLEMENT'
+  | 'RETURN_CONSIGNMENT'
+  | 'CLOSE_WORKSPACE'
+  | 'CANCEL_WORKSPACE'
+
+export interface WorkspaceReadinessState {
+  ok: boolean
+  severity: 'ok' | 'info' | 'warning' | 'blocked'
+  message: string | null
+  missing: string[]
+}
+
+export interface ProcurementWorkspacePayload {
+  id: number
+  status: WorkspaceStatus
+  display: {
+    title: string
+    subtitle: string | null
+    created_at: string
+    updated_at: string
+    primary_currency: string
+    next_action: {
+      key: WorkspaceActionKey | string | null
+      label: string | null
+      reason: string | null
+    }
+  }
+  flow: {
+    current_step: WorkspaceFlowStepKey
+    next_action: WorkspaceActionKey | string | null
+    steps: Array<{
+      key: WorkspaceFlowStepKey
+      title: string
+      status: 'ready' | 'blocked' | 'complete' | 'locked'
+      readiness_keys: string[]
+      primary_actions: Array<WorkspaceActionKey | string>
+      blocked_reason: string | null
+    }>
+  }
+  policy: {
+    funding_source: WorkspaceFundingSource | string | null
+    settlement_type: WorkspaceSettlementType | string | null
+    allowed_settlements: Array<WorkspaceSettlementType | string>
+    visible_sections: WorkspaceSectionKey[]
+    locked_sections: Record<string, string | null>
+    allowed_actions: Array<WorkspaceActionKey | string>
+    blocked_reasons: Array<{ code: string; message: string }>
+  }
+  readiness: Record<string, WorkspaceReadinessState>
+  sections: Array<{
+    key: WorkspaceSectionKey
+    title: string
+    visible: boolean
+    locked: boolean
+    locked_reason: string | null
+    readiness_key: string | null
+  }>
+  documents: {
+    procurement: {
+      id: number
+      status: WorkspaceStatus
+      supplier_id: number | null
+      supplier_name: string | null
+      notes: string
+      opened_at: string
+      closed_at: string | null
+    }
+    source: {
+      funding_source: WorkspaceFundingSource | string | null
+      supplier_required: boolean
+      supplier_id: number | null
+      investment_agreement_required: boolean
+      investment_agreement_id: number | null
+    }
+    items: Array<{
+      id: number
+      product_variant_id: number
+      product_variant_name: string
+      quantity: string
+      unit_purchase_price: string
+      currency: string
+      fx_rate: string
+      lifecycle_state: string
+      payment_state: string
+      received_quantity: string
+      remaining_quantity: string
+      locked_reason: string | null
+    }>
+    expenses: Array<{
+      id: number
+      expense_type: string
+      amount: string
+      currency: string
+      fx_rate: string
+      allocation_method: string
+      target_item_ids: number[]
+      lifecycle_state: string
+      payment_state: string
+      locked_reason: string | null
+    }>
+    settlement: {
+      id: number
+      type: WorkspaceSettlementType | string
+      currency_of_obligation: string
+      fx_rate_at_obligation: string
+      total_amount_due: string
+      paid_amount: string
+      remaining_amount: string
+      deadline_date: string | null
+      consignment_mode: string | null
+      notes: string
+      schedule: Array<{
+        id: number
+        sequence_number: number
+        due_date: string
+        amount: string
+        currency: string
+        status: string
+        paid_at: string | null
+        paid_amount: string
+      }>
+    } | null
+    payables: Array<{
+      id: number
+      supplier_id: number
+      supplier_name: string | null
+      original_amount: string
+      paid_amount: string
+      remaining_amount: string
+      currency: string
+      status: string
+      due_date: string | null
+    }>
+    payments: Array<{
+      id: number
+      target_type: string
+      target_id: number
+      source_type: string
+      source_id: number
+      amount: string
+      currency: string
+      fx_rate: string
+      status: string
+      paid_at: string
+      journal_entry_id: number | null
+    }>
+    investment: {
+      agreement_id: number
+      agreement_label: string
+      legal_mode: string | null
+      currency: string
+      planned_budget: string
+      partners: Array<{
+        partner_id: number
+        partner_name: string
+        role: string
+        planned_capital_share: string
+        profit_share: string
+      }>
+      contributions: Array<{
+        id: number
+        partner_id: number
+        amount: string
+        currency: string
+        fx_rate: string
+        date: string
+        notes: string
+      }>
+      allocations: Array<{
+        id: number
+        procurement_id: number
+        partner_id: number
+        direction: string
+        amount: string
+        currency: string
+        fx_rate: string
+        date: string
+        notes: string
+      }>
+      available_by_partner: Record<string, Record<string, string>>
+    } | null
+    receive_batches: Array<{
+      id: number
+      received_at: string
+      warehouse_id: number
+      warehouse_name: string
+      status: string
+      inventory_total_uzs: string
+      lines: Array<{
+        id: number
+        item_id: number
+        lot_id: number
+        product_variant_id: number
+        product_variant_name: string
+        quantity: string
+        unit_purchase_price_uzs: string
+        allocated_expense_uzs: string
+        landed_cost_per_unit_uzs: string
+      }>
+      expenses: Array<{
+        id: number
+        expense_id: number
+        expense_type: string
+        allocated_amount_uzs: string
+      }>
+      capital_snapshot: unknown | null
+      journal_entry_id: number | null
+    }>
+    lots_preview: unknown[]
+  }
+  summaries: {
+    items_total_uzs: string
+    expenses_total_uzs: string
+    payables_total: string
+    receive_batches_count: number
+  }
+  history: Array<{
+    kind: string
+    date: string
+    title: string
+    document_id: number
+  }>
+}
+
+export interface ProcurementWorkspaceCreatePayload {
+  funding_source?: WorkspaceFundingSource
+  supplier_id?: number | null
+  investment_agreement_id?: number | null
+  agreement_id?: number | null
+  notes?: string
+  client_request_id?: string
+}
+
+export async function fetchProcurementWorkspaces(params?: {
+  status?: string
+  funding_source?: string
+}, signal?: AbortSignal): Promise<ProcurementWorkspacePayload[]> {
+  const { data } = await api.get<ProcurementWorkspacePayload[] | { results?: ProcurementWorkspacePayload[] }>(
+    '/api/v1/procurement-workspaces/',
+    { params, signal },
+  )
+  return Array.isArray(data) ? data : data.results ?? []
+}
+
+export async function fetchProcurementWorkspace(
+  id: number,
+  signal?: AbortSignal,
+): Promise<ProcurementWorkspacePayload> {
+  const { data } = await api.get<ProcurementWorkspacePayload>(`/api/v1/procurement-workspaces/${id}/`, { signal })
+  return data
+}
+
+export async function createProcurementWorkspace(
+  payload: ProcurementWorkspaceCreatePayload,
+): Promise<ProcurementWorkspacePayload> {
+  const { data } = await api.post<ProcurementWorkspacePayload>('/api/v1/procurement-workspaces/', payload)
+  return data
+}
+
+export async function runProcurementWorkspaceAction<TPayload extends Record<string, unknown>>(
+  id: number,
+  action: WorkspaceActionKey,
+  payload: TPayload,
+): Promise<ProcurementWorkspacePayload> {
+  const { data } = await api.post<ProcurementWorkspacePayload>(
+    `/api/v1/procurement-workspaces/${id}/actions/${action}/`,
+    {
+      client_request_id: crypto.randomUUID(),
+      payload,
+    },
+  )
+  return data
+}
+
 export interface ProcurementListItem {
   id: number
   procurement_type: string
@@ -130,6 +428,29 @@ export interface ProcurementDetail {
       notes: string
     }>
   }
+  terms: {
+    id: number
+    type: string
+    currency_of_obligation: string
+    fx_rate_at_obligation: string
+    total_amount_due: string
+    paid_amount: string
+    remaining_amount: string
+    status: string
+    deadline_date: string | null
+    consignment_agreement: number | null
+    notes: string
+    schedule: Array<{
+      id: number
+      sequence_number: number
+      due_date: string
+      amount: string
+      currency: string
+      status: string
+      paid_at: string | null
+      paid_amount: string
+    }>
+  } | null
   receive_batches: ReceiveBatch[]
   receive_plan: ReceivePlan
   cost_preview: {
@@ -458,6 +779,22 @@ export interface ProcurementUpsertPayload {
     target_item_ids?: number[]
   }>
   contract?: ProcurementContractPayload
+  terms?: {
+    type: string
+    currency_of_obligation?: string
+    fx_rate_at_obligation?: string | number
+    total_amount_due: string | number
+    paid_amount?: string | number
+    deadline_date?: string | null
+    consignment_agreement_id?: number | null
+    notes?: string
+  } | null
+  schedule?: Array<{
+    sequence_number?: number
+    due_date: string
+    amount: string | number
+    currency?: string
+  }>
 }
 
 export async function fetchInvestmentAgreements(): Promise<InvestmentAgreementListItem[]> {
@@ -528,6 +865,8 @@ export async function receiveProcurement(
   destination_warehouse_id: number,
   item_ids?: number[],
   capital_allocations?: ReceiveCapitalAllocationPayload[],
+  terms_payload?: Record<string, unknown> | null,
+  schedule_payload?: Array<Record<string, unknown>>,
 ): Promise<ProcurementDetail & { items_count: number }> {
   const { data } = await api.post<ProcurementDetail & { items_count: number }>(
     `/api/v1/partnerships/procurements/${id}/receive/`,
@@ -535,6 +874,8 @@ export async function receiveProcurement(
       destination_warehouse_id,
       ...(item_ids?.length ? { item_ids } : {}),
       ...(capital_allocations?.length ? { capital_allocations } : {}),
+      ...(terms_payload ? { terms_payload } : {}),
+      ...(schedule_payload?.length ? { schedule_payload } : {}),
     },
   )
   return data
@@ -545,6 +886,55 @@ export async function splitProcurementItem(
   payload: { item_id: number; quantity: string | number },
 ): Promise<ProcurementDetail> {
   const { data } = await api.post<ProcurementDetail>(`/api/v1/partnerships/procurements/${id}/split-item/`, payload)
+  return data
+}
+
+export async function createConsignmentReturn(
+  id: number,
+  payload: {
+    warehouse_id: number
+    notes?: string
+    client_request_id?: string
+    lines: Array<{
+      lot_id: number
+      quantity: string | number
+      disposition: 'RETURN_TO_SUPPLIER' | 'DISPOSE_SUPPLIER_LOSS' | 'DISPOSE_BUSINESS_LOSS' | 'CONVERT_TO_OWN'
+      agreed_price_per_unit: string | number
+      notes?: string
+    }>
+  },
+): Promise<unknown> {
+  const { data } = await api.post(`/api/v1/partnerships/procurements/${id}/consignment-return/`, payload)
+  return data
+}
+
+export interface ProcurementTermsAmendment {
+  id: number
+  amended_at: string
+  changed_by_user: number | null
+  changed_by_user_name: string
+  change_payload: {
+    before?: Record<string, string>
+    after?: Record<string, string>
+  }
+  reason: string
+}
+
+export async function fetchProcurementTermsAmendments(id: number): Promise<ProcurementTermsAmendment[]> {
+  const { data } = await api.get<ProcurementTermsAmendment[]>(
+    `/api/v1/partnerships/procurements/${id}/terms/amendments/`,
+  )
+  return data
+}
+
+export async function amendProcurementTerms(
+  id: number,
+  payload: { new_fields: Record<string, unknown>; reason?: string },
+): Promise<{ amendment_id: number; change_payload: ProcurementTermsAmendment['change_payload']; amended_at: string }> {
+  const { data } = await api.post(
+    `/api/v1/partnerships/procurements/${id}/terms/amend/`,
+    payload,
+  )
   return data
 }
 

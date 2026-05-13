@@ -93,7 +93,7 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner', 'warehouse'] },
   },
 
-  // Procurements (rendered by restored intake views until full slice rewrite)
+  // Procurements
   {
     path: '/procurements/agreements',
     name: 'agreement-list',
@@ -121,19 +121,31 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/procurements/create',
     name: 'procurement-create',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
+    meta: { roles: ['owner', 'warehouse'] },
+  },
+  {
+    path: '/procurements/legacy/create',
+    name: 'procurement-create-legacy',
+    component: () => import('@/modules/intake/views/IntakeCreateLegacy.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id/edit',
     name: 'procurement-edit',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id',
     name: 'procurement-detail',
-    component: () => import('@/modules/intake/views/IntakeDetail.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
+    meta: { roles: ['owner', 'warehouse'] },
+  },
+  {
+    path: '/procurements/:id/consignment-return',
+    name: 'procurement-consignment-return',
+    component: () => import('@/modules/intake/views/ConsignmentReturnCreate.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
@@ -214,6 +226,12 @@ const routes: RouteRecordRaw[] = [
     path: '/suppliers',
     name: 'suppliers',
     component: () => import('@/modules/more/views/SuppliersView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
+    path: '/suppliers/payables',
+    name: 'supplier-payables',
+    component: () => import('@/modules/suppliers/views/SupplierPayablesView.vue'),
     meta: { roles: ['owner'] },
   },
   {

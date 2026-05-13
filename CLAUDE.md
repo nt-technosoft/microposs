@@ -14,6 +14,45 @@ MicroPOS / **Sherik POS** — mobile-first POS platform for small retail busines
 - 🎯 **[AGENTS.md](./AGENTS.md)** — entrypoint для всех LLM-инструментов (Cursor/Codex/etc.)
 - 💼 **[presentation/](./presentation/)** — pitch-материалы и стратегические документы (Sharia certification research, Billz proposal)
 
+## Active P0
+
+**E07 — Procurement & Investment Workspace Re-architecture** is the current priority:
+[`docs/roadmap/E07-procurement-workspace.md`](./docs/roadmap/E07-procurement-workspace.md)
+
+Treat E07 as the source of truth for new procurement/investment work. The old intake flow is historical context, not the target architecture.
+
+## Architecture-First Delivery Policy
+
+For large epics, domain rewrites and foundational features, optimize for the
+target architecture, not for a locally green or cosmetically complete state.
+
+- Do not write tests for the sake of tests. Tests must validate the intended
+  business behavior and target architecture.
+- Do not add shims, aliases, hidden compatibility layers or temporary
+  workarounds only to make old tests, old UI or old services pass.
+- A temporarily incomplete or red intermediate state is acceptable during a
+  planned reset if the roadmap clearly explains how the final architecture will
+  become consistent.
+- When conflicts appear, resolve them at the architecture/domain boundary:
+  decide which model, service, module or contract should change long-term
+  instead of patching the local symptom.
+- Before implementing large changes, check how the decision affects adjacent
+  domains: inventory/FIFO, finance/journals, suppliers/payables,
+  partnerships/profit, reporting, frontend state and Excel replay.
+- Prefer explicit target contracts over silent backward compatibility. Old code
+  can remain as reference, but must not dictate the new model.
+- Verification is still required, but it should prove the target behavior. Do
+  not treat legacy-suite green as success if it required compromising the
+  architecture.
+- For confirmed large epics such as E07, continue in larger coherent slices
+  until a real blocker appears. Do not stop after every micro-task just to
+  report progress or ask for permission when the roadmap and target contracts
+  provide enough context.
+- Use planning when it improves execution quality, then execute the plan.
+  Periodically re-check the architecture, domain boundaries and adjacent-module
+  effects, but avoid wasting cycles on premature full-suite verification while
+  the reset is intentionally incomplete.
+
 ## Architecture
 - **Monorepo**: `backend/` (Django) + `frontend/` (Vue.js 3)
 - **Backend**: Python 3.12 / Django 5.x / DRF / PostgreSQL 16 / Redis / Celery
@@ -58,11 +97,15 @@ MicroPOS / **Sherik POS** — mobile-first POS platform for small retail busines
 - Debounce 300ms on currency switches and search inputs
 
 ## Vacuum Rework Note
-- Frontend migration follows **reuse foundation / rewrite feature-domain**.
+- E07 is the current P0 and follows **controlled radical reset**.
+- Do not treat old procurement/intake backend or UI as target architecture. Use old code only as reference for business rules and edge cases.
+- New procurement/investment/payment core should be designed as target architecture, not adapted around old compromises.
+- Frontend migration follows **reuse foundation / rebuild procurement feature-domain**.
 - Reuse foundation: app shell, shared/base components, design tokens, feedback primitives, auth/session backbone, route meta/access semantics.
-- Rewrite feature-domain: screens, flows, contracts, stores, and adapters still tied to legacy `Receipt`, `InvestorSummary`, and old orchestration.
-- `Receipt` is being replaced by `Procurement` in product and UX terminology.
-- PR-12 (Excel mapping/final cleanup) is a separate discovery/design track under direct user control, not a default continuation of PR-10/11.
+- Rebuild feature-domain: procurement workspace, investment agreement flow, funding/settlement/payment/receive sections, policy-driven UI state.
+- E07 Phase D frontend must follow `docs/roadmap/E07-canonical-workspace-flow.md`: goods/expenses → supplier/settlement → funding → payment/obligation → receipt → history. API section order is not UX order.
+- `Receipt` is legacy; new work should model procurement through the E07 document/event architecture.
+- PR-12 (Excel mapping/final cleanup) is a separate discovery/design track, but Excel replay must later validate E07.
 
 ## Roadmap Protocol
 

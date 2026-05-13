@@ -1264,6 +1264,8 @@ def open_procurement(
     contract: dict | None = None,
     items: list[dict] | None = None,
     expenses: list[dict] | None = None,
+    terms: dict | None = None,
+    schedule: list[dict] | None = None,
 ):
     """
     Create a Procurement (and, for partnership types, InvestmentContract + ContractPartner[]).
@@ -1338,6 +1340,14 @@ def open_procurement(
                 contract=contract,
             )
 
+        if terms is not None:
+            _upsert_procurement_terms_draft(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                terms_payload=terms,
+                schedule_payload=schedule or [],
+            )
+
         ProcurementBalance.objects.create(
             tenant_id=tenant_id,
             procurement=procurement,
@@ -1368,6 +1378,8 @@ def update_open_procurement(
     contract: dict | None = None,
     items: list[dict] | None = None,
     expenses: list[dict] | None = None,
+    terms: dict | None = None,
+    schedule: list[dict] | None = None,
 ):
     from .models import InvestmentAgreement, InvestmentContract, Procurement
 
@@ -1421,7 +1433,7 @@ def update_open_procurement(
         procurement.agreement = agreement
         procurement.supplier_id = supplier_id
         procurement.notes = notes
-        procurement.save(update_fields=['procurement_type', 'agreement', 'supplier', 'notes', 'updated_at'])
+        procurement.save(update_fields=['funding_source', 'agreement', 'supplier', 'notes', 'updated_at'])
 
         _replace_procurement_items_and_expenses(
             tenant_id=tenant_id,
@@ -1437,6 +1449,14 @@ def update_open_procurement(
                 procurement=procurement,
                 procurement_type=procurement_type,
                 contract=contract,
+            )
+
+        if terms is not None:
+            _upsert_procurement_terms_draft(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                terms_payload=terms,
+                schedule_payload=schedule or [],
             )
 
         publish_event(
@@ -1779,11 +1799,65 @@ def _withdraw_procurement_amounts(
     balance.save(update_fields=['balances', 'updated_at'])
 
 
+def _pay_procurement_amounts_from_cash_account(
+    *,
+    tenant_id: int,
+    procurement,
+    cash_account_id: int,
+    amounts_by_currency: dict[str, Decimal],
+    date,
+    reason: str,
+    source_ref_type: str,
+) -> list[CashEntry]:
+    account = CashAccount.objects.select_for_update().get(
+        pk=cash_account_id,
+        tenant_id=tenant_id,
+    )
+    account_currency = str(account.currency or 'UZS').upper()
+    total = _q(Decimal(str(amounts_by_currency.get(account_currency, _ZERO))))
+    foreign_currencies = [
+        currency
+        for currency, amount in amounts_by_currency.items()
+        if currency != account_currency and _q(amount) > 0
+    ]
+    if foreign_currencies:
+        raise ValueError(
+            f'Cash account currency {account_currency} cannot pay {foreign_currencies}.'
+        )
+    if total <= 0:
+        raise ValueError('Cash payment amount must be > 0.')
+    if account.balance < total:
+        raise ValueError(
+            f'Insufficient cash in {account.name}: have {account.balance}, need {total}.'
+        )
+
+    cash_entry = create_cash_entry(
+        tenant_id=tenant_id,
+        account=account,
+        direction=CashEntry.Direction.OUT,
+        amount=total,
+        date=date,
+        source_ref_type=source_ref_type,
+        source_ref_id=procurement.pk,
+    )
+    record_journal_from_cash_entry(
+        tenant_id=tenant_id,
+        cash_entry=cash_entry,
+        operation_type='payment',
+        operation_id=cash_entry.pk,
+        counterpart_account_code='1100',
+        description=reason,
+        date=date,
+    )
+    return [cash_entry]
+
+
 def pay_procurement_items(
     *,
     tenant_id: int,
     procurement_id: int,
     item_ids: list[int] | None = None,
+    cash_account_id: int | None = None,
     reason: str = '',
 ):
     from .models import Procurement, ProcurementBalance, ProcurementItem
@@ -1817,11 +1891,6 @@ def pay_procurement_items(
         if not draft_items:
             raise ValueError('No draft items to pay.')
 
-        balance = ProcurementBalance.objects.select_for_update().get(
-            procurement=procurement,
-            tenant_id=tenant_id,
-        )
-
         amounts_by_currency: dict[str, Decimal] = {}
         fx_rate_map: dict[str, Decimal] = {}
         for item in draft_items:
@@ -1830,15 +1899,30 @@ def pay_procurement_items(
             fx_rate_map[str(item.currency).upper()] = Decimal(str(item.fx_rate))
 
         paid_at = timezone.now()
-        _withdraw_procurement_amounts(
-            tenant_id=tenant_id,
-            procurement=procurement,
-            balance=balance,
-            amounts_by_currency=amounts_by_currency,
-            fx_rate_map=fx_rate_map,
-            date=paid_at,
-            reason=payment_reason,
-        )
+        if procurement.procurement_type == Procurement.Type.OWN_FUNDS and cash_account_id:
+            _pay_procurement_amounts_from_cash_account(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                cash_account_id=cash_account_id,
+                amounts_by_currency=amounts_by_currency,
+                date=paid_at,
+                reason=payment_reason,
+                source_ref_type='procurement_items_payment',
+            )
+        else:
+            balance = ProcurementBalance.objects.select_for_update().get(
+                procurement=procurement,
+                tenant_id=tenant_id,
+            )
+            _withdraw_procurement_amounts(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                balance=balance,
+                amounts_by_currency=amounts_by_currency,
+                fx_rate_map=fx_rate_map,
+                date=paid_at,
+                reason=payment_reason,
+            )
 
         ProcurementItem.objects.filter(
             pk__in=[item.pk for item in draft_items],
@@ -1922,6 +2006,7 @@ def pay_procurement_expenses(
     tenant_id: int,
     procurement_id: int,
     expense_ids: list[int] | None = None,
+    cash_account_id: int | None = None,
     reason: str = '',
 ):
     from .models import Procurement, ProcurementBalance, ProcurementExpense
@@ -1949,11 +2034,6 @@ def pay_procurement_expenses(
         if not draft_expenses:
             raise ValueError('No draft expenses to pay.')
 
-        balance = ProcurementBalance.objects.select_for_update().get(
-            procurement=procurement,
-            tenant_id=tenant_id,
-        )
-
         amounts_by_currency: dict[str, Decimal] = {}
         fx_rate_map: dict[str, Decimal] = {}
         for expense in draft_expenses:
@@ -1962,15 +2042,30 @@ def pay_procurement_expenses(
             fx_rate_map[str(expense.currency).upper()] = Decimal(str(expense.fx_rate))
 
         paid_at = timezone.now()
-        _withdraw_procurement_amounts(
-            tenant_id=tenant_id,
-            procurement=procurement,
-            balance=balance,
-            amounts_by_currency=amounts_by_currency,
-            fx_rate_map=fx_rate_map,
-            date=paid_at,
-            reason=payment_reason,
-        )
+        if procurement.procurement_type == Procurement.Type.OWN_FUNDS and cash_account_id:
+            _pay_procurement_amounts_from_cash_account(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                cash_account_id=cash_account_id,
+                amounts_by_currency=amounts_by_currency,
+                date=paid_at,
+                reason=payment_reason,
+                source_ref_type='procurement_expenses_payment',
+            )
+        else:
+            balance = ProcurementBalance.objects.select_for_update().get(
+                procurement=procurement,
+                tenant_id=tenant_id,
+            )
+            _withdraw_procurement_amounts(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                balance=balance,
+                amounts_by_currency=amounts_by_currency,
+                fx_rate_map=fx_rate_map,
+                date=paid_at,
+                reason=payment_reason,
+            )
 
         ProcurementExpense.objects.filter(
             pk__in=[expense.pk for expense in draft_expenses],
@@ -2679,6 +2774,478 @@ def get_procurement_receive_plan(*, tenant_id: int, procurement_id: int, item_id
     return build_receive_plan(procurement, item_ids=item_ids)
 
 
+def _validate_terms_payload_supplier(procurement, terms_payload):
+    """Validate supplier settlement policy for a procurement mutation."""
+    if terms_payload is None:
+        return
+
+    from .policies import allowed_settlements_for_funding
+
+    t = (terms_payload.get('type') or '').upper()
+    funding_source = procurement.funding_source
+    allowed_settlements = allowed_settlements_for_funding(funding_source)
+    if t and t not in allowed_settlements:
+        raise ValueError(
+            f'{funding_source} does not allow {t} terms in MVP.'
+        )
+    if t and t != 'PREPAID' and procurement.supplier_id is None:
+        raise ValueError(
+            f'Supplier is required for {t} terms; supplier_id is None on '
+            f'procurement #{procurement.pk}.'
+        )
+
+
+def _terms_status_for_amounts(total_amount_due: Decimal, paid_amount: Decimal):
+    from .models import ProcurementTerms
+
+    total = _q(Decimal(str(total_amount_due or 0)))
+    paid = _q(Decimal(str(paid_amount or 0)))
+    if paid >= total and total > 0:
+        return ProcurementTerms.Status.FULLY_PAID
+    if paid > 0:
+        return ProcurementTerms.Status.PARTIALLY_PAID
+    return ProcurementTerms.Status.OPEN
+
+
+def _normalize_terms_values(terms_payload):
+    t = (terms_payload.get('type') or '').upper()
+    if not t:
+        raise ValueError('terms.type is required.')
+
+    total_amount_due = _q(Decimal(str(terms_payload['total_amount_due'])))
+    raw_paid = terms_payload.get('paid_amount')
+    paid_amount = _q(Decimal(str(raw_paid if raw_paid not in (None, '') else '0')))
+    if t == 'PREPAID':
+        paid_amount = total_amount_due
+    if paid_amount < 0:
+        raise ValueError('terms.paid_amount cannot be negative.')
+    if paid_amount > total_amount_due:
+        raise ValueError('terms.paid_amount cannot exceed total_amount_due.')
+
+    return {
+        'type': t,
+        'currency_of_obligation': str(terms_payload.get('currency_of_obligation') or 'UZS').upper(),
+        'fx_rate_at_obligation': Decimal(str(terms_payload.get('fx_rate_at_obligation') or 1)),
+        'total_amount_due': total_amount_due,
+        'paid_amount': paid_amount,
+        'status': _terms_status_for_amounts(total_amount_due, paid_amount),
+        'deadline_date': terms_payload.get('deadline_date'),
+        'consignment_agreement_id': terms_payload.get('consignment_agreement_id'),
+        'notes': str(terms_payload.get('notes') or ''),
+    }
+
+
+def _replace_payment_schedule(tenant_id, terms, schedule_payload):
+    from apps.suppliers.models import PaymentSchedule
+
+    if terms.schedule_entries.exclude(status=PaymentSchedule.Status.PENDING).exists():
+        raise ValueError('Cannot replace payment schedule after schedule payments started.')
+
+    terms.schedule_entries.all().delete()
+    return _create_payment_schedule(tenant_id, terms, schedule_payload)
+
+
+def _upsert_procurement_terms_draft(tenant_id, procurement, terms_payload, schedule_payload):
+    from .models import ProcurementTerms
+
+    if procurement.receive_batches.exists():
+        raise ValueError('Нельзя менять условия поставщика после оприходования; используйте изменение условий.')
+
+    _validate_terms_payload_supplier(procurement, terms_payload)
+    values = _normalize_terms_values(terms_payload)
+
+    if values['type'] == ProcurementTerms.Type.INSTALLMENT and not schedule_payload:
+        raise ValueError('Payment schedule is required for installment terms.')
+
+    terms, _created = ProcurementTerms.objects.update_or_create(
+        tenant_id=tenant_id,
+        procurement=procurement,
+        defaults=values,
+    )
+
+    if values['type'] == ProcurementTerms.Type.INSTALLMENT:
+        _replace_payment_schedule(tenant_id, terms, schedule_payload)
+    elif terms.schedule_entries.exists():
+        _replace_payment_schedule(tenant_id, terms, [])
+
+    return terms
+
+
+def _create_or_get_procurement_terms(tenant_id, procurement, terms_payload, received_at):
+    """
+    Create ProcurementTerms for a procurement if not already present.
+    Returns (terms, was_created).
+    """
+    from .models import ProcurementTerms
+
+    if hasattr(procurement, 'terms') and procurement.terms is not None:
+        # Already created on a previous receive batch — leave intact
+        return procurement.terms, False
+
+    if terms_payload is None:
+        return None, False
+
+    t = (terms_payload.get('type') or '').upper()
+    if not t:
+        raise ValueError('terms_payload.type is required.')
+
+    values = _normalize_terms_values(terms_payload)
+    terms = ProcurementTerms.objects.create(
+        tenant_id=tenant_id,
+        procurement=procurement,
+        **values,
+    )
+    return terms, True
+
+
+def _create_payment_schedule(tenant_id, terms, schedule_payload):
+    """Create PaymentSchedule rows for INSTALLMENT terms."""
+    from apps.suppliers.models import PaymentSchedule
+
+    if not schedule_payload:
+        return []
+
+    created = []
+    for idx, entry in enumerate(schedule_payload, start=1):
+        sched = PaymentSchedule.objects.create(
+            tenant_id=tenant_id,
+            procurement_terms=terms,
+            sequence_number=entry.get('sequence_number', idx),
+            due_date=entry['due_date'],
+            amount=Decimal(str(entry['amount'])),
+            currency=str(entry.get('currency') or terms.currency_of_obligation).upper(),
+            status=PaymentSchedule.Status.PENDING,
+        )
+        created.append(sched)
+    return created
+
+
+def apply_terms_amendment(
+    *,
+    tenant_id: int,
+    terms_id: int,
+    new_fields: dict,
+    reason: str = '',
+    user_id: int | None = None,
+):
+    """
+    Apply an explicit amendment to ProcurementTerms.
+
+    Captures before/after snapshot in `ProcurementTermsAmendment.change_payload`,
+    then applies allowed mutations to the Terms row.
+
+    Allowed mutations (whitelist):
+      - deadline_date   (DEFERRED contracts)
+      - total_amount_due
+      - notes
+
+    Silent direct edits to ProcurementTerms are still possible via Django ORM
+    but discouraged — this is the audited path.
+    """
+    from .models import ProcurementTerms, ProcurementTermsAmendment
+
+    allowed = {'deadline_date', 'total_amount_due', 'notes'}
+    bad = set(new_fields) - allowed
+    if bad:
+        raise ValueError(f'Cannot amend fields: {bad}. Allowed: {allowed}.')
+
+    with transaction.atomic():
+        terms = (
+            ProcurementTerms.objects
+            .select_for_update()
+            .get(pk=terms_id, tenant_id=tenant_id)
+        )
+
+        before = {k: str(getattr(terms, k)) for k in allowed}
+        after = dict(before)
+
+        for k, v in new_fields.items():
+            setattr(terms, k, v)
+            after[k] = str(v)
+
+        terms.save(update_fields=list(new_fields.keys()) + ['updated_at'])
+
+        amendment = ProcurementTermsAmendment.objects.create(
+            tenant_id=tenant_id,
+            terms=terms,
+            amended_at=timezone.now(),
+            changed_by_user_id=user_id,
+            change_payload={'before': before, 'after': after},
+            reason=reason,
+        )
+
+        # Sync deadline on the associated payable, if any
+        from apps.suppliers.models import SupplierPayable
+        if 'deadline_date' in new_fields:
+            SupplierPayable.objects.filter(
+                tenant_id=tenant_id,
+                procurement=terms.procurement,
+                status__in=[
+                    SupplierPayable.Status.OPEN,
+                    SupplierPayable.Status.PARTIALLY_PAID,
+                ],
+            ).update(
+                deadline_date=new_fields['deadline_date'],
+                updated_at=timezone.now(),
+            )
+
+        publish_event(
+            event_type='procurement.terms.amended',
+            payload={
+                'terms_id': terms.pk,
+                'procurement_id': terms.procurement_id,
+                'amendment_id': amendment.pk,
+                'changed_fields': list(new_fields.keys()),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return amendment
+
+
+def _upsert_supplier_links_for_items(tenant_id, procurement, items, received_at):
+    """E02 hook: upsert ProductSupplier link for each item if procurement has a supplier."""
+    if procurement.supplier_id is None:
+        return
+    from apps.catalog.services import upsert_product_supplier_link
+
+    for item in items:
+        if not item.quantity or Decimal(str(item.quantity)) <= 0:
+            continue
+        upsert_product_supplier_link(
+            tenant_id=tenant_id,
+            product_variant_id=item.product_variant_id,
+            supplier_id=procurement.supplier_id,
+            unit_price=Decimal(str(item.unit_purchase_price)),
+            currency=item.currency,
+            quantity=Decimal(str(item.quantity)),
+            received_at=received_at,
+            fx_rate=Decimal(str(item.fx_rate or 1)),
+        )
+
+
+def process_consignment_return(
+    *,
+    tenant_id: int,
+    consignment_return_id: int,
+    warehouse_id: int,
+    confirmed_at=None,
+):
+    """
+    Confirm a ConsignmentReturn document, processing each line according to
+    its disposition:
+
+      RETURN_TO_SUPPLIER    stock - qty (CONSIGNMENT_RETURN_OUT), payable - agreed
+      DISPOSE_SUPPLIER_LOSS stock - qty (WRITEOFF),                payable - cost
+      DISPOSE_BUSINESS_LOSS stock - qty (WRITEOFF),                payable unchanged
+      CONVERT_TO_OWN        split consignment lot into a new OWNED lot at agreed price,
+                            payable + agreed (business now owes for converted qty)
+
+    All lines processed within a single atomic block. Status moves DRAFT → CONFIRMED.
+    """
+    from apps.inventory.models import Lot, LotStock, StockMovement
+    from apps.suppliers.models import SupplierPayable
+    from .models import (
+        ConsignmentReturn, ConsignmentReturnLine, Procurement,
+    )
+
+    confirmed_at = confirmed_at or timezone.now()
+
+    with transaction.atomic():
+        ret = (
+            ConsignmentReturn.objects
+            .select_for_update()
+            .get(pk=consignment_return_id, tenant_id=tenant_id)
+        )
+        if ret.status != ConsignmentReturn.Status.DRAFT:
+            raise ValueError(
+                f'Cannot process consignment return in status {ret.status}.'
+            )
+
+        lines = list(ret.lines.select_related('lot'))
+        if not lines:
+            raise ValueError('Consignment return has no lines.')
+
+        # Find the related payable for this procurement (if any)
+        payable = (
+            SupplierPayable.objects
+            .select_for_update()
+            .filter(
+                tenant_id=tenant_id,
+                procurement=ret.procurement,
+                status__in=[
+                    SupplierPayable.Status.OPEN,
+                    SupplierPayable.Status.PARTIALLY_PAID,
+                ],
+            )
+            .first()
+        )
+
+        for line in lines:
+            qty = Decimal(str(line.quantity))
+            if qty <= 0:
+                raise ValueError(f'Line #{line.pk} has non-positive quantity.')
+
+            lot = line.lot
+            lot_stock = (
+                LotStock.objects
+                .select_for_update()
+                .filter(tenant_id=tenant_id, lot=lot, warehouse_id=warehouse_id)
+                .first()
+            )
+            if lot_stock is None:
+                raise ValueError(
+                    f'No LotStock at warehouse {warehouse_id} for lot #{lot.pk}.'
+                )
+
+            qty_int = int(qty)
+            if lot_stock.quantity_remaining < qty_int:
+                raise ValueError(
+                    f'Lot #{lot.pk} at warehouse {warehouse_id} has '
+                    f'{lot_stock.quantity_remaining} < {qty_int} requested.'
+                )
+
+            d = line.disposition
+            agreed_unit = Decimal(str(line.agreed_price_per_unit))
+            cost_unit = Decimal(str(lot.landed_cost_per_unit))
+
+            if d in (
+                ConsignmentReturnLine.Disposition.RETURN_TO_SUPPLIER,
+                ConsignmentReturnLine.Disposition.DISPOSE_SUPPLIER_LOSS,
+                ConsignmentReturnLine.Disposition.DISPOSE_BUSINESS_LOSS,
+            ):
+                # Reduce stock
+                lot_stock.quantity_remaining = lot_stock.quantity_remaining - qty_int
+                lot_stock.save(update_fields=['quantity_remaining', 'updated_at'])
+
+                # Stock movement type
+                if d == ConsignmentReturnLine.Disposition.RETURN_TO_SUPPLIER:
+                    mtype = StockMovement.MovementType.CONSIGNMENT_RETURN_OUT
+                else:
+                    mtype = StockMovement.MovementType.WRITEOFF
+
+                StockMovement.objects.create(
+                    tenant_id=tenant_id,
+                    lot=lot,
+                    movement_type=mtype,
+                    quantity=-qty_int,
+                    from_location_id=warehouse_id,
+                    reference_type='consignment_return',
+                    reference_id=ret.pk,
+                )
+
+                # Payable adjustments
+                if payable is not None:
+                    if d == ConsignmentReturnLine.Disposition.RETURN_TO_SUPPLIER:
+                        reduction = (agreed_unit * qty).quantize(Decimal('0.01'))
+                    elif d == ConsignmentReturnLine.Disposition.DISPOSE_SUPPLIER_LOSS:
+                        reduction = (cost_unit * qty).quantize(Decimal('0.01'))
+                    else:  # DISPOSE_BUSINESS_LOSS
+                        reduction = Decimal('0.00')
+
+                    if reduction > 0:
+                        new_paid = Decimal(str(payable.paid_amount))  # paid stays the same
+                        new_original = Decimal(str(payable.original_amount)) - reduction
+                        if new_original < 0:
+                            new_original = Decimal('0')
+                        new_remaining = new_original - new_paid
+                        if new_remaining <= 0:
+                            new_remaining = Decimal('0')
+                            payable.status = SupplierPayable.Status.FULLY_PAID
+                        payable.original_amount = new_original
+                        payable.remaining_amount = new_remaining
+                        payable.save(update_fields=[
+                            'original_amount', 'remaining_amount', 'status', 'updated_at',
+                        ])
+
+            elif d == ConsignmentReturnLine.Disposition.CONVERT_TO_OWN:
+                # Split: reduce consignment lot quantity, create new owned Lot
+                lot_stock.quantity_remaining = lot_stock.quantity_remaining - qty_int
+                lot_stock.save(update_fields=['quantity_remaining', 'updated_at'])
+
+                # Mark consignment movement
+                StockMovement.objects.create(
+                    tenant_id=tenant_id,
+                    lot=lot,
+                    movement_type=StockMovement.MovementType.ADJUSTMENT,
+                    quantity=-qty_int,
+                    from_location_id=warehouse_id,
+                    reference_type='consignment_return',
+                    reference_id=ret.pk,
+                )
+
+                # New owned lot at the agreed price (no contract snapshot)
+                new_lot = Lot.objects.create(
+                    tenant_id=tenant_id,
+                    procurement_item=lot.procurement_item,
+                    product_variant=lot.product_variant,
+                    quantity_initial=qty_int,
+                    unit_purchase_price=agreed_unit,
+                    landed_cost_per_unit=agreed_unit,
+                    contract_snapshot={},
+                    received_at=confirmed_at,
+                    is_active=True,
+                )
+                LotStock.objects.create(
+                    tenant_id=tenant_id,
+                    lot=new_lot,
+                    warehouse_id=warehouse_id,
+                    quantity_remaining=qty_int,
+                )
+                StockMovement.objects.create(
+                    tenant_id=tenant_id,
+                    lot=new_lot,
+                    movement_type=StockMovement.MovementType.RECEIPT,
+                    quantity=qty_int,
+                    to_location_id=warehouse_id,
+                    reference_type='consignment_return',
+                    reference_id=ret.pk,
+                )
+
+                # Increase payable (business now owes for the converted qty)
+                if payable is not None:
+                    add_amount = (agreed_unit * qty).quantize(Decimal('0.01'))
+                    payable.original_amount = (
+                        Decimal(str(payable.original_amount)) + add_amount
+                    )
+                    payable.remaining_amount = (
+                        Decimal(str(payable.remaining_amount)) + add_amount
+                    )
+                    # If was FULLY_PAID after a previous payment, this re-opens it
+                    if payable.remaining_amount > 0 and payable.status == SupplierPayable.Status.FULLY_PAID:
+                        payable.status = SupplierPayable.Status.PARTIALLY_PAID
+                    payable.save(update_fields=[
+                        'original_amount', 'remaining_amount', 'status', 'updated_at',
+                    ])
+
+            else:
+                raise ValueError(f'Unknown disposition: {d}')
+
+            # Mark lot inactive if fully exhausted across all warehouses
+            remaining_total = LotStock.objects.filter(
+                tenant_id=tenant_id, lot=lot,
+            ).aggregate(t=models.Sum('quantity_remaining'))['t'] or 0
+            if remaining_total <= 0 and lot.is_active:
+                lot.is_active = False
+                lot.save(update_fields=['is_active', 'updated_at'])
+
+        ret.status = ConsignmentReturn.Status.CONFIRMED
+        ret.return_date = confirmed_at
+        ret.save(update_fields=['status', 'return_date', 'updated_at'])
+
+        publish_event(
+            event_type='consignment_return.confirmed',
+            payload={
+                'consignment_return_id': ret.pk,
+                'procurement_id': ret.procurement_id,
+                'lines_count': len(lines),
+            },
+            tenant_id=tenant_id,
+        )
+
+    return ret
+
+
 def receive_procurement(
     *,
     tenant_id: int,
@@ -2687,10 +3254,20 @@ def receive_procurement(
     item_ids: list[int] | None = None,
     capital_allocations: list[dict] | None = None,
     received_at=None,
+    terms_payload: dict | None = None,
+    schedule_payload: list[dict] | None = None,
 ):
     """
     Finalize a procurement: validate balance == 0, allocate landed cost,
     create Lot + LotStock for every item with an immutable contract_snapshot.
+
+    Optional `terms_payload` (E01): if provided AND no ProcurementTerms exists
+    yet, creates one. For non-PREPAID terms, additionally:
+      - creates a SupplierPayable (procurement.supplier_id required)
+      - for INSTALLMENT, requires `schedule_payload` and creates PaymentSchedule rows
+
+    For every item with non-NULL supplier on the procurement, refreshes the
+    ProductSupplier link (E02).
     """
     from apps.inventory.models import Lot, LotStock, StockMovement
     from .models import (
@@ -2711,6 +3288,13 @@ def receive_procurement(
             raise ValueError(
                 f'Cannot receive procurement in status {procurement.status}.'
             )
+
+        # E01: validate supplier presence for non-PREPAID terms (early).
+        # Terms may be sent with receive or already saved on the draft procurement.
+        _validate_terms_payload_supplier(procurement, terms_payload)
+        existing_terms = getattr(procurement, 'terms', None)
+        if terms_payload is None and existing_terms is not None and existing_terms.type != 'PREPAID':
+            _validate_terms_payload_supplier(procurement, {'type': existing_terms.type})
 
         is_partnership = procurement.procurement_type in _PARTNERSHIP_TYPES
 
@@ -3050,7 +3634,18 @@ def receive_procurement(
             procurement.received_at = received_at
             procurement.save(update_fields=['status', 'received_at', 'updated_at'])
 
-        if total_inventory_uzs > 0:
+        own_funds_cash_paid = (
+            procurement.procurement_type == Procurement.Type.OWN_FUNDS
+            and CashEntry.objects.filter(
+                tenant_id=tenant_id,
+                source_ref_type__in=[
+                    'procurement_items_payment',
+                    'procurement_expenses_payment',
+                ],
+                source_ref_id=procurement.pk,
+            ).exists()
+        )
+        if total_inventory_uzs > 0 and not own_funds_cash_paid:
             create_journal_entry(
                 tenant_id=tenant_id,
                 operation_type='receipt',
@@ -3073,6 +3668,49 @@ def receive_procurement(
                 date=received_at,
             )
 
+        # ====================================================================
+        # E01 — Terms / Payable / Schedule creation on first confirmed receive
+        # ====================================================================
+        terms_saved = None
+        payable_created = None
+        if terms_payload is not None or getattr(procurement, 'terms', None) is not None:
+            terms, was_created = _create_or_get_procurement_terms(
+                tenant_id, procurement, terms_payload, received_at,
+            )
+            if terms is not None:
+                terms_saved = terms if was_created else None
+                # Non-PREPAID → SupplierPayable. Draft-saved terms still need
+                # a payable when the procurement is first received.
+                if terms.type != 'PREPAID':
+                    from apps.suppliers.models import SupplierPayable
+                    from apps.suppliers.services import create_payable_from_procurement
+
+                    existing_payable = SupplierPayable.objects.filter(
+                        tenant_id=tenant_id,
+                        procurement_id=procurement.pk,
+                        reason=SupplierPayable.Reason.PROCUREMENT,
+                    ).first()
+                    if existing_payable is None:
+                        terms_saved = terms
+                        if procurement.supplier_id is None:
+                            raise ValueError(f'Supplier is required for {terms.type} terms.')
+                        payable_created = create_payable_from_procurement(
+                            tenant_id=tenant_id,
+                            procurement_id=procurement.pk,
+                            supplier_id=procurement.supplier_id,
+                            terms=terms,
+                            deadline_date=terms.deadline_date,
+                        )
+                # INSTALLMENT → PaymentSchedule when terms were sent directly
+                # to receive and no draft schedule exists yet.
+                if terms.type == 'INSTALLMENT' and schedule_payload and not terms.schedule_entries.exists():
+                    _create_payment_schedule(tenant_id, terms, schedule_payload)
+
+        # ====================================================================
+        # E02 — refresh ProductSupplier link for each received item
+        # ====================================================================
+        _upsert_supplier_links_for_items(tenant_id, procurement, items, received_at)
+
         publish_event(
             event_type='procurement.received',
             payload={
@@ -3080,6 +3718,8 @@ def receive_procurement(
                 'receive_batch_id': receive_batch.pk,
                 'destination_warehouse_id': destination_warehouse_id,
                 'items_count': len(items),
+                'terms_id': terms_saved.pk if terms_saved else None,
+                'payable_id': payable_created.pk if payable_created else None,
             },
             tenant_id=tenant_id,
         )

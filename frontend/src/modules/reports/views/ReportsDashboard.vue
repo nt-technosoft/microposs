@@ -1292,7 +1292,7 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedProcurementId === procurement.procurement_id" class="analytics-details">
-                    <span class="detail-chip">{{ procurementTypeLabel(procurement.procurement_type) }}</span>
+                    <span class="detail-chip">{{ procurementTypeLabel(procurement.funding_source) }}</span>
                     <span class="detail-chip">{{ procurementStatusLabel(procurement.status) }}</span>
                     <span class="detail-chip">{{ t('reports.revenueLine', { amount: formatRowReportPrice(procurement, 'revenue', procurement.revenue) }) }}</span>
                     <span class="detail-chip">{{ t('reports.cogsLine', { amount: formatRowReportPrice(procurement, 'cogs', procurement.cogs) }) }}</span>

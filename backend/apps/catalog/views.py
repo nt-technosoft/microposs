@@ -2,7 +2,7 @@
 Catalog API views — CRUD for categories, products, attributes, discount reasons.
 """
 
-from django.db.models import Count, Max, Prefetch
+from django.db.models import Count, Exists, Max, OuterRef, Prefetch, Q
 from django.conf import settings
 from django.core.validators import FileExtensionValidator
 from rest_framework import viewsets, status
@@ -232,6 +232,24 @@ class ProductViewSet(viewsets.ModelViewSet):
             tenant_id=self.request.tenant_id,
         ).select_related('category')
 
+        # E02 — preferred sorting: products with a ProductSupplier link to the
+        # given supplier come first, ordered by recency of that link.
+        supplier_id = self.request.query_params.get('supplier_id')
+        order_mode = self.request.query_params.get('order')
+        if self.action == 'list' and supplier_id and order_mode == 'preferred':
+            from .models import ProductSupplier
+            link_qs = ProductSupplier.objects.filter(
+                supplier_id=supplier_id,
+                product_variant__product=OuterRef('pk'),
+            )
+            qs = qs.annotate(
+                _has_supplier_link=Exists(link_qs),
+                _supplier_last_received=Max(
+                    'variants__supplier_links__last_received_at',
+                    filter=Q(variants__supplier_links__supplier_id=supplier_id),
+                ),
+            ).order_by('-_has_supplier_link', '-_supplier_last_received', 'name')
+
         if self.action == 'retrieve':
             qs = qs.prefetch_related(
                 'variants__attribute_values__attribute_value__attribute',
@@ -257,6 +275,19 @@ class ProductViewSet(viewsets.ModelViewSet):
         if raw_location and str(raw_location).isdigit():
             context['location_id'] = int(raw_location)
         return context
+
+    def filter_queryset(self, queryset):
+        qs = super().filter_queryset(queryset)
+        # E02 — re-apply preferred ordering after DRF's default filter chain
+        # has potentially overridden our annotated order_by.
+        supplier_id = self.request.query_params.get('supplier_id')
+        if (
+            self.action == 'list'
+            and supplier_id
+            and self.request.query_params.get('order') == 'preferred'
+        ):
+            qs = qs.order_by('-_has_supplier_link', '-_supplier_last_received', 'name')
+        return qs
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -417,6 +448,36 @@ class ProductViewSet(viewsets.ModelViewSet):
         )
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='suppliers')
+    def suppliers(self, request, pk=None):
+        """E02 — list suppliers that have ever shipped any variant of this product."""
+        from .models import ProductSupplier
+        product = self.get_object()
+        links = (
+            ProductSupplier.objects
+            .filter(
+                tenant_id=request.tenant_id,
+                product_variant__product=product,
+            )
+            .select_related('supplier', 'product_variant')
+            .order_by('-last_received_at')
+        )
+        data = [
+            {
+                'supplier_id': link.supplier_id,
+                'supplier_name': link.supplier.name,
+                'product_variant_id': link.product_variant_id,
+                'last_received_at': link.last_received_at,
+                'last_unit_price': str(link.last_unit_price),
+                'last_currency': link.last_currency,
+                'total_received_quantity': str(link.total_received_quantity),
+                'total_received_value_uzs': str(link.total_received_value_uzs),
+                'total_procurements_count': link.total_procurements_count,
+            }
+            for link in links
+        ]
+        return Response(data)
+
     @action(detail=True, methods=['post', 'delete'], url_path='photo')
     def photo(self, request, pk=None):
         """Upload/replace or remove product photo."""
@@ -478,11 +539,34 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         return [IsOwner()]
 
     def get_queryset(self):
-        return ProductVariant.objects.filter(
+        qs = ProductVariant.objects.filter(
             tenant_id=self.request.tenant_id,
         ).select_related('product').prefetch_related(
             'attribute_values__attribute_value__attribute',
         )
+        supplier_id = self.request.query_params.get('supplier_id')
+        if supplier_id and self.request.query_params.get('order') == 'preferred':
+            from .models import ProductSupplier
+            link_qs = ProductSupplier.objects.filter(
+                supplier_id=supplier_id,
+                product_variant=OuterRef('pk'),
+            )
+            qs = qs.annotate(
+                _supplier_preferred=Exists(link_qs),
+                _supplier_last_received=Max(
+                    'supplier_links__last_received_at',
+                    filter=Q(supplier_links__supplier_id=supplier_id),
+                ),
+                _supplier_last_unit_price=Max(
+                    'supplier_links__last_unit_price',
+                    filter=Q(supplier_links__supplier_id=supplier_id),
+                ),
+                _supplier_last_currency=Max(
+                    'supplier_links__last_currency',
+                    filter=Q(supplier_links__supplier_id=supplier_id),
+                ),
+            ).order_by('-_supplier_preferred', '-_supplier_last_received', 'product__name')
+        return qs
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

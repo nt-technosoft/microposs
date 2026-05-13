@@ -345,6 +345,113 @@ class CashEntry(TenantModel):
         return f"CashEntry {self.direction} {self.amount} ({self.account})"
 
 
+class Payment(TenantModel):
+    """
+    Generic append-only money document.
+
+    E07 target: procurement, supplier, capital and dividend payments should use
+    one explicit payment fact instead of hiding financial truth inside line
+    statuses or domain-specific payment rows.
+    """
+
+    class SourceType(models.TextChoices):
+        CASH_ACCOUNT = 'CASH_ACCOUNT', 'Cash account'
+        CAPITAL_POOL = 'CAPITAL_POOL', 'Capital pool'
+        EXTERNAL_PARTNER = 'EXTERNAL_PARTNER', 'External partner'
+
+    class TargetType(models.TextChoices):
+        PROCUREMENT_COST = 'PROCUREMENT_COST', 'Procurement cost'
+        SUPPLIER_PAYABLE = 'SUPPLIER_PAYABLE', 'Supplier payable'
+        CAPITAL_CONTRIBUTION = 'CAPITAL_CONTRIBUTION', 'Capital contribution'
+        DIVIDEND = 'DIVIDEND', 'Dividend'
+
+    class Status(models.TextChoices):
+        POSTED = 'POSTED', 'Posted'
+        REVERSED = 'REVERSED', 'Reversed'
+
+    source_type = models.CharField(max_length=24, choices=SourceType.choices)
+    source_id = models.PositiveIntegerField()
+    target_type = models.CharField(max_length=32, choices=TargetType.choices)
+    target_id = models.PositiveIntegerField()
+    amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1'))
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.POSTED)
+    paid_at = models.DateTimeField()
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payments',
+    )
+    reversed_payment = models.ForeignKey(
+        'self',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='reversal_payments',
+    )
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'finance_payment'
+        indexes = [
+            models.Index(fields=['tenant', 'paid_at']),
+            models.Index(fields=['tenant', 'source_type', 'source_id']),
+            models.Index(fields=['tenant', 'target_type', 'target_id']),
+            models.Index(fields=['tenant', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_finance_payment_idempotent',
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('Payment is append-only. Use reversal instead of delete.')
+
+
+class PaymentAllocation(TenantModel):
+    """
+    Optional split allocation for a logical payment.
+
+    MVP may use one target per Payment, but this keeps the model ready for
+    multi-target payments without changing the public contract later.
+    """
+
+    payment = models.ForeignKey(
+        Payment,
+        on_delete=models.PROTECT,
+        related_name='allocations',
+    )
+    target_type = models.CharField(max_length=32, choices=Payment.TargetType.choices)
+    target_id = models.PositiveIntegerField()
+    amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+
+    class Meta:
+        db_table = 'finance_payment_allocation'
+        indexes = [
+            models.Index(fields=['payment']),
+            models.Index(fields=['tenant', 'target_type', 'target_id']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('PaymentAllocation is append-only. Use reversal instead of delete.')
+
+
 class CurrencyExchange(TenantModel):
     """
     Atomic currency exchange between two CashAccounts.

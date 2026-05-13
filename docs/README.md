@@ -14,6 +14,8 @@
 | **[ROADMAP.md](./ROADMAP.md)** | **Центральная карта эпиков и их статусов** — открывай в первую очередь |
 | [roadmap/](./roadmap/) | Детали по каждому эпику (фазы, чек-листы, открытые вопросы) |
 
+**Текущий P0:** [E07 — Procurement & Investment Workspace Re-architecture](./roadmap/E07-procurement-workspace.md)
+
 ### Архитектура и устройство системы
 | Документ | Что описывает |
 |---|---|

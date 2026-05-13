@@ -65,6 +65,23 @@ def _parse_dt(raw):
     return dt
 
 
+def resolve_snapshot_path(raw_path: str) -> Path:
+    """Resolve snapshot path from repo root or backend cwd."""
+    snapshot_path = Path(raw_path).expanduser()
+    if snapshot_path.is_absolute():
+        return snapshot_path
+
+    candidates = [
+        Path.cwd() / snapshot_path,
+        Path(__file__).resolve().parents[5] / snapshot_path,
+        Path(__file__).resolve().parents[4] / snapshot_path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 @dataclass(frozen=True)
 class Scenario:
     key: str
@@ -123,9 +140,7 @@ class Command(BaseCommand):
                 action='this command truncates business data and rebuilds the Excel audit workflow',
             )
 
-        snapshot_path = Path(options['snapshot'])
-        if not snapshot_path.is_absolute():
-            snapshot_path = Path.cwd() / snapshot_path
+        snapshot_path = resolve_snapshot_path(options['snapshot'])
         if not snapshot_path.exists():
             raise CommandError(f'Snapshot not found: {snapshot_path}')
         snapshot = json.loads(snapshot_path.read_text(encoding='utf-8'))

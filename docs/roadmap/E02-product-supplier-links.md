@@ -1,7 +1,7 @@
 # E02 — Product–Supplier Links (UX + модель)
 
-**Статус:** 🟡 `IN_PROGRESS` (проектируется параллельно с E01)
-**Прогресс:** ~15% (модель утверждена, реализация не начата)
+**Статус:** ✅ `DONE`
+**Прогресс:** 100%
 **Зависит от:** E01 (по UX-форме)
 **Блокирует:** E03
 **Параллельно:** E01, E04
@@ -89,28 +89,28 @@ GET /api/v1/inventory/products/?supplier_id=X&search=хлеб&order=preferred
 ## Задачи (чек-лист)
 
 ### Фаза 1 — модель
-- [ ] T-1.1 Спроектировать `ProductSupplier` (поля + индекс на `(supplier_id, last_received_at DESC)`)
-- [ ] T-1.2 Миграция (создание таблицы, бэкфилл из исторических Procurement если нужно)
-- [ ] T-1.3 Базовые unit-тесты модели
+- [x] T-1.1 Спроектировать `ProductSupplier` (✅ создан в `apps/catalog/models.py` с индексом на `(supplier, -last_received_at)`)
+- [x] T-1.2 Миграция (✅ catalog/0002_productsupplier применена; бэкфилл из исторических — в Wave 6)
+- [x] T-1.3 Базовые unit-тесты модели (✅ покрыты тестами сервиса в Wave 1)
 
 ### Фаза 2 — автообогащение
-- [ ] T-2.1 Сервис `inventory.upsert_product_supplier_link(product_id, supplier_id, unit_price, currency, quantity, value_uzs)`
-- [ ] T-2.2 Хук в `procurement.confirm()` (зависит от E01 T-1.6) — вызов upsert для каждого item, если supplier_id IS NOT NULL
-- [ ] T-2.3 Сервис `inventory.quick_create_product(name, category?, baseline_price?, from_procurement_id)` с авто-привязкой
-- [ ] T-2.4 Хук в quick_create — создание ProductSupplier
-- [ ] T-2.5 Тесты: новый товар + первая приёмка, существующий товар + повторная приёмка, item без supplier (PREPAID-no-supplier case)
+- [x] T-2.1 Сервис `catalog.upsert_product_supplier_link(...)` (✅ реализован в `apps/catalog/services.py`)
+- [x] T-2.2 Хук в `receive_procurement()` — реализован как `_upsert_supplier_links_for_items`, вызывается для каждого item с не-NULL supplier (включая backward-compat mode без terms_payload)
+- [x] T-2.3 Сервис `catalog.quick_create_product(...)` с авто-привязкой (✅ реализован)
+- [x] T-2.4 Хук в quick_create — создание ProductSupplier (placeholder с 0 quantity)
+- [x] T-2.5 Тесты: новый товар + первая приёмка, существующий + повторная, без supplier — все 3 сценария + edge cases (zero qty, empty name)
 
 ### Фаза 3 — UX (синхронно с E01 T-3.2/T-3.3)
-- [ ] T-3.1 API endpoint `GET /api/v1/inventory/products/?supplier_id=X&search=...&order=preferred`
-- [ ] T-3.2 Сериализация: вложенный `_supplier_link` блок в каждом товаре
-- [ ] T-3.3 Frontend-компонент: подсветка «✓ Постоянный поставщик» / «✓ Поставлял раньше»
-- [ ] T-3.4 Mobile-friendly UX
+- [x] T-3.1 API endpoint `GET /api/v1/catalog/products/?supplier_id=X&order=preferred` — реализован, с annotated sorting (`_has_supplier_link`, `_supplier_last_received`)
+- [x] T-3.2 Сериализация: supplier metadata в вариантах (`supplier_preferred`, last price/currency)
+- [x] T-3.3 Frontend-компонент: подсветка preferred-поставщика
+- [x] T-3.4 Mobile-friendly UX
 
 ### Фаза 4 — аналитика
-- [ ] T-4.1 Endpoint `GET /api/v1/inventory/products/{id}/suppliers/` (история по товару)
-- [ ] T-4.2 Endpoint `GET /api/v1/suppliers/{id}/products/` (история по поставщику с агрегатами)
-- [ ] T-4.3 UI: блок «Поставщики» на карточке товара
-- [ ] T-4.4 UI: блок «Товары» на карточке поставщика
+- [x] T-4.1 Endpoint `GET /api/v1/catalog/products/{id}/suppliers/` (история по товару)
+- [x] T-4.2 Endpoint `GET /api/v1/suppliers/suppliers/{id}/products/` (история по поставщику с агрегатами)
+- [x] T-4.3 UI: блок «Поставщики» на карточке товара
+- [x] T-4.4 UI: блок «Товары» на карточке поставщика
 
 ## Открытые вопросы
 

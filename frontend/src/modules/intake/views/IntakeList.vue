@@ -6,7 +6,7 @@ import { RefreshCcw, RotateCcw, PackageOpen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import { ProcurementStatus, ProcurementType } from '@/types/enums'
-import { fetchProcurements, type ProcurementListItem } from '@/api/partnerships'
+import { fetchProcurementWorkspaces, type ProcurementWorkspacePayload } from '@/api/partnerships'
 import ProcurementSectionShell from '@/modules/intake/components/ProcurementSectionShell.vue'
 import { intlLocale } from '@/i18n/format'
 import { procurementStatusMeta, procurementTypeMeta, type LabelMeta } from '@/utils/domainLabels'
@@ -34,7 +34,7 @@ const FILTER_CHIPS = computed<FilterChip[]>(() => [
   { value: ProcurementStatus.CLOSED, label: t('domain.procurementStatus.CLOSED') },
 ])
 
-const procurements = ref<ProcurementListItem[]>([])
+const procurements = ref<ProcurementWorkspacePayload[]>([])
 const isLoading = ref(false)
 const error = ref<string | null>(null)
 const activeFilter = ref<StatusFilter>('all')
@@ -51,7 +51,7 @@ async function loadProcurementList(): Promise<void> {
       params.status = activeFilter.value
     }
 
-    procurements.value = await fetchProcurements(params)
+    procurements.value = await fetchProcurementWorkspaces(params)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : t('procurements.loadFailed')
     error.value = message
@@ -65,7 +65,7 @@ onMounted(loadProcurementList)
 
 // ── Computed ─────────────────────────────────────────────────────────────────
 
-const filteredProcurements = computed<ProcurementListItem[]>(() => {
+const filteredProcurements = computed<ProcurementWorkspacePayload[]>(() => {
   if (activeFilter.value === 'all') return procurements.value
   return procurements.value.filter((item) => item.status === activeFilter.value)
 })
@@ -176,21 +176,23 @@ function onFilterChange(value: StatusFilter): void {
           <div class="card-top">
             <div class="card-id-row">
               <span class="card-id">#{{ procurement.id }}</span>
-              <span class="card-date">{{ formatDate(procurement.opened_at) }}</span>
+              <span class="card-date">{{ formatDate(procurement.documents.procurement.opened_at) }}</span>
             </div>
-            <span class="badge-type" :class="getTypeMeta(procurement.procurement_type as ProcurementType).colorClass">
-              {{ getTypeMeta(procurement.procurement_type as ProcurementType).label }}
+            <span class="badge-type" :class="getTypeMeta(procurement.policy.funding_source as ProcurementType).colorClass">
+              {{ getTypeMeta(procurement.policy.funding_source as ProcurementType).label }}
             </span>
           </div>
 
           <div class="card-main">
             <div class="card-value">
-              <span class="card-total tabular-nums">{{ totalCost(procurement.total_amount) }}</span>
+              <span class="card-total tabular-nums">{{ totalCost(procurement.summaries.items_total_uzs) }}</span>
             </div>
             <div class="card-meta-line">
               <span class="card-trace">
-                {{ linesLabel(procurement.items_count) }}
-                <template v-if="procurement.supplier_name"> · {{ procurement.supplier_name }}</template>
+                {{ linesLabel(procurement.documents.items.length) }}
+                <template v-if="procurement.documents.procurement.supplier_name">
+                  · {{ procurement.documents.procurement.supplier_name }}
+                </template>
               </span>
               <span
                 class="badge-status"

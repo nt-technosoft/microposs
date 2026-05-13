@@ -155,7 +155,7 @@ export interface SaleExplanationLine {
   }
   procurement: null | {
     id: number
-    procurement_type: string
+    funding_source: string
     status: string
     opened_at: string
     received_at: string | null

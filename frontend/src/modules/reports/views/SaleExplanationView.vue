@@ -336,7 +336,7 @@ onMounted(load)
               <div v-if="line.procurement" class="trace-subsection">
                 <div class="row">
                   <span>{{ t('reports.saleAudit.procurementSource') }}</span>
-                  <span class="mono">#{{ line.procurement.id }} · {{ procurementTypeLabel(line.procurement.procurement_type) }}</span>
+                  <span class="mono">#{{ line.procurement.id }} · {{ procurementTypeLabel(line.procurement.funding_source) }}</span>
                 </div>
                 <div class="row">
                   <span>{{ t('common.status') }}</span>

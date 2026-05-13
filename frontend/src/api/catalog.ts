@@ -88,6 +88,8 @@ interface FetchVariantsParams {
   active?: boolean
   search?: string
   category?: number
+  supplier_id?: number
+  order?: 'preferred'
   page?: number
   page_size?: number
 }
@@ -146,8 +148,23 @@ export interface ProductUpdatePayload {
   is_active?: boolean
 }
 
-export async function fetchCategories(params?: FetchCategoriesParams): Promise<Category[]> {
-  const { data } = await api.get<PaginatedResponse<Category> | Category[]>('/api/v1/catalog/categories/', { params })
+export interface ProductSupplierHistoryItem {
+  supplier_id: number
+  supplier_name: string
+  product_variant_id: number
+  last_received_at: string | null
+  last_unit_price: string
+  last_currency: string
+  total_received_quantity: string
+  total_received_value_uzs: string
+  total_procurements_count: number
+}
+
+export async function fetchCategories(
+  params?: FetchCategoriesParams,
+  signal?: AbortSignal,
+): Promise<Category[]> {
+  const { data } = await api.get<PaginatedResponse<Category> | Category[]>('/api/v1/catalog/categories/', { params, signal })
   return toList<Category>(data)
 }
 
@@ -226,6 +243,13 @@ export async function fetchProduct(
   return data
 }
 
+export async function fetchProductSuppliers(productId: number): Promise<ProductSupplierHistoryItem[]> {
+  const { data } = await api.get<ProductSupplierHistoryItem[]>(
+    `/api/v1/catalog/products/${productId}/suppliers/`,
+  )
+  return toList<ProductSupplierHistoryItem>(data)
+}
+
 export async function fetchProductVariants(
   productId: number,
   params?: { location_id?: number; location?: number },
@@ -279,10 +303,11 @@ export async function fetchVariants(params?: FetchVariantsParams): Promise<Produ
 
 export async function fetchVariantsPaginated(
   params?: FetchVariantsParams,
+  signal?: AbortSignal,
 ): Promise<PaginatedResponse<ProductVariant>> {
   const { data } = await api.get<PaginatedResponse<ProductVariant> | ProductVariant[]>(
     '/api/v1/catalog/variants/',
-    { params },
+    { params, signal },
   )
   return toPaginated<ProductVariant>(data)
 }

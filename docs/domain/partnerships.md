@@ -1,207 +1,201 @@
-# Partnerships — Мударабá и Мушарáка
+# Partnerships — Target Investment Layer
 
-## Исламская модель финансирования
+> E07 target document. Previous implementation details remain available in Git history. Current work must follow `docs/roadmap/E07-procurement-workspace.md`.
 
-MicroPOS поддерживает два вида партнёрства:
+## Purpose
 
-| Тип | Суть |
+The partnerships domain manages investment relationships, capital commitments, actual contributions, allocations into procurement batches, profit/loss rules and investor-facing reporting.
+
+It must not be modeled as a procurement type. Procurement consumes investment capital; it does not define the full investment relationship.
+
+## Core Concepts
+
+### InvestmentProfile
+
+Investor identity and eligibility profile.
+
+Future marketplace data may include:
+
+- investor status;
+- business relation state;
+- risk/visibility permissions;
+- rating/limits;
+- KYC or certification metadata if needed.
+
+### BusinessInvestorRelation
+
+Relationship between a business and investor.
+
+Can originate from:
+
+- manual owner entry;
+- accepted marketplace offer;
+- invite flow.
+
+### InvestmentOffer
+
+Future marketplace proposal.
+
+Direction may be:
+
+- business invites investor;
+- investor offers capital to business.
+
+An offer does not fund procurement directly. Accepted offer creates an `InvestmentAgreement`.
+
+### InvestmentAgreement
+
+Approved investment contract.
+
+Holds:
+
+- business;
+- partners;
+- operator;
+- planned budget;
+- currency;
+- profit rule;
+- loss rule;
+- legal/contract type label if needed;
+- status;
+- close constraints.
+
+`MUSHARAKA` and `MUDARABA` may exist as contract/legal modes, not as primary procurement UI types.
+
+### CapitalCommitment
+
+Planned capital promise.
+
+Example: investor plans 70%, operator plans 30%.
+
+Commitment is not a cash movement.
+
+### CapitalContribution
+
+Actual capital movement into the investment pool or procurement capital pool.
+
+Example: plan was 70/30, but actual batch funding becomes 68/32 or 72/28.
+
+Contribution is append-only and must carry:
+
+- partner;
+- amount;
+- currency;
+- FX snapshot;
+- date;
+- source reference.
+
+### InvestmentAllocation
+
+Allocation of available capital to a procurement workspace or a specific receive batch.
+
+This is the bridge from investment layer to inventory/procurement layer.
+
+Target rule: procurement-level allocation may reserve capital, but receive-batch allocation is what creates the immutable factual snapshot used by lots.
+
+### BatchCapitalSnapshot
+
+Immutable capital/profit snapshot attached to a receive batch and copied into created lots.
+
+Different batches of one procurement may have different snapshots.
+
+## Profit Model
+
+Target model keeps the existing essential formula:
+
+```text
+investor_profit = gross_profit * capital_share * mudaraba_ratio
+operator_profit = gross_profit - sum(investor_profit)
+```
+
+The formula is evaluated from `Lot.contract_snapshot`.
+
+This means:
+
+- planned agreement is a plan;
+- batch allocation is factual;
+- lot snapshot is the source of truth for future sale profit;
+- current agreement edits never rewrite existing lots.
+
+## Partnership Procurement Flow
+
+1. Business and investor have or create `InvestmentAgreement`.
+2. Agreement defines commitments and profit/loss rules.
+3. Participants contribute actual capital.
+4. Procurement chooses funding source `PARTNERSHIP`.
+5. Procurement links to agreement.
+6. Items and expenses are funded through explicit capital allocations.
+7. Receive batch finalizes factual capital allocation.
+8. Lots receive immutable snapshot.
+9. Sales accrue partner profit through FIFO lot slices.
+
+## Partial Receipts
+
+Partial receipts are mandatory.
+
+Example:
+
+- agreement plan: 70/30;
+- first batch actual funding: 68/32;
+- second batch actual funding: 72/28.
+
+Each batch must create its own snapshot. Sales from lots in batch one use 68/32. Sales from lots in batch two use 72/28.
+
+## Ledger
+
+Partner ledger is append-only.
+
+Events:
+
+| Event | Meaning |
 |---|---|
-| **Мударабá (Mudaraba)** | Инвестор вкладывает капитал, оператор работает; прибыль считается через `mudaraba_ratio`; убытки идут по капиталу |
-| **Мушарáка (Musharaka)** | Несколько сторон вкладывают капитал; убытки идут по капиталу, прибыль может быть договорной и проверяется формулой |
+| `CAPITAL_COMMITTED` | planned promise, optional accounting impact |
+| `CAPITAL_IN` | actual contribution |
+| `CAPITAL_ALLOCATED` | capital used for procurement/batch |
+| `CAPITAL_RETURNED` | unused capital returned |
+| `PROFIT_ACCRUED` | profit from sale |
+| `PROFIT_REVERSED` | sale return reverses profit |
+| `LOSS_INCURRED` | loss/writeoff allocated |
+| `DIVIDEND_PAID` | payout to partner |
 
-На практике контракт — **гибрид**: Мушарáка с настраиваемым `mudaraba_ratio`.
+Not every ledger event must be a DB enum immediately, but the domain model must distinguish these facts.
 
----
+## Closing Rules
 
-## Структура контракта
+An investment agreement cannot close while any active lot tied to its snapshots remains economically active.
 
-### InvestmentAgreement (родительское соглашение)
+Close requires:
 
-Покрывает несколько закупок под единым соглашением.
+- no active inventory tied to agreement;
+- pending profits/losses settled or explicitly carried;
+- capital returned or settlement documented;
+- all payouts recorded as append-only payments.
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `mudaraba_ratio` | Decimal [0..1] | Доля прибыли, распределяемая пропорционально капиталу |
-| `loss_rule` | BY_CAPITAL | Метод распределения убытков |
-| `planned_budget` | Decimal | Планируемый объём |
-| `currency` | str | Основная валюта соглашения |
-| `status` | OPEN / ACTIVE / CLOSED / CANCELLED | |
+## Marketplace Compatibility
 
-### AgreementPartner
-Участник соглашения.
+Marketplace should produce investment agreements, not procurement records.
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `partner` | FK Partner | Партнёр |
-| `role` | INVESTOR / OPERATOR | Роль |
-| `planned_capital_share` | Decimal | Запланированная сумма капитала в валюте соглашения |
-| `profit_share` | Decimal | Доля прибыли [0..1] |
+Flow:
 
-**Инварианты:**
-- Ровно 1 OPERATOR в каждом контракте
-- `Σ profit_share` всех партнёров = 1.0
-- `mudaraba_ratio` ∈ [0.0, 1.0]
+1. Investor sees limited business metrics.
+2. Investor sends offer or accepts invitation.
+3. Business accepts.
+4. Agreement is created.
+5. Procurement can use agreement as funding source.
 
----
+This keeps investor discovery separate from purchase execution.
 
-## contract_snapshot — иммутабельный снимок
+## MVP Rules
 
-При приёмке товара (`receive_procurement_batch`) контракт записывается в `Lot.contract_snapshot`. После этого он никогда не меняется — даже если соглашение изменится.
+- Partnership funding supports `PREPAID` supplier settlement only.
+- Partnership + supplier credit is blocked until a dedicated hybrid model exists.
+- `MUSHARAKA` is not a separate procurement card.
+- Quick agreement creation from workspace is allowed for manual/offline business workflows.
 
-```json
-{
-  "mudaraba_ratio": "0.7",
-  "loss_rule": "BY_CAPITAL",
-  "partners": [
-    {
-      "partner_id": 1,
-      "role": "INVESTOR",
-      "capital_share": "0.6",
-      "profit_share": "0.42"
-    },
-    {
-      "partner_id": 2,
-      "role": "OPERATOR",
-      "capital_share": "0.4",
-      "profit_share": "0.58"
-    }
-  ]
-}
-```
+## Related Domains
 
----
-
-## Формула распределения прибыли
-
-**Входные данные:**
-- `gross_line_profit = (unit_price − unit_landed_cost) × quantity`
-- `contract_snapshot` из лота
-
-**Расчёт на инвестора:**
-```
-profit_investor_i = gross_line_profit × capital_share_i × mudaraba_ratio
-```
-
-**Расчёт на оператора:**
-```
-profit_operator = gross_line_profit × (capital_share_op + (1 − mudaraba_ratio) × Σ capital_share_investors)
-```
-
-**Пример** (mudaraba_ratio = 0.7, инвестор 60%, оператор 40%):
-- Валовая прибыль = 100 UZS
-- Инвестор: `100 × 0.6 × 0.7 = 42 UZS`
-- Оператор: `100 × (0.4 + 0.3 × 0.6) = 100 × 0.58 = 58 UZS`
-
-Результат сохраняется в `SaleLine.profit_distribution_snapshot = {"1": "42.00", "2": "58.00"}`. Источник долей — `Lot.contract_snapshot`, который фиксируется на уровне конкретной партии приёмки; разные партии одного прихода могут иметь разные фактические доли.
-
----
-
-## PartnerLedgerEntry — журнал партнёра
-
-Append-only запись изменения позиции партнёра.
-
-| Тип | Когда создаётся |
-|---|---|
-| `PROFIT_ACCRUED` | При каждой продаже (per partner, per lot-slice) |
-| `PROFIT_REVERSED` | При возврате товара (RESTOCK или DISPOSE) |
-| `LOSS_INCURRED` | При возврате с DISPOSE (товар уничтожен) |
-| `CAPITAL_IN` | При внесении капитала в InvestmentAgreement |
-| `CAPITAL_OUT` | При выводе капитала |
-| `DIVIDEND_PAID` | При выплате дивидендов |
-
----
-
-## Учёт капитала партнёра
-
-Доступный баланс партнёра в соглашении вычисляется как:
-
-```
-available = CAPITAL_IN − CAPITAL_OUT − allocated_to_procurements + returned_from_procurements
-```
-
-`_agreement_partner_available(agreement)` возвращает `{partner_id: {currency: available_amount}}`.
-
-При приёмке партнёрской закупки:
-1. Проверяется что у партнёра достаточно баланса
-2. Фиксируется `allocation_rows` в `ProcurementReceiveBatch`
-3. Баланс партнёра уменьшается на вложенную сумму
-
----
-
-## Жизненный цикл
-
-```
-InvestmentAgreement.status = OPEN
-    └─ CAPITAL_IN: партнёры вносят капитал
-           └─ PartnerLedgerEntry(CAPITAL_IN) per partner
-
-Procurement (PARTNERSHIP type) создаётся
-    └─ Привязывается к InvestmentAgreement
-
-receive_procurement_batch()
-    └─ contract_snapshot фиксируется в Lot
-    └─ ProcurementReceiveBatchCapitalAllocation фиксирует капитал этой партии
-
-Продажа → SaleLine (FIFO-слайс)
-    └─ PartnerLedgerEntry(PROFIT_ACCRUED) per partner
-
-Возврат RESTOCK:
-    └─ PartnerLedgerEntry(PROFIT_REVERSED) per partner
-
-Возврат DISPOSE:
-    └─ PartnerLedgerEntry(PROFIT_REVERSED) + LOSS_INCURRED per partner
-
-Закрытие Agreement:
-    └─ Возможно только если нет активных Lot-ов
-    └─ PartnerLedgerEntry(DIVIDEND_PAID) при выплате
-```
-
----
-
-## Ограничения при закрытии контракта
-
-`InvestorContract` (и `InvestmentAgreement`) закрывается только если:
-- Нет лотов со статусом `is_active=True`, связанных с данным контрактом
-- Весь товар распродан или списан
-
----
-
-## Profitability-отчёты для партнёрств
-
-### `get_agreement_profitability_detail(tenant_id, agreement_id, report_currency?)`
-
-Возвращает полный отчёт по соглашению:
-
-```json
-{
-  "report_currency": "UZS",
-  "agreement": { "id": 1, "status": "ACTIVE", "mudaraba_ratio": "0.7", ... },
-  "partners": [
-    {
-      "partner_id": 1,
-      "role": "INVESTOR",
-      "capital_in": "10000000",
-      "capital_out": "0",
-      "profit_accrued": "420000",
-      "profit_reversed": "0",
-      "losses_incurred": "0",
-      "dividends_paid": "0",
-      "pending_payout": "420000"
-    }
-  ],
-  "procurements": [...]
-}
-```
-
-### `get_procurement_profitability_detail(tenant_id, procurement_id, report_currency?)`
-
-Детальный отчёт по конкретной закупке: каждая позиция, проданные/оставшиеся количества, маржа, прогнозируемая прибыль.
-
----
-
-## Связи с другими доменами
-
-- **Inventory:** `Lot.contract_snapshot` читается при каждой продаже; Lot деактивируется → контракт можно закрыть
-- **Sales:** `calculate_profit_distribution()` использует `contract_snapshot`; создаёт `PartnerLedgerEntry(PROFIT_ACCRUED)`
-- **Finance:** журнальные проводки при вложении/выплате капитала; FX-ставки для мультивалютных вложений
-- **Core:** `Partner`, `BusinessInvestorRelation.ACTIVE` контролирует доступ к закупкам
+- Procurement: consumes investment capital and creates receive batches.
+- Inventory: stores lot snapshots.
+- Sales: accrues profit from snapshots.
+- Finance: records capital movements, payouts and journal entries.
+- Reports: exposes investor dashboard and agreement profitability.

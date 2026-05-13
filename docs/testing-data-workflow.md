@@ -35,46 +35,24 @@
   на проверяемую финансовую картину.
 - Пропускать продажи из-за нехватки остатков и считать сценарий полным.
 
-## Текущий статус старого Excel seed
+## Актуальный Excel workflow
 
-`backend/apps/core/management/commands/seed_from_excel.py` частично подходит для
-smoke/reconciliation dataset: он использует `open_procurement`,
-`receive_procurement`, `transfer_lot_stock`, `open_pos_session`, `create_sale`,
-`exchange_currency`, `pay_dividend`.
+Для E07 этот workflow остаётся каноничным партнёрским replay, но не должен
+считаться единственным доказательством новой procurement-архитектуры. После E07
+нужно дополнительно покрывать own-funds, deferred/installment/consignment и
+blocked hybrid сценарии отдельными smoke/test seed flows.
 
-Но это не полноценная имитация UI-flow:
+Старые команды прямого Excel-import удалены. Каноничный путь сейчас один:
 
-- часть master/baseline данных создаётся прямым ORM, что допустимо только для
-  начального окружения;
-- закупка в старом seed принимается одной партией, без нового partial receive
-  сценария;
-- растаможка проводится как отдельный операционный расход, а не как targeted
-  procurement expense;
-- есть fallback-перемещения и смена склада продажи при нехватке остатка;
-- кассы иногда “праймятся” owner contribution, чтобы операция прошла;
-- старый seed может пропускать строки продаж, если остатка не хватает.
+1. `excel_snapshot_from_xlsx` — преобразует исходный `.xlsx` в JSON snapshot.
+2. `excel_workflow_staged` — поэтапно проигрывает жизненный цикл владельца:
+   baseline → procurements → transfers → sales → final.
+3. `excel_workflow_audit` — тот же сценарий одной командой для быстрой
+   регрессии после того, как staged-проход уже проверен руками.
 
-Поэтому его результат нельзя использовать как финальное доказательство, что
-пользовательский workflow работает полностью.
-
-## Принцип следующего seed-аудита
-
-Новый сценарий для Excel-кейса должен быть отдельным workflow/audit seed:
-
-- сначала dry-run: показать, какие Excel-строки будут превращены в какие UI/API
-  действия;
-- затем apply: выполнить действия через сервисы, максимально близкие к API;
-- если нужна подготовительная операция, она должна быть явной в отчёте сценария;
-- если строка Excel не может быть проиграна корректно, сценарий должен падать или
-  фиксировать blocker, а не молча подбирать склад/кассу;
-- итоговый отчёт должен показывать:
-  - сколько действий выполнено;
-  - какие строки Excel не проиграны;
-  - какие цифры совпали/не совпали;
-  - какие расхождения являются бизнес-расхождениями, а какие техническими.
-
-Такой seed можно считать ускоренной имитацией работы владельца бизнеса, а не
-ручным импортом итоговой отчётности.
+Этот workflow не импортирует готовые отчётные итоги. Он создаёт пользователей,
+товары, партнёрские приходы, partial receive, перемещения, POS-смены и продажи
+через доменные сервисы, максимально близкие к UI/API.
 
 ## Текущая команда
 
@@ -90,7 +68,16 @@ MUZORABA USTOZ VA BEKZOD AKA 2 (1).xlsx
 backend/import_snapshots/muzoraba_ustoz_bekzod_latest.json
 ```
 
-Полный workflow seed всё ещё доступен как management command:
+Если Excel-файл изменился, snapshot пересобирается так:
+
+```bash
+DJANGO_SETTINGS_MODULE=config.settings.development \
+  backend/.venv/bin/python backend/manage.py excel_snapshot_from_xlsx \
+  --source-xlsx "MUZORABA USTOZ VA BEKZOD AKA 2 (1).xlsx" \
+  --output-json backend/import_snapshots/muzoraba_ustoz_bekzod_latest.json
+```
+
+Полный workflow seed доступен как management command:
 
 ```bash
 DJANGO_SETTINGS_MODULE=config.settings.development \

@@ -6,6 +6,8 @@ import environ
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env(
@@ -174,6 +176,12 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BEAT_SCHEDULE = {
+    'analytics.mark-overdue-payment-schedules': {
+        'task': 'apps.analytics.tasks.mark_overdue_payment_schedules',
+        'schedule': crontab(minute=5, hour=0),
+    },
+}
 
 # --- FX sync ---
 

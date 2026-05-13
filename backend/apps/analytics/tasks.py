@@ -378,3 +378,28 @@ def compute_aging_reports(tenant_id):
     ).exclude(
         entity_id__in=suppliers.values_list('pk', flat=True),
     ).delete()
+
+
+# =========================================================================
+# E01 — Mark overdue payment schedule entries
+# =========================================================================
+
+
+@shared_task
+def mark_overdue_payment_schedules():
+    """
+    Sweep PaymentSchedule rows whose due_date has passed and which are still
+    PENDING — flip them to OVERDUE.
+
+    Schedule via Celery Beat (daily, e.g. at 00:05 local time).
+    """
+    from apps.suppliers.models import PaymentSchedule
+
+    today = timezone.now().date()
+    updated = PaymentSchedule.objects.filter(
+        status=PaymentSchedule.Status.PENDING,
+        due_date__lt=today,
+    ).update(status=PaymentSchedule.Status.OVERDUE)
+    if updated:
+        logger.info('Marked %d PaymentSchedule rows as OVERDUE.', updated)
+    return updated

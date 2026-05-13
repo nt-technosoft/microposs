@@ -1,0 +1,35 @@
+- main [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e7]:
+      - img [ref=e9]
+      - heading "MicroPOS" [level=1] [ref=e12]
+      - paragraph [ref=e13]: Умный учёт для вашего бизнеса
+    - main [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Войти в систему" [level=2] [ref=e16]
+        - generic [ref=e17]:
+          - generic [ref=e18]:
+            - generic [ref=e19]: Имя пользователя
+            - generic [ref=e20]:
+              - generic:
+                - img
+              - textbox "Имя пользователя" [ref=e21]:
+                - /placeholder: Введите логин
+          - generic [ref=e22]:
+            - generic [ref=e23]: Пароль
+            - generic [ref=e24]:
+              - generic:
+                - img
+              - textbox "Пароль" [ref=e25]:
+                - /placeholder: Введите пароль
+              - button "Показать пароль" [ref=e26] [cursor=pointer]:
+                - img [ref=e27]
+          - button "Войти" [ref=e30] [cursor=pointer]:
+            - generic [ref=e31]: Войти
+        - button "Подать заявку на подключение бизнеса Короткая регистрация, активация после подтверждения в платформе." [ref=e32] [cursor=pointer]:
+          - img [ref=e34]
+          - generic [ref=e38]:
+            - generic [ref=e39]: Подать заявку на подключение бизнеса
+            - generic [ref=e40]: Короткая регистрация, активация после подтверждения в платформе.
+          - img [ref=e41]
+        - paragraph [ref=e43]: MicroPOS v0.1

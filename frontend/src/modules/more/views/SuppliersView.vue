@@ -3,7 +3,16 @@ import { computed, onMounted, ref } from 'vue'
 import { ArrowLeft, Plus, Search, Truck, AlertCircle } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { createSupplier, fetchSuppliers, recordSupplierPayment } from '@/api/suppliers'
+import {
+  createSupplier,
+  fetchSuppliers,
+  fetchSupplierPayables,
+  fetchSupplierProducts,
+  recordSupplierPayment,
+  type SupplierPayable,
+  type SupplierProductHistoryItem,
+} from '@/api/suppliers'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import type { Supplier } from '@/types/models'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -11,12 +20,16 @@ import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
+import SupplierPaymentForm from '@/modules/suppliers/components/SupplierPaymentForm.vue'
 
 const router = useRouter()
 const toast = useToast()
 const { t } = useI18n()
 
 const suppliers = ref<Supplier[]>([])
+const payables = ref<SupplierPayable[]>([])
+const urgentPayables = ref<SupplierPayable[]>([])
+const cashAccounts = ref<CashAccountRecord[]>([])
 const search = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
@@ -29,11 +42,16 @@ const isCreating = ref(false)
 
 const paymentOpen = ref(false)
 const selectedSupplier = ref<Supplier | null>(null)
+const selectedPayable = ref<SupplierPayable | null>(null)
 const paymentAmount = ref('')
 const isPaying = ref(false)
+const productsOpen = ref(false)
+const productsSupplier = ref<Supplier | null>(null)
+const supplierProducts = ref<SupplierProductHistoryItem[]>([])
+const isLoadingSupplierProducts = ref(false)
 
 const totalPayables = computed(() =>
-  suppliers.value.reduce((sum, supplier) => sum + parseFloat(supplier.outstanding_balance || '0'), 0),
+  payables.value.reduce((sum, payable) => sum + parseFloat(payable.remaining_amount || '0'), 0),
 )
 
 async function loadSuppliers(): Promise<void> {
@@ -44,10 +62,43 @@ async function loadSuppliers(): Promise<void> {
       search: search.value.trim() || undefined,
     })
     suppliers.value = response.results
+    const [payableResponse, overdueResponse, burningResponse] = await Promise.all([
+      fetchSupplierPayables(),
+      fetchSupplierPayables({ overdue: true }),
+      fetchSupplierPayables({ burning_in: 7 }),
+    ])
+    payables.value = payableResponse.results
+    const urgentById = new Map<number, SupplierPayable>()
+    for (const payable of [...overdueResponse.results, ...burningResponse.results]) {
+      urgentById.set(payable.id, payable)
+    }
+    urgentPayables.value = [...urgentById.values()]
   } catch (error: unknown) {
     errorMessage.value = error instanceof Error ? error.message : t('suppliers.loadFailed')
   } finally {
     isLoading.value = false
+  }
+}
+
+async function openSupplierProducts(supplier: Supplier): Promise<void> {
+  productsSupplier.value = supplier
+  supplierProducts.value = []
+  productsOpen.value = true
+  isLoadingSupplierProducts.value = true
+  try {
+    supplierProducts.value = await fetchSupplierProducts(supplier.id)
+  } catch (error: unknown) {
+    toast.error(error instanceof Error ? error.message : t('suppliers.productsLoadFailed'))
+  } finally {
+    isLoadingSupplierProducts.value = false
+  }
+}
+
+async function loadCashAccounts(): Promise<void> {
+  try {
+    cashAccounts.value = await fetchCashAccounts()
+  } catch {
+    cashAccounts.value = []
   }
 }
 
@@ -78,19 +129,33 @@ async function submitCreate(): Promise<void> {
   }
 }
 
-function openPayment(supplier: Supplier): void {
+function openPayment(supplier: Supplier, payable?: SupplierPayable): void {
   selectedSupplier.value = supplier
-  paymentAmount.value = ''
+  selectedPayable.value = payable ?? payables.value.find((item) => item.supplier === supplier.id) ?? null
+  paymentAmount.value = selectedPayable.value?.remaining_amount ?? ''
   paymentOpen.value = true
+}
+
+function supplierForPayable(payable: SupplierPayable): Supplier {
+  return suppliers.value.find((supplier) => supplier.id === payable.supplier) ?? {
+    id: payable.supplier,
+    name: payable.supplier_name,
+    phone: '',
+    email: '',
+    outstanding_balance: payable.remaining_amount,
+    is_active: true,
+    created_at: '',
+    updated_at: '',
+  } as Supplier
 }
 
 async function submitPayment(): Promise<void> {
   if (!selectedSupplier.value) return
-  const amount = Number(paymentAmount.value)
-  if (!Number.isFinite(amount) || amount <= 0) return
 
   isPaying.value = true
   try {
+    const amount = Number(paymentAmount.value)
+    if (!Number.isFinite(amount) || amount <= 0) return
     await recordSupplierPayment(selectedSupplier.value.id, {
       amount,
       payment_method: 'cash',
@@ -105,7 +170,14 @@ async function submitPayment(): Promise<void> {
   }
 }
 
-onMounted(loadSuppliers)
+async function handlePayablePaid(): Promise<void> {
+  paymentOpen.value = false
+  await loadSuppliers()
+}
+
+onMounted(async () => {
+  await Promise.all([loadSuppliers(), loadCashAccounts()])
+})
 </script>
 
 <template>
@@ -136,7 +208,52 @@ onMounted(loadSuppliers)
 
       <section class="summary">
         <span>{{ t('suppliers.totalPayables') }}</span>
-        <strong class="tabular-nums">{{ formatPrice(totalPayables) }}</strong>
+        <div class="summary-side">
+          <strong class="tabular-nums">{{ formatPrice(totalPayables) }}</strong>
+          <button type="button" @click="router.push({ name: 'supplier-payables' })">
+            {{ t('suppliers.openPayablesPage') }}
+          </button>
+        </div>
+      </section>
+
+      <section v-if="urgentPayables.length > 0" class="burning-list">
+        <div class="payables-head">
+          <span>{{ t('suppliers.burningPayables') }}</span>
+          <strong>{{ urgentPayables.length }}</strong>
+        </div>
+        <button
+          v-for="payable in urgentPayables.slice(0, 3)"
+          :key="payable.id"
+          class="payable-row payable-row--urgent"
+          type="button"
+          @click="openPayment(supplierForPayable(payable), payable)"
+        >
+          <span>
+            <strong>{{ payable.supplier_name }}</strong>
+            <small>{{ payable.deadline_date || t('suppliers.noDeadline') }}</small>
+          </span>
+          <b class="tabular-nums">{{ payable.remaining_amount }} {{ payable.currency_of_obligation }}</b>
+        </button>
+      </section>
+
+      <section v-if="payables.length > 0" class="payables-list">
+        <div class="payables-head">
+          <span>{{ t('suppliers.openPayables') }}</span>
+          <strong>{{ payables.length }}</strong>
+        </div>
+        <button
+          v-for="payable in payables.slice(0, 5)"
+          :key="payable.id"
+          class="payable-row"
+          type="button"
+          @click="openPayment(supplierForPayable(payable), payable)"
+        >
+          <span>
+            <strong>{{ payable.supplier_name }}</strong>
+            <small>{{ payable.deadline_date || t('suppliers.noDeadline') }}</small>
+          </span>
+          <b class="tabular-nums">{{ payable.remaining_amount }} {{ payable.currency_of_obligation }}</b>
+        </button>
       </section>
 
       <div v-if="errorMessage" class="error-banner" role="alert">
@@ -181,9 +298,16 @@ onMounted(loadSuppliers)
               v-if="Number(supplier.outstanding_balance) > 0"
               class="pay-btn"
               type="button"
-              @click="openPayment(supplier)"
+              @click.stop="openPayment(supplier)"
             >
               {{ t('suppliers.pay') }}
+            </button>
+            <button
+              class="products-btn"
+              type="button"
+              @click="openSupplierProducts(supplier)"
+            >
+              {{ t('suppliers.productsShort') }}
             </button>
           </div>
         </article>
@@ -217,7 +341,14 @@ onMounted(loadSuppliers)
       :title="selectedSupplier ? t('suppliers.paymentTitle', { name: selectedSupplier.name }) : t('suppliers.paymentTitleFallback')"
       @close="paymentOpen = false"
     >
-      <form class="sheet-form" @submit.prevent="submitPayment">
+      <SupplierPaymentForm
+        v-if="selectedPayable"
+        :supplier="selectedSupplier"
+        :payable="selectedPayable"
+        :accounts="cashAccounts"
+        @paid="handlePayablePaid"
+      />
+      <form v-else class="sheet-form" @submit.prevent="submitPayment">
         <BaseInput
           v-model="paymentAmount"
           :label="`${t('suppliers.paymentAmount')} *`"
@@ -235,6 +366,37 @@ onMounted(loadSuppliers)
           {{ t('suppliers.recordPayment') }}
         </BaseButton>
       </form>
+    </AppBottomSheet>
+
+    <AppBottomSheet
+      :open="productsOpen"
+      :title="productsSupplier ? t('suppliers.productsTitle', { name: productsSupplier.name }) : t('suppliers.productsTitleFallback')"
+      @close="productsOpen = false"
+    >
+      <div class="supplier-products">
+        <div v-if="isLoadingSupplierProducts" class="skeleton-row" />
+        <AppEmptyState
+          v-else-if="supplierProducts.length === 0"
+          :title="t('suppliers.productsEmptyTitle')"
+          :description="t('suppliers.productsEmptyText')"
+        />
+        <template v-else>
+          <article
+            v-for="item in supplierProducts"
+            :key="item.product_variant_id"
+            class="supplier-product-row"
+          >
+            <div>
+              <strong>{{ item.product_name }}</strong>
+              <small>{{ item.variant_sku || t('common.notSpecified') }}</small>
+            </div>
+            <div class="supplier-product-side">
+              <b>{{ item.last_unit_price }} {{ item.last_currency }}</b>
+              <small>{{ t('suppliers.receivedQty', { count: item.total_received_quantity }) }}</small>
+            </div>
+          </article>
+        </template>
+      </div>
     </AppBottomSheet>
   </div>
 </template>
@@ -314,12 +476,29 @@ onMounted(loadSuppliers)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
   background: var(--color-warning-bg);
   border: 1px solid var(--color-warning);
   border-radius: var(--radius-md);
   padding: var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-text-primary);
+}
+
+.summary-side {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.summary-side button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+  color: var(--color-warning);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
 }
 
 .list {
@@ -335,6 +514,69 @@ onMounted(loadSuppliers)
   background: var(--color-bg-elevated);
   border-radius: var(--radius-md);
   padding: var(--space-3);
+}
+
+.payables-list,
+.burning-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+}
+
+.burning-list {
+  border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-warning-bg) 56%, var(--color-bg-elevated));
+}
+
+.payables-head,
+.payable-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.payables-head {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+}
+
+.payable-row {
+  min-height: 52px;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  text-align: left;
+}
+
+.payable-row span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.payable-row strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+}
+
+.payable-row small {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.payable-row b {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+}
+
+.payable-row--urgent b {
+  color: var(--color-error);
 }
 
 .card-main {
@@ -391,7 +633,8 @@ onMounted(loadSuppliers)
   font-weight: var(--font-semibold);
 }
 
-.pay-btn {
+.pay-btn,
+.products-btn {
   min-height: 30px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-brand-300);
@@ -400,6 +643,53 @@ onMounted(loadSuppliers)
   padding: 0 var(--space-2);
   font-size: var(--text-xs);
   font-weight: var(--font-semibold);
+}
+
+.products-btn {
+  border-color: var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+}
+
+.supplier-products {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.supplier-product-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 58px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated);
+  padding: var(--space-3);
+}
+
+.supplier-product-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.supplier-product-row strong,
+.supplier-product-row b {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.supplier-product-row small {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.supplier-product-side {
+  justify-items: end;
+  text-align: right;
+  flex: 0 0 auto;
 }
 
 .fab {

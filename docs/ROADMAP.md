@@ -22,14 +22,18 @@
 
 | # | Эпик | Статус | Прогресс | Зависит от | Документ |
 |---|---|---|---|---|---|
-| **E01** | Suppliers & Procurement (расширенная модель) | 🟡 IN_PROGRESS | ~30% | — | [→](./roadmap/E01-suppliers-procurement.md) |
-| **E02** | Product–Supplier Links (UX + модель) | 🟡 IN_PROGRESS | ~15% | E01 (UX) | [→](./roadmap/E02-product-supplier-links.md) |
+| **E01** | Suppliers & Procurement (расширенная модель) | 🟢 DONE | 100% | — | [→](./roadmap/E01-suppliers-procurement.md) |
+| **E02** | Product–Supplier Links (UX + модель) | 🟢 DONE | 100% | E01 (UX) | [→](./roadmap/E02-product-supplier-links.md) |
 | **E03** | Real Value Reporting (Net Asset View) | ⚪ NOT_STARTED | 0% | E01, E02 | [→](./roadmap/E03-real-value-reporting.md) |
 | **E04** | Contract Types Formalization | 🟡 IN_PROGRESS | 60% | — | [→](./roadmap/E04-contract-types.md) |
 | **E05** | Zakat Calculation | ⏸️ PAUSED | 0% | E01, E02, E03 | [→](./roadmap/E05-zakat.md) |
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
+| **E07** | Procurement & Investment Workspace Re-architecture | 🟡 IN_PROGRESS | 52% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 
-**🔥 Активный спринт:** E01 + E02 + E04 параллельно. Подробности — в файлах эпиков.
+**🔥 Активный спринт / P0:** E07 — Procurement & Investment Workspace Re-architecture.
+Стратегия E07: controlled radical reset — новый procurement/investment/payment core и новый frontend workspace, старый intake/procurement код используется только как reference до switch-over.
+E04 продолжается как связанный архитектурный контекст, E03/E05 зависят от стабилизации E07.
+**E01/E02 завершены**: backend, frontend wizard, поставщики/оплаты, консигнационные возвраты, история связей товар↔поставщик.
 
 ---
 
@@ -38,9 +42,7 @@
 **Текущая последовательность работы:**
 
 ```
-E01 (поставщики/расчёты)
-  ↓
-E02 (привязка товаров к поставщикам)
+E07 (новая архитектура Procurement + Investment Workspace)
   ↓
 E03 (реальная ценность бизнеса — итоговая отчётность)
   ↓
@@ -49,7 +51,7 @@ E05 (закят, появляются нужные переменные)
 E06 (сертификация, когда продукт зрел и есть документация)
 ```
 
-E04 (формализация типов контрактов) идёт **параллельно** — это в основном модель данных и интерфейс, не блокирует приходы.
+E01/E02 завершены и теперь считаются историческим фундаментом, который может быть пересобран внутри E07. E04 идёт как связанный контекст для investment/contract layer.
 
 ---
 

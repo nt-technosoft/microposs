@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft } from 'lucide-vue-next'
-import { fetchDiscountReasons, fetchProduct, fetchProductVariants } from '@/api/catalog'
+import { ArrowLeft, Package, ShoppingCart, Check, ListTree, ArrowRightLeft, Truck } from 'lucide-vue-next'
+import { fetchDiscountReasons, fetchProduct, fetchProductSuppliers, fetchProductVariants, type ProductSupplierHistoryItem } from '@/api/catalog'
 import { fetchLots } from '@/api/inventory'
 import { createWriteoff, fetchWriteoffPreview, type WriteoffPreview } from '@/api/risk'
 import { useFxRate } from '@/composables/useFxRate'
@@ -38,6 +38,7 @@ const {
 // ===== State =====
 const product = ref<Product | null>(null)
 const variants = ref<ProductVariant[]>([])
+const supplierHistory = ref<ProductSupplierHistoryItem[]>([])
 const discountReasonOptions = ref<Array<{ value: number; label: string }>>([])
 const isLoading = ref(true)
 const loadError = ref<string | null>(null)
@@ -317,6 +318,17 @@ function formatStock(stock: number | undefined): string {
   return `${stock} ${t('common.pieces')}`
 }
 
+function formatShortDate(value: string | null): string {
+  if (!value) return t('common.notSpecified')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return t('common.notSpecified')
+  return new Intl.DateTimeFormat(intlLocale(locale.value), {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  }).format(date)
+}
+
 function openVariantSheet(): void {
   if (!product.value?.has_variants) return
   variantSheetOpen.value = true
@@ -523,18 +535,20 @@ async function loadProduct() {
 
   try {
     const locationId = sessionStore.currentSession?.location?.id
-    const [productData, variantsData, discountReasons] = await Promise.all([
+    const [productData, variantsData, supplierData, discountReasons] = await Promise.all([
       fetchProduct(id, {
         location_id: locationId,
       }),
       fetchProductVariants(id, {
         location_id: locationId,
       }),
+      fetchProductSuppliers(id),
       fetchDiscountReasons(),
     ])
 
     product.value = productData
     variants.value = variantsData
+    supplierHistory.value = supplierData
     discountReasonOptions.value = discountReasons
       .filter((reason) => reason.is_active !== false)
       .sort((left, right) => Number(right.is_default) - Number(left.is_default))
@@ -789,6 +803,32 @@ onMounted(() => {
             </button>
           </div>
         </div>
+
+        <section v-if="supplierHistory.length > 0" class="supplier-history-section">
+          <div class="supplier-history-head">
+            <div>
+              <span>{{ t('products.supplierHistoryEyebrow') }}</span>
+              <h3>{{ t('products.supplierHistoryTitle') }}</h3>
+            </div>
+            <Truck :size="18" :stroke-width="1.75" />
+          </div>
+          <div class="supplier-history-list">
+            <article
+              v-for="entry in supplierHistory.slice(0, 3)"
+              :key="`${entry.supplier_id}-${entry.product_variant_id}`"
+              class="supplier-history-row"
+            >
+              <div>
+                <strong>{{ entry.supplier_name }}</strong>
+                <small>{{ t('products.lastReceiptDate', { date: formatShortDate(entry.last_received_at) }) }}</small>
+              </div>
+              <div class="supplier-history-side">
+                <b>{{ entry.last_unit_price }} {{ entry.last_currency }}</b>
+                <small>{{ t('products.receivedQtyShort', { count: entry.total_received_quantity }) }}</small>
+              </div>
+            </article>
+          </div>
+        </section>
 
         <!-- ===== Quantity + add to cart ===== -->
         <div class="cart-section">
@@ -1566,6 +1606,84 @@ onMounted(() => {
 .writeoff-confirm:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.supplier-history-section {
+  display: grid;
+  gap: var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated);
+  padding: var(--space-4);
+}
+
+.supplier-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.supplier-history-head span {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+}
+
+.supplier-history-head h3 {
+  margin-top: 3px;
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+}
+
+.supplier-history-head svg {
+  color: var(--color-brand-600);
+}
+
+.supplier-history-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.supplier-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 54px;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-2);
+}
+
+.supplier-history-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.supplier-history-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.supplier-history-row strong,
+.supplier-history-row b {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+}
+
+.supplier-history-row small {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.supplier-history-side {
+  justify-items: end;
+  text-align: right;
+  flex: 0 0 auto;
 }
 
 /* ===== Cart section ===== */

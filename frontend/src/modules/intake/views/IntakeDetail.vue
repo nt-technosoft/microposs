@@ -28,9 +28,12 @@ import {
   type ReceiveBatchCapitalPreview,
 } from '@/api/partnerships'
 import { useAuthStore } from '@/stores/auth'
+import { useIntakeStore } from '@/stores/intake'
 import type { Category, Product, ProductVariant, Supplier } from '@/types/models'
+import type { PaymentTermsDraft } from '@/modules/intake/types'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import ProcurementTermsHistory from '@/modules/intake/components/ProcurementTermsHistory.vue'
 import { useFxRate } from '@/composables/useFxRate'
 import { intlLocale } from '@/i18n/format'
 import { partnerRoleLabel, procurementStatusLabel as domainProcurementStatusLabel, procurementTypeLabel as domainProcurementTypeLabel } from '@/utils/domainLabels'
@@ -39,6 +42,7 @@ const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const auth = useAuthStore()
+const intakeStore = useIntakeStore()
 const { t, locale } = useI18n()
 
 const procurement = ref<ProcurementDetail | null>(null)
@@ -608,6 +612,61 @@ function formatDraftMoney(value: number): string {
 
 function defaultFxRateForCurrency(currency: string): string {
   return normalizeCurrency(currency) === 'UZS' ? '1' : latestUsdRate.value
+}
+
+function procurementItemsTotalInUzs(detail: ProcurementDetail): number {
+  return detail.items.reduce((sum, item) => {
+    const amount = parsePositiveNumber(item.quantity) * parsePositiveNumber(item.unit_purchase_price)
+    const currency = normalizeCurrency(item.currency)
+    const fx = currency === 'UZS' ? 1 : parsePositiveNumber(item.fx_rate)
+    return sum + amount * fx
+  }, 0)
+}
+
+function buildTermsPayloadForReceive(detail: ProcurementDetail, terms: PaymentTermsDraft | null): {
+  termsPayload: Record<string, unknown> | null
+  schedulePayload: Array<Record<string, unknown>>
+} {
+  if (!terms) {
+    return { termsPayload: null, schedulePayload: [] }
+  }
+
+  const currency = normalizeCurrency(terms.currency_of_obligation)
+  const fxRate = currency === 'UZS' ? 1 : parsePositiveNumber(terms.fx_rate_at_obligation)
+  const totalUzs = procurementItemsTotalInUzs(detail)
+  const totalAmountDue = currency === 'UZS'
+    ? totalUzs
+    : fxRate > 0
+      ? totalUzs / fxRate
+      : 0
+
+  const termsPayload: Record<string, unknown> = {
+    type: terms.type,
+    currency_of_obligation: currency,
+    fx_rate_at_obligation: String(fxRate || 1),
+    total_amount_due: roundMoney(totalAmountDue).toFixed(2),
+    paid_amount: terms.paid_amount || '0',
+    notes: terms.notes || '',
+  }
+  if (terms.type === 'DEFERRED' && terms.deadline_date) {
+    termsPayload.deadline_date = terms.deadline_date
+  }
+  if (terms.type === 'CONSIGNMENT' && terms.consignment_agreement_id) {
+    termsPayload.consignment_agreement_id = terms.consignment_agreement_id
+  }
+
+  const schedulePayload = terms.type === 'INSTALLMENT'
+    ? terms.schedule
+        .filter((row) => row.due_date && parsePositiveNumber(row.amount) > 0)
+        .map((row, index) => ({
+          sequence_number: index + 1,
+          due_date: row.due_date,
+          amount: row.amount,
+          currency,
+        }))
+    : []
+
+  return { termsPayload, schedulePayload }
 }
 
 function standardUsdUzsRate(): string {
@@ -2217,11 +2276,17 @@ async function confirmReceipt(): Promise<void> {
   const wasFinalReceive = receiveWillFinish.value
   isConfirming.value = true
   try {
+    const { termsPayload, schedulePayload } = buildTermsPayloadForReceive(
+      procurement.value,
+      procurement.value.terms ? null : intakeStore.getTermsForProcurement(procurement.value.id),
+    )
     const updated = await receiveProcurement(
       procurement.value.id,
       selectedWarehouseId.value,
       selectedReceiveLines.value.map((line) => line.item_id),
       receiveCapitalPayload(),
+      termsPayload,
+      schedulePayload,
     )
     procurement.value = updated
     receiveConfirmSheetOpen.value = false
@@ -2441,6 +2506,13 @@ onMounted(async () => {
             </div>
           </div>
         </section>
+
+        <ProcurementTermsHistory
+          v-if="procurement.terms"
+          :procurement-id="procurement.id"
+          :terms="procurement.terms"
+          @changed="loadProcurement"
+        />
 
         <section id="stage-balance" class="card balance-card stage-card">
           <button class="stage-card-head" type="button" @click="toggleStage('balance')">

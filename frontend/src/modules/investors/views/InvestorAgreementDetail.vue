@@ -397,7 +397,7 @@ onMounted(load)
                 <div class="investor-list-row__main">
                   <div class="agreement-row__head">
                     <strong class="investor-list-row__title">
-                      {{ procurementTypeLabel(procurement.procurement_type) }} #{{ procurement.procurement_id }}
+                      {{ procurementTypeLabel(procurement.funding_source) }} #{{ procurement.procurement_id }}
                     </strong>
                     <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
                       {{ procurementStatusLabel(procurement.status) }}

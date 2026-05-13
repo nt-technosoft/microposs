@@ -200,7 +200,7 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
             },
             'procurement': {
                 'id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,

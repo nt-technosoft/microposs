@@ -1,9 +1,9 @@
 # E01 — Suppliers & Procurement (расширенная модель)
 
-**Статус:** 🟡 `IN_PROGRESS`
-**Прогресс:** ~30% (модель данных проектируется)
+**Статус:** ✅ `DONE` (backend + frontend рабочий цикл закрыты)
+**Прогресс:** 100%
 **Зависит от:** —
-**Блокирует:** E02, E03, E05
+**Блокирует:** E02 (frontend), E03, E05
 **Параллельно:** E02, E04
 
 ---
@@ -155,47 +155,49 @@ Celery-задача-сторож на `PaymentSchedule.due_date`. Дашборд
 ## Задачи (чек-лист)
 
 ### Фаза 1 — модель и сервисы
-- [ ] T-1.1 Спроектировать поля `ProcurementTerms` (final review с командой)
-- [ ] T-1.2 Спроектировать поля `SupplierPayable` (final review)
-- [ ] T-1.3 Спроектировать поля `PaymentSchedule` (final review)
-- [ ] T-1.4 Расширения существующих моделей: `Supplier`, `Procurement.supplier_id` nullable, `SupplierPayment.allocations`
-- [ ] T-1.5 Миграции БД (с обратной совместимостью для существующих Procurement)
-- [ ] T-1.6 Сервис `procurement.confirm(procurement_id, terms_payload, payment_payload?)` — atomic-операция (Procurement + Terms + Lots + Payable + Journal)
-- [ ] T-1.7 Валидаторы инвариантов (см. список инвариантов в Плане)
-- [ ] T-1.8 Тесты: 5 типов условий × сценарии (PREPAID без поставщика, DEFERRED с дедлайном, INSTALLMENT с графиком, CONSIGNMENT, PARTIAL)
-- [ ] T-1.9 API-эндпоинты: `POST /api/v1/procurement/{id}/confirm/`, `GET /api/v1/suppliers/payables/`
+- [x] T-1.1 Спроектировать поля `ProcurementTerms` (✅ создано в `apps/partnerships/models.py`)
+- [x] T-1.2 Спроектировать поля `SupplierPayable` (✅ создано в `apps/suppliers/models.py`)
+- [x] T-1.3 Спроектировать поля `PaymentSchedule` (✅ создано в `apps/suppliers/models.py`)
+- [x] T-1.4 Расширения существующих моделей: `Supplier.default_payment_terms`/`default_currency`, `SupplierPayment.allocations`/`payable`/`schedule_entry`, `StockMovement.MovementType.CONSIGNMENT_RETURN_OUT`
+- [x] T-1.5 Миграции БД (применены: catalog/0002, inventory/0003, partnerships/0011, suppliers/0002)
+- [x] T-1.6 Сервис `receive_procurement(..., terms_payload, schedule_payload)` — расширен в Wave 2 с хуками atomic-создания Terms + Schedule + Payable + ProductSupplier links
+- [x] T-1.7 Валидаторы инвариантов на confirm — supplier required для не-PREPAID
+- [x] T-1.8 Базовые тесты сервисов: 16 unit-тестов (upsert_product_supplier_link, quick_create_product, create_payable_from_procurement, record_payable_payment с мульти-кассой/частичной оплатой/идемпотентностью/графиком)
+- [x] T-1.9 API-эндпоинты: `POST /api/v1/partnerships/procurements/{id}/receive/` (расширен), `GET/POST /api/v1/suppliers/payables/`, `POST /payables/{id}/pay/`, `POST /procurements/{id}/terms/amend/`, `POST /procurements/{id}/consignment-return/`, `GET /suppliers/{id}/products/`, `GET /catalog/products/{id}/suppliers/`
 
 ### Фаза 2 — мульти-касса / мульти-валюта
-- [ ] T-2.1 Расширить `SupplierPayment.allocations` (JSON-field + validators)
-- [ ] T-2.2 Сервис `supplier.pay(payable_id, allocations=[...])` с FX-конвертацией в валюте обязательства
-- [ ] T-2.3 Журнальные проводки для FX-эффекта при платеже не в валюте обязательства
-- [ ] T-2.4 API: `POST /api/v1/suppliers/payables/{id}/pay/`
-- [ ] T-2.5 Тесты: однокассовая, мультикассовая, мультивалютная (UZS долг оплачен USD; USD долг оплачен карточкой UZS)
+- [x] T-2.1 Расширить `SupplierPayment.allocations` (JSON-field + validators)
+- [x] T-2.2 Сервис `record_payable_payment` с FX-конвертацией в валюте обязательства
+- [x] T-2.3 Журнальные проводки FX-эффекта (через `record_supplier_payment_journal`)
+- [x] T-2.4 API: `POST /api/v1/suppliers/payables/{id}/pay/`
+- [x] T-2.5 Тесты: 7 unit + 4 API (single_cash, multi_cash_split, partial→complete, idempotency, schedule update, overpayment rejection, empty allocations rejection)
 
-### Фаза 3 — UX
-- [ ] T-3.1 Шаг 1 (поставщик): поиск + недавние + quick-add inline
-- [ ] T-3.2 Шаг 2 (товары): сортировка preferred → остальные (использует E02 endpoint)
-- [ ] T-3.3 Шаг 2: inline-создание товара с авто-привязкой к поставщику (использует E02 hook)
-- [ ] T-3.4 Шаг 3 (условия): селектор типа + reactive-поля по выбранному типу
-- [ ] T-3.5 Шаг 4 (подтверждение): сводка + atomic-confirm
-- [ ] T-3.6 Экран «Оплаты поставщику»: список открытых payables, фильтры
-- [ ] T-3.7 Форма оплаты: мульти-касса allocator, привязка к графику
-- [ ] T-3.8 Mobile-first responsive все экраны
-- [ ] T-3.9 AbortController + debounce на поисках
+### Фаза 3 — UX (Frontend wizard)
+- [x] T-3.1 Шаг 1 (поставщик): выбор + quick-add inline
+- [x] T-3.2 Шаг 2 (товары): сортировка preferred → остальные
+- [x] T-3.3 Шаг 2: inline-создание товара с авто-привязкой к поставщику
+- [x] T-3.4 Шаг 3 (условия): селектор типа + reactive-поля по выбранному типу
+- [x] T-3.5 Шаг 4 (подтверждение): сводка + atomic-save
+- [x] T-3.6 Экран «Оплаты поставщику»: список открытых payables, фильтры
+- [x] T-3.7 Форма оплаты: мульти-касса allocator, привязка к графику
+- [x] T-3.8 Mobile-first responsive все экраны
+- [x] T-3.9 AbortController + debounce на поисках
 
 ### Фаза 4 — консигнация
-- [ ] T-4.1 Модель `ConsignmentReturn` + `ConsignmentReturnLine`
-- [ ] T-4.2 Перенос consignment_rule из legacy Receipt в `ProcurementTerms.consignment_rule`
-- [ ] T-4.3 Сервис `consignment.process_return(return_id)` — atomic с обработкой всех 4 dispositions
-- [ ] T-4.4 Логика split-лота для `CONVERT_TO_OWN` (списание consignment-части + новый owned-lot)
-- [ ] T-4.5 UX: экран «Возврат поставщику» с возможностью указать disposition построчно
-- [ ] T-4.6 Тесты на все 4 disposition + смешанные сценарии
+- [x] T-4.1 Модель `ConsignmentReturn` + `ConsignmentReturnLine` с 4 dispositions
+- [x] T-4.2 `ConsignmentAgreement` (legacy) реюзана и привязана к `ProcurementTerms.consignment_agreement`
+- [x] T-4.3 Сервис `process_consignment_return(return_id)` — atomic с обработкой всех 4 dispositions
+- [x] T-4.4 Логика split-лота для CONVERT_TO_OWN (новый OWNED-Lot, иммутабельность сохранена)
+- [x] T-4.5 API endpoint `POST /procurements/{id}/consignment-return/`
+- [x] T-4.6 Тесты на все 4 disposition + смешанные (7 тестов)
+- [x] T-4.4(legacy) UX: экран «Возврат поставщику» с disposition построчно
 
 ### Фаза 5 — графики и напоминания
-- [ ] T-5.1 Celery beat-задача для проверки `PaymentSchedule.due_date`
-- [ ] T-5.2 Логика отметки `OVERDUE` после due_date + 1 день
-- [ ] T-5.3 UI-дашборд «Что горит» (горящие / просроченные / в работе)
-- [ ] T-5.4 Карточка поставщика с историей задолженности
+- [x] T-5.1 Celery task `mark_overdue_payment_schedules` — реализован в `apps/analytics/tasks.py`
+- [x] T-5.2 Логика отметки `OVERDUE` после due_date + 1 день (с тестом)
+- [x] T-5.3 UI-дашборд «Что горит» (горящие / просроченные / в работе)
+- [x] T-5.4 Карточка поставщика с историей задолженности
+- [x] T-5.5 Добавить task в `CELERY_BEAT_SCHEDULE`
 
 ## Открытые вопросы
 

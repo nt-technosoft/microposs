@@ -2,6 +2,8 @@
 Catalog domain — categories, products, variants, attributes.
 """
 
+from decimal import Decimal
+
 from django.db import models
 from apps.core.models import TenantModel
 
@@ -251,3 +253,69 @@ class DiscountReason(TenantModel):
 
     def __str__(self):
         return self.name
+
+
+class ProductSupplier(TenantModel):
+    """
+    Soft association between a ProductVariant and a Supplier — captures the
+    fact that this variant has been (or is) sourced from this supplier.
+
+    Auto-maintained by the procurement service: created on first receipt,
+    updated on subsequent receipts. Never deleted manually.
+
+    No explicit "primary" flag — preferred supplier is computed on the fly
+    by `(-last_received_at, -total_procurements_count)`.
+    """
+
+    product_variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.CASCADE,
+        related_name='supplier_links',
+    )
+    supplier = models.ForeignKey(
+        'suppliers.Supplier',
+        on_delete=models.CASCADE,
+        related_name='product_links',
+    )
+    last_received_at = models.DateTimeField(
+        help_text='Timestamp of the most recent confirmed receipt from this supplier.',
+    )
+    last_unit_price = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        help_text='Unit price of the most recent receipt (in last_currency).',
+    )
+    last_currency = models.CharField(max_length=3, default='UZS')
+    total_received_quantity = models.DecimalField(
+        max_digits=16,
+        decimal_places=3,
+        default=Decimal('0'),
+    )
+    total_received_value_uzs = models.DecimalField(
+        max_digits=18,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text='Cumulative value of received quantities, normalized to UZS.',
+    )
+    total_procurements_count = models.PositiveIntegerField(
+        default=0,
+        help_text='Number of distinct confirmed procurements this link has participated in.',
+    )
+
+    class Meta:
+        db_table = 'catalog_product_supplier'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['product_variant', 'supplier'],
+                name='uq_product_supplier_pair',
+            ),
+        ]
+        indexes = [
+            # For sorting catalog by "preferred for this supplier" — newest first
+            models.Index(fields=['supplier', '-last_received_at']),
+            models.Index(fields=['tenant', 'supplier']),
+            models.Index(fields=['tenant', 'product_variant']),
+        ]
+
+    def __str__(self):
+        return f"{self.product_variant_id} ← {self.supplier_id} (last {self.last_received_at})"

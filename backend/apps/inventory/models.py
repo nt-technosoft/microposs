@@ -6,6 +6,7 @@ from django.db import models
 from django.core.validators import MinValueValidator
 from decimal import Decimal
 
+from apps.core.exceptions import ImmutableRecordError
 from apps.core.models import TenantModel, ImmutableMixin
 
 
@@ -282,6 +283,24 @@ class Lot(TenantModel):
     def save(self, *args, **kwargs):
         if not self.pk and self.receipt_id is None and self.procurement_item_id is None:
             raise ValueError('Lot must originate from receipt or procurement item.')
+        if self.pk:
+            original = Lot.objects.get(pk=self.pk)
+            immutable_fields = (
+                'receipt_id',
+                'receipt_line_id',
+                'procurement_item_id',
+                'product_variant_id',
+                'quantity_initial',
+                'unit_purchase_price',
+                'landed_cost_per_unit',
+                'contract_snapshot',
+                'received_at',
+            )
+            for field_name in immutable_fields:
+                if getattr(original, field_name) != getattr(self, field_name):
+                    raise ImmutableRecordError(
+                        f"Cannot modify immutable Lot field '{field_name}'."
+                    )
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -332,6 +351,7 @@ class StockMovement(TenantModel):
         RETURN = 'return', 'Возврат'
         WRITEOFF = 'writeoff', 'Списание'
         ADJUSTMENT = 'adjustment', 'Корректировка'
+        CONSIGNMENT_RETURN_OUT = 'consignment_return_out', 'Возврат поставщику (консигнация)'
 
     lot = models.ForeignKey(
         Lot,
@@ -339,7 +359,7 @@ class StockMovement(TenantModel):
         related_name='movements',
     )
     movement_type = models.CharField(
-        max_length=20,
+        max_length=32,
         choices=MovementType.choices,
     )
     quantity = models.IntegerField(

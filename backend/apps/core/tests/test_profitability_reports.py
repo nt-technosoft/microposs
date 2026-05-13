@@ -225,7 +225,7 @@ class ProfitabilityReportsTests(APITestCase):
         )
 
         self.assertEqual(row['procurement_id'], self.procurement.id)
-        self.assertEqual(row['procurement_type'], Procurement.Type.PARTNERSHIP)
+        self.assertEqual(row['funding_source'], Procurement.FundingSource.PARTNERSHIP)
         self.assertEqual(row['status'], Procurement.Status.RECEIVED)
         self.assertEqual(row['item_count'], 1)
         self.assertEqual(row['quantity_sold'], 5)

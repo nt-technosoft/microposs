@@ -202,7 +202,7 @@ class ProductProfitabilitySerializer(serializers.Serializer):
 
 class ProcurementProfitabilitySerializer(serializers.Serializer):
     procurement_id = serializers.IntegerField()
-    procurement_type = serializers.CharField()
+    funding_source = serializers.CharField()
     status = serializers.CharField()
     opened_at = serializers.DateTimeField()
     received_at = serializers.DateTimeField(allow_null=True)

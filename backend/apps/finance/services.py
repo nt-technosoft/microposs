@@ -11,7 +11,8 @@ from apps.core.services import publish_event
 
 from .models import (
     Account, CashAccount, CashEntry, CurrencyExchange, Expense,
-    JournalEntry, JournalLine, OwnerContribution, Refund,
+    JournalEntry, JournalLine, OwnerContribution, Payment, PaymentAllocation,
+    Refund,
 )
 from .fx_rates import (
     get_fx_rate_for_date,
@@ -442,6 +443,245 @@ def record_supplier_payment_journal(
     )
 
 
+def record_generic_cash_payment(
+    *,
+    tenant_id: int,
+    cash_account_id: int,
+    target_type: str,
+    target_id: int,
+    amount: Decimal,
+    currency: str | None = None,
+    fx_rate: Decimal | None = None,
+    paid_at=None,
+    counterpart_account_code: str,
+    operation_type: str = 'payment',
+    description: str = '',
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """
+    E07 generic payment from a CashAccount.
+
+    Creates one append-only Payment fact, one CashEntry OUT, one balanced
+    JournalEntry and links the journal back to Payment.
+    """
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Payment amount must be > 0')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=cash_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        payment_currency = str(currency or account.currency or 'UZS').upper()
+        if payment_currency != str(account.currency or '').upper():
+            raise ValueError('Payment currency must match CashAccount currency.')
+        if account.balance < amount:
+            raise ValueError(
+                f'Insufficient cash in {account.name}: have {account.balance}, need {amount}.'
+            )
+
+        resolved_fx_rate = (
+            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
+            if fx_rate is not None
+            else (
+                Decimal('1')
+                if payment_currency == 'UZS'
+                else resolve_fx_rate_snapshot(
+                    tenant_id=tenant_id,
+                    operation_currency=payment_currency,
+                    operation_at=paid_at,
+                )
+            )
+        )
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CASH_ACCOUNT,
+            source_id=account.pk,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=resolved_fx_rate,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = _record_cash_payment_journal(
+            tenant_id=tenant_id,
+            cash_entry=cash_entry,
+            operation_type=operation_type,
+            operation_id=payment.pk,
+            counterpart_account_code=counterpart_account_code,
+            description=description or f'Payment #{payment.pk}',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'target_type': target_type,
+                'target_id': target_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'source_type': payment.source_type,
+                'source_id': payment.source_id,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return payment
+
+
+def record_partner_capital_contribution_payment(
+    *,
+    tenant_id: int,
+    partner_id: int,
+    contribution_id: int,
+    cash_account_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    fx_rate: Decimal | None = None,
+    paid_at=None,
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """Record partner capital entering a business cash account."""
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Contribution payment amount must be > 0')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=cash_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        payment_currency = str(currency or 'UZS').upper()
+        account_currency = str(account.currency or 'UZS').upper()
+        resolved_fx_rate = (
+            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
+            if fx_rate is not None
+            else (
+                Decimal('1')
+                if payment_currency == 'UZS'
+                else resolve_fx_rate_snapshot(
+                    tenant_id=tenant_id,
+                    operation_currency=payment_currency,
+                    operation_at=paid_at,
+                )
+            )
+        )
+        if account_currency == payment_currency:
+            cash_amount = amount
+        elif account_currency == 'UZS':
+            cash_amount = (amount * resolved_fx_rate).quantize(Decimal('0.01'))
+        elif payment_currency == 'UZS':
+            cash_amount = (amount / resolved_fx_rate).quantize(Decimal('0.01'))
+        else:
+            raise ValueError('Contribution can only convert through UZS cash accounts in MVP.')
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.EXTERNAL_PARTNER,
+            source_id=partner_id,
+            target_type=Payment.TargetType.CAPITAL_CONTRIBUTION,
+            target_id=contribution_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=resolved_fx_rate,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=Payment.TargetType.CAPITAL_CONTRIBUTION,
+            target_id=contribution_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.IN,
+            amount=cash_amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = record_journal_from_cash_entry(
+            tenant_id=tenant_id,
+            cash_entry=cash_entry,
+            operation_type='capital_contribution',
+            operation_id=payment.pk,
+            counterpart_account_code='3100',
+            description=f'Partner capital contribution #{contribution_id}',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.capital_contribution_payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'partner_id': partner_id,
+                'contribution_id': contribution_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'cash_account_id': account.pk,
+            },
+            tenant_id=tenant_id,
+        )
+    return payment
+
+
 def record_expense(
     *,
     tenant_id: int,
@@ -668,6 +908,46 @@ def record_journal_from_cash_entry(
             },
             {
                 'account_code': cr_code,
+                'debit': Decimal('0'),
+                'credit': amount,
+                'description': description,
+            },
+        ],
+        description=description,
+        date=date or cash_entry.date,
+    )
+
+
+def _record_cash_payment_journal(
+    *,
+    tenant_id: int,
+    cash_entry: CashEntry,
+    operation_type: str,
+    operation_id: int,
+    counterpart_account_code: str,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    cash_account = cash_entry.account
+    cash_code = (
+        cash_account.linked_account.code
+        if cash_account.linked_account_id
+        else '1000'
+    )
+    amount = cash_entry.amount
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type=operation_type,
+        operation_id=operation_id,
+        lines=[
+            {
+                'account_code': counterpart_account_code,
+                'debit': amount,
+                'credit': Decimal('0'),
+                'description': description,
+            },
+            {
+                'account_code': cash_code,
                 'debit': Decimal('0'),
                 'credit': amount,
                 'description': description,
@@ -1371,7 +1651,7 @@ def get_procurement_profitability_rows(
         if row is None:
             row = {
                 'procurement_id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,
@@ -1503,7 +1783,7 @@ def get_procurement_profitability_detail(
     )
     summary = summary_rows[0] if summary_rows else {
         'procurement_id': procurement.id,
-        'procurement_type': procurement.procurement_type,
+        'funding_source': procurement.funding_source,
         'status': procurement.status,
         'opened_at': procurement.opened_at,
         'received_at': procurement.received_at,
@@ -1738,7 +2018,7 @@ def get_agreement_profitability_detail(
         else:
             row = {
                 'procurement_id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,
@@ -1769,17 +2049,17 @@ def get_agreement_profitability_detail(
         totals['quantity_sold'] += int(row['quantity_sold'])
         totals['remaining_quantity'] += int(row['remaining_quantity'])
         for item in procurement.items.all():
-            if item.status == 'PAID':
+            if item.lifecycle_state == 'READY_FOR_RECEIVE':
                 pending_paid_items_count += 1
                 procurement_pending_cost += _money(
                     Decimal(str(item.quantity))
                     * Decimal(str(item.unit_purchase_price))
                     * Decimal(str(item.fx_rate or '1'))
                 )
-            elif item.status == 'DRAFT':
+            elif item.lifecycle_state == 'DRAFT':
                 draft_items_count += 1
         for expense in procurement.expenses.all():
-            if expense.status == 'PAID':
+            if expense.lifecycle_state == 'READY_FOR_RECEIVE':
                 procurement_pending_cost += _money(
                     Decimal(str(expense.amount))
                     * Decimal(str(expense.fx_rate or '1'))

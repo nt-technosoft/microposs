@@ -20,8 +20,8 @@ class ProcurementExpenseInline(admin.TabularInline):
 
 @admin.register(Procurement)
 class ProcurementAdmin(admin.ModelAdmin):
-    list_display = ('id', 'procurement_type', 'status', 'supplier', 'opened_at')
-    list_filter = ('procurement_type', 'status')
+    list_display = ('id', 'funding_source', 'status', 'supplier', 'opened_at')
+    list_filter = ('funding_source', 'status')
     inlines = [ProcurementItemInline, ProcurementExpenseInline]
 
 

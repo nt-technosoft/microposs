@@ -236,7 +236,7 @@ def create_sale(
     from apps.inventory.services import allocate_lot
     from apps.inventory.models import LotStock, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import (
+    from apps.partnerships.workspace_support import (
         get_or_create_ledger, append_ledger_entry,
     )
     from apps.sales.models import SalePayment
@@ -1056,7 +1056,7 @@ def process_return(
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+    from apps.partnerships.workspace_support import append_ledger_entry, get_or_create_ledger
     from apps.finance.services import create_journal_entry
 
     if date is None:

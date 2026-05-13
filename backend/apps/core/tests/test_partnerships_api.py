@@ -494,7 +494,7 @@ class PartnershipsApiTests(APITestCase):
         update_response = self.client.put(
             f'/api/v1/partnerships/procurements/{procurement_id}/',
             {
-                'procurement_type': Procurement.Type.MUSHARAKA,
+                'procurement_type': 'MUSHARAKA',
                 'notes': 'Try to mutate contract after money movement',
                 'contract': {
                     'mudaraba_ratio': '1',

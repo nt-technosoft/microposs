@@ -208,6 +208,9 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     category_id = serializers.IntegerField(source='product.category_id', read_only=True)
     category_name = serializers.CharField(source='product.category.name', read_only=True, default=None)
     display_sku = serializers.SerializerMethodField()
+    supplier_preferred = serializers.SerializerMethodField()
+    supplier_last_unit_price = serializers.SerializerMethodField()
+    supplier_last_currency = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductVariant
@@ -217,6 +220,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             'is_active', 'attribute_values', 'stock_quantity',
             'total_stock_all_locations', 'stock_at_location',
             'stock_by_location', 'availability_state',
+            'supplier_preferred', 'supplier_last_unit_price', 'supplier_last_currency',
         ]
         read_only_fields = ['id', 'effective_price']
 
@@ -272,6 +276,16 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     def get_display_sku(self, obj):
         sku = (obj.sku or '').strip()
         return sku or f'VAR-{obj.id}'
+
+    def get_supplier_preferred(self, obj):
+        return bool(getattr(obj, '_supplier_preferred', False))
+
+    def get_supplier_last_unit_price(self, obj):
+        value = getattr(obj, '_supplier_last_unit_price', None)
+        return str(value) if value is not None else None
+
+    def get_supplier_last_currency(self, obj):
+        return getattr(obj, '_supplier_last_currency', None)
 
 
 class ProductVariantCreateSerializer(serializers.Serializer):

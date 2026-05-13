@@ -25,8 +25,11 @@ from .models import (
     ProcurementReceiveBatchCapitalAllocation,
     ProcurementReceiveBatchExpense,
     ProcurementReceiveBatchLine,
+    ProcurementTerms,
+    ProcurementTermsAmendment,
 )
-from .services import build_procurement_cost_preview, build_receive_plan
+from .workspace import build_workspace_payload
+from apps.suppliers.models import PaymentSchedule
 
 
 def _money(value: Decimal) -> Decimal:
@@ -60,7 +63,7 @@ class ProcurementItemSerializer(serializers.ModelSerializer):
         model = ProcurementItem
         fields = [
             'id', 'product_variant', 'product_variant_name', 'quantity',
-            'unit_purchase_price', 'currency', 'fx_rate', 'status',
+            'unit_purchase_price', 'currency', 'fx_rate', 'lifecycle_state',
         ]
         read_only_fields = ['id']
 
@@ -72,7 +75,7 @@ class ProcurementExpenseSerializer(serializers.ModelSerializer):
         model = ProcurementExpense
         fields = [
             'id', 'expense_type', 'amount', 'currency', 'fx_rate',
-            'allocation_method', 'notes', 'status', 'target_item_ids',
+            'allocation_method', 'notes', 'lifecycle_state', 'target_item_ids',
         ]
         read_only_fields = ['id']
 
@@ -125,6 +128,29 @@ class ProcurementReceiveBatchSerializer(serializers.ModelSerializer):
             'id', 'warehouse', 'warehouse_name', 'received_at',
             'items_count', 'total_inventory_uzs', 'lines', 'expenses',
             'capital_allocations',
+        ]
+        read_only_fields = ['id']
+
+
+class PaymentScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentSchedule
+        fields = [
+            'id', 'sequence_number', 'due_date', 'amount',
+            'currency', 'status', 'paid_at', 'paid_amount',
+        ]
+        read_only_fields = ['id']
+
+
+class ProcurementTermsSerializer(serializers.ModelSerializer):
+    schedule = PaymentScheduleSerializer(source='schedule_entries', many=True, read_only=True)
+
+    class Meta:
+        model = ProcurementTerms
+        fields = [
+            'id', 'type', 'currency_of_obligation', 'fx_rate_at_obligation',
+            'total_amount_due', 'paid_amount', 'remaining_amount', 'status',
+            'deadline_date', 'consignment_agreement', 'notes', 'schedule',
         ]
         read_only_fields = ['id']
 
@@ -529,6 +555,7 @@ class ProcurementLedgerSerializer(serializers.ModelSerializer):
 
 
 class ProcurementListSerializer(serializers.ModelSerializer):
+    funding_source = serializers.CharField(read_only=True)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     agreement_label = serializers.SerializerMethodField()
     items_count = serializers.SerializerMethodField()
@@ -540,7 +567,7 @@ class ProcurementListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Procurement
         fields = [
-            'id', 'procurement_type', 'status', 'opened_at', 'received_at',
+            'id', 'funding_source', 'status', 'opened_at', 'received_at',
             'supplier', 'supplier_name', 'agreement', 'agreement_label',
             'items_count', 'is_receive_ready',
             'total_amount', 'notes', 'receive_status', 'receive_message',
@@ -556,9 +583,9 @@ class ProcurementListSerializer(serializers.ModelSerializer):
         return f'Инвестдоговор #{obj.agreement_id}'
 
     def _receive_plan(self, obj):
-        cache = self.context.setdefault('_receive_plan_cache', {})
+        cache = self.context.setdefault('_workspace_payload_cache', {})
         if obj.pk not in cache:
-            cache[obj.pk] = build_receive_plan(obj)
+            cache[obj.pk] = build_workspace_payload(obj)
         return cache[obj.pk]
 
     def get_total_amount(self, obj):
@@ -582,22 +609,24 @@ class ProcurementListSerializer(serializers.ModelSerializer):
         return str((item_total + expense_total).quantize(Decimal('0.01')))
 
     def get_is_receive_ready(self, obj):
-        return self._receive_plan(obj)['status'] in ('READY', 'AUTO_SURPLUS', 'AGREEMENT_SURPLUS')
+        return bool(self._receive_plan(obj)['readiness']['receive_ready']['ok'])
 
     def get_receive_status(self, obj):
-        return self._receive_plan(obj)['status']
+        return 'READY' if self.get_is_receive_ready(obj) else 'BLOCKED'
 
     def get_receive_message(self, obj):
-        return self._receive_plan(obj)['message']
+        return self._receive_plan(obj)['readiness']['receive_ready']['message']
 
 
 class ProcurementDetailSerializer(serializers.ModelSerializer):
+    funding_source = serializers.CharField(read_only=True)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     agreement_label = serializers.SerializerMethodField()
     items = ProcurementItemSerializer(many=True, read_only=True)
     expenses = ProcurementExpenseSerializer(many=True, read_only=True)
     contract = InvestmentContractSerializer(read_only=True)
     balance = ProcurementBalanceSerializer(read_only=True)
+    terms = ProcurementTermsSerializer(read_only=True)
     receive_batches = ProcurementReceiveBatchSerializer(many=True, read_only=True)
     receive_plan = serializers.SerializerMethodField()
     cost_preview = serializers.SerializerMethodField()
@@ -605,10 +634,10 @@ class ProcurementDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Procurement
         fields = [
-            'id', 'procurement_type', 'status', 'opened_at', 'received_at', 'closed_at',
+            'id', 'funding_source', 'status', 'opened_at', 'received_at', 'closed_at',
             'supplier', 'supplier_name', 'agreement', 'agreement_label',
             'notes', 'client_request_id',
-            'items', 'expenses', 'contract', 'balance',
+            'items', 'expenses', 'contract', 'balance', 'terms',
             'receive_batches', 'receive_plan', 'cost_preview',
         ]
         read_only_fields = ['id']
@@ -619,10 +648,22 @@ class ProcurementDetailSerializer(serializers.ModelSerializer):
         return f'Инвестдоговор #{obj.agreement_id}'
 
     def get_receive_plan(self, obj):
-        return build_receive_plan(obj)
+        payload = build_workspace_payload(obj)
+        return {
+            'status': 'READY' if payload['readiness']['receive_ready']['ok'] else 'BLOCKED',
+            'message': payload['readiness']['receive_ready']['message'],
+            'readiness': payload['readiness'],
+            'policy': payload['policy'],
+        }
 
     def get_cost_preview(self, obj):
-        return build_procurement_cost_preview(obj)
+        payload = build_workspace_payload(obj)
+        return {
+            'items_total_uzs': payload['summaries']['items_total_uzs'],
+            'expenses_total_uzs': payload['summaries']['expenses_total_uzs'],
+            'payables_total': payload['summaries']['payables_total'],
+            'receive_batches_count': payload['summaries']['receive_batches_count'],
+        }
 
 
 class ContractPartnerInputSerializer(serializers.Serializer):
@@ -706,15 +747,40 @@ class ProcurementExpenseTargetsSerializer(serializers.Serializer):
     )
 
 
+class PaymentScheduleInputSerializer(serializers.Serializer):
+    sequence_number = serializers.IntegerField(required=False)
+    due_date = serializers.DateField()
+    amount = serializers.DecimalField(max_digits=16, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, allow_blank=True)
+
+
+class ProcurementTermsInputSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=ProcurementTerms.Type.choices)
+    currency_of_obligation = serializers.CharField(max_length=3, required=False, default='UZS')
+    fx_rate_at_obligation = serializers.DecimalField(max_digits=16, decimal_places=6, required=False, default='1')
+    total_amount_due = serializers.DecimalField(max_digits=16, decimal_places=2)
+    paid_amount = serializers.DecimalField(max_digits=16, decimal_places=2, required=False, default='0')
+    deadline_date = serializers.DateField(required=False, allow_null=True)
+    consignment_agreement_id = serializers.IntegerField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
 class ProcurementCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
-    procurement_type = serializers.ChoiceField(choices=Procurement.Type.choices)
+    funding_source = serializers.ChoiceField(choices=Procurement.FundingSource.choices, required=False)
     supplier_id = serializers.IntegerField(required=False, allow_null=True)
     agreement_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     contract = InvestmentContractInputSerializer(required=False, allow_null=True)
     items = ProcurementItemInputSerializer(many=True, required=False, default=list)
     expenses = ProcurementExpenseInputSerializer(many=True, required=False, default=list)
+    terms = ProcurementTermsInputSerializer(required=False, allow_null=True)
+    schedule = PaymentScheduleInputSerializer(many=True, required=False, default=list)
+
+    def validate(self, attrs):
+        if not attrs.get('funding_source'):
+            raise serializers.ValidationError({'funding_source': 'This field is required.'})
+        return attrs
 
 
 class BalanceContributionSerializer(serializers.ModelSerializer):
@@ -779,6 +845,58 @@ class ReceiveProcurementSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    # E01 — optional terms / schedule for the procurement
+    terms_payload = serializers.DictField(required=False, allow_null=True)
+    schedule_payload = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+    )
+
+
+class TermsAmendmentSerializer(serializers.Serializer):
+    """Payload for POST /procurements/{id}/terms/amend/"""
+    new_fields = serializers.DictField()
+    reason = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class ProcurementTermsAmendmentSerializer(serializers.ModelSerializer):
+    changed_by_user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProcurementTermsAmendment
+        fields = [
+            'id', 'amended_at', 'changed_by_user',
+            'changed_by_user_name', 'change_payload', 'reason',
+        ]
+        read_only_fields = fields
+
+    def get_changed_by_user_name(self, obj):
+        user = getattr(obj, 'changed_by_user', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
+
+
+class ConsignmentReturnLineSerializer(serializers.Serializer):
+    lot_id = serializers.IntegerField()
+    quantity = serializers.DecimalField(max_digits=14, decimal_places=3)
+    disposition = serializers.ChoiceField(choices=[
+        'RETURN_TO_SUPPLIER',
+        'DISPOSE_SUPPLIER_LOSS',
+        'DISPOSE_BUSINESS_LOSS',
+        'CONVERT_TO_OWN',
+    ])
+    agreed_price_per_unit = serializers.DecimalField(max_digits=14, decimal_places=6)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class ConsignmentReturnCreateSerializer(serializers.Serializer):
+    """Payload for POST /procurements/{id}/consignment-return/"""
+    warehouse_id = serializers.IntegerField()
+    lines = ConsignmentReturnLineSerializer(many=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class PayProcurementItemsSerializer(serializers.Serializer):
@@ -787,6 +905,7 @@ class PayProcurementItemsSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    cash_account_id = serializers.IntegerField(required=False, allow_null=True)
     reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 
@@ -796,6 +915,7 @@ class PayProcurementExpensesSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    cash_account_id = serializers.IntegerField(required=False, allow_null=True)
     reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 

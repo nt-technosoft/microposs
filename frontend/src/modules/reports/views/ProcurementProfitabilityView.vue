@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
             <p class="hero-kicker">{{ t('reports.procurementNumber', { id: summary.procurement_id }) }}</p>
             <h2 class="hero-title">{{ summary.supplier_name || t('reports.procurementNoSupplier') }}</h2>
             <div class="hero-meta">
-              <span>{{ procurementTypeLabel(summary.procurement_type ?? '') }}</span>
+              <span>{{ procurementTypeLabel(summary.funding_source ?? '') }}</span>
               <span>{{ procurementStatusLabel(summary.status ?? '') }}</span>
               <span>{{ formatDateTime(summary.received_at || summary.opened_at) }}</span>
             </div>

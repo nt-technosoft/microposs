@@ -153,7 +153,7 @@ export interface ReportDisplay extends ReportCurrencyMeta {
 
 export interface ProcurementProfitabilityRow {
   procurement_id: number
-  procurement_type: string
+  funding_source: string
   status: string
   opened_at: string
   received_at: string | null
@@ -462,9 +462,10 @@ export async function fetchAccounts(): Promise<Account[]> {
   return extractList<Account>(data)
 }
 
-export async function fetchCashAccounts(): Promise<CashAccountRecord[]> {
+export async function fetchCashAccounts(signal?: AbortSignal): Promise<CashAccountRecord[]> {
   const { data } = await api.get<PaginatedResponse<CashAccountRecord> | CashAccountRecord[]>(
     '/api/v1/finance/cash-accounts/',
+    { signal },
   )
   return extractList<CashAccountRecord>(data)
 }

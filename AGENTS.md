@@ -18,6 +18,7 @@ MicroPOS / **Sherik POS** — mobile-first платформа: финансов�
 - E04 — Contract Types Formalization → [doc](./docs/roadmap/E04-contract-types.md)
 - E05 — Zakat Calculation → [doc](./docs/roadmap/E05-zakat.md)
 - E06 — Sharia Certification → [doc](./docs/roadmap/E06-sharia-certification.md)
+- E07 — Procurement & Investment Workspace Re-architecture → [doc](./docs/roadmap/E07-procurement-workspace.md) **P0 / главный активный цикл**
 
 **Roadmap-протокол** (для любого LLM-инструмента, работающего с задачами):
 1. Открой [`docs/ROADMAP.md`](./docs/ROADMAP.md) → определи свой эпик
@@ -27,6 +28,38 @@ MicroPOS / **Sherik POS** — mobile-first платформа: финансов�
 5. Новая крупная тема → новый эпик по [`docs/roadmap/_template.md`](./docs/roadmap/_template.md)
 
 ## Quick Reference
+
+## Architecture-First Delivery Policy
+
+For large epics, domain rewrites and foundational features, optimize for the
+target architecture, not for a locally green or cosmetically complete state.
+
+- Do not write tests for the sake of tests. Tests must validate the intended
+  business behavior and target architecture.
+- Do not add shims, aliases, hidden compatibility layers or temporary
+  workarounds only to make old tests, old UI or old services pass.
+- A temporarily incomplete or red intermediate state is acceptable during a
+  planned reset if the roadmap clearly explains how the final architecture will
+  become consistent.
+- When conflicts appear, resolve them at the architecture/domain boundary:
+  decide which model, service, module or contract should change long-term
+  instead of patching the local symptom.
+- Before implementing large changes, check how the decision affects adjacent
+  domains: inventory/FIFO, finance/journals, suppliers/payables,
+  partnerships/profit, reporting, frontend state and Excel replay.
+- Prefer explicit target contracts over silent backward compatibility. Old code
+  can remain as reference, but must not dictate the new model.
+- Verification is still required, but it should prove the target behavior. Do
+  not treat legacy-suite green as success if it required compromising the
+  architecture.
+- For confirmed large epics such as E07, continue in larger coherent slices
+  until a real blocker appears. Do not stop after every micro-task just to
+  report progress or ask for permission when the roadmap and target contracts
+  provide enough context.
+- Use planning when it improves execution quality, then execute the plan.
+  Periodically re-check the architecture, domain boundaries and adjacent-module
+  effects, but avoid wasting cycles on premature full-suite verification while
+  the reset is intentionally incomplete.
 
 ### Where to find business logic
 | Domain | Backend service | Frontend module |
@@ -53,7 +86,26 @@ MicroPOS / **Sherik POS** — mobile-first платформа: финансов�
 cd backend
 DJANGO_SETTINGS_MODULE=config.settings.development .venv/bin/python -m pytest apps/core/tests/ -q
 ```
-All 108 tests should pass.
+Run this before treating backend/domain changes as complete.
+
+### Canonical Excel workflow
+Use `docs/testing-data-workflow.md` as the source of truth.
+
+- Canonical source file: `MUZORABA USTOZ VA BEKZOD AKA 2 (1).xlsx`
+- Canonical snapshot: `backend/import_snapshots/muzoraba_ustoz_bekzod_latest.json`
+- Current commands:
+  - `excel_snapshot_from_xlsx` — rebuild snapshot from `.xlsx`
+  - `excel_workflow_staged` — staged manual-audit replay
+  - `excel_workflow_audit` — full one-shot replay after staged flow is trusted
+
+Do not use retired direct-import scripts. Test data must be generated through
+domain services/API-like flows, not by inserting final Excel totals into reports.
+
+### Thread / context handoff
+For large tasks, prefer a fresh Codex thread per epic/task. Keep durable context
+in this file, `docs/ROADMAP.md`, domain docs, and tests. Before starting a new
+thread, summarize: branch, goal, changed files, relevant docs, commands to run,
+and unresolved risks.
 
 ## Architecture
 - **Monorepo**: `backend/` (Django) + `frontend/` (Vue.js 3)
@@ -93,6 +145,7 @@ All 108 tests should pass.
 - Components: `src/components/` (shared) + `src/modules/<domain>/components/`
 - Design tokens in CSS custom properties
 - Lucide icons (no emojis as structural icons)
+- Any frontend/UI change must explicitly use `frontend-skill` as part of the workflow
 - All animations 150-300ms, respect prefers-reduced-motion
 - AbortController pattern for all data-loading functions; cancel in onBeforeUnmount
 - Debounce 300ms on currency switches and search inputs
@@ -101,6 +154,10 @@ All 108 tests should pass.
 `CELERY_TASK_ALWAYS_EAGER=True` is set in `config/settings/development.py`. This means all `.delay()` calls execute synchronously — no Celery worker needed in development. Tests rely on this behaviour.
 
 ## Vacuum Rework Note
-- Frontend migration: reuse foundation, rewrite feature-domain.
-- `Receipt` is being replaced by `Procurement` in product and UX terminology.
-- PR-12 (Excel mapping) is a separate track, not a default continuation.
+- E07 is the current P0 and follows **controlled radical reset**.
+- Do not treat old procurement/intake backend or UI as target architecture. Use old code only as reference for business rules and edge cases.
+- New procurement/investment/payment core should be designed as target architecture, not adapted around old compromises.
+- Frontend migration: reuse foundation, but rebuild the procurement feature-domain around one workspace.
+- E07 Phase D frontend must follow `docs/roadmap/E07-canonical-workspace-flow.md`: goods/expenses → supplier/settlement → funding → payment/obligation → receipt → history. API section order is not UX order.
+- `Receipt` is legacy; new work should model procurement through the E07 document/event architecture.
+- PR-12 (Excel mapping) is a separate track, not a default continuation, but Excel replay must later validate E07.

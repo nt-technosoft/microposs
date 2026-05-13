@@ -1,8 +1,8 @@
 """
-Partnerships domain — Procurement (partnership-level purchase),
-InvestmentContract (Musharaka+Mudaraba hybrid), ProcurementBalance (common pot).
+Partnerships domain — E07 procurement workspace and investment layer.
 
-Lives alongside legacy inventory.Receipt during migration (PR-2..PR-9).
+Legacy procurement-attached contract/balance classes remain only as reference
+while the target workspace services are rebuilt.
 """
 
 from decimal import Decimal
@@ -10,6 +10,7 @@ from decimal import Decimal
 from django.db import models
 
 from apps.core.models import TenantModel, ImmutableMixin
+from apps.core.exceptions import ImmutableRecordError
 
 
 class InvestmentAgreement(TenantModel):
@@ -21,7 +22,19 @@ class InvestmentAgreement(TenantModel):
         CLOSED = 'CLOSED', 'Закрыт'
         CANCELLED = 'CANCELLED', 'Отменён'
 
+    class LegalMode(models.TextChoices):
+        MUDARABA = 'MUDARABA', 'Мудараба'
+        MUSHARAKA = 'MUSHARAKA', 'Мушарака'
+        HYBRID = 'HYBRID', 'Гибрид'
+
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    legal_mode = models.CharField(
+        max_length=20,
+        choices=LegalMode.choices,
+        null=True,
+        blank=True,
+        help_text='Legal/contract label only; not a procurement type.',
+    )
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
     supplier = models.ForeignKey(
@@ -102,8 +115,10 @@ class AgreementPartner(TenantModel):
 
 class Procurement(ImmutableMixin, TenantModel):
     """
-    A procurement event — umbrella over items, expenses, balance and
-    (optionally) an InvestmentContract for partnership-financed procurements.
+    E07 purchase/workspace root.
+
+    Funding source, supplier settlement, payments, investment agreement and
+    receive batches are separate documents coordinated by workspace services.
     """
 
     class Status(models.TextChoices):
@@ -113,13 +128,16 @@ class Procurement(ImmutableMixin, TenantModel):
         CLOSED = 'CLOSED', 'Закрыт'
         CANCELLED = 'CANCELLED', 'Отменён'
 
-    class Type(models.TextChoices):
+    class FundingSource(models.TextChoices):
         OWN_FUNDS = 'OWN_FUNDS', 'Собственные средства'
-        PARTNERSHIP = 'PARTNERSHIP', 'Партнёрский'
-        MUSHARAKA = 'MUSHARAKA', 'Мушарака'
-        DISTRIBUTOR = 'DISTRIBUTOR', 'Дистрибуторский'  # frozen: DISTRIBUTOR is deferred, do not develop
+        PARTNERSHIP = 'PARTNERSHIP', 'Партнёрский капитал'
 
-    procurement_type = models.CharField(max_length=20, choices=Type.choices)
+    funding_source = models.CharField(
+        max_length=20,
+        choices=FundingSource.choices,
+        default=FundingSource.OWN_FUNDS,
+        help_text='E07 target funding axis.',
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -150,7 +168,7 @@ class Procurement(ImmutableMixin, TenantModel):
         db_table = 'partnerships_procurement'
         indexes = [
             models.Index(fields=['tenant', 'status']),
-            models.Index(fields=['tenant', 'procurement_type']),
+            models.Index(fields=['tenant', 'funding_source']),
             models.Index(fields=['tenant', 'agreement']),
         ]
         constraints = [
@@ -162,16 +180,17 @@ class Procurement(ImmutableMixin, TenantModel):
         ]
 
     def __str__(self):
-        return f"Procurement#{self.pk} {self.procurement_type}/{self.status}"
+        return f"Procurement#{self.pk} {self.funding_source}/{self.status}"
 
 
 class ProcurementItem(TenantModel):
     """A line item on a procurement — product variant + planned quantity."""
 
-    class Status(models.TextChoices):
+    class LifecycleState(models.TextChoices):
         DRAFT = 'DRAFT', 'Черновик'
-        PAID = 'PAID', 'Оплачено'
+        READY_FOR_RECEIVE = 'READY_FOR_RECEIVE', 'Готово к приёмке'
         RECEIVED = 'RECEIVED', 'Оприходовано'
+        CANCELLED = 'CANCELLED', 'Отменено'
 
     procurement = models.ForeignKey(
         Procurement,
@@ -187,17 +206,17 @@ class ProcurementItem(TenantModel):
     unit_purchase_price = models.DecimalField(max_digits=14, decimal_places=6)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
-    status = models.CharField(
-        max_length=16,
-        choices=Status.choices,
-        default=Status.DRAFT,
+    lifecycle_state = models.CharField(
+        max_length=24,
+        choices=LifecycleState.choices,
+        default=LifecycleState.DRAFT,
     )
 
     class Meta:
         db_table = 'partnerships_procurement_item'
         indexes = [
             models.Index(fields=['procurement']),
-            models.Index(fields=['procurement', 'status']),
+            models.Index(fields=['procurement', 'lifecycle_state']),
         ]
 
 
@@ -215,10 +234,11 @@ class ProcurementExpense(TenantModel):
         BY_QUANTITY = 'BY_QUANTITY', 'Пропорционально количеству'
         BY_WEIGHT = 'BY_WEIGHT', 'Пропорционально весу'
 
-    class Status(models.TextChoices):
+    class LifecycleState(models.TextChoices):
         DRAFT = 'DRAFT', 'Черновик'
-        PAID = 'PAID', 'Оплачено'
+        READY_FOR_RECEIVE = 'READY_FOR_RECEIVE', 'Готово к приёмке'
         RECEIVED = 'RECEIVED', 'Оприходовано'
+        CANCELLED = 'CANCELLED', 'Отменено'
 
     procurement = models.ForeignKey(
         Procurement,
@@ -235,17 +255,17 @@ class ProcurementExpense(TenantModel):
         default=AllocationMethod.BY_VALUE,
     )
     notes = models.CharField(max_length=255, blank=True, default='')
-    status = models.CharField(
-        max_length=16,
-        choices=Status.choices,
-        default=Status.DRAFT,
+    lifecycle_state = models.CharField(
+        max_length=24,
+        choices=LifecycleState.choices,
+        default=LifecycleState.DRAFT,
     )
 
     class Meta:
         db_table = 'partnerships_procurement_expense'
         indexes = [
             models.Index(fields=['procurement']),
-            models.Index(fields=['procurement', 'status']),
+            models.Index(fields=['procurement', 'lifecycle_state']),
         ]
 
 
@@ -302,6 +322,14 @@ class ProcurementReceiveBatch(TenantModel):
             models.Index(fields=['warehouse'], name='partnership_warehou_3f31c8_idx'),
         ]
 
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementReceiveBatch is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementReceiveBatch is append-only.')
+
 
 class ProcurementReceiveBatchLine(TenantModel):
     """A received procurement item snapshot inside a receive batch."""
@@ -334,6 +362,14 @@ class ProcurementReceiveBatchLine(TenantModel):
             models.Index(fields=['lot'], name='partnership_lot_id_776a8e_idx'),
         ]
 
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementReceiveBatchLine is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementReceiveBatchLine is append-only.')
+
 
 class ProcurementReceiveBatchExpense(TenantModel):
     """Expense amount fixed into a receive batch."""
@@ -356,6 +392,14 @@ class ProcurementReceiveBatchExpense(TenantModel):
             models.Index(fields=['batch'], name='partnership_batch_i_2b88d7_idx'),
             models.Index(fields=['expense'], name='partnership_expense_cebc8a_idx'),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementReceiveBatchExpense is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementReceiveBatchExpense is append-only.')
 
 
 class ProcurementReceiveBatchCapitalAllocation(TenantModel):
@@ -388,6 +432,14 @@ class ProcurementReceiveBatchCapitalAllocation(TenantModel):
                 name='uq_receive_batch_capital_partner',
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementReceiveBatchCapitalAllocation is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementReceiveBatchCapitalAllocation is append-only.')
 
 
 class InvestmentContract(TenantModel):
@@ -795,4 +847,228 @@ class DividendPayment(TenantModel):
         indexes = [
             models.Index(fields=['partner', 'date']),
             models.Index(fields=['procurement']),
+        ]
+
+
+# =========================================================================
+# E01 — Procurement Terms, Amendments, Consignment Returns
+# =========================================================================
+
+
+class ProcurementTerms(TenantModel):
+    """
+    Payment terms attached to a Procurement (OneToOne).
+
+    Captures the obligation structure: type (PREPAID/PARTIAL/DEFERRED/
+    INSTALLMENT/CONSIGNMENT), obligation currency with FX snapshot, total
+    amount due, and (for DEFERRED) deadline / (for INSTALLMENT) a schedule
+    in `suppliers.PaymentSchedule`.
+
+    For CONSIGNMENT, references the existing `suppliers.ConsignmentAgreement`.
+    """
+
+    class Type(models.TextChoices):
+        PREPAID = 'PREPAID', 'Полная предоплата'
+        PARTIAL = 'PARTIAL', 'Частичная оплата'
+        DEFERRED = 'DEFERRED', 'Отсрочка'
+        INSTALLMENT = 'INSTALLMENT', 'Рассрочка'
+        CONSIGNMENT = 'CONSIGNMENT', 'Консигнация'
+
+    class Status(models.TextChoices):
+        OPEN = 'OPEN', 'Открыты'
+        PARTIALLY_PAID = 'PARTIALLY_PAID', 'Частично оплачены'
+        FULLY_PAID = 'FULLY_PAID', 'Полностью оплачены'
+        CANCELLED = 'CANCELLED', 'Отменены'
+
+    procurement = models.OneToOneField(
+        Procurement,
+        on_delete=models.CASCADE,
+        related_name='terms',
+    )
+    type = models.CharField(max_length=16, choices=Type.choices)
+    currency_of_obligation = models.CharField(max_length=3, default='UZS')
+    fx_rate_at_obligation = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        default=Decimal('1'),
+        help_text='Snapshot of FX rate at obligation date; not revalued.',
+    )
+    total_amount_due = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        help_text='Total obligation in `currency_of_obligation` (Σ items × prices × fx).',
+    )
+    paid_amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        default=Decimal('0'),
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    deadline_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Only for DEFERRED type. Null otherwise (schedule covers INSTALLMENT).',
+    )
+    consignment_agreement = models.ForeignKey(
+        'suppliers.ConsignmentAgreement',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='procurement_terms',
+        help_text='Only for CONSIGNMENT type.',
+    )
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_procurement_terms'
+        indexes = [
+            models.Index(fields=['tenant', 'type', 'status']),
+            models.Index(fields=['tenant', 'status', 'deadline_date']),
+        ]
+
+    def __str__(self):
+        return f"Terms#{self.pk} type={self.type} status={self.status}"
+
+    @property
+    def remaining_amount(self) -> Decimal:
+        return Decimal(str(self.total_amount_due or 0)) - Decimal(str(self.paid_amount or 0))
+
+
+class ProcurementTermsAmendment(TenantModel):
+    """
+    Explicit amendment to a ProcurementTerms after the procurement has been
+    received. Captures before/after snapshot for audit. Silent edits to
+    ProcurementTerms are forbidden — every change must produce an amendment.
+    """
+
+    terms = models.ForeignKey(
+        ProcurementTerms,
+        on_delete=models.PROTECT,
+        related_name='amendments',
+    )
+    amended_at = models.DateTimeField()
+    changed_by_user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='procurement_terms_amendments',
+    )
+    change_payload = models.JSONField(
+        help_text='Snapshot {before: {...}, after: {...}} of changed fields.',
+    )
+    reason = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_procurement_terms_amendment'
+        indexes = [
+            models.Index(fields=['terms', 'amended_at']),
+        ]
+
+
+class ConsignmentReturn(TenantModel):
+    """
+    A return document for a CONSIGNMENT-typed procurement. Each return can
+    contain multiple lines, each with its own `disposition` — allowing mixed
+    scenarios (some lines returned to supplier, some disposed, some converted
+    to owned inventory).
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        CONFIRMED = 'CONFIRMED', 'Подтверждён'
+        CANCELLED = 'CANCELLED', 'Отменён'
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='consignment_returns',
+    )
+    supplier = models.ForeignKey(
+        'suppliers.Supplier',
+        on_delete=models.PROTECT,
+        related_name='consignment_returns',
+    )
+    return_date = models.DateTimeField()
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_consignment_return'
+        indexes = [
+            models.Index(fields=['tenant', 'procurement']),
+            models.Index(fields=['tenant', 'status', 'return_date']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_consignment_return_idempotent',
+            ),
+        ]
+
+
+class ConsignmentReturnLine(TenantModel):
+    """
+    A single line of a ConsignmentReturn. The `disposition` determines what
+    happens to this quantity of this lot:
+
+    - RETURN_TO_SUPPLIER     stock -, payable - (supplier takes goods back)
+    - DISPOSE_SUPPLIER_LOSS  stock -, payable - (supplier eats the loss)
+    - DISPOSE_BUSINESS_LOSS  stock -, no payable change (business eats loss)
+    - CONVERT_TO_OWN         split lot: old consignment lot quantity -,
+                             new owned Lot created at `agreed_price_per_unit`
+                             + payable + for the conversion
+    """
+
+    class Disposition(models.TextChoices):
+        RETURN_TO_SUPPLIER = 'RETURN_TO_SUPPLIER', 'Возврат поставщику'
+        DISPOSE_SUPPLIER_LOSS = 'DISPOSE_SUPPLIER_LOSS', 'Списание (на поставщике)'
+        DISPOSE_BUSINESS_LOSS = 'DISPOSE_BUSINESS_LOSS', 'Списание (на бизнесе)'
+        CONVERT_TO_OWN = 'CONVERT_TO_OWN', 'Перевод в собственность'
+
+    consignment_return = models.ForeignKey(
+        ConsignmentReturn,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    lot = models.ForeignKey(
+        'inventory.Lot',
+        on_delete=models.PROTECT,
+        related_name='consignment_return_lines',
+    )
+    quantity = models.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        help_text='Quantity from the lot being processed under this disposition.',
+    )
+    disposition = models.CharField(
+        max_length=24,
+        choices=Disposition.choices,
+    )
+    agreed_price_per_unit = models.DecimalField(
+        max_digits=14,
+        decimal_places=6,
+        help_text=(
+            'Agreed unit price for the disposition. '
+            'For RETURN/DISPOSE_*: amount of payable reduction per unit. '
+            'For CONVERT_TO_OWN: buyout price per unit.'
+        ),
+    )
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_consignment_return_line'
+        indexes = [
+            models.Index(fields=['consignment_return']),
+            models.Index(fields=['lot']),
         ]
