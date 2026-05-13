@@ -135,7 +135,13 @@ def build_workspace_payload(procurement: Procurement) -> dict:
         has_supplier=bool(procurement.supplier_id),
         has_investment_agreement=bool(procurement.agreement_id),
         has_items=has_items,
-        has_procurement_balance=balance is not None,
+        has_procurement_balance=(
+            balance is not None
+            and (
+                procurement.funding_source == Procurement.FundingSource.PARTNERSHIP
+                or _has_capital_activity(balance)
+            )
+        ),
         has_capital_activity=_has_capital_activity(balance),
         has_payment_activity=_has_payment_activity(procurement, payables),
         has_receive_batches=bool(receive_batches),
@@ -343,6 +349,13 @@ def dispatch_workspace_action(
             payload=mutation_payload,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'SPLIT_ITEM':
+        split_workspace_item(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            payload=mutation_payload,
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'PAY_COSTS':
         pay_workspace_costs(
             tenant_id=tenant_id,
@@ -488,6 +501,82 @@ def _draft_expense_for_update(tenant_id: int, procurement: Procurement, expense_
     return expense
 
 
+def split_workspace_item(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    payload: dict,
+) -> tuple[ProcurementItem, ProcurementItem]:
+    """Split a draft/receivable item line before posting a partial receive batch."""
+
+    item_id = payload.get('item_id') or payload.get('id')
+    split_quantity = Decimal(str(payload.get('quantity') or payload.get('split_quantity') or '0'))
+    if not item_id:
+        raise ValueError('item_id is required.')
+    if split_quantity <= 0:
+        raise ValueError('Split quantity must be > 0.')
+
+    with transaction.atomic():
+        locked_procurement = Procurement.objects.select_for_update().get(
+            pk=procurement.pk,
+            tenant_id=tenant_id,
+        )
+        if locked_procurement.status not in (
+            Procurement.Status.OPEN,
+            Procurement.Status.PARTIALLY_RECEIVED,
+        ):
+            raise ValueError(f'Cannot split item in status {locked_procurement.status}.')
+
+        item = ProcurementItem.objects.select_for_update().get(
+            pk=int(item_id),
+            tenant_id=tenant_id,
+            procurement=locked_procurement,
+        )
+        if item.lifecycle_state not in (
+            ProcurementItem.LifecycleState.DRAFT,
+            ProcurementItem.LifecycleState.READY_FOR_RECEIVE,
+        ):
+            raise ValueError('Only draft or receivable item lines can be split.')
+
+        current_quantity = Decimal(str(item.quantity))
+        if split_quantity >= current_quantity:
+            raise ValueError('Split quantity must be less than current item quantity.')
+
+        remaining_quantity = current_quantity - split_quantity
+        item.quantity = split_quantity
+        item.save(update_fields=['quantity', 'updated_at'])
+
+        new_item = ProcurementItem.objects.create(
+            tenant_id=tenant_id,
+            procurement=locked_procurement,
+            product_variant_id=item.product_variant_id,
+            quantity=remaining_quantity,
+            unit_purchase_price=item.unit_purchase_price,
+            currency=item.currency,
+            fx_rate=item.fx_rate,
+            lifecycle_state=item.lifecycle_state,
+        )
+        for target in ProcurementExpenseTarget.objects.filter(item=item):
+            ProcurementExpenseTarget.objects.get_or_create(
+                tenant_id=tenant_id,
+                expense_id=target.expense_id,
+                item=new_item,
+            )
+
+        publish_event(
+            event_type='procurement.item_split',
+            payload={
+                'procurement_id': locked_procurement.pk,
+                'source_item_id': item.pk,
+                'new_item_id': new_item.pk,
+                'source_quantity': str(split_quantity),
+                'new_quantity': str(remaining_quantity),
+            },
+            tenant_id=tenant_id,
+        )
+        return item, new_item
+
+
 def _replace_expense_targets(
     tenant_id: int,
     procurement: Procurement,
@@ -525,7 +614,7 @@ def create_and_link_workspace_agreement(
     client_request_id: str | None = None,
 ) -> InvestmentAgreement:
     if procurement.funding_source != Procurement.FundingSource.PARTNERSHIP:
-        raise ValueError('Investment agreement can be created only for PARTNERSHIP procurement.')
+        _ensure_source_editable(procurement)
 
     agreement = create_investment_agreement(
         tenant_id=tenant_id,
@@ -554,13 +643,12 @@ def link_workspace_agreement(
     procurement: Procurement,
     agreement_id: int | None,
 ) -> None:
-    if procurement.funding_source != Procurement.FundingSource.PARTNERSHIP:
-        raise ValueError('Investment agreement can be linked only to PARTNERSHIP procurement.')
     if not agreement_id:
         raise ValueError('agreement_id is required.')
     _ensure_source_editable(procurement)
     InvestmentAgreement.objects.get(pk=agreement_id, tenant_id=tenant_id)
     Procurement.objects.filter(pk=procurement.pk, tenant_id=tenant_id).update(
+        funding_source=Procurement.FundingSource.PARTNERSHIP,
         agreement_id=agreement_id,
         updated_at=timezone.now(),
     )
@@ -838,20 +926,38 @@ def pay_workspace_costs(
             raise ValueError('amount is required when CashAccount currency is not UZS.')
         amount = _draft_cost_total_uzs(selected_items, selected_expenses)
 
+    payment_currency = payload.get('currency') or cash_account.currency
+    payment_fx_rate = payload.get('fx_rate')
+
     payment = record_generic_cash_payment(
         tenant_id=tenant_id,
         cash_account_id=cash_account.pk,
         target_type=Payment.TargetType.PROCUREMENT_COST,
         target_id=procurement.pk,
         amount=Decimal(str(amount)),
-        currency=payload.get('currency') or cash_account.currency,
-        fx_rate=payload.get('fx_rate'),
+        currency=payment_currency,
+        fx_rate=payment_fx_rate,
         counterpart_account_code='1100',
         operation_type='procurement_payment',
         description=f'Procurement #{procurement.pk} costs payment',
         client_request_id=client_request_id,
         notes=payload.get('notes', ''),
     )
+
+    terms = getattr(procurement, 'terms', None)
+    if terms and terms.type == ProcurementTerms.Type.PARTIAL:
+        paid_delta = _payment_amount_for_terms(
+            amount=Decimal(str(amount)),
+            currency=str(payment_currency or cash_account.currency).upper(),
+            fx_rate=payment_fx_rate,
+            terms=terms,
+        )
+        terms.paid_amount = min(
+            Decimal(str(terms.total_amount_due)),
+            (Decimal(str(terms.paid_amount or 0)) + paid_delta).quantize(Decimal('0.01')),
+        )
+        terms.status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
+        terms.save(update_fields=['paid_amount', 'status', 'updated_at'])
 
     item_type = procurement.items.model
     expense_type = procurement.expenses.model
@@ -925,6 +1031,8 @@ def receive_workspace_batch(
         terms = getattr(locked, 'terms', None)
         if terms and terms.type == ProcurementTerms.Type.INSTALLMENT and not terms.schedule_entries.exists():
             raise ValueError('INSTALLMENT settlement requires payment schedule.')
+        if terms and terms.type == ProcurementTerms.Type.PARTIAL and not _has_procurement_cost_payment(locked):
+            raise ValueError('PARTIAL settlement requires an upfront payment before receive.')
         allowed_states = _receivable_line_states(locked, terms)
         requested_item_ids = {int(item_id) for item_id in payload.get('item_ids') or []}
         items_qs = (
@@ -1117,6 +1225,8 @@ def _policy_payload(policy, terms) -> dict:
         ):
             if action not in allowed_actions:
                 allowed_actions.append(action)
+    if 'UPDATE_ITEMS' in allowed_actions and 'SPLIT_ITEM' not in allowed_actions:
+        allowed_actions.append('SPLIT_ITEM')
     if getattr(terms, 'type', None) == ProcurementTerms.Type.INSTALLMENT and 'GENERATE_INSTALLMENT_SCHEDULE' not in allowed_actions:
         allowed_actions.append('GENERATE_INSTALLMENT_SCHEDULE')
     return {
@@ -1158,7 +1268,7 @@ def _flow_payload(
             complete=purchase_complete,
             previous_complete=True,
             readiness_keys=['items_ready', 'expenses_ready'],
-            primary_actions=['UPDATE_ITEMS', 'UPDATE_EXPENSES'],
+            primary_actions=['UPDATE_ITEMS', 'UPDATE_EXPENSES', 'SPLIT_ITEM'],
             blocked_reason=None,
         ),
         _flow_step(
@@ -1254,7 +1364,7 @@ def _flow_step(
 def _funding_flow_complete(procurement: Procurement, balance) -> bool:
     if procurement.funding_source == Procurement.FundingSource.OWN_FUNDS:
         return True
-    return bool(procurement.agreement_id and balance is not None)
+    return bool(procurement.agreement_id)
 
 
 def _payment_obligation_complete(procurement: Procurement, terms, balance, payables) -> bool:
@@ -1271,6 +1381,36 @@ def _payment_obligation_complete(procurement: Procurement, terms, balance, payab
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
         return _has_capital_activity(balance)
     return _has_payment_activity(procurement, payables)
+
+
+def _terms_status_for_paid_amount(total_amount_due: Decimal, paid_amount: Decimal) -> str:
+    total = Decimal(str(total_amount_due or 0)).quantize(Decimal('0.01'))
+    paid = Decimal(str(paid_amount or 0)).quantize(Decimal('0.01'))
+    if total > 0 and paid >= total:
+        return ProcurementTerms.Status.FULLY_PAID
+    if paid > 0:
+        return ProcurementTerms.Status.PARTIALLY_PAID
+    return ProcurementTerms.Status.OPEN
+
+
+def _payment_amount_for_terms(
+    *,
+    amount: Decimal,
+    currency: str,
+    fx_rate,
+    terms: ProcurementTerms,
+) -> Decimal:
+    amount = Decimal(str(amount or 0))
+    payment_currency = str(currency or 'UZS').upper()
+    obligation_currency = str(terms.currency_of_obligation or 'UZS').upper()
+    if payment_currency == obligation_currency:
+        return amount.quantize(Decimal('0.01'))
+
+    rate = Decimal(str(fx_rate or terms.fx_rate_at_obligation or 1))
+    amount_uzs = amount if payment_currency == 'UZS' else amount * rate
+    if obligation_currency == 'UZS':
+        return amount_uzs.quantize(Decimal('0.01'))
+    return (amount_uzs / Decimal(str(terms.fx_rate_at_obligation or 1))).quantize(Decimal('0.01'))
 
 
 def _allowed_action_keys(policy, terms) -> list[str]:
@@ -1462,7 +1602,7 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         'partners': [
             {
                 'partner_id': member.partner_id,
-                'partner_name': getattr(member.partner, 'name', str(member.partner_id)),
+                'partner_name': getattr(member.partner, 'display_name', str(member.partner_id)),
                 'role': member.role,
                 'planned_capital_share': str(member.planned_capital_share),
                 'profit_share': str(member.profit_share),
@@ -1639,6 +1779,15 @@ def _has_capital_activity(balance) -> bool:
 
 def _has_payment_activity(procurement: Procurement, payables) -> bool:
     return any(item.lifecycle_state != item.LifecycleState.DRAFT for item in procurement.items.all()) or bool(payables)
+
+
+def _has_procurement_cost_payment(procurement: Procurement) -> bool:
+    return Payment.objects.filter(
+        tenant_id=procurement.tenant_id,
+        target_type=Payment.TargetType.PROCUREMENT_COST,
+        target_id=procurement.id,
+        status=Payment.Status.POSTED,
+    ).exists()
 
 
 def _legacy_payment_state(lifecycle_state: str) -> str:

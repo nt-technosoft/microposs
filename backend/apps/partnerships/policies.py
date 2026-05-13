@@ -101,8 +101,6 @@ def evaluate_procurement_policy(context: ProcurementPolicyContext) -> Procuremen
     if funding == PARTNERSHIP:
         if not context.has_investment_agreement:
             blocked.append('PARTNERSHIP requires an InvestmentAgreement.')
-        if not context.has_procurement_balance:
-            blocked.append('PARTNERSHIP requires ProcurementBalance capital pool.')
 
     if (
         context.settlement_type in SUPPLIER_REQUIRED_SETTLEMENTS
@@ -173,7 +171,7 @@ def _settlement_ready(
 def _capital_ready(context: ProcurementPolicyContext, funding: str) -> bool:
     if funding != PARTNERSHIP:
         return True
-    return context.has_investment_agreement and context.has_procurement_balance
+    return context.has_investment_agreement and context.has_capital_activity
 
 
 def _allowed_actions(

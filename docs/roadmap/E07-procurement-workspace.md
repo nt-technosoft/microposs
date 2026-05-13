@@ -1,7 +1,7 @@
 # E07 — Procurement & Investment Workspace Re-architecture
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** 52%
+**Прогресс:** 68%
 **Приоритет:** P0 — главный архитектурный цикл проекта
 **Зависит от:** E01, E04
 **Блокирует:** E03, E05, investor marketplace, стабильный procurement UX
@@ -107,7 +107,7 @@ Procurement разделяет три независимых вопроса:
 | Roadmap | E07 выбран как P0 |
 | Target docs | procurement / partnerships / finance описаны как целевая модель |
 | Backend | target core в целом соответствует разделённой document/event architecture; workspace payload now exposes canonical `flow` |
-| Frontend | текущий `ProcurementWorkspace.vue` — технический прототип; final Phase D нужно пересобрать по canonical flow |
+| Frontend | `ProcurementWorkspace.vue` переведён на первый canonical-flow slice; дальше нужно добить сценарные UX-состояния и smoke |
 | Excel workflow | оставить на потом, после стабилизации core |
 
 ## Следующий Правильный Шаг
@@ -176,13 +176,29 @@ Phase D UX.
 - [x] Build first technical `ProcurementWorkspace` prototype.
 - [ ] Rebuild final `ProcurementWorkspace` around canonical flow.
   - [x] Reoriented current prototype: create flow starts with goods, supplier moved to settlement, funding separated as money-source block.
+  - [x] Added explicit canonical navigation: goods/expenses -> supplier/settlement -> funding -> payment/obligation -> receipt -> history.
+  - [x] Added scenario-first workspace pass: compact metrics, next-action context, settlement/payable guidance, partnership capital summary and batch snapshot display.
+  - [x] Split own-funds payment UX into prepaid, partial advance and payable-only branches instead of showing all settlement modes as ordinary prepayment.
+  - [x] Added partial-receive guardrails for expense allocation: global/mixed expenses are blocked in UI until user targets or splits them.
 - [ ] Add flow/navigation metadata to API contract if needed.
-- [ ] Build policy-driven sections without letting API order dictate UX order.
+- [x] Build policy-driven sections without letting API order dictate UX order.
 - [x] Keep old intake screens as reference until switch-over.
-- [ ] Switch procurement create/detail/edit routes to the final canonical workspace.
+- [x] Switch procurement create/detail/edit routes to the final canonical workspace.
 - [ ] Harden partnership agreement creation/linking UX inside workspace.
   - [x] First in-workspace agreement creation/linking form added for partner-funded procurement.
+  - [x] Quick agreement action can switch an own-funds draft workspace into partnership without legacy endpoint fallback.
 - [ ] Add frontend smoke coverage for own funds, deferred payable and partnership capital scenarios.
+  - [x] Added target `SPLIT_ITEM` workspace action and frontend split control for partial receive preparation.
+- [x] Phase D.2 UX improvement pass:
+  - [x] Replaced all product-variant and supplier `<select>` elements with bottom-sheet pickers (`WorkspaceVariantPickerSheet`, `WorkspaceSupplierPickerSheet`).
+  - [x] Added quick-create flows for products and suppliers inside pickers (`WorkspaceQuickProductSheet`, `WorkspaceQuickSupplierSheet`).
+  - [x] Added confirmation sheet for `RECEIVE_BATCH` with mandatory partnership snapshot checkbox (`WorkspaceReceiveConfirmSheet`).
+  - [x] Added split-item sheet for partial-receive preparation (`WorkspaceSplitItemSheet`).
+  - [x] Converted settlement type, funding source, allocation method, schedule interval and partner role selects to chip-group buttons.
+  - [x] Replaced warehouse select with card-picker.
+  - [x] Added human-readable label dictionaries for all technical enum values (lifecycle states, payment states, expense types, history kinds, payable statuses).
+  - [x] Removed all raw enum values from user-facing UI strings and warning messages.
+  - [x] Added Slice 3 CSS (obligation-context, account-cards, partner-cards, partner-chips, payable-cards, contribution/allocation forms).
 
 ### Phase E — Verification
 
@@ -223,6 +239,12 @@ Phase D UX.
 - 2026-05-13: Restored canonical Phase D flow from the original "design from zero" agreement. Current frontend workspace is classified as technical prototype; final Phase D must follow `goods/expenses -> supplier/settlement -> funding -> payment/obligation -> receipt -> history`.
 - 2026-05-13: Backend workspace payload now includes canonical `flow` steps/current_step/next_action so frontend no longer has to infer user order from technical sections.
 - 2026-05-13: Frontend prototype reoriented toward canonical flow: create no longer starts with funding, goods/expenses render first, supplier/settlement and funding are separated.
+- 2026-05-13: Phase D frontend canonical slice implemented: workspace uses `payload.flow` navigation, create starts from purchase intent, supplier settlement is separated from funding, and payment/obligation handles own funds, payables and partnership capital paths.
+- 2026-05-13: `PARTIAL` settlement behavior corrected as target domain logic: receive requires an upfront procurement payment; that payment updates settlement `paid_amount`; supplier payable is created only for the remaining obligation after receive.
+- 2026-05-13: Partnership funding boundary corrected: `InvestmentAgreement` completes the funding step; capital contribution/allocation belongs to payment/obligation step and then unlocks receive.
+- 2026-05-13: Deferred/installment target contracts covered: deferred receive creates payable without upfront payment; installment receive requires generated schedule.
+- 2026-05-13: Browser smoke covered own-funds prepaid receive/reopen, partnership agreement -> contribution -> allocation -> receive, and installment schedule gating to receive.
+- 2026-05-13: Phase D scenario UX pass started: workspace gained next-action context, compact cost/status metrics, expense allocation scope, target `SPLIT_ITEM`, payable-oriented settlement hints, partnership capital summaries and receive-batch snapshot display.
 
 ## Открытые Вопросы
 

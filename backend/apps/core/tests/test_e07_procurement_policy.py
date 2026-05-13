@@ -101,21 +101,18 @@ class ProcurementPolicyTests(SimpleTestCase):
         )
         self.assertFalse(result.readiness['source_ready'])
 
-    def test_partnership_requires_capital_pool(self):
+    def test_partnership_capital_pool_is_payment_step_readiness_not_funding_validity(self):
         result = evaluate_procurement_policy(
             ProcurementPolicyContext(
                 funding_source=Procurement.FundingSource.PARTNERSHIP,
                 settlement_type=ProcurementTerms.Type.PREPAID,
                 has_investment_agreement=True,
                 has_procurement_balance=False,
+                has_capital_activity=False,
             ),
         )
 
-        self.assertFalse(result.is_valid)
-        self.assertIn(
-            'PARTNERSHIP requires ProcurementBalance capital pool.',
-            result.blocked_reasons,
-        )
+        self.assertTrue(result.is_valid)
         self.assertFalse(result.readiness['capital_ready'])
 
     def test_musharaka_is_legacy_alias_but_not_valid_new_flow(self):
