@@ -168,9 +168,21 @@ history — knowing *why* the project arrived where it is matters.
   The founder reviews through code and commit history.
 - The brief end-of-turn summary that Claude Code provides by default is
   enough; don't manually expand it.
-- **Append one line: next logical step from the plan + recommended model.**
-  Example: `Next: T-1.1 audit services.py imports — Sonnet (mechanical).`
-  Skip this line during brainstorm/discussion phases.
+- **Append routing block at the end of every execution turn** (skip during
+  brainstorm/discussion):
+  - Determine the next task and its required model (Opus = planning/audit/arch;
+    Sonnet = mechanical execution of approved plan).
+  - **Same model as current window** → one line:
+    `Next: T-X.Y — [task name] — continue here.`
+  - **Different model required** → generate a ready-to-paste prompt for the
+    other window (2–3 lines max, no re-explanation of context already in docs):
+    ```
+    → Other window ([Opus/Sonnet]):
+    "Commit <hash> closed [T-X.Y / phase name].
+     Next: [T-X.Z] from [docs/roadmap/E0N-*.md]. [one line only if constraint not obvious from epic]"
+    ```
+  The other window reads the epic file itself — do not re-paste what's already
+  there. Only include what is NOT derivable from docs + git log.
 - If a decision genuinely needs sign-off before commit (rare — irreversible
   or cross-cutting), ask the specific question directly, not "want to
   review the diff?"
