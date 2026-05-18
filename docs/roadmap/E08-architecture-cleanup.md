@@ -178,18 +178,7 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 
 ## Открытые вопросы
 
-- ? Куда переносить `pay_dividend`, `get_partner_aggregate` —
-  `workspace_support.py` уже большой (761 LoC), стоит ли выделить
-  `agreement_services.py`?
-- ? Как поступить с тестами `test_procurement_lifecycle.py` (~1600 LoC) —
-  переписать под E07 или удалить целиком? По правилу «не писать тесты ради
-  тестов» склоняемся к удалению, но финальное решение за founder'ом.
-- ~~`Lot.received_at` backfill источник~~ — Закрыто 2026-05-19: выбран
-  `created_at`. В новом коде `received_at` всегда = `timezone.now()` в
-  момент `RECEIVE_BATCH`. Для legacy лотов `created_at` — лучшее из доступных.
-- ? Какие именно тесты-инварианты написать как страховку для шариатского
-  учёта (`sum(profit_ratio) == 1.0`, FIFO ordering, append-only ledger,
-  immutable snapshots, sum partner capital_share == 1.0 в snapshot)?
+(Все актуальные вопросы Phase 2 закрыты 2026-05-19 — см. историю ниже.)
 
 ## Решённые вопросы (история)
 
@@ -215,6 +204,37 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 - ✓ 2026-05-18: senior-partner collaboration principles зафиксированы в
   `CLAUDE.md` и в `AGENTS.md` (короткой ссылкой) → workflow живёт между
   сессиями, не только в текущей.
+- ✓ 2026-05-19: **Phase 2 архитектурные решения зафиксированы (до выполнения).**
+  - **T-2.5 balances → derived с per-request memoization** (через
+    `cached_property`, scoped to instance), не projection-table. Rationale:
+    объём данных низкий (десятки событий на agreement), N+1 решается
+    `prefetch_related`. Projection — преждевременная оптимизация; добавим
+    отдельным треком только если докажем pain.
+  - **T-2.6 — чистый drop** (без миграции данных). Pre-flight audit показал
+    `ProcurementBalance/BalanceContribution/BalanceWithdrawal/ProcurementBalanceExchange`
+    содержат 0 записей. Frontend API client `createProcurementBalanceExchange`
+    тоже удаляется. Guard «PARTNERSHIP requires ProcurementBalance capital
+    pool» в `test_e07_workspace_contract.py` переезжает в procurement policy
+    validation.
+  - **T-2.8 — Variant A: immutable от создания + статус `DRAFT`.**
+    `ProcurementTerms` создаётся в `DRAFT`, перевод в `ACTIVE` фризит запись
+    (save-guard через ImmutableMixin); правки только через
+    `ProcurementTermsAmendment`. Окно «мутируемого ACTIVE» закрывается
+    полностью — это окно, в котором условия договора можно подменить
+    бесследно.
+  - **Тесты — инварианты пишутся по ходу каждой группы задач**, не отдельным
+    треком. Фокус: `sum(profit_ratio)==1.0`, FIFO ordering, append-only
+    ledger, immutable snapshots, `sum(capital_share)==1.0` в snapshot,
+    derived balance consistency. Эти тесты остаются как architecture guards
+    после закрытия Phase 2 — единственный класс тестов, который не умирает с
+    переписыванием домена.
+  - **Дополнительно:** общий тест-долг (>100 тестов) **не выносится в
+    отдельный эпик**. Politика: мёртвые тесты умирают вместе с мёртвым
+    кодом, добавляем только assertion-инварианты. Phase 1 уже подтвердил
+    pattern (7 legacy-тестов удалены).
+  - Старый вопрос «куда переносить pay_dividend» закрыт фактом — `agreement_services.py`
+    создан в Phase 1. Старый вопрос «`test_procurement_lifecycle.py`
+    удалять/переписывать» закрыт — удалён в Phase 1.
 - ✓ 2026-05-19: **Phase 1 закрыта.** `apps/partnerships/services.py` (4012 LoC)
   удалён. 4 live-функции перенесены в `agreement_services.py`. 7 legacy тестов
   удалены; `test_partner_ledger.py` и `test_audit_batch_one.py` обновлены на
