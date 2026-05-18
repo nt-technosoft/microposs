@@ -206,3 +206,26 @@ To prevent drift across sessions and keep documentation as a reliable map
 - `Key Business Rules` is canonical in this file. `AGENTS.md` and other
   docs reference it; they don't redefine it.
 - Same principle for any rule that affects multiple agents/tools.
+
+## Model usage
+
+Project default is **Sonnet 4.6** (set in `.claude/settings.local.json`).
+This is intentional: Sonnet handles 95% of work fine and the Opus 5-hour
+quota burns fast.
+
+**Switch to Opus** (`/model opus`) for sessions where the value is in
+thinking, not typing:
+- Audits, architectural decisions, cross-domain analysis
+- Brainstorming new directions or evaluating proposals
+- Planning new epics or major rewrites
+- Deep research
+
+**Stay on Sonnet** for sessions where the plan is already set:
+- Mechanical code changes following an approved plan
+- File reorganization, renaming, formatting
+- Running an existing checklist from an epic
+- Reading and reporting (most subagent tasks)
+
+When delegating to subagents via the `Agent` tool, pass `model: "sonnet"`
+explicitly for routine work — even from an Opus session. Opus tokens are
+the bottleneck; don't burn them on subagent work that doesn't need them.
