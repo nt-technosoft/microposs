@@ -55,10 +55,21 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             .select_related('supplier')
             .prefetch_related(
                 'partners__partner',
+                'commitments__partner',
+                'commitments__created_by',
+                'commitments__actor_partner',
                 'contributions__partner',
+                'contributions__created_by',
+                'contributions__actor_partner',
                 'withdrawals__partner',
+                'withdrawals__created_by',
+                'withdrawals__actor_partner',
                 'allocations__partner',
+                'allocations__created_by',
+                'allocations__actor_partner',
                 'allocations__procurement',
+                'events__actor_user',
+                'events__actor_partner',
                 'procurements__supplier',
                 'procurements__items',
                 'procurements__expenses',
@@ -85,6 +96,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 currency=data.get('currency', 'UZS'),
                 notes=data.get('notes', ''),
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
+                created_by_id=request.user.id if request.user.is_authenticated else None,
                 partners=[dict(partner) for partner in data.get('partners', [])],
             )
         except ValueError as error:
@@ -105,6 +117,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 currency=serializer.validated_data['currency'],
                 fx_rate=serializer.validated_data['fx_rate'],
                 notes=serializer.validated_data.get('notes', ''),
+                created_by_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
@@ -124,6 +137,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 currency=serializer.validated_data['currency'],
                 fx_rate=serializer.validated_data['fx_rate'],
                 reason=serializer.validated_data.get('reason', ''),
+                created_by_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
@@ -162,6 +176,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 tenant_id=request.tenant_id,
                 procurement=procurement,
                 payload={'allocations': [dict(row) for row in serializer.validated_data['allocations']]},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error

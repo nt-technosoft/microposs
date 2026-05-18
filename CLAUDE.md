@@ -90,6 +90,7 @@ target architecture, not for a locally green or cosmetically complete state.
 - Pinia stores per domain
 - API layer in `src/api/` with typed clients
 - Components: `src/components/` (shared) + `src/modules/<domain>/components/`
+- Reuse shared controls before creating new UI controls: `MoneyCurrencyInput` for amount+currency, `BaseSelect` for mobile-friendly selects.
 - Design tokens in CSS custom properties
 - Lucide icons (no emojis as structural icons)
 - All animations 150-300ms, respect prefers-reduced-motion

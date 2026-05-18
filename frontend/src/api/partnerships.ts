@@ -87,6 +87,7 @@ export interface ProcurementWorkspacePayload {
     procurement: {
       id: number
       status: WorkspaceStatus
+      primary_currency: string
       supplier_id: number | null
       supplier_name: string | null
       notes: string
@@ -252,6 +253,7 @@ export interface ProcurementWorkspacePayload {
 
 export interface ProcurementWorkspaceCreatePayload {
   funding_source?: WorkspaceFundingSource
+  primary_currency?: string
   supplier_id?: number | null
   investment_agreement_id?: number | null
   agreement_id?: number | null
@@ -640,6 +642,8 @@ export interface InvestmentAgreementListItem {
   mudaraba_ratio: string
   balances: Record<string, string>
   partners_count: number
+  investor_names: string[]
+  operator_names: string[]
   procurements_count: number
   notes: string
 }
@@ -655,6 +659,24 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     planned_capital_share: string
     profit_share: string
   }>
+  commitments: Array<{
+    id: number
+    partner: number
+    partner_name: string
+    partner_role: string
+    amount: string
+    currency: string
+    fx_rate: string
+    date: string
+    source: string
+    confirmation_status: string
+    created_by: number | null
+    created_by_name: string
+    actor_partner: number | null
+    actor_partner_name: string | null
+    notes: string
+    client_request_id: string | null
+  }>
   contributions: Array<{
     id: number
     partner: number
@@ -664,7 +686,14 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     currency: string
     fx_rate: string
     date: string
+    source: string
+    confirmation_status: string
+    created_by: number | null
+    created_by_name: string
+    actor_partner: number | null
+    actor_partner_name: string | null
     notes: string
+    client_request_id: string | null
   }>
   withdrawals: Array<{
     id: number
@@ -675,7 +704,14 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     currency: string
     fx_rate: string
     date: string
+    source: string
+    confirmation_status: string
+    created_by: number | null
+    created_by_name: string
+    actor_partner: number | null
+    actor_partner_name: string | null
     reason: string
+    client_request_id: string | null
   }>
   allocations: Array<{
     id: number
@@ -688,7 +724,27 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     currency: string
     fx_rate: string
     date: string
+    source: string
+    confirmation_status: string
+    created_by: number | null
+    created_by_name: string
+    actor_partner: number | null
+    actor_partner_name: string | null
     notes: string
+    client_request_id: string | null
+  }>
+  events: Array<{
+    id: number
+    event_type: string
+    occurred_at: string
+    actor_user: number | null
+    actor_user_name: string
+    actor_partner: number | null
+    actor_partner_name: string | null
+    source: string
+    related_model: string
+    related_id: number | null
+    payload: Record<string, unknown>
   }>
   procurements: ProcurementListItem[]
   participant_totals: Array<{
@@ -721,11 +777,15 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
 export interface InvestmentAgreementCreatePayload {
   client_request_id?: string
   supplier_id?: number | null
-  mudaraba_ratio: string | number
-  planned_budget: string | number
+  mudaraba_ratio?: string | number
+  planned_budget?: string | number
+  investor_partner_id?: number
+  investor_planned_amount?: string | number
+  investor_capital_percent?: string | number
+  investor_profit_percent?: string | number
   currency?: string
   notes?: string
-  partners: AgreementPartnerPayload[]
+  partners?: AgreementPartnerPayload[]
 }
 
 export interface AgreementAllocationPreview {

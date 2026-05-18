@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RefreshCcw, RotateCcw, PackageOpen } from 'lucide-vue-next'
+import { Handshake, RefreshCcw, RotateCcw, PackageOpen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { formatPrice } from '@/utils/currency'
 import { ProcurementStatus, ProcurementType } from '@/types/enums'
@@ -107,6 +107,10 @@ function goToCreate(): void {
   router.push({ name: 'procurement-create' })
 }
 
+function goToPartnershipCreate(): void {
+  router.push({ name: 'procurement-create', query: { mode: 'partnership' } })
+}
+
 function onFilterChange(value: StatusFilter): void {
   activeFilter.value = value
   loadProcurementList()
@@ -122,6 +126,10 @@ function onFilterChange(value: StatusFilter): void {
     @primary="goToCreate"
   >
     <template #header-actions>
+      <button class="partnership-btn" type="button" aria-label="Создать партнёрский приход" @click="goToPartnershipCreate">
+        <Handshake :size="16" :stroke-width="1.9" />
+        <span>Партнёрский</span>
+      </button>
       <button class="icon-btn" type="button" :aria-label="t('procurements.refreshProcurements')" @click="loadProcurementList">
         <RefreshCcw :size="17" />
       </button>
@@ -219,6 +227,22 @@ function onFilterChange(value: StatusFilter): void {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   flex-shrink: 0;
+}
+
+.partnership-btn {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
 }
 
 .filter-row {

@@ -121,19 +121,19 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/procurements/create',
     name: 'procurement-create',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id/edit',
     name: 'procurement-edit',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id',
     name: 'procurement-detail',
-    component: () => import('@/modules/intake/views/IntakeDetail.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspace.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {

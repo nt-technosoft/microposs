@@ -18,7 +18,9 @@ from apps.suppliers.models import SupplierPayable
 from apps.suppliers.services import create_payable_from_procurement, record_payable_payment
 
 from .models import (
+    AgreementActionSource,
     AgreementAllocation,
+    AgreementConfirmationStatus,
     AgreementContribution,
     AgreementPartner,
     BalanceContribution,
@@ -49,6 +51,7 @@ from .workspace_support import (
     create_investment_agreement,
     generate_installment_schedule,
     get_or_create_ledger,
+    record_agreement_event,
     upsert_procurement_terms_draft,
     upsert_supplier_links_for_items,
 )
@@ -93,6 +96,7 @@ def create_workspace(
     *,
     tenant_id: int,
     funding_source: str = Procurement.FundingSource.OWN_FUNDS,
+    primary_currency: str = 'UZS',
     supplier_id: int | None = None,
     agreement_id: int | None = None,
     notes: str = '',
@@ -100,6 +104,7 @@ def create_workspace(
 ) -> Procurement:
     if funding_source not in Procurement.FundingSource.values:
         raise ValueError('Unsupported funding source.')
+    primary_currency = _normalize_currency(primary_currency)
 
     if client_request_id:
         existing = Procurement.objects.filter(
@@ -112,6 +117,7 @@ def create_workspace(
     return Procurement.objects.create(
         tenant_id=tenant_id,
         funding_source=funding_source,
+        primary_currency=primary_currency,
         supplier_id=supplier_id,
         agreement_id=agreement_id,
         notes=notes,
@@ -180,6 +186,12 @@ def workspace_queryset(tenant_id: int):
             'receive_batches__lines__item__product_variant',
             'receive_batches__expenses__expense',
             'receive_batches__capital_allocations__partner',
+            'agreement__partners__partner',
+            'agreement__commitments__partner',
+            'agreement__contributions__partner',
+            'agreement__allocations__partner',
+            'agreement__events__actor_user',
+            'agreement__events__actor_partner',
         )
         .order_by('-opened_at', '-id')
     )
@@ -196,6 +208,7 @@ def update_workspace_source(
     _ensure_source_editable(procurement)
 
     funding_source = payload.get('funding_source')
+    primary_currency = payload.get('primary_currency')
     supplier_id = payload.get('supplier_id', procurement.supplier_id)
     agreement_id = (
         payload.get('investment_agreement_id')
@@ -216,6 +229,8 @@ def update_workspace_source(
         locked = Procurement.objects.select_for_update().get(pk=procurement.pk, tenant_id=tenant_id)
         _ensure_source_editable(locked)
         locked.funding_source = next_funding_source
+        if primary_currency is not None:
+            locked.primary_currency = _normalize_currency(primary_currency)
         locked.supplier_id = supplier_id
         locked.agreement_id = agreement_id
         if 'notes' in payload:
@@ -223,6 +238,7 @@ def update_workspace_source(
         _validate_source_transition(locked)
         locked.save(update_fields=[
             'funding_source',
+            'primary_currency',
             'supplier',
             'agreement',
             'notes',
@@ -378,6 +394,7 @@ def dispatch_workspace_action(
             procurement=procurement,
             payload=mutation_payload,
             client_request_id=client_request_id,
+            user_id=user_id,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'LINK_INVESTMENT_AGREEMENT':
@@ -393,6 +410,7 @@ def dispatch_workspace_action(
             procurement=procurement,
             payload=mutation_payload,
             client_request_id=client_request_id,
+            user_id=user_id,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'ALLOCATE_CAPITAL':
@@ -401,6 +419,7 @@ def dispatch_workspace_action(
             procurement=procurement,
             payload=mutation_payload,
             client_request_id=client_request_id,
+            user_id=user_id,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'RECEIVE_BATCH':
@@ -612,6 +631,7 @@ def create_and_link_workspace_agreement(
     procurement: Procurement,
     payload: dict,
     client_request_id: str | None = None,
+    user_id: int | None = None,
 ) -> InvestmentAgreement:
     if procurement.funding_source != Procurement.FundingSource.PARTNERSHIP:
         _ensure_source_editable(procurement)
@@ -624,6 +644,7 @@ def create_and_link_workspace_agreement(
         currency=payload.get('currency', 'UZS'),
         notes=payload.get('notes', ''),
         client_request_id=client_request_id,
+        created_by_id=user_id,
         partners=payload.get('partners') or [],
     )
     if payload.get('legal_mode'):
@@ -660,22 +681,13 @@ def record_workspace_capital_contribution(
     procurement: Procurement,
     payload: dict,
     client_request_id: str | None = None,
+    user_id: int | None = None,
 ) -> AgreementContribution:
     agreement = _require_workspace_agreement(procurement)
     cash_account_id = payload.get('cash_account_id')
     if not cash_account_id:
         raise ValueError('cash_account_id is required for capital contribution.')
     notes = payload.get('notes', '')
-    if client_request_id:
-        idempotency_note = f'client_request_id:{client_request_id}'
-        existing = AgreementContribution.objects.filter(
-            tenant_id=tenant_id,
-            agreement=agreement,
-            notes__contains=idempotency_note,
-        ).first()
-        if existing:
-            return existing
-        notes = f'{notes} {idempotency_note}'.strip()
     contribution = add_agreement_contribution(
         tenant_id=tenant_id,
         agreement_id=agreement.id,
@@ -685,6 +697,10 @@ def record_workspace_capital_contribution(
         fx_rate=Decimal(str(payload.get('fx_rate', '1'))),
         date=payload.get('date') or payload.get('paid_at'),
         notes=notes,
+        client_request_id=client_request_id,
+        created_by_id=user_id,
+        source=AgreementActionSource.BUSINESS_RECORDED,
+        confirmation_status=AgreementConfirmationStatus.CONFIRMED,
     )
     record_partner_capital_contribution_payment(
         tenant_id=tenant_id,
@@ -707,6 +723,7 @@ def allocate_workspace_capital(
     procurement: Procurement,
     payload: dict,
     client_request_id: str | None = None,
+    user_id: int | None = None,
 ) -> list[AgreementAllocation]:
     agreement = _require_workspace_agreement(procurement)
     rows = payload.get('allocations') or [payload]
@@ -716,6 +733,14 @@ def allocate_workspace_capital(
     date = payload.get('date') or timezone.now()
     created: list[AgreementAllocation] = []
     with transaction.atomic():
+        if client_request_id:
+            existing_allocations = list(AgreementAllocation.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ))
+            if existing_allocations:
+                return existing_allocations
+
         locked_agreement = (
             InvestmentAgreement.objects
             .select_for_update()
@@ -771,6 +796,11 @@ def allocate_workspace_capital(
                 fx_rate=fx_rate,
                 date=date,
                 notes=_with_client_request_id(row.get('notes', ''), client_request_id),
+                source=AgreementActionSource.BUSINESS_RECORDED,
+                confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+                created_by_id=user_id,
+                actor_partner_id=partner_id,
+                client_request_id=client_request_id,
             )
             contribution = BalanceContribution.objects.create(
                 tenant_id=tenant_id,
@@ -802,6 +832,24 @@ def allocate_workspace_capital(
         locked_agreement.save(update_fields=['balances', 'updated_at'])
         balance.balances = procurement_balances
         balance.save(update_fields=['balances', 'updated_at'])
+        for allocation in created:
+            record_agreement_event(
+                tenant_id=tenant_id,
+                agreement=locked_agreement,
+                event_type='allocation.to_procurement',
+                source=AgreementActionSource.BUSINESS_RECORDED,
+                actor_user_id=user_id,
+                actor_partner_id=allocation.partner_id,
+                related_model='AgreementAllocation',
+                related_id=allocation.pk,
+                payload={
+                    'procurement_id': locked_procurement.pk,
+                    'partner_id': allocation.partner_id,
+                    'amount': str(allocation.amount),
+                    'currency': allocation.currency,
+                    'confirmation_status': allocation.confirmation_status,
+                },
+            )
         publish_event(
             event_type='investment_agreement.allocated_to_procurement',
             payload={
@@ -1474,6 +1522,7 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
             'status': procurement.status,
             'supplier_id': procurement.supplier_id,
             'supplier_name': getattr(procurement.supplier, 'name', None),
+            'primary_currency': procurement.primary_currency,
             'notes': procurement.notes,
             'opened_at': procurement.opened_at.isoformat(),
             'closed_at': procurement.closed_at.isoformat() if procurement.closed_at else None,
@@ -1609,31 +1658,67 @@ def _investment_payload(procurement: Procurement) -> dict | None:
             }
             for member in agreement.partners.select_related('partner').all()
         ],
+        'commitments': [
+            {
+                'id': commitment.id,
+                'partner_id': commitment.partner_id,
+                'partner_name': getattr(commitment.partner, 'display_name', str(commitment.partner_id)),
+                'amount': str(commitment.amount),
+                'currency': commitment.currency,
+                'fx_rate': str(commitment.fx_rate),
+                'date': commitment.date.isoformat(),
+                'source': commitment.source,
+                'confirmation_status': commitment.confirmation_status,
+                'notes': commitment.notes,
+            }
+            for commitment in agreement.commitments.select_related('partner').all()
+        ],
         'contributions': [
             {
                 'id': contribution.id,
                 'partner_id': contribution.partner_id,
+                'partner_name': getattr(contribution.partner, 'display_name', str(contribution.partner_id)),
                 'amount': str(contribution.amount),
                 'currency': contribution.currency,
                 'fx_rate': str(contribution.fx_rate),
                 'date': contribution.date.isoformat(),
+                'source': contribution.source,
+                'confirmation_status': contribution.confirmation_status,
                 'notes': contribution.notes,
             }
-            for contribution in agreement.contributions.all()
+            for contribution in agreement.contributions.select_related('partner').all()
         ],
         'allocations': [
             {
                 'id': allocation.id,
                 'procurement_id': allocation.procurement_id,
                 'partner_id': allocation.partner_id,
+                'partner_name': getattr(allocation.partner, 'display_name', str(allocation.partner_id)),
                 'direction': allocation.direction,
                 'amount': str(allocation.amount),
                 'currency': allocation.currency,
                 'fx_rate': str(allocation.fx_rate),
                 'date': allocation.date.isoformat(),
+                'source': allocation.source,
+                'confirmation_status': allocation.confirmation_status,
                 'notes': allocation.notes,
             }
-            for allocation in agreement.allocations.filter(procurement=procurement)
+            for allocation in agreement.allocations.select_related('partner').filter(procurement=procurement)
+        ],
+        'events': [
+            {
+                'id': event.id,
+                'event_type': event.event_type,
+                'occurred_at': event.occurred_at.isoformat(),
+                'source': event.source,
+                'actor_user_id': event.actor_user_id,
+                'actor_partner_id': event.actor_partner_id,
+                'actor_partner_name': getattr(event.actor_partner, 'display_name', None),
+                'related_model': event.related_model,
+                'related_id': event.related_id,
+                'payload': event.payload,
+            }
+            for event in agreement.events.select_related('actor_user', 'actor_partner').all()[:30]
         ],
         'available_by_partner': {
             str(partner_id): {
@@ -1757,13 +1842,11 @@ def _section_key(section: str) -> str:
 
 
 def _primary_currency(procurement: Procurement) -> str:
-    if procurement.items.exists():
-        return procurement.items.first().currency
-    if procurement.expenses.exists():
-        return procurement.expenses.first().currency
-    if procurement.agreement_id:
-        return procurement.agreement.currency
-    return 'UZS'
+    return _normalize_currency(procurement.primary_currency)
+
+
+def _normalize_currency(value: str | None) -> str:
+    return 'USD' if str(value or 'UZS').upper() == 'USD' else 'UZS'
 
 
 def _has_capital_activity(balance) -> bool:

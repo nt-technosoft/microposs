@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowLeft, BarChart3, Plus, RotateCcw, Send, Wallet } from 'lucide-vue-next'
+import BaseSelect from '@/components/base/BaseSelect.vue'
+import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
 import {
   addAgreementContribution,
   addAgreementWithdrawal,
@@ -17,6 +19,7 @@ import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
 import { partnerRoleLabel, procurementStatusLabel } from '@/utils/domainLabels'
 import { intlLocale } from '@/i18n/format'
+import { getApiErrorMessage } from '@/utils/errors'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,12 +31,13 @@ const loading = ref(false)
 const error = ref('')
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
-const contributionCurrency = ref('USD')
+const contributionCurrency = ref<'USD' | 'UZS'>('USD')
 const savingContribution = ref(false)
 const withdrawalPartnerId = ref<number | null>(null)
 const withdrawalAmount = ref('')
-const withdrawalCurrency = ref('USD')
+const withdrawalCurrency = ref<'USD' | 'UZS'>('USD')
 const savingWithdrawal = ref(false)
+const withdrawalError = ref('')
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
 const allocating = ref(false)
@@ -53,9 +57,60 @@ const balanceLabel = computed(() => {
 })
 const contributedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.contributed_amount || 0), 0) ?? 0)
 const allocatedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) ?? 0)
+const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
+  value: partner.partner,
+  label: agreementSideLabel(partner.role),
+})))
+const availableByPartnerCurrency = computed<Record<number, Record<string, number>>>(() => {
+  const rows: Record<number, Record<string, number>> = {}
+  const add = (partnerId: number, currency: string, amount: number) => {
+    const bucket = rows[partnerId] ?? {}
+    bucket[currency] = (bucket[currency] ?? 0) + amount
+    rows[partnerId] = bucket
+  }
+  for (const contribution of agreement.value?.contributions ?? []) {
+    add(contribution.partner, contribution.currency, Number(contribution.amount || 0))
+  }
+  for (const withdrawal of agreement.value?.withdrawals ?? []) {
+    add(withdrawal.partner, withdrawal.currency, -Number(withdrawal.amount || 0))
+  }
+  for (const allocation of agreement.value?.allocations ?? []) {
+    const amount = Number(allocation.amount || 0)
+    add(
+      allocation.partner,
+      allocation.currency,
+      allocation.direction === 'TO_PROCUREMENT' ? -amount : amount,
+    )
+  }
+  return rows
+})
+const withdrawalAmountValue = computed(() => Number.parseFloat(withdrawalAmount.value || '0') || 0)
+const withdrawalAvailableAmount = computed(() => {
+  if (!withdrawalPartnerId.value) return 0
+  return availableByPartnerCurrency.value[withdrawalPartnerId.value]?.[withdrawalCurrency.value] ?? 0
+})
+const withdrawalAvailabilityError = computed(() => {
+  if (!withdrawalPartnerId.value || withdrawalAmountValue.value <= 0) return ''
+  if (withdrawalAmountValue.value <= withdrawalAvailableAmount.value + 0.000001) return ''
+  return `Нельзя вернуть ${formatPrice(withdrawalAmountValue.value, withdrawalCurrency.value)}: доступно только ${formatPrice(withdrawalAvailableAmount.value, withdrawalCurrency.value)}.`
+})
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString(intlLocale(locale.value), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+function agreementSideLabel(role: string): string {
+  if (role === 'INVESTOR') return 'Инвестор'
+  if (role === 'OPERATOR') return 'Бизнес'
+  return partnerRoleLabel(role)
+}
+
+function setContributionPartner(value: string | number | boolean | null): void {
+  contributionPartnerId.value = typeof value === 'number' ? value : Number(value) || null
+}
+
+function setWithdrawalPartner(value: string | number | boolean | null): void {
+  withdrawalPartnerId.value = typeof value === 'number' ? value : Number(value) || null
 }
 
 function fxRateForCurrency(currency: string): string {
@@ -64,7 +119,7 @@ function fxRateForCurrency(currency: string): string {
 
 function ensureFxRate(currency: string): boolean {
   if (currency !== 'USD' || latestUsdRate.value) return true
-  toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
+  toast.error(t('procurements.syncUsdRateFirst'))
   return false
 }
 
@@ -98,7 +153,7 @@ async function saveContribution(): Promise<void> {
     toast.success(t('procurements.contributionAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : t('procurements.contributionAddFailed'))
+    toast.error(getApiErrorMessage(err, t('procurements.contributionAddFailed')))
   } finally {
     savingContribution.value = false
   }
@@ -106,6 +161,11 @@ async function saveContribution(): Promise<void> {
 
 async function saveWithdrawal(): Promise<void> {
   if (!agreement.value || !withdrawalPartnerId.value || !withdrawalAmount.value) return
+  withdrawalError.value = withdrawalAvailabilityError.value
+  if (withdrawalError.value) {
+    toast.error(withdrawalError.value)
+    return
+  }
   if (!ensureFxRate(withdrawalCurrency.value)) return
   savingWithdrawal.value = true
   try {
@@ -117,10 +177,12 @@ async function saveWithdrawal(): Promise<void> {
       reason: t('procurements.withdrawalReason'),
     })
     withdrawalAmount.value = ''
+    withdrawalError.value = ''
     toast.success(t('procurements.withdrawalAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : t('procurements.withdrawalAddFailed'))
+    withdrawalError.value = getApiErrorMessage(err, t('procurements.withdrawalAddFailed'))
+    toast.error(withdrawalError.value)
   } finally {
     savingWithdrawal.value = false
   }
@@ -161,9 +223,6 @@ async function allocateSuggested(): Promise<void> {
 
 onMounted(async () => {
   await Promise.allSettled([load(), loadLatestUsdRate()])
-  if (latestUsdRateError.value) {
-    toast.error(latestUsdRateError.value)
-  }
 })
 </script>
 
@@ -217,15 +276,19 @@ onMounted(async () => {
             <h2>{{ t('procurements.contribution') }}</h2>
             <Wallet :size="17" />
           </div>
-          <div class="inline-form">
-            <select v-model.number="contributionPartnerId">
-              <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
-            </select>
-            <input v-model="contributionAmount" inputmode="decimal" :placeholder="t('common.amount')" />
-            <select v-model="contributionCurrency">
-              <option value="USD">USD</option>
-              <option value="UZS">UZS</option>
-            </select>
+          <div class="money-move-form">
+            <BaseSelect
+              :model-value="contributionPartnerId"
+              :options="agreementSideOptions"
+              title="Кто пополняет договор"
+              @update:model-value="setContributionPartner"
+            />
+            <MoneyCurrencyInput
+              v-model="contributionAmount"
+              v-model:currency="contributionCurrency"
+              :placeholder="t('common.amount')"
+              aria-label="Сумма пополнения договора"
+            />
           </div>
           <button class="action" type="button" :disabled="savingContribution" @click="saveContribution">
             <Plus :size="17" /> {{ t('procurements.addContribution') }}
@@ -237,17 +300,24 @@ onMounted(async () => {
             <h2>{{ t('procurements.withdrawalFromAgreement') }}</h2>
             <RotateCcw :size="17" />
           </div>
-          <div class="inline-form">
-            <select v-model.number="withdrawalPartnerId">
-              <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
-            </select>
-            <input v-model="withdrawalAmount" inputmode="decimal" :placeholder="t('common.amount')" />
-            <select v-model="withdrawalCurrency">
-              <option value="USD">USD</option>
-              <option value="UZS">UZS</option>
-            </select>
+          <div class="money-move-form">
+            <BaseSelect
+              :model-value="withdrawalPartnerId"
+              :options="agreementSideOptions"
+              title="Кому вернуть деньги"
+              @update:model-value="setWithdrawalPartner"
+            />
+            <MoneyCurrencyInput
+              v-model="withdrawalAmount"
+              v-model:currency="withdrawalCurrency"
+              :placeholder="t('common.amount')"
+              aria-label="Сумма возврата из договора"
+            />
           </div>
-          <button class="action secondary" type="button" :disabled="savingWithdrawal" @click="saveWithdrawal">
+          <p v-if="withdrawalAvailabilityError || withdrawalError" class="form-error">
+            {{ withdrawalAvailabilityError || withdrawalError }}
+          </p>
+          <button class="action secondary" type="button" :disabled="savingWithdrawal || Boolean(withdrawalAvailabilityError)" @click="saveWithdrawal">
             <RotateCcw :size="17" /> {{ t('procurements.recordWithdrawal') }}
           </button>
         </section>
@@ -331,15 +401,21 @@ h2 { margin: 0; font-size: var(--text-base); font-weight: var(--font-semibold); 
 .proc-row { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: transparent; text-align: left; }
 .proc-row span { color: var(--color-text-primary); }
 .inline-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 82px; gap: var(--space-2); }
+.money-move-form { display: grid; grid-template-columns: minmax(112px, .75fr) minmax(0, 1.25fr); gap: var(--space-2); }
 .inline-form.two { grid-template-columns: minmax(0, 1fr) auto; }
 input, select { min-height: 42px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); padding: 0 var(--space-3); background: var(--color-bg-primary); color: var(--color-text-primary); font: inherit; }
 .action { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 0; border-radius: var(--radius-md); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
 .action.secondary { background: var(--color-bg-elevated); color: var(--color-text-primary); border: 1px solid var(--color-border-default); }
 .action:disabled { opacity: .55; }
 .allocation-box { display: grid; gap: var(--space-2); padding-top: var(--space-2); }
+.form-error { margin: 0; color: var(--color-danger); font-size: var(--text-sm); line-height: 1.4; }
 .state { min-height: 180px; display: grid; place-items: center; color: var(--color-text-secondary); }
 .state-error { color: var(--color-error); }
 @media (max-width: 420px) {
   .inline-form { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 340px) {
+  .money-move-form { grid-template-columns: 1fr; }
 }
 </style>

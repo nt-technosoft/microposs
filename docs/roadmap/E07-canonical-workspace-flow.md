@@ -18,6 +18,24 @@ Canonical user order:
 Purchase intent -> Supplier terms -> Funding -> Payment/obligation -> Goods receipt -> History/audit
 ```
 
+2026-05-18 refinement: this order is canonical for **regular / own-funds**
+procurements. Partnership procurements are a separate workspace mode because
+investment-funded procurement is not a daily operator path and has a different
+capital discipline.
+
+Partnership user order:
+
+```text
+Investment agreement -> Goods and landed costs -> Supplier terms -> Capital contribution/allocation -> Payment -> Goods receipt snapshot -> History/audit
+```
+
+The product may still use one `ProcurementWorkspace` shell, but it must expose
+two explicit entry points:
+
+- `New procurement` — regular business purchase.
+- `Partnership procurement` — starts by choosing or creating an
+  `InvestmentAgreement`.
+
 Readable UI blocks:
 
 1. Goods and landed costs.
@@ -59,6 +77,47 @@ The difference is allowed actions and locked facts, not a different UI family.
 The system may create an early backend `OPEN Procurement` for autosave, but the
 first user-facing decision is not funding. The first user-facing decision is the
 purchase intent.
+
+Exception: partnership workspace starts with `InvestmentAgreement`, because all
+partner-funded money must pass through the agreement before it can be allocated
+or paid.
+
+## Regular Vs Partnership Modes
+
+### Regular Procurement
+
+Regular procurement is the default and most frequent path.
+
+Rules:
+
+- starts with goods/expenses;
+- uses business `CashAccount` directly for prepaid/partial payments;
+- may create `SupplierPayable` for deferred/installment/partial remainder;
+- does not show investment agreement, capital contribution, allocation or lot
+  profit-share controls.
+
+### Partnership Procurement
+
+Partnership procurement is an explicit secondary path.
+
+Rules:
+
+- starts with an existing or quick-created `InvestmentAgreement`;
+- supplier credit is not supported in MVP;
+- all participant money moves through the agreement before payment;
+- payment and receipt are unlocked by agreement capital contribution and
+  allocation, not by direct cash payment;
+- receive batch freezes factual capital/profit snapshot from allocated capital.
+
+Canonical money rule:
+
+```text
+CapitalCommitment -> CapitalContribution -> CapitalAllocation -> Payment -> ReceiveBatchSnapshot
+```
+
+Do not model direct partner/business payment as an independent source of truth.
+If UX says "pay business share from cash", backend still records it as business
+capital contribution into the agreement and allocation to the procurement.
 
 ### 1. Purchase Intent: Goods And Landed Costs
 
@@ -144,6 +203,15 @@ Partnership example:
 - supplier payment is funded from capital allocation/pool;
 - factual batch allocation may differ from agreement plan.
 
+MVP partnership payment discipline:
+
+- payment is blocked until the agreement has enough contributed/allocated
+  capital;
+- UI may provide a combined "contribute and allocate" action for convenience;
+- backend must still create separate contribution and allocation facts;
+- leftover capital remains available on the agreement or is returned through
+  withdrawal, not silently discarded.
+
 Payment is always a document/fact. It is not just a line status.
 
 ### 5. Goods Receipt
@@ -196,6 +264,29 @@ Required backend capabilities:
 - API contract supports the canonical flow without forcing old endpoint shapes;
 - serializers expose enough data for frontend to render the canonical order.
 
+Future-proofing for investor-side workflows:
+
+- `InvestmentAgreement` should be treated as an agreement between parties, not
+  only a business-owned form;
+- MVP may be business-managed, but records should be ready for actor/source and
+  confirmation metadata;
+- future workflow should support agreement proposal/accept/reject and
+  contribution submitted/confirmed/disputed states.
+
+Target supporting concepts:
+
+- `CapitalCommitment` — planned amount/intent by participant;
+- `CapitalContribution` — actual money received into agreement;
+- `CapitalAllocation` — agreement capital reserved/used for procurement;
+- `AgreementEvent` — append-only audit of agreement-level actions;
+- confirmation fields on contributions/commitments when investor portal becomes
+  interactive.
+
+2026-05-18 backend foundation status: these concepts are now represented in
+the target partnership backend. MVP still records actions as business-managed
+confirmed facts, but the stored shape is ready for future investor-submitted /
+business-confirmed flows.
+
 If an API shape makes frontend start with funding as the primary decision, the
 API shape is incomplete for Phase D even if backend models are correct.
 
@@ -230,8 +321,9 @@ Phase D is complete only when:
 - supplier settlement and funding are visibly separate;
 - own funds never asks for procurement balance;
 - partnership asks for agreement/capital only in the money-source/capital area;
+- partnership create starts with agreement selection/creation before goods;
+- partnership payments cannot bypass agreement contribution/allocation;
 - deferred/installment paths create payable-oriented UI;
 - receive batch UI supports partial receive and batch snapshots;
 - completed procurement opens in the same workspace with locked facts and
   follow-up payment/audit actions.
-

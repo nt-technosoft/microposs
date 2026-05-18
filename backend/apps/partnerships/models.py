@@ -13,10 +13,27 @@ from apps.core.models import TenantModel, ImmutableMixin
 from apps.core.exceptions import ImmutableRecordError
 
 
+class AgreementActionSource(models.TextChoices):
+    BUSINESS_RECORDED = 'BUSINESS_RECORDED', 'Зафиксировано бизнесом'
+    INVESTOR_SUBMITTED = 'INVESTOR_SUBMITTED', 'Отправлено инвестором'
+    SYSTEM = 'SYSTEM', 'Система'
+
+
+class AgreementConfirmationStatus(models.TextChoices):
+    PENDING = 'PENDING', 'Ожидает подтверждения'
+    CONFIRMED = 'CONFIRMED', 'Подтверждено'
+    DISPUTED = 'DISPUTED', 'Оспаривается'
+    CANCELLED = 'CANCELLED', 'Отменено'
+
+
 class InvestmentAgreement(TenantModel):
     """Parent investment agreement that can fund multiple concrete procurements."""
 
     class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        PROPOSED = 'PROPOSED', 'Предложен'
+        ACCEPTED = 'ACCEPTED', 'Принят'
+        REJECTED = 'REJECTED', 'Отклонён'
         OPEN = 'OPEN', 'Открыт'
         ACTIVE = 'ACTIVE', 'Активен'
         CLOSED = 'CLOSED', 'Закрыт'
@@ -113,6 +130,67 @@ class AgreementPartner(TenantModel):
         ]
 
 
+class CapitalCommitment(TenantModel):
+    """Planned capital intent by a participant before actual money is received."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='commitments',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='capital_commitments',
+    )
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    date = models.DateTimeField()
+    source = models.CharField(
+        max_length=24,
+        choices=AgreementActionSource.choices,
+        default=AgreementActionSource.BUSINESS_RECORDED,
+    )
+    confirmation_status = models.CharField(
+        max_length=20,
+        choices=AgreementConfirmationStatus.choices,
+        default=AgreementConfirmationStatus.CONFIRMED,
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='capital_commitments_created',
+    )
+    actor_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='capital_commitments_acted',
+    )
+    notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_capital_commitment'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['partner']),
+            models.Index(fields=['confirmation_status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_capital_commitment_idempotent',
+            ),
+        ]
+
+
 class Procurement(ImmutableMixin, TenantModel):
     """
     E07 purchase/workspace root.
@@ -142,6 +220,11 @@ class Procurement(ImmutableMixin, TenantModel):
         max_length=20,
         choices=Status.choices,
         default=Status.OPEN,
+    )
+    primary_currency = models.CharField(
+        max_length=3,
+        default='UZS',
+        help_text='Workspace display/default currency for item and expense drafts.',
     )
     opened_at = models.DateTimeField()
     received_at = models.DateTimeField(null=True, blank=True)
@@ -637,7 +720,32 @@ class AgreementContribution(TenantModel):
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
     date = models.DateTimeField()
+    source = models.CharField(
+        max_length=24,
+        choices=AgreementActionSource.choices,
+        default=AgreementActionSource.BUSINESS_RECORDED,
+    )
+    confirmation_status = models.CharField(
+        max_length=20,
+        choices=AgreementConfirmationStatus.choices,
+        default=AgreementConfirmationStatus.CONFIRMED,
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_contributions_created',
+    )
+    actor_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_contributions_acted',
+    )
     notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = 'partnerships_agreement_contribution'
@@ -645,6 +753,14 @@ class AgreementContribution(TenantModel):
         indexes = [
             models.Index(fields=['agreement']),
             models.Index(fields=['partner']),
+            models.Index(fields=['confirmation_status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_agreement_contribution_idempotent',
+            ),
         ]
 
 
@@ -665,7 +781,32 @@ class AgreementWithdrawal(TenantModel):
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
     date = models.DateTimeField()
+    source = models.CharField(
+        max_length=24,
+        choices=AgreementActionSource.choices,
+        default=AgreementActionSource.BUSINESS_RECORDED,
+    )
+    confirmation_status = models.CharField(
+        max_length=20,
+        choices=AgreementConfirmationStatus.choices,
+        default=AgreementConfirmationStatus.CONFIRMED,
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_withdrawals_created',
+    )
+    actor_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_withdrawals_acted',
+    )
     reason = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = 'partnerships_agreement_withdrawal'
@@ -673,6 +814,14 @@ class AgreementWithdrawal(TenantModel):
         indexes = [
             models.Index(fields=['agreement']),
             models.Index(fields=['partner']),
+            models.Index(fields=['confirmation_status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_agreement_withdrawal_idempotent',
+            ),
         ]
 
 
@@ -707,7 +856,32 @@ class AgreementAllocation(TenantModel):
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
     date = models.DateTimeField()
+    source = models.CharField(
+        max_length=24,
+        choices=AgreementActionSource.choices,
+        default=AgreementActionSource.BUSINESS_RECORDED,
+    )
+    confirmation_status = models.CharField(
+        max_length=20,
+        choices=AgreementConfirmationStatus.choices,
+        default=AgreementConfirmationStatus.CONFIRMED,
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_allocations_created',
+    )
+    actor_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_allocations_acted',
+    )
     notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = 'partnerships_agreement_allocation'
@@ -716,7 +890,55 @@ class AgreementAllocation(TenantModel):
             models.Index(fields=['agreement']),
             models.Index(fields=['procurement']),
             models.Index(fields=['partner']),
+            models.Index(fields=['confirmation_status']),
+            models.Index(fields=['tenant', 'client_request_id']),
         ]
+
+
+class AgreementEvent(TenantModel):
+    """Append-only audit event for agreement-level workflow and money facts."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='events',
+    )
+    event_type = models.CharField(max_length=80)
+    occurred_at = models.DateTimeField()
+    actor_user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_events',
+    )
+    actor_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_events',
+    )
+    source = models.CharField(
+        max_length=24,
+        choices=AgreementActionSource.choices,
+        default=AgreementActionSource.BUSINESS_RECORDED,
+    )
+    related_model = models.CharField(max_length=80, blank=True, default='')
+    related_id = models.PositiveIntegerField(null=True, blank=True)
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        db_table = 'partnerships_agreement_event'
+        ordering = ['-occurred_at', '-id']
+        indexes = [
+            models.Index(fields=['agreement', 'event_type']),
+            models.Index(fields=['tenant', 'occurred_at']),
+            models.Index(fields=['related_model', 'related_id']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('AgreementEvent is append-only. Physical delete forbidden.')
 
 
 # ─── Partner Ledger ────────────────────────────────────────────────────────────

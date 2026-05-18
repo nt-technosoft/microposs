@@ -14,8 +14,13 @@ from apps.partnerships.formulas import profit_shares_from_capital
 
 from .models import (
     AgreementContribution,
+    AgreementActionSource,
+    AgreementConfirmationStatus,
+    AgreementEvent,
+    AgreementAllocation,
     AgreementPartner,
     AgreementWithdrawal,
+    CapitalCommitment,
     InvestmentAgreement,
     PartnerLedgerEntry,
     ProcurementTerms,
@@ -54,6 +59,10 @@ def create_investment_agreement(
     currency: str = 'UZS',
     notes: str = '',
     client_request_id: str | None = None,
+    created_by_id: int | None = None,
+    actor_partner_id: int | None = None,
+    source: str = AgreementActionSource.BUSINESS_RECORDED,
+    confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
     partners: list[dict],
 ) -> InvestmentAgreement:
     if opened_at is None:
@@ -90,7 +99,7 @@ def create_investment_agreement(
             balances={},
         )
         for partner in partners:
-            AgreementPartner.objects.create(
+            member = AgreementPartner.objects.create(
                 tenant_id=tenant_id,
                 agreement=agreement,
                 partner_id=partner['partner_id'],
@@ -98,6 +107,36 @@ def create_investment_agreement(
                 planned_capital_share=money(partner['planned_capital_share']),
                 profit_share=ratio(partner.get('profit_share', '0')),
             )
+            CapitalCommitment.objects.create(
+                tenant_id=tenant_id,
+                agreement=agreement,
+                partner_id=member.partner_id,
+                amount=member.planned_capital_share,
+                currency=currency,
+                fx_rate=Decimal('1'),
+                date=opened_at,
+                source=source,
+                confirmation_status=confirmation_status,
+                created_by_id=created_by_id,
+                actor_partner_id=actor_partner_id,
+                notes='initial_agreement_plan',
+                client_request_id=None,
+            )
+        record_agreement_event(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            event_type='agreement.opened',
+            source=source,
+            actor_user_id=created_by_id,
+            actor_partner_id=actor_partner_id,
+            related_model='InvestmentAgreement',
+            related_id=agreement.pk,
+            payload={
+                'planned_budget': str(agreement.planned_budget),
+                'currency': agreement.currency,
+                'partners_count': len(partners),
+            },
+        )
         publish_event(
             event_type='investment_agreement.opened',
             payload={'agreement_id': agreement.pk},
@@ -116,6 +155,11 @@ def add_agreement_contribution(
     fx_rate: Decimal = Decimal('1'),
     date=None,
     notes: str = '',
+    client_request_id: str | None = None,
+    created_by_id: int | None = None,
+    actor_partner_id: int | None = None,
+    source: str = AgreementActionSource.BUSINESS_RECORDED,
+    confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
 ) -> AgreementContribution:
     amount = money(amount)
     currency = str(currency or 'UZS').upper()
@@ -125,6 +169,14 @@ def add_agreement_contribution(
         date = timezone.now()
 
     with transaction.atomic():
+        if client_request_id:
+            existing = AgreementContribution.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ).first()
+            if existing:
+                return existing
+
         agreement = InvestmentAgreement.objects.select_for_update().get(
             pk=agreement_id,
             tenant_id=tenant_id,
@@ -142,12 +194,33 @@ def add_agreement_contribution(
             currency=currency,
             fx_rate=Decimal(str(fx_rate)),
             date=date,
+            source=source,
+            confirmation_status=confirmation_status,
+            created_by_id=created_by_id,
+            actor_partner_id=actor_partner_id,
             notes=notes,
+            client_request_id=client_request_id,
         )
         _mutate_agreement_balance(agreement, currency, amount)
         if agreement.status == InvestmentAgreement.Status.OPEN:
             agreement.status = InvestmentAgreement.Status.ACTIVE
             agreement.save(update_fields=['status', 'updated_at'])
+        record_agreement_event(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            event_type='contribution.recorded',
+            source=source,
+            actor_user_id=created_by_id,
+            actor_partner_id=actor_partner_id or partner_id,
+            related_model='AgreementContribution',
+            related_id=contribution.pk,
+            payload={
+                'partner_id': partner_id,
+                'amount': str(amount),
+                'currency': currency,
+                'confirmation_status': confirmation_status,
+            },
+        )
         publish_event(
             event_type='investment_agreement.contribution_added',
             payload={
@@ -171,6 +244,11 @@ def add_agreement_withdrawal(
     fx_rate: Decimal = Decimal('1'),
     date=None,
     reason: str = '',
+    client_request_id: str | None = None,
+    created_by_id: int | None = None,
+    actor_partner_id: int | None = None,
+    source: str = AgreementActionSource.BUSINESS_RECORDED,
+    confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
 ) -> AgreementWithdrawal:
     amount = money(amount)
     currency = str(currency or 'UZS').upper()
@@ -180,6 +258,14 @@ def add_agreement_withdrawal(
         date = timezone.now()
 
     with transaction.atomic():
+        if client_request_id:
+            existing = AgreementWithdrawal.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ).first()
+            if existing:
+                return existing
+
         agreement = InvestmentAgreement.objects.select_for_update().get(
             pk=agreement_id,
             tenant_id=tenant_id,
@@ -188,6 +274,17 @@ def add_agreement_withdrawal(
             raise ValueError('Cannot withdraw from closed agreement.')
         if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
             raise ValueError('Selected partner is not part of this agreement.')
+
+        available = _agreement_partner_available(
+            agreement=agreement,
+            partner_id=partner_id,
+            currency=currency,
+        )
+        if available < amount:
+            raise ValueError(
+                f'Нельзя вернуть {money(amount)} {currency}: '
+                f'у выбранной стороны доступно только {money(available)} {currency}.'
+            )
 
         _mutate_agreement_balance(agreement, currency, -amount)
         withdrawal = AgreementWithdrawal.objects.create(
@@ -198,7 +295,28 @@ def add_agreement_withdrawal(
             currency=currency,
             fx_rate=Decimal(str(fx_rate)),
             date=date,
+            source=source,
+            confirmation_status=confirmation_status,
+            created_by_id=created_by_id,
+            actor_partner_id=actor_partner_id,
             reason=reason,
+            client_request_id=client_request_id,
+        )
+        record_agreement_event(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            event_type='withdrawal.recorded',
+            source=source,
+            actor_user_id=created_by_id,
+            actor_partner_id=actor_partner_id or partner_id,
+            related_model='AgreementWithdrawal',
+            related_id=withdrawal.pk,
+            payload={
+                'partner_id': partner_id,
+                'amount': str(amount),
+                'currency': currency,
+                'confirmation_status': confirmation_status,
+            },
         )
         publish_event(
             event_type='investment_agreement.withdrawal_added',
@@ -211,6 +329,35 @@ def add_agreement_withdrawal(
             tenant_id=tenant_id,
         )
     return withdrawal
+
+
+def record_agreement_event(
+    *,
+    tenant_id: int,
+    agreement: InvestmentAgreement,
+    event_type: str,
+    source: str = AgreementActionSource.BUSINESS_RECORDED,
+    actor_user_id: int | None = None,
+    actor_partner_id: int | None = None,
+    related_model: str = '',
+    related_id: int | None = None,
+    payload: dict | None = None,
+    occurred_at=None,
+) -> AgreementEvent:
+    if occurred_at is None:
+        occurred_at = timezone.now()
+    return AgreementEvent.objects.create(
+        tenant_id=tenant_id,
+        agreement=agreement,
+        event_type=event_type,
+        occurred_at=occurred_at,
+        actor_user_id=actor_user_id,
+        actor_partner_id=actor_partner_id,
+        source=source,
+        related_model=related_model,
+        related_id=related_id,
+        payload=payload or {},
+    )
 
 
 def upsert_procurement_terms_draft(tenant_id, procurement, terms_payload, schedule_payload):
@@ -482,11 +629,33 @@ def _mutate_agreement_balance(agreement: InvestmentAgreement, currency: str, del
     next_value = Decimal(str(balances.get(currency, '0'))) + Decimal(str(delta))
     if next_value < 0:
         raise ValueError(
-            f'Insufficient agreement balance for {currency}: have {balances.get(currency, "0")}, need {abs(delta)}.'
+            f'Недостаточно средств в договоре: доступно {money(balances.get(currency, "0"))} {currency}, '
+            f'нужно {money(abs(delta))} {currency}.'
         )
     balances[currency] = str(money(next_value))
     agreement.balances = balances
     agreement.save(update_fields=['balances', 'updated_at'])
+
+
+def _agreement_partner_available(
+    *,
+    agreement: InvestmentAgreement,
+    partner_id: int,
+    currency: str,
+) -> Decimal:
+    currency = str(currency or 'UZS').upper()
+    available = ZERO
+    for contribution in agreement.contributions.filter(partner_id=partner_id, currency=currency):
+        available += Decimal(str(contribution.amount))
+    for withdrawal in agreement.withdrawals.filter(partner_id=partner_id, currency=currency):
+        available -= Decimal(str(withdrawal.amount))
+    for allocation in agreement.allocations.filter(partner_id=partner_id, currency=currency):
+        amount = Decimal(str(allocation.amount))
+        if allocation.direction == AgreementAllocation.Direction.TO_PROCUREMENT:
+            available -= amount
+        else:
+            available += amount
+    return money(available)
 
 
 def _validate_terms_payload_supplier(procurement, terms_payload) -> None:

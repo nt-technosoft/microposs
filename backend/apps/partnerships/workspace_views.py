@@ -34,6 +34,7 @@ class ProcurementWorkspaceListCreateView(APIView):
             procurement = create_workspace(
                 tenant_id=request.tenant_id,
                 funding_source=funding_source,
+                primary_currency=payload.get('primary_currency') or 'UZS',
                 supplier_id=payload.get('supplier_id'),
                 agreement_id=payload.get('investment_agreement_id') or payload.get('agreement_id'),
                 notes=payload.get('notes', ''),

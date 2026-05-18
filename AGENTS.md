@@ -143,6 +143,7 @@ and unresolved risks.
 - Pinia stores per domain
 - API layer in `src/api/` with typed clients
 - Components: `src/components/` (shared) + `src/modules/<domain>/components/`
+- Reuse shared controls before creating new UI controls: `MoneyCurrencyInput` for amount+currency, `BaseSelect` for mobile-friendly selects.
 - Design tokens in CSS custom properties
 - Lucide icons (no emojis as structural icons)
 - Any frontend/UI change must explicitly use `frontend-skill` as part of the workflow

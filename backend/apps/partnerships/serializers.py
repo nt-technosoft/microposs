@@ -5,9 +5,11 @@ from rest_framework import serializers
 from .models import (
     AgreementAllocation,
     AgreementContribution,
+    AgreementEvent,
     AgreementPartner,
     AgreementWithdrawal,
     BalanceContribution,
+    CapitalCommitment,
     InvestmentAgreement,
     ProcurementBalanceExchange,
     BalanceWithdrawal,
@@ -29,6 +31,7 @@ from .models import (
     ProcurementTermsAmendment,
 )
 from .workspace import build_workspace_payload
+from apps.core.models import Partner
 from apps.suppliers.models import PaymentSchedule
 
 
@@ -167,55 +170,156 @@ class AgreementPartnerSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+class CapitalCommitmentSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    partner_role = serializers.CharField(source='partner.role', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    actor_partner_name = serializers.CharField(source='actor_partner.display_name', read_only=True)
+
+    class Meta:
+        model = CapitalCommitment
+        fields = [
+            'id', 'partner', 'partner_name', 'partner_role',
+            'amount', 'currency', 'fx_rate', 'date',
+            'source', 'confirmation_status', 'created_by',
+            'created_by_name', 'actor_partner', 'actor_partner_name',
+            'notes', 'client_request_id',
+        ]
+        read_only_fields = ['id', 'created_by_name', 'actor_partner_name']
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, 'created_by', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
+
+
 class AgreementContributionSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
     partner_role = serializers.CharField(source='partner.role', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    actor_partner_name = serializers.CharField(source='actor_partner.display_name', read_only=True)
 
     class Meta:
         model = AgreementContribution
-        fields = ['id', 'partner', 'partner_name', 'partner_role', 'amount', 'currency', 'fx_rate', 'date', 'notes']
+        fields = [
+            'id', 'partner', 'partner_name', 'partner_role',
+            'amount', 'currency', 'fx_rate', 'date',
+            'source', 'confirmation_status', 'created_by',
+            'created_by_name', 'actor_partner', 'actor_partner_name',
+            'notes', 'client_request_id',
+        ]
         read_only_fields = ['id', 'date']
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, 'created_by', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
 
 
 class AgreementWithdrawalSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
     partner_role = serializers.CharField(source='partner.role', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    actor_partner_name = serializers.CharField(source='actor_partner.display_name', read_only=True)
 
     class Meta:
         model = AgreementWithdrawal
-        fields = ['id', 'partner', 'partner_name', 'partner_role', 'amount', 'currency', 'fx_rate', 'date', 'reason']
+        fields = [
+            'id', 'partner', 'partner_name', 'partner_role',
+            'amount', 'currency', 'fx_rate', 'date',
+            'source', 'confirmation_status', 'created_by',
+            'created_by_name', 'actor_partner', 'actor_partner_name',
+            'reason', 'client_request_id',
+        ]
         read_only_fields = ['id', 'date']
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, 'created_by', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
 
 
 class AgreementAllocationSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
     partner_role = serializers.CharField(source='partner.role', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    actor_partner_name = serializers.CharField(source='actor_partner.display_name', read_only=True)
 
     class Meta:
         model = AgreementAllocation
         fields = [
             'id', 'procurement', 'partner', 'partner_name', 'partner_role',
-            'direction', 'amount', 'currency', 'fx_rate', 'date', 'notes',
+            'direction', 'amount', 'currency', 'fx_rate', 'date',
+            'source', 'confirmation_status', 'created_by',
+            'created_by_name', 'actor_partner', 'actor_partner_name',
+            'notes', 'client_request_id',
         ]
         read_only_fields = ['id', 'date']
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, 'created_by', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
+
+
+class AgreementEventSerializer(serializers.ModelSerializer):
+    actor_user_name = serializers.SerializerMethodField()
+    actor_partner_name = serializers.CharField(source='actor_partner.display_name', read_only=True)
+
+    class Meta:
+        model = AgreementEvent
+        fields = [
+            'id', 'event_type', 'occurred_at',
+            'actor_user', 'actor_user_name', 'actor_partner',
+            'actor_partner_name', 'source', 'related_model',
+            'related_id', 'payload',
+        ]
+        read_only_fields = fields
+
+    def get_actor_user_name(self, obj):
+        user = getattr(obj, 'actor_user', None)
+        if user is None:
+            return ''
+        return user.get_full_name() or user.get_username()
 
 
 class InvestmentAgreementListSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     partners_count = serializers.SerializerMethodField()
     procurements_count = serializers.SerializerMethodField()
+    investor_names = serializers.SerializerMethodField()
+    operator_names = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentAgreement
         fields = [
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'planned_budget', 'currency', 'mudaraba_ratio', 'balances',
-            'partners_count', 'procurements_count', 'notes',
+            'partners_count', 'investor_names', 'operator_names',
+            'procurements_count', 'notes',
         ]
         read_only_fields = ['id']
 
     def get_partners_count(self, obj):
         return obj.partners.count()
+
+    def get_investor_names(self, obj):
+        return [
+            row.partner.display_name
+            for row in obj.partners.all()
+            if row.role == AgreementPartner.Role.INVESTOR
+        ]
+
+    def get_operator_names(self, obj):
+        return [
+            row.partner.display_name
+            for row in obj.partners.all()
+            if row.role == AgreementPartner.Role.OPERATOR
+        ]
 
     def get_procurements_count(self, obj):
         return obj.procurements.count()
@@ -224,9 +328,11 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
 class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     partners = AgreementPartnerSerializer(many=True, read_only=True)
+    commitments = CapitalCommitmentSerializer(many=True, read_only=True)
     contributions = AgreementContributionSerializer(many=True, read_only=True)
     withdrawals = AgreementWithdrawalSerializer(many=True, read_only=True)
     allocations = AgreementAllocationSerializer(many=True, read_only=True)
+    events = AgreementEventSerializer(many=True, read_only=True)
     procurements = serializers.SerializerMethodField()
     participant_totals = serializers.SerializerMethodField()
     history = serializers.SerializerMethodField()
@@ -237,8 +343,8 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'mudaraba_ratio', 'loss_rule', 'planned_budget', 'currency',
             'balances', 'notes', 'client_request_id', 'partners',
-            'contributions', 'withdrawals', 'allocations', 'procurements',
-            'participant_totals', 'history',
+            'commitments', 'contributions', 'withdrawals', 'allocations',
+            'events', 'procurements', 'participant_totals', 'history',
         ]
         read_only_fields = ['id']
 
@@ -683,11 +789,93 @@ class InvestmentContractInputSerializer(serializers.Serializer):
 class InvestmentAgreementCreateSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False)
     supplier_id = serializers.IntegerField(required=False, allow_null=True)
-    mudaraba_ratio = serializers.DecimalField(max_digits=7, decimal_places=6)
-    planned_budget = serializers.DecimalField(max_digits=14, decimal_places=2)
+    mudaraba_ratio = serializers.DecimalField(max_digits=7, decimal_places=6, required=False)
+    planned_budget = serializers.DecimalField(max_digits=14, decimal_places=2, required=False)
+    investor_partner_id = serializers.IntegerField(required=False)
+    investor_planned_amount = serializers.DecimalField(max_digits=14, decimal_places=2, required=False)
+    investor_capital_percent = serializers.DecimalField(max_digits=7, decimal_places=4, required=False)
+    investor_profit_percent = serializers.DecimalField(max_digits=7, decimal_places=4, required=False)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     notes = serializers.CharField(required=False, default='', allow_blank=True)
-    partners = ContractPartnerInputSerializer(many=True)
+    partners = ContractPartnerInputSerializer(many=True, required=False)
+
+    def validate(self, attrs):
+        if attrs.get('partners'):
+            if 'planned_budget' not in attrs or 'mudaraba_ratio' not in attrs:
+                raise serializers.ValidationError({
+                    'detail': 'Explicit partners payload requires planned_budget and mudaraba_ratio.',
+                })
+            return attrs
+
+        required = [
+            'investor_partner_id',
+            'investor_planned_amount',
+            'investor_capital_percent',
+            'investor_profit_percent',
+        ]
+        missing = [field for field in required if attrs.get(field) in (None, '')]
+        if missing:
+            raise serializers.ValidationError({field: 'This field is required.' for field in missing})
+
+        request = self.context.get('request')
+        tenant_id = getattr(request, 'tenant_id', None)
+        if tenant_id is None:
+            raise serializers.ValidationError({'detail': 'Tenant context is required.'})
+
+        operator = Partner.objects.filter(
+            tenant_id=tenant_id,
+            role=Partner.Role.OPERATOR,
+            is_active=True,
+        ).first()
+        if operator is None:
+            raise serializers.ValidationError({'detail': 'Active business operator partner is required.'})
+
+        investor_id = int(attrs['investor_partner_id'])
+        if not Partner.objects.filter(
+            tenant_id=tenant_id,
+            id=investor_id,
+            role=Partner.Role.INVESTOR,
+            is_active=True,
+        ).exists():
+            raise serializers.ValidationError({'investor_partner_id': 'Active investor partner is required.'})
+
+        investor_amount = _money(attrs['investor_planned_amount'])
+        capital_percent = Decimal(str(attrs['investor_capital_percent']))
+        profit_percent = Decimal(str(attrs['investor_profit_percent']))
+        if investor_amount <= 0:
+            raise serializers.ValidationError({'investor_planned_amount': 'Must be greater than 0.'})
+        if capital_percent <= 0 or capital_percent >= 100:
+            raise serializers.ValidationError({'investor_capital_percent': 'Must be between 0 and 100.'})
+        if profit_percent < 0 or profit_percent > 100:
+            raise serializers.ValidationError({'investor_profit_percent': 'Must be between 0 and 100.'})
+
+        investor_capital_share = (capital_percent / Decimal('100')).quantize(Decimal('0.000001'))
+        investor_profit_share = (profit_percent / Decimal('100')).quantize(Decimal('0.000001'))
+        mudaraba_ratio = (investor_profit_share / investor_capital_share).quantize(Decimal('0.000001'))
+        if mudaraba_ratio < 0 or mudaraba_ratio > 1:
+            raise serializers.ValidationError({
+                'investor_profit_percent': 'Profit formula cannot exceed investor capital ratio in MVP.',
+            })
+
+        planned_budget = _money(investor_amount / investor_capital_share)
+        operator_amount = _money(planned_budget - investor_amount)
+        attrs['planned_budget'] = planned_budget
+        attrs['mudaraba_ratio'] = mudaraba_ratio
+        attrs['partners'] = [
+            {
+                'partner_id': investor_id,
+                'role': 'INVESTOR',
+                'planned_capital_share': investor_amount,
+                'profit_share': investor_profit_share,
+            },
+            {
+                'partner_id': operator.id,
+                'role': 'OPERATOR',
+                'planned_capital_share': operator_amount,
+                'profit_share': Decimal('1') - investor_profit_share,
+            },
+        ]
+        return attrs
 
 
 class AgreementAllocationRowSerializer(serializers.Serializer):

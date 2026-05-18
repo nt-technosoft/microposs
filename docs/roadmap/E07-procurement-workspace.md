@@ -1,7 +1,7 @@
 # E07 — Procurement & Investment Workspace Re-architecture
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** 68%
+**Прогресс:** 70%
 **Приоритет:** P0 — главный архитектурный цикл проекта
 **Зависит от:** E01, E04
 **Блокирует:** E03, E05, investor marketplace, стабильный procurement UX
@@ -71,13 +71,82 @@ Procurement разделяет три независимых вопроса:
 
 - `OWN_FUNDS` может использовать `PREPAID`, `PARTIAL`, `DEFERRED`, `INSTALLMENT`, `CONSIGNMENT`.
 - `PARTNERSHIP` в MVP может использовать только `PREPAID`.
-- Partnership flow требует `InvestmentAgreement`.
+- Regular procurement и partnership procurement имеют разные entry points.
+- Regular procurement стартует с товаров/расходов.
+- Partnership procurement стартует с выбора или быстрого создания `InvestmentAgreement`.
 - Own funds payment идёт напрямую из `CashAccount`.
-- Partnership payment идёт через capital pool / allocation.
+- Partnership payment всегда идёт через `InvestmentAgreement`: `CapitalContribution -> CapitalAllocation -> Payment`.
+- Прямой оплаты "мимо договора" в partnership flow нет; если UX выглядит как
+  "оплатить долю бизнеса из кассы", backend всё равно фиксирует business
+  contribution в договор и allocation на приход.
 - Один procurement может иметь несколько `ReceiveBatch`.
 - Каждый receive batch может иметь свой factual capital snapshot.
 - Lot snapshot immutable и является источником FIFO profit distribution.
 - Payments, receive batches, journal entries и capital movements append-only.
+
+## Partnership Money Discipline
+
+Новая договорённость от 2026-05-18:
+
+Партнёрский приход не использует старый "баланс прихода" как отдельный источник
+правды. Старый смысл баланса прихода переносится на капитал инвестдоговора.
+
+Canonical chain:
+
+```text
+CapitalCommitment -> CapitalContribution -> CapitalAllocation -> Payment -> ReceiveBatchSnapshot
+```
+
+Практический смысл:
+
+- вклад инвестора и вклад бизнеса сначала становятся капиталом договора;
+- только затем капитал выделяется на конкретный приход;
+- только выделенный капитал может оплачивать товары/расходы партнёрского прихода;
+- фактические доли партии считаются по allocation/contribution, а не по плану;
+- сдача/остаток остаётся доступным балансом договора или выводится через
+  withdrawal.
+
+Для UX допустимо объединять действия, например `Внести и выделить на приход`,
+но backend обязан сохранить отдельные документы contribution и allocation.
+
+## Investment Agreement Creation Principle
+
+`planned_budget` больше не должен быть главным пользовательским вводом.
+
+Целевой UX:
+
+- основной ввод: `инвестор планирует вложить X`;
+- система рассчитывает рекомендуемый вклад бизнеса по плановым долям;
+- система может вывести ориентировочный общий объём договора как derived value;
+- пользователь может внести факт меньше/больше плана;
+- рекомендации не блокируют, потому что snapshot партии считает факт.
+
+`planned_budget` можно оставить в backend как ориентир/derived planned volume,
+но не использовать как единственный источник истины. Истина для отчётов и
+snapshot — реальные contributions и allocations.
+
+## Future Investor Workflow Readiness
+
+MVP остаётся business-managed: бизнес может создать договор, зафиксировать
+взнос инвестора и управлять приходом.
+
+Но модель должна быть готова к будущему investor-side workflow:
+
+- договор — это agreement между сторонами, не просто форма бизнеса;
+- будущий инвестор сможет принять/отклонить договор;
+- инвестор сможет отправить факт взноса;
+- бизнес подтверждает, что деньги получены;
+- стороны могут спорить/отменять неподтверждённые действия.
+
+Target additions for audit/backend readiness:
+
+- `CapitalCommitment` для планового намерения вложить сумму;
+- `confirmation_status` / `created_by` / `actor_partner` на contribution-like facts;
+- `AgreementEvent` для append-only истории договора;
+- статусы договора уровня `DRAFT`, `PROPOSED`, `ACCEPTED`, `REJECTED`, `ACTIVE`, `CLOSED`.
+
+Эти возможности не обязательно выводить в MVP UI, но новые backend/API решения
+не должны закрывать путь к ним.
 
 ## Документы
 
@@ -131,6 +200,7 @@ reset:
   - [x] First actions: `UPDATE_SOURCE`, `UPDATE_SETTLEMENT`, `AMEND_SETTLEMENT`.
   - [x] Payments/payables actions: `PAY_COSTS`, `PAY_SUPPLIER_PAYABLE` with generic `Payment` + cash facts.
   - [x] Investment funding actions: create/link agreement, record contribution, allocate capital to procurement balance.
+  - [x] Investment agreement readiness foundation: `CapitalCommitment`, confirmation/source/actor metadata and append-only `AgreementEvent`.
   - [x] Receive batch/lot snapshot rewrite: `RECEIVE_BATCH` creates immutable batch, lots, stocks, movements, capital snapshot and payable/journal facts.
   - [ ] Integration rewire baseline: заменить старые вызовы целевыми контрактами без compatibility shims.
     - [x] Active `partnerships/procurements` create/update/list/retrieve/pay/receive facade now routes through workspace payload/actions.
@@ -187,6 +257,11 @@ Phase D UX.
 - [ ] Harden partnership agreement creation/linking UX inside workspace.
   - [x] First in-workspace agreement creation/linking form added for partner-funded procurement.
   - [x] Quick agreement action can switch an own-funds draft workspace into partnership without legacy endpoint fallback.
+  - [x] Partnership workspace split into explicit secondary entry point; regular procurement remains default.
+  - [x] Agreement picker uses compact agreement cards and in-workspace quick create.
+  - [ ] Rework agreement creation around investor planned investment amount instead of user-primary total budget.
+  - [ ] Add contribution/allocation UX that follows `Contribution -> Allocation -> Payment`.
+  - [ ] Add agreement detail sheet/card showing balances, linked procurements and recalculation simulation.
 - [ ] Add frontend smoke coverage for own funds, deferred payable and partnership capital scenarios.
   - [x] Added target `SPLIT_ITEM` workspace action and frontend split control for partial receive preparation.
 - [x] Phase D.2 UX improvement pass:
@@ -245,7 +320,16 @@ Phase D UX.
 - 2026-05-13: Deferred/installment target contracts covered: deferred receive creates payable without upfront payment; installment receive requires generated schedule.
 - 2026-05-13: Browser smoke covered own-funds prepaid receive/reopen, partnership agreement -> contribution -> allocation -> receive, and installment schedule gating to receive.
 - 2026-05-13: Phase D scenario UX pass started: workspace gained next-action context, compact cost/status metrics, expense allocation scope, target `SPLIT_ITEM`, payable-oriented settlement hints, partnership capital summaries and receive-batch snapshot display.
+- 2026-05-18: E07 partnership flow refined: regular and partnership procurements have separate entry points. Partnership starts from `InvestmentAgreement`; regular procurement stays focused on goods/expenses and supplier/payment scenarios.
+- 2026-05-18: Partnership money discipline accepted: all participant money must pass through `InvestmentAgreement` as contribution and allocation before payment; direct payment "mimo agreement" is forbidden as source of truth.
+- 2026-05-18: Old "procurement balance" meaning is replaced by agreement capital pool for partnership. UX may combine contribution/allocation for convenience, but backend must keep separate append-only facts.
+- 2026-05-18: Investment agreement creation direction accepted: primary UX should be "investor plans to invest X", with recommended business contribution and derived overall volume, not a rigid user-primary total budget.
+- 2026-05-18: Future investor workflow must be preserved architecturally: commitments, confirmation status, actor/source metadata and agreement events should be prepared even if MVP remains business-managed.
+- 2026-05-18: Backend agreement readiness audit completed: added `CapitalCommitment`, agreement event log, confirmation/source/actor metadata for contribution/withdrawal/allocation facts, exposed them in serializers/workspace payload, and wired API/workspace services to record business-managed MVP facts through those target fields.
+- 2026-05-18: Investment agreement creation contract moved to target UX shape: API can accept investor planned amount + capital/profit percentages, derives total planned volume and business recommended contribution, and frontend creation form no longer makes total budget the primary input.
 
 ## Открытые Вопросы
 
-- Нет блокирующих вопросов для продолжения B4.
+- Нет backend-блокеров для продолжения Phase D.
+- UX/flow обычного и партнёрского прихода остаётся user-controlled зоной: не
+  перестраивать эти интерфейсы дальше без явного направления пользователя.
