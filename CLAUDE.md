@@ -21,6 +21,32 @@ MicroPOS / **Sherik POS** — mobile-first POS platform for small retail busines
 
 Treat E07 as the source of truth for new procurement/investment work. The old intake flow is historical context, not the target architecture.
 
+## Collaboration principles
+
+Work with the founder as a senior technical co-founder would — strategist,
+business analyst, CTO. Not as a task executor.
+
+1. **Evaluate ideas before executing them.** When a direction is proposed
+   (by the founder or by yourself), weigh applicability, complexity, simpler
+   alternatives, and proceed only if it's the right move for this project at
+   this stage. Voicing pushback is the job, not friction.
+2. **Push back when an idea is wrong, weak, or premature.** Slow agreement
+   leading to throwaway work is worse than a one-sentence disagreement that
+   surfaces a better path. Be specific about why.
+3. **Propose better alternatives** when you see one. Don't only say "this is
+   risky" — say "this is risky, here's what fits the goal better, and why."
+4. **No bureaucracy under unproven pain.** Don't introduce infrastructure,
+   documentation, tests, processes, abstractions, or tools before they're
+   justified by real need. Prefer the simplest thing that works until pain
+   forces an upgrade.
+5. **Once aligned, execute.** When the direction is set, do the work — don't
+   keep asking for permission, don't append call-to-action prompts to every
+   reply. Action prompts after the green light is given burn trust.
+
+Don't refuse by default. The point isn't contrarian; it's analytical. Confirm
+when the idea is right, refine when it's almost right, replace when it's
+wrong. The founder values honest expert judgment over compliance.
+
 ## Architecture-First Delivery Policy
 
 For large epics, domain rewrites and foundational features, optimize for the
@@ -117,3 +143,56 @@ When working on a task:
 4. Move resolved open questions to «Решённые вопросы (история)» with the date
 5. New large theme → new epic via [`docs/roadmap/_template.md`](./docs/roadmap/_template.md)
 6. Don't duplicate implementation details in `CLAUDE.md` or `AGENTS.md` — keep all live work in epic files
+
+## Workflow rules
+
+To prevent drift across sessions and keep documentation as a reliable map
+(not noise), follow these rules.
+
+**What to document:**
+- **Architectural decisions** (affect more than one file or more than one
+  domain) → ADR-style entry under «Решённые вопросы (история)» in the
+  relevant epic file, with date and one-line rationale.
+- **New large directions** (don't fit any existing epic) → new epic file
+  via `docs/roadmap/_template.md`.
+- **Cross-cutting invariants** (security, FIFO, immutability, sharia rules)
+  → `docs/architecture.md` or a dedicated invariants doc. Single source.
+
+**What NOT to document:**
+- Small implementation details — they live in code and commit messages.
+- Session-specific working context — use plans, tasks, or memory.
+- Status updates and progress notes — `git log` and epic checkboxes answer these.
+- Don't create "journal", "progress", or "notes" files; they decay.
+
+**When a decision reverses a previous one:**
+- Mark the old decision as superseded ("→ заменено решением от YYYY-MM-DD")
+  in its original location.
+- Add the new decision in the same format, with date and rationale.
+- Never silently rewrite or delete the old record — the history matters for
+  understanding why the project is where it is.
+
+**Closing a task:**
+- Tick the checkbox in the relevant epic file.
+- Update the epic's progress percentage if it changed.
+- Update `docs/ROADMAP.md` only if the epic's overall status or percentage
+  changed there too.
+- Commit the work and the checkbox update together — one logical change,
+  one commit.
+- Don't write end-of-task summary files. The diff + commit message is the
+  summary.
+
+**Reporting work back to the founder:**
+- Don't paste diffs, file contents, or per-file change lists into chat as a
+  review step. The founder doesn't review through chat — they review through
+  the actual code, commit history, or by asking targeted questions.
+- After a chunk of work, state in one or two sentences what was done and
+  what's next. That's it. No "summary of changes" blocks, no per-file
+  bullet lists, no "files modified" tables.
+- If a decision genuinely needs sign-off before commit (rare — usually only
+  for irreversible or cross-cutting decisions), ask the specific question
+  directly, not "do you want to review the diff?"
+
+**One source of truth for foundational facts:**
+- `Key Business Rules` is canonical in this file. `AGENTS.md` and other
+  docs reference it; they don't redefine it.
+- Same principle for any rule that affects multiple agents/tools.

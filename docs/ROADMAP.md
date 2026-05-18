@@ -28,11 +28,13 @@
 | **E04** | Contract Types Formalization | 🟡 IN_PROGRESS | 60% | — | [→](./roadmap/E04-contract-types.md) |
 | **E05** | Zakat Calculation | ⏸️ PAUSED | 0% | E01, E02, E03 | [→](./roadmap/E05-zakat.md) |
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
-| **E07** | Procurement & Investment Workspace Re-architecture | 🟡 IN_PROGRESS | 52% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
+| **E07** | Procurement & Investment Workspace Re-architecture | 🟡 IN_PROGRESS | 70% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
+| **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟡 IN_PROGRESS | 0% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 
-**🔥 Активный спринт / P0:** E07 — Procurement & Investment Workspace Re-architecture.
+**🔥 Активный спринт / P0:** E07 (Procurement Workspace Phase D) + E08 (Architecture Cleanup).
 Стратегия E07: controlled radical reset — новый procurement/investment/payment core и новый frontend workspace, старый intake/procurement код используется только как reference до switch-over.
-E04 продолжается как связанный архитектурный контекст, E03/E05 зависят от стабилизации E07.
+E08 параллельно с E07: устраняет архитектурные долги (мёртвый код, дублирование источников правды для денежных балансов, FIFO loophole с `Lot.received_at`), не дублирует Phase D.
+E04 продолжается как связанный архитектурный контекст, E03/E05/E06 зависят от завершения E07 + E08.
 **E01/E02 завершены**: backend, frontend wizard, поставщики/оплаты, консигнационные возвраты, история связей товар↔поставщик.
 
 ---
@@ -42,14 +44,16 @@ E04 продолжается как связанный архитектурны�
 **Текущая последовательность работы:**
 
 ```
-E07 (новая архитектура Procurement + Investment Workspace)
-  ↓
-E03 (реальная ценность бизнеса — итоговая отчётность)
-  ↓
-E05 (закят, появляются нужные переменные)
-  ↓
-E06 (сертификация, когда продукт зрел и есть документация)
+E07 (новая архитектура Procurement + Investment Workspace) ──┐
+                                                              ├─→ E03 → E05 → E06
+E08 (cleanup, source-of-truth, гигиена legacy) ──────────────┘
 ```
+
+E07 и E08 идут параллельно/чередуясь: E08 устраняет долги, накопившиеся в
+controlled radical reset, E07 продолжает Phase D frontend workspace под
+прямым контролем founder'а. E03/E05/E06 не запускаются, пока E08 Фаза 2 не
+закрыта (без чистого источника правды Net Value / Zakat / Sharia
+сертификация не построятся).
 
 E01/E02 завершены и теперь считаются историческим фундаментом, который может быть пересобран внутри E07. E04 идёт как связанный контекст для investment/contract layer.
 

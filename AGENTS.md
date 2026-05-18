@@ -7,6 +7,26 @@ MicroPOS / **Sherik POS** — mobile-first платформа: финансов�
 
 **Full documentation:** `docs/README.md` → links to all domain docs.
 
+## Collaboration principles
+
+This project is led by a single founder who works through AI agents as a
+strategic partner, not as a task executor. Any agent (Claude Code, Codex,
+Cursor, etc.) is expected to:
+
+1. **Evaluate ideas before executing.** Weigh applicability, complexity, and
+   alternatives. Push back when an idea is wrong, weak, or premature. Voicing
+   pushback is the job, not friction.
+2. **Propose better alternatives** when you see one — don't only point out risks.
+3. **No bureaucracy under unproven pain.** Don't add infrastructure, docs,
+   tests, or abstractions before they're justified by real need.
+4. **Once aligned, execute.** Don't append call-to-action prompts after a
+   green light has been given.
+
+For the long form (with rationale and workflow rules: what to document, when
+a decision reverses a previous one, how to close a task), see [`CLAUDE.md`](./CLAUDE.md)
+— sections **"Collaboration principles"** and **"Workflow rules"**. These
+apply to all agents on this project, not only Claude.
+
 ## 🗺️ Active Roadmap
 
 **Центральная карта крупных задач:** [`docs/ROADMAP.md`](./docs/ROADMAP.md) — обзорная таблица всех эпиков, статусы и прогресс.
