@@ -1,7 +1,7 @@
 # E08 — Architecture Cleanup & Source-of-Truth Consolidation
 
 **Статус:** 🟡 IN_PROGRESS
-**Прогресс:** 25% (Phase 0 закрыта)
+**Прогресс:** 55% (Phase 0 + Phase 1 закрыты)
 **Зависит от:** E07 (целевая архитектура procurement workspace)
 **Блокирует:** E03 (Net Value), E05 (Zakat), E06 (Sharia certification) — все нуждаются в чистом источнике правды
 
@@ -134,26 +134,28 @@ E08 не дублирует её, а указывает: после Фазы 2 �
       discipline, idempotency и т.д.) с явным указанием target vs legacy
       имён.
 
-### Фаза 1 — Global hygiene
+### Фаза 1 — Global hygiene ✅
 
-- [ ] T-1.1 Аудит всех импортов `apps/partnerships/services.py` — список
+- [x] T-1.1 Аудит всех импортов `apps/partnerships/services.py` — список
       мест-вызовов, что нужно сохранить.
-- [ ] T-1.2 Перенести `pay_dividend`, `get_partner_aggregate`,
+- [x] T-1.2 Перенести `pay_dividend`, `get_partner_aggregate`,
       `append_ledger_entry`, `get_or_create_ledger` в новый
-      `apps/partnerships/agreement_services.py` (или `workspace_support.py`).
-- [ ] T-1.3 Обновить все импорты в `partnerships/views.py`,
+      `apps/partnerships/agreement_services.py`.
+- [x] T-1.3 Обновить все импорты в `partnerships/views.py`,
       `investors/views.py`, `investors/services.py`, `risk/services.py`,
       `core/management/commands/bootstrap_demo.py`,
       `bootstrap_deploy_baseline.py`, `excel_workflow_audit.py`.
-- [ ] T-1.4 Удалить `apps/partnerships/services.py`.
-- [ ] T-1.5 Переписать или удалить тесты, опирающиеся на удалённый код
+- [x] T-1.4 Удалить `apps/partnerships/services.py`.
+- [x] T-1.5 Удалить тесты, опирающиеся на удалённый код
       (`test_procurement_lifecycle.py`, `test_e01_e02_services.py`,
-      `test_e01_wave5_consignment.py`).
-- [ ] T-1.6 Миграция `Lot.received_at` → `NOT NULL` + backfill.
-- [ ] T-1.7 Удалить frontend legacy: `IntakeCreate.vue`, `IntakeDetail.vue`,
-      `stores/intake.ts`, `components/ProcurementTermsHistory.vue`, legacy
-      типы в `modules/intake/types.ts`.
-- [ ] T-1.8 Удалить «болтающуюся строку 406» в `ProcurementWorkspace.vue`.
+      `test_e01_wave5_consignment.py` и ещё 4 файла с той же зависимостью).
+      `test_partner_ledger.py` и `test_audit_batch_one.py` сохранены —
+      обновлены на `agreement_services`.
+- [x] T-1.6 Миграция `Lot.received_at` → `NOT NULL` + backfill из `created_at`.
+- [x] T-1.7 Удалить frontend legacy: `IntakeCreate.vue`, `IntakeDetail.vue`,
+      `stores/intake.ts`, `components/ProcurementTermsHistory.vue`,
+      `modules/intake/types.ts`.
+- [x] T-1.8 Удалить «болтающуюся строку 406» в `ProcurementWorkspace.vue`.
 
 ### Фаза 2 — Source-of-truth consolidation
 
@@ -182,9 +184,9 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 - ? Как поступить с тестами `test_procurement_lifecycle.py` (~1600 LoC) —
   переписать под E07 или удалить целиком? По правилу «не писать тесты ради
   тестов» склоняемся к удалению, но финальное решение за founder'ом.
-- ? `Lot.received_at` backfill источник: `Lot.receipt.date`,
-  `procurement.opened_at`, или `Lot.created_at`? Сравнить, что точнее
-  отражает реальную дату приёмки в legacy данных.
+- ~~`Lot.received_at` backfill источник~~ — Закрыто 2026-05-19: выбран
+  `created_at`. В новом коде `received_at` всегда = `timezone.now()` в
+  момент `RECEIVE_BATCH`. Для legacy лотов `created_at` — лучшее из доступных.
 - ? Какие именно тесты-инварианты написать как страховку для шариатского
   учёта (`sum(profit_ratio) == 1.0`, FIFO ordering, append-only ledger,
   immutable snapshots, sum partner capital_share == 1.0 в snapshot)?
@@ -213,3 +215,13 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 - ✓ 2026-05-18: senior-partner collaboration principles зафиксированы в
   `CLAUDE.md` и в `AGENTS.md` (короткой ссылкой) → workflow живёт между
   сессиями, не только в текущей.
+- ✓ 2026-05-19: **Phase 1 закрыта.** `apps/partnerships/services.py` (4012 LoC)
+  удалён. 4 live-функции перенесены в `agreement_services.py`. 7 legacy тестов
+  удалены; `test_partner_ledger.py` и `test_audit_batch_one.py` обновлены на
+  новый путь импорта и зелёные (4/4 passed). `Lot.received_at` — миграция
+  0003 NOT NULL с backfill из `created_at`. Frontend: `IntakeCreate.vue`,
+  `IntakeDetail.vue`, `stores/intake.ts`, `ProcurementTermsHistory.vue`,
+  `intake/types.ts` удалены; стройная строка 406 в `ProcurementWorkspace.vue`
+  убрана. Bootstrap/audit команды застабированы с TODO E07 Phase D.
+  `Lot.received_at` backfill источник: `created_at` выбран как наиболее
+  точное приближение для legacy лотов (открытый вопрос закрыт).

@@ -403,4 +403,3 @@ onBeforeUnmount(() => {
   }
 }
 </style>
-              @update-primary-currency="goods.setPrimaryCurrency"

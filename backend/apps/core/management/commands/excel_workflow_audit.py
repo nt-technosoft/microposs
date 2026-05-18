@@ -547,15 +547,9 @@ class Command(BaseCommand):
         variants: dict,
     ):
         from apps.partnerships.models import Procurement, ProcurementExpense
-        from apps.partnerships.services import (
-            add_contribution,
-            get_procurement_receive_plan,
-            open_procurement,
-            pay_procurement_expenses,
-            pay_procurement_items,
-            receive_procurement,
-            update_procurement_expense_targets,
-        )
+        # TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
+        # Legacy services (open_procurement, add_contribution, etc.) removed in E08 T-1.4.
+        raise NotImplementedError('Excel audit procurement replay requires E07 Phase D rewrite.')
 
         purchase_rows = plan['purchase_rows']
         opened_at = _parse_dt(purchase_rows[0].get('SANA'))

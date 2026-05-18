@@ -119,7 +119,7 @@ def create_writeoff(
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+    from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
 
     if quantity < 1:
         raise ValueError('Writeoff quantity must be >= 1.')

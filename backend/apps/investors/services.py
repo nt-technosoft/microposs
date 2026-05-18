@@ -200,7 +200,7 @@ def close_investor_contract(
         ).first()
 
         if partner:
-            from apps.partnerships.services import get_partner_aggregate
+            from apps.partnerships.agreement_services import get_partner_aggregate
             agg = get_partner_aggregate(partner_id=partner.pk, tenant_id=tenant_id)
             final_settlement = agg['capital_net'] + agg['profit_pending_payout']
         else:
@@ -261,7 +261,7 @@ def update_investor_summary(tenant_id: int, contract_id: int) -> dict:
 
     ledger_agg = {}
     if partner:
-        from apps.partnerships.services import get_partner_aggregate
+        from apps.partnerships.agreement_services import get_partner_aggregate
         ledger_agg = get_partner_aggregate(partner_id=partner.pk, tenant_id=tenant_id)
 
     capital_net = ledger_agg.get('capital_net', Decimal('0'))

@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from apps.core.models import Partner
 from apps.core.permissions import IsOwner, IsInvestor
 from apps.partnerships.models import ProcurementPartnerLedger
-from apps.partnerships.services import get_partner_aggregate
+from apps.partnerships.agreement_services import get_partner_aggregate
 
 from .models import Investor, InvestorContract
 from .serializers import (

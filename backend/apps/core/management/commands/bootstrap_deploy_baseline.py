@@ -21,13 +21,6 @@ from apps.inventory.models import Lot, Warehouse
 from apps.inventory.services import transfer_lot_stock
 from apps.investors.models import Investor
 from apps.partnerships.models import Procurement
-from apps.partnerships.services import (
-    add_contribution,
-    open_procurement,
-    pay_procurement_expenses,
-    pay_procurement_items,
-    receive_procurement,
-)
 from apps.sales.models import PosSession, SalePayment
 from apps.sales.services import create_sale, open_pos_session
 from apps.suppliers.models import Supplier
@@ -422,79 +415,9 @@ class Command(BaseCommand):
         ).first()
 
         if procurement is None:
-            procurement = open_procurement(
-                tenant_id=business.id,
-                procurement_type=Procurement.Type.PARTNERSHIP,
-                supplier_id=baseline['supplier'].id,
-                notes=BASELINE_PROCUREMENT_NOTES,
-                client_request_id=BASELINE_PROCUREMENT_REQUEST_ID,
-                contract={
-                    'mudaraba_ratio': Decimal('0.571429'),
-                    'planned_budget': Decimal('550'),
-                    'currency': 'USD',
-                    'partners': [
-                        {
-                            'partner_id': baseline['investor_partner'].id,
-                            'role': 'INVESTOR',
-                            'planned_capital_share': Decimal('385'),
-                            'profit_share': Decimal('0.4'),
-                        },
-                        {
-                            'partner_id': baseline['operator'].id,
-                            'role': 'OPERATOR',
-                            'planned_capital_share': Decimal('165'),
-                            'profit_share': Decimal('0.6'),
-                        },
-                    ],
-                },
-                items=[{
-                    'product_variant_id': variant,
-                    'quantity': Decimal('50'),
-                    'unit_purchase_price': Decimal('10'),
-                    'currency': 'USD',
-                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
-                }],
-                expenses=[{
-                    'expense_type': 'CUSTOMS',
-                    'amount': Decimal('50'),
-                    'currency': 'USD',
-                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
-                    'notes': 'Baseline customs allocation',
-                }],
-            )
-            add_contribution(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                partner_id=baseline['investor_partner'].id,
-                amount=Decimal('385'),
-                currency='USD',
-                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
-                notes='Baseline investor capital',
-            )
-            add_contribution(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                partner_id=baseline['operator'].id,
-                amount=Decimal('165'),
-                currency='USD',
-                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
-                notes='Baseline operator capital',
-            )
-            pay_procurement_items(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                reason='Baseline item payment',
-            )
-            pay_procurement_expenses(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                reason='Baseline expense payment',
-            )
-            procurement = receive_procurement(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                destination_warehouse_id=baseline['storage'].id,
-            )
+            # TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
+            # Legacy open_procurement/add_contribution/receive_procurement removed in E08 T-1.4.
+            return False
 
         lot = Lot.objects.filter(
             tenant=business,

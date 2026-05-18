@@ -18,10 +18,6 @@ from apps.finance.chart_of_accounts import setup_chart_of_accounts
 from apps.finance.models import CashAccount, ExchangeRate
 from apps.inventory.models import Warehouse
 from apps.partnerships.models import Procurement
-from apps.partnerships.services import (
-    open_procurement, add_contribution, pay_procurement_expenses,
-    pay_procurement_items, receive_procurement,
-)
 from apps.sales.services import create_sale, open_pos_session
 from apps.suppliers.models import Supplier
 
@@ -90,117 +86,11 @@ class Command(BaseCommand):
         cashier_user,
     ):
         """
-        Musharaka+Mudaraba demo: investor 70% / operator 30% capital,
-        mudaraba_ratio = 4/7 → profit 40/60 investor/operator.
-        All amounts in USD using the shared demo FX rate. Plan uses 550 USD total.
+        TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
+        The legacy open_procurement/add_contribution/receive_procurement functions were
+        removed in E08 Phase 1 (T-1.4).
         """
-        fx = DEFAULT_DEMO_USD_UZS_RATE
-        usd = 'USD'
-
-        procurement = open_procurement(
-            tenant_id=business.id,
-            procurement_type=Procurement.Type.PARTNERSHIP,
-            supplier_id=supplier.id,
-            notes='Demo partnership procurement',
-            contract={
-                'mudaraba_ratio': Decimal('0.571429'),  # 4/7
-                'planned_budget': Decimal('550'),
-                'currency': usd,
-                'partners': [
-                    {
-                        'partner_id': investor.id,
-                        'role': 'INVESTOR',
-                        'planned_capital_share': Decimal('385'),
-                        'profit_share': Decimal('0.4'),
-                    },
-                    {
-                        'partner_id': operator.id,
-                        'role': 'OPERATOR',
-                        'planned_capital_share': Decimal('165'),
-                        'profit_share': Decimal('0.6'),
-                    },
-                ],
-            },
-            items=[{
-                'product_variant_id': variant.id,
-                'quantity': Decimal('50'),
-                'unit_purchase_price': Decimal('10'),
-                'currency': usd,
-                'fx_rate': fx,
-            }],
-            expenses=[{
-                'expense_type': 'CUSTOMS',
-                'amount': Decimal('50'),
-                'currency': usd,
-                'fx_rate': fx,
-                'notes': 'Customs demo',
-            }],
-        )
-
-        # Contributions: investor 385 USD, operator 165 USD (70/30 of 550).
-        add_contribution(
-            tenant_id=business.id,
-            procurement_id=procurement.id,
-            partner_id=investor.id,
-            amount=Decimal('385'),
-            currency=usd,
-            fx_rate=fx,
-            notes='Investor seed capital',
-        )
-        add_contribution(
-            tenant_id=business.id,
-            procurement_id=procurement.id,
-            partner_id=operator.id,
-            amount=Decimal('165'),
-            currency=usd,
-            fx_rate=fx,
-            notes='Operator seed capital',
-        )
-
-        pay_procurement_items(
-            tenant_id=business.id,
-            procurement_id=procurement.id,
-            reason='Payment for items',
-        )
-        pay_procurement_expenses(
-            tenant_id=business.id,
-            procurement_id=procurement.id,
-            reason='Customs payment',
-        )
-
-        receive_procurement(
-            tenant_id=business.id,
-            procurement_id=procurement.id,
-            destination_warehouse_id=store.id,
-        )
-
-            # ─── Sale: 5 units @ 20 USD (cash, converted by demo FX rate) ─────────
-        session = open_pos_session(
-            tenant_id=business.id,
-            location_id=store.id,
-            opened_by_id=cashier_user.id,
-            opening_cash=Decimal('0'),
-        )
-        unit_price_uzs = Decimal('20') * fx  # 240 000 UZS
-        create_sale(
-            tenant_id=business.id,
-            pos_session_id=session.id,
-            location_id=store.id,
-            sold_by_id=cashier_user.id,
-            customer_id=customer.id,
-            lines=[{
-                'product_variant_id': variant.id,
-                'quantity': 5,
-                'unit_price': unit_price_uzs,
-            }],
-            payments=[{
-                'amount': unit_price_uzs * 5,
-                'currency': 'UZS',
-                'fx_rate': Decimal('1'),
-                'method': 'CASH',
-            }],
-            notes='Demo sale',
-        )
+        raise NotImplementedError('Partnership demo flow requires E07 Phase D rewrite.')
 
     def handle(self, *args, **options):
         require_debug_or_confirmation(

@@ -26,7 +26,7 @@ from .serializers import (
     TermsAmendmentSerializer,
     ProcurementTermsAmendmentSerializer,
 )
-from .services import (
+from .agreement_services import (
     pay_dividend,
 )
 from .workspace_support import (

@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.finance.models import CashEntry
-from apps.partnerships.services import get_partner_aggregate
+from apps.partnerships.agreement_services import get_partner_aggregate
 from apps.sales.models import SalePayment
 from apps.sales.services import create_sale
 

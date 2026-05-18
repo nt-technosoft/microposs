@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.test import TestCase
 
 from apps.partnerships.models import PartnerLedgerEntry
-from apps.partnerships.services import get_partner_aggregate
+from apps.partnerships.agreement_services import get_partner_aggregate
 from apps.sales.models import SalePayment
 from apps.sales.services import create_sale
 
@@ -119,7 +119,8 @@ class PartnerLedgerAggregateTests(TestCase):
             investor['profit_accrued'] + operator['profit_accrued'],
             (sale.total_amount - sale.total_cogs).quantize(Decimal('0.01')),
         )
+        agreement = procurement.agreement_allocations.first().agreement
         self.assertEqual(
             investor['by_currency']['USD']['capital_in'] + operator['by_currency']['USD']['capital_in'],
-            procurement.contract.planned_budget,
+            agreement.planned_budget,
         )

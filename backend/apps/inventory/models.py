@@ -263,7 +263,7 @@ class Lot(TenantModel):
             'Shape: {mudaraba_ratio, loss_rule, partners: [{partner_id, role, capital_share, profit_share}]}'
         ),
     )
-    received_at = models.DateTimeField(null=True, blank=True)
+    received_at = models.DateTimeField()
     is_active = models.BooleanField(
         default=True,
         help_text='False when total quantity_remaining across warehouses == 0.',
