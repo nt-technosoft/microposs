@@ -86,18 +86,28 @@ target architecture, not for a locally green or cosmetically complete state.
 - **Tests**: `DJANGO_SETTINGS_MODULE=config.settings.development .venv/bin/python -m pytest apps/core/tests/ -q`
 
 ## Key Business Rules (NEVER violate)
-1. Products appear ONLY through Procurement / Receipt (except initial inventory)
-2. Receipt.status = confirmed → immutable forever
-3. SaleLine always references Lot (not ProductVariant directly) — FIFO allocation creates one SaleLine per lot-slice
-4. FIFO by default for lot selection — ordered by (lot.received_at, lot.id)
-5. sum(profit_ratio of all participants) == 1.0
-6. capital_ratio is auto-calculated from capital_amount
-7. Credit sale requires customer_id
-8. InvestorContract closes only if no active Lots remain
-9. Moving Lot changes only location, not participants/shares
-10. JournalEntry created automatically for every financial operation
-11. All significant operations write OutboxEvent
-12. Physical delete() forbidden for Sale, Receipt, JournalEntry, Lot
+
+This list is canonical. Other docs (`AGENTS.md`, `docs/README.md`) must
+reference this section, not redefine the rules.
+
+1. Products appear in inventory ONLY through `Procurement` → `ReceiveBatch` (except initial inventory).
+2. `ReceiveBatch.status = POSTED` → immutable forever; corrections happen via new documents (split / reversal / new batch), not silent edits.
+3. `SaleLine` always references a `Lot` (not `ProductVariant` directly) — FIFO allocation creates one `SaleLine` per lot-slice.
+4. FIFO for lot selection — ordered by (`lot.received_at`, `lot.id`); `Lot.received_at` must be NOT NULL.
+5. `sum(profit_ratio of all participants) == 1.0` in any `InvestmentAgreement` / `Lot.contract_snapshot`.
+6. `capital_ratio` is derived from `capital_amount`; never stored as an independent writable field.
+7. Credit sale requires `customer_id`.
+8. `InvestmentAgreement` (target) / `InvestorContract` (legacy) closes only if no active `Lot`s remain that reference its snapshots.
+9. Moving a `Lot` between warehouses changes only location, never participants/shares/`contract_snapshot`.
+10. `JournalEntry` is created automatically for every financial operation; no money moves without a journal line.
+11. All significant domain operations write an `OutboxEvent`.
+12. Physical `delete()` is forbidden for `Sale`, `ReceiveBatch`, `JournalEntry`, `Lot`, `Payment`, `CapitalContribution`, `PartnerLedgerEntry`, `AgreementEvent`. Reversal is a new append-only record, not a deletion.
+13. Partnership money moves only through `InvestmentAgreement` (`CapitalCommitment` → `CapitalContribution` → `InvestmentAllocation` → `Payment`); there is no direct payment path "around" the agreement.
+14. `Lot.contract_snapshot` is immutable at creation; changing an `InvestmentAgreement` later does not rewrite existing lots — only future receive batches use the new shares.
+
+> `Receipt`/`ReceiptLine` (legacy) and `InvestorContract` (legacy) still exist
+> in code but are **not** the target. Reference E08 `legacy-inventory.md` for
+> the full list of legacy entities.
 
 ## Backend Conventions
 - All models inherit `core.BaseModel` (soft-delete, timestamps)

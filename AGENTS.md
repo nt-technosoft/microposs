@@ -132,19 +132,9 @@ and unresolved risks.
 - **Backend**: Python 3.12 / Django 5.x / DRF / PostgreSQL 16 / Redis / Celery
 - **Frontend**: Vue.js 3 + TypeScript + Pinia + Vue Router + Vite
 
-## Key Business Rules (NEVER violate)
-1. Products appear ONLY through Procurement / Receipt (except initial inventory)
-2. Receipt.status = confirmed → immutable forever
-3. SaleLine always references Lot (not ProductVariant directly) — one SaleLine per FIFO lot-slice
-4. FIFO by default: ordered by (lot.received_at, lot.id)
-5. sum(profit_ratio of all participants) == 1.0
-6. capital_ratio is auto-calculated from capital_amount
-7. Credit sale requires customer_id
-8. InvestorContract closes only if no active Lots remain
-9. Moving Lot changes only location, not participants/shares
-10. JournalEntry created automatically for every financial operation
-11. All significant operations write OutboxEvent
-12. Physical delete() forbidden for Sale, Receipt, JournalEntry, Lot
+## Key Business Rules
+
+**Canonical source:** [`CLAUDE.md` → Key Business Rules](./CLAUDE.md#key-business-rules-never-violate). Do not redefine the rules here — read them there. This section is intentionally a pointer, not a copy.
 
 ## Backend Conventions
 - All models inherit `core.BaseModel` (soft-delete, timestamps)

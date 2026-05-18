@@ -1,7 +1,7 @@
 # E08 — Architecture Cleanup & Source-of-Truth Consolidation
 
 **Статус:** 🟡 IN_PROGRESS
-**Прогресс:** 0%
+**Прогресс:** 25% (Phase 0 закрыта)
 **Зависит от:** E07 (целевая архитектура procurement workspace)
 **Блокирует:** E03 (Net Value), E05 (Zakat), E06 (Sharia certification) — все нуждаются в чистом источнике правды
 
@@ -115,21 +115,24 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 
 ## Задачи (чек-лист)
 
-### Фаза 0 — Foundation map
+### Фаза 0 — Foundation map ✅
 
-- [ ] T-0.1 Свести `Key Business Rules` в `CLAUDE.md` как canonical;
+- [x] T-0.1 Свести `Key Business Rules` в `CLAUDE.md` как canonical;
       `AGENTS.md` и `docs/README.md` — ссылки.
-- [ ] T-0.2 Синхронизировать прогресс E07 в `docs/ROADMAP.md` (52% → 70%).
-- [ ] T-0.3 Резолвить `Receipt`-инвариант: удалить из Key Business Rules либо
-      явно переформулировать через `ReceiveBatch`.
-- [ ] T-0.4 Резолвить `SupplierSettlement` vs `ProcurementTerms` в
-      `docs/domain/customers-suppliers.md` и `docs/roadmap/E01-*`.
-- [ ] T-0.5 Создать `docs/legacy-inventory.md` со списком всего legacy
-      кода (`apps/partnerships/services.py`, `IntakeCreate.vue`,
-      `IntakeDetail.vue`, `stores/intake.ts`, `Investor` app).
-- [ ] T-0.6 Создать `docs/glossary.md` с базовыми терминами (Мудараба,
-      Мушарака, `contract_snapshot`, `CapitalCommitment` vs `Contribution`
-      vs `Allocation`, `BatchCapitalSnapshot`, FIFO slice, idempotency).
+- [x] T-0.2 Синхронизировать прогресс E07 в `docs/ROADMAP.md` (52% → 70%).
+- [x] T-0.3 Резолвить `Receipt`-инвариант: переформулировать Key Business
+      Rules через `ReceiveBatch`; `Receipt` явно отмечен как legacy + 2
+      новых правила (#13, #14) про money discipline и snapshot immutability.
+- [x] T-0.4 Резолвить `SupplierSettlement` vs `ProcurementTerms`: header
+      note добавлен в `docs/domain/customers-suppliers.md` и
+      `docs/roadmap/E01-suppliers-procurement.md`; target имя =
+      `SupplierSettlement`, code rename → E08 Фаза 2.
+- [x] T-0.5 `docs/legacy-inventory.md` создан — единое место для всего
+      legacy (backend модули, frontend файлы, docs, tests).
+- [x] T-0.6 `docs/glossary.md` создан — базовые термины (Мудараба,
+      Мушарака, Procurement, ReceiveBatch, contract_snapshot, money
+      discipline, idempotency и т.д.) с явным указанием target vs legacy
+      имён.
 
 ### Фаза 1 — Global hygiene
 
@@ -188,6 +191,13 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 
 ## Решённые вопросы (история)
 
+- ✓ 2026-05-18: **Phase 0 закрыта.** Foundation map установлена: Key
+  Business Rules canonical в `CLAUDE.md` (14 правил, target-имена
+  `ReceiveBatch`/`InvestmentAgreement` вместо legacy `Receipt`/`InvestorContract`,
+  добавлены правила money discipline и snapshot immutability), AGENTS.md и
+  docs/README.md — ссылками. `docs/legacy-inventory.md` и `docs/glossary.md`
+  созданы как единые источники для «что устарело» и «что что означает».
+  E07 progress синхронизирован 52% → 70%.
 - ✓ 2026-05-18: новый эпик E08 создан как отдельный от E07. E08 фокусируется
   на cleanup и source-of-truth, E07 продолжает focus на procurement workspace
   re-architecture (Phase D frontend closure). Решение принято после
