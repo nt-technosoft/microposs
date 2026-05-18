@@ -209,23 +209,31 @@ To prevent drift across sessions and keep documentation as a reliable map
 
 ## Model usage
 
-Project default is **Sonnet 4.6** (set in `.claude/settings.local.json`).
-This is intentional: Sonnet handles 95% of work fine and the Opus 5-hour
-quota burns fast.
+Default is **Opus 4.7** (global setting). Opus is the dispatcher — it
+delegates better than Sonnet because it classifies task complexity more
+reliably.
 
-**Switch to Opus** (`/model opus`) for sessions where the value is in
-thinking, not typing:
-- Audits, architectural decisions, cross-domain analysis
-- Brainstorming new directions or evaluating proposals
-- Planning new epics or major rewrites
-- Deep research
+**One decision per phase, not per message:**
 
-**Stay on Sonnet** for sessions where the plan is already set:
-- Mechanical code changes following an approved plan
-- File reorganization, renaming, formatting
-- Running an existing checklist from an epic
-- Reading and reporting (most subagent tasks)
+- **Stay on Opus** (default) for: dialogue, planning, audits, architecture,
+  reviewing proposals, deciding the next move, anything where the value is
+  thinking.
+- **Switch to Sonnet** (`/model sonnet`) when entering pure execution of an
+  already-approved plan — a full epic phase of mechanical changes, file
+  reorgs, migrations, renames. Stay on Sonnet until a new architectural
+  decision is needed, then `/model opus` back.
 
-When delegating to subagents via the `Agent` tool, pass `model: "sonnet"`
-explicitly for routine work — even from an Opus session. Opus tokens are
-the bottleneck; don't burn them on subagent work that doesn't need them.
+**Delegate to Sonnet subagent** (via `Agent(model: "sonnet", ...)`) from an
+Opus session when:
+- One subtask is large (~3000+ output tokens) — e.g. cross-file audit,
+  function migration, reading a long file and extracting structure.
+- Multiple independent subtasks can run in parallel (3 audits, 5 file scans).
+- Do NOT delegate for small edits (1–2 lines, single file) — the prompt +
+  result overhead exceeds the saving. Opus does small edits faster.
+
+**Sonnet must not make architectural decisions on its own.** If executing a
+plan and a branch point appears that wasn't covered, stop and surface it
+rather than guess. Architectural calls belong to Opus or to the founder.
+
+The point isn't to analyze every message for routing — that itself burns
+Opus tokens. The point is one heuristic call per phase, then execute.
