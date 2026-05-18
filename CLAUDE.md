@@ -225,11 +225,20 @@ reliably.
 
 **Delegate to Sonnet subagent** (via `Agent(model: "sonnet", ...)`) from an
 Opus session when:
-- One subtask is large (~3000+ output tokens) — e.g. cross-file audit,
-  function migration, reading a long file and extracting structure.
-- Multiple independent subtasks can run in parallel (3 audits, 5 file scans).
-- Do NOT delegate for small edits (1–2 lines, single file) — the prompt +
-  result overhead exceeds the saving. Opus does small edits faster.
+- One subtask is large (**≥8000 output tokens**) — e.g. cross-module audit,
+  reading several long files and synthesizing, migration of a group of
+  files. Below this size, the prompt+result overhead doesn't pay off
+  because Opus 4.7 / Sonnet 4.6 output price ratio is only ~1.67x.
+- Multiple independent subtasks can run in parallel (3 audits, 5 file
+  scans) — parallelism is the real win, not cost.
+- Do NOT delegate for small or medium edits — Opus does them faster
+  end-to-end, including thinking + writing.
+
+**Cost vs rate quota.** Dollar cost of Opus vs Sonnet differs only ~1.67x,
+and cached input on Opus ($0.50/M) is cheaper than uncached input on Sonnet
+($3/M) — so long warm-cache Opus sessions can be cheaper than fresh Sonnet
+sessions. The real reason to switch to Sonnet is **5-hour rate quota**,
+which is tighter on Opus. Switch is about availability, not pennies.
 
 **Sonnet must not make architectural decisions on its own.** If executing a
 plan and a branch point appears that wasn't covered, stop and surface it
