@@ -173,8 +173,8 @@ E08 не дублирует её, а указывает: после Фазы 2 �
       → BatchCapitalSnapshot (без посредника `ProcurementBalance`).
 - [ ] T-2.8 `ProcurementTerms` → `ImmutableMixin` после первого `Payment` или
       `receive_batch`.
-- [ ] T-2.9 `SalePayment.account_id` → FK `finance.CashAccount`.
-- [ ] T-2.10 `DividendPayment.paid_from_account_id` → FK `finance.CashAccount`.
+- [x] T-2.9 `SalePayment.account_id` → FK `finance.CashAccount`.
+- [x] T-2.10 `DividendPayment.paid_from_account_id` → FK `finance.CashAccount`.
 
 ## Открытые вопросы
 

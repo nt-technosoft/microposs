@@ -1060,8 +1060,13 @@ class DividendPayment(TenantModel):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
-    # FK to finance.CashAccount lands in PR-7; int placeholder for now.
-    paid_from_account_id = models.IntegerField(null=True, blank=True)
+    paid_from_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
     date = models.DateTimeField()
 
     class Meta:

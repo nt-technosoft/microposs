@@ -212,8 +212,13 @@ class SalePayment(TenantModel):
         choices=Role.choices,
         default=Role.INCOMING,
     )
-    # FK to finance.CashAccount lands in PR-7; keep as nullable int for now.
-    account_id = models.IntegerField(null=True, blank=True)
+    account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
 
     class Meta:
         db_table = 'sales_sale_payment'
