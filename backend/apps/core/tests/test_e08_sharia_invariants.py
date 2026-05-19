@@ -35,8 +35,10 @@ from apps.partnerships.models import (
     ProcurementPartnerLedger,
 )
 from apps.inventory.models import Lot
+from apps.finance.models import JournalEntry, JournalLine
+from apps.suppliers.models import SupplierPayable
 
-from ._helpers import build_tenant, seed_received_procurement
+from ._helpers import build_tenant, seed_received_procurement, open_session
 from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
 
 
@@ -198,6 +200,82 @@ class LotOwnershipInvariants(TestCase):
         _, lot = seed_received_procurement(ctx)
         self.assertTrue(lot.is_owned)
 
+    def test_consigned_receive_creates_no_payable_and_no_inventory_journal(self):
+        ctx = build_tenant()
+        proc, lot = self._seed_consigned_received(ctx)
+
+        # No SupplierPayable created at receive time
+        payables = SupplierPayable.objects.filter(procurement=proc)
+        self.assertEqual(payables.count(), 0, 'CONSIGNED receive must not create any SupplierPayable')
+
+        # No JournalEntry with operation_type='receipt' that debits inventory account 1100
+        batch = lot.receive_batch_line.batch
+        journal_lines = JournalLine.objects.filter(
+            journal_entry__operation_type='receipt',
+            journal_entry__operation_id=batch.id,
+        )
+        self.assertEqual(journal_lines.count(), 0, 'CONSIGNED receive must not write any journal entry')
+
+    def test_consigned_procurement_rejects_expenses(self):
+        ctx = build_tenant()
+        proc = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=ctx['supplier'].id,
+        )
+        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
+        proc.save(update_fields=['goods_ownership'])
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{'product_variant_id': ctx['variant'].id, 'quantity': 5,
+                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1'}],
+                'expenses': [],
+            }},
+        )
+        with self.assertRaises(ValueError, msg='CONSIGNED procurement must reject landed expenses'):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=proc,
+                action='UPDATE_EXPENSES',
+                payload={'payload': {
+                    'expenses': [{'expense_type': 'CUSTOMS', 'amount': '500.00',
+                                  'currency': 'UZS', 'fx_rate': '1'}],
+                }},
+            )
+
+    @staticmethod
+    def _seed_consigned_received(ctx):
+        """Create OWN_FUNDS + CONSIGNED procurement, add items, receive. Returns (proc, lot)."""
+        proc = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=ctx['supplier'].id,
+        )
+        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
+        proc.save(update_fields=['goods_ownership'])
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc, action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{'product_variant_id': ctx['variant'].id, 'quantity': 10,
+                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1'}],
+                'expenses': [],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc, action='UPDATE_SETTLEMENT',
+            payload={'payload': {'type': 'ON_SALE', 'total_amount_due': '30000.00',
+                                 'currency_of_obligation': 'UZS'}},
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc, action='RECEIVE_BATCH',
+            payload={'payload': {'warehouse_id': ctx['storage'].id}},
+        )
+        lot = Lot.objects.get(procurement_item__procurement=proc)
+        return proc, lot
+
     def test_consigned_lot_has_is_owned_false(self):
         ctx = build_tenant()
         proc = create_workspace(
@@ -242,3 +320,122 @@ class LotOwnershipInvariants(TestCase):
         )
         lot = Lot.objects.get(procurement_item__procurement=proc)
         self.assertFalse(lot.is_owned)
+
+
+class OwnedSaleNoConsignmentPayableInvariant(TestCase):
+    """Separate class to avoid username collision with ConsignmentObligationInvariants setUp."""
+
+    def test_owned_sale_does_not_create_consignment_payable(self):
+        from apps.sales.services import create_sale
+        ctx = build_tenant()
+        _, _ = seed_received_procurement(ctx)
+        session = open_session(ctx)
+        create_sale(
+            tenant_id=ctx['business'].id,
+            pos_session_id=session.id,
+            location_id=ctx['store'].id,
+            sold_by_id=ctx['cashier'].id,
+            customer_id=None,
+            lines=[{'product_variant_id': ctx['variant'].id,
+                    'quantity': 1, 'unit_price': '300000.00'}],
+            payments=[{'amount': '300000.00', 'currency': 'UZS',
+                       'method': 'CASH', 'account_id': ctx['cash_account'].id}],
+        )
+        self.assertEqual(
+            SupplierPayable.objects.filter(
+                reason=SupplierPayable.Reason.CONSIGNMENT_SALE,
+            ).count(),
+            0,
+        )
+
+
+class ConsignmentObligationInvariants(TestCase):
+    """
+    E09 Phase 2 — guards that consignment auto-obligation logic is correct.
+    """
+
+    def setUp(self):
+        from apps.sales.services import create_sale
+        self.create_sale = create_sale
+        self.ctx = build_tenant()
+        self.proc, self.lot = LotOwnershipInvariants._seed_consigned_received(self.ctx)
+        self.session = open_session(self.ctx)
+
+    def _sell_one(self, qty=1):
+        return self.create_sale(
+            tenant_id=self.ctx['business'].id,
+            pos_session_id=self.session.id,
+            location_id=self.ctx['store'].id,
+            sold_by_id=self.ctx['cashier'].id,
+            customer_id=None,
+            lines=[{
+                'product_variant_id': self.ctx['variant'].id,
+                'quantity': qty,
+                'unit_price': '5000.00',
+            }],
+            payments=[{
+                'amount': str(Decimal('5000.00') * qty),
+                'currency': 'UZS',
+                'method': 'CASH',
+                'account_id': self.ctx['cash_account'].id,
+            }],
+        )
+
+    def test_consigned_sale_creates_payable_with_correct_amount(self):
+        """Продажа CONSIGNED Lot → payable с правильной суммой и валютой."""
+        sale = self._sell_one(qty=3)
+        payables = SupplierPayable.objects.filter(
+            procurement=self.proc,
+            reason=SupplierPayable.Reason.CONSIGNMENT_SALE,
+        )
+        self.assertEqual(payables.count(), 1)
+        p = payables.first()
+        # unit_purchase_price=3000 UZS, qty=3 → 9000
+        self.assertEqual(p.original_amount, Decimal('9000.00'))
+        self.assertEqual(p.currency_of_obligation, 'UZS')
+
+    def test_consigned_payable_has_open_status_initially(self):
+        """Созданный payable имеет status=OPEN и paid_amount=0."""
+        self._sell_one(qty=2)
+        p = SupplierPayable.objects.get(
+            procurement=self.proc,
+            reason=SupplierPayable.Reason.CONSIGNMENT_SALE,
+        )
+        self.assertEqual(p.status, SupplierPayable.Status.OPEN)
+        self.assertEqual(p.paid_amount, Decimal('0.00'))
+        self.assertEqual(p.remaining_amount, p.original_amount)
+
+    def test_multiple_consigned_sales_create_separate_payables(self):
+        """Две продажи из одного Lot → два разных payable."""
+        self._sell_one(qty=1)
+        self._sell_one(qty=2)
+        payables = SupplierPayable.objects.filter(
+            procurement=self.proc,
+            reason=SupplierPayable.Reason.CONSIGNMENT_SALE,
+        )
+        self.assertEqual(payables.count(), 2)
+
+    def test_consigned_sale_journal_credits_ap_not_inventory_with_correct_amount(self):
+        """
+        Journal для CONSIGNED продажи кредитует A/P (2000), не Inventory (1100).
+        CR 2000 = unit_purchase_price × qty (в UZS).
+        """
+        sale = self._sell_one(qty=2)
+        # There are multiple JournalEntry per sale; gather all lines across all of them.
+        lines = list(
+            JournalLine.objects.filter(
+                journal_entry__operation_type='sale',
+                journal_entry__operation_id=sale.pk,
+            ).select_related('account')
+        )
+        account_codes = {line.account.code for line in lines}
+
+        self.assertIn('5000', account_codes, 'DR COGS должен быть')
+        self.assertIn('2000', account_codes, 'CR A/P должен быть для CONSIGNED')
+        self.assertNotIn('1100', account_codes, 'CR Inventory не должно быть для CONSIGNED')
+
+        ap_credit = sum(
+            line.credit for line in lines if line.account.code == '2000'
+        )
+        # unit_purchase_price=3000, qty=2 → 6000 UZS
+        self.assertEqual(ap_credit.quantize(Decimal('0.01')), Decimal('6000.00'))
