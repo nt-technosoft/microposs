@@ -236,30 +236,54 @@ def record_sale_cogs_journal(
     sale_id: int,
     total_cogs: Decimal,
     date=None,
+    consignment_legs: list[dict] | None = None,
 ) -> JournalEntry | None:
-    """Record the cost/inventory side of a sale once per completed sale."""
+    """
+    DR 5000 (COGS) for total_cogs.
+
+    Credits split:
+      - CR 1100 (Inventory) for owned portion = total_cogs - Σ(legs.amount_uzs)
+      - CR 2000 (A/P Suppliers) per consignment leg with payable reference in description
+    """
     normalized_cogs = _to_decimal(total_cogs).quantize(Decimal('0.01'))
     if normalized_cogs <= 0:
         return None
+
+    legs = consignment_legs or []
+    total_consigned = sum(
+        (_to_decimal(leg['amount_uzs']) for leg in legs),
+        Decimal('0'),
+    ).quantize(Decimal('0.01'))
+    total_owned = (normalized_cogs - total_consigned).quantize(Decimal('0.01'))
+
+    journal_lines = [
+        {
+            'account_code': '5000',
+            'debit': normalized_cogs,
+            'credit': Decimal('0'),
+            'description': f'Sale #{sale_id} cost of goods',
+        },
+    ]
+    if total_owned > 0:
+        journal_lines.append({
+            'account_code': '1100',
+            'debit': Decimal('0'),
+            'credit': total_owned,
+            'description': f'Sale #{sale_id} inventory reduction (owned)',
+        })
+    for leg in legs:
+        journal_lines.append({
+            'account_code': '2000',
+            'debit': Decimal('0'),
+            'credit': _to_decimal(leg['amount_uzs']).quantize(Decimal('0.01')),
+            'description': f'Sale #{sale_id} consignment obligation payable#{leg["payable_id"]}',
+        })
 
     return create_journal_entry(
         tenant_id=tenant_id,
         operation_type='sale',
         operation_id=sale_id,
-        lines=[
-            {
-                'account_code': '5000',
-                'debit': normalized_cogs,
-                'credit': Decimal('0'),
-                'description': f'Sale #{sale_id} cost of goods',
-            },
-            {
-                'account_code': '1100',
-                'debit': Decimal('0'),
-                'credit': normalized_cogs,
-                'description': f'Sale #{sale_id} inventory reduction',
-            },
-        ],
+        lines=journal_lines,
         description=f'Sale #{sale_id} COGS',
         date=date,
     )

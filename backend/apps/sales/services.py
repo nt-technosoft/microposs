@@ -286,6 +286,7 @@ def create_sale(
 
         total_amount = Decimal('0')
         total_cogs = Decimal('0')
+        consignment_legs: list[dict] = []
 
         for line_data in lines:
             variant_id = line_data['product_variant_id']
@@ -376,6 +377,20 @@ def create_sale(
                     unit_landed_cost=unit_landed_cost,
                     profit_distribution_snapshot=profit_snapshot,
                 )
+
+                # E09 Phase 2 — auto-obligation for CONSIGNED Lot sales
+                from apps.suppliers.consignment_obligations import (
+                    record_consignment_obligation_for_sale_line,
+                )
+                consignment_payable = record_consignment_obligation_for_sale_line(sale_line)
+                if consignment_payable is not None:
+                    leg_cogs_uzs = (
+                        Decimal(str(lot.landed_cost_per_unit)) * Decimal(str(alloc_qty))
+                    ).quantize(Decimal('0.01'))
+                    consignment_legs.append({
+                        'payable_id': consignment_payable.id,
+                        'amount_uzs': leg_cogs_uzs,
+                    })
 
                 locked_stock.quantity_remaining -= alloc_qty
                 locked_stock.save(update_fields=['quantity_remaining', 'updated_at'])
@@ -569,6 +584,7 @@ def create_sale(
                 sale_id=sale.pk,
                 total_cogs=total_cogs,
                 date=date,
+                consignment_legs=consignment_legs or None,
             )
 
         publish_event(
