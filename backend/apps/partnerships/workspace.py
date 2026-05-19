@@ -138,7 +138,7 @@ def build_workspace_payload(procurement: Procurement) -> dict:
         has_supplier=bool(procurement.supplier_id),
         has_investment_agreement=bool(procurement.agreement_id),
         has_items=has_items,
-        has_procurement_balance=(
+        has_partnership_capital_activity=(
             capital_activity
             and procurement.funding_source != Procurement.FundingSource.PARTNERSHIP
         ),
@@ -1143,6 +1143,7 @@ def receive_workspace_batch(
                 landed_cost_per_unit=landed_per_unit,
                 contract_snapshot=contract_snapshot,
                 received_at=received_at,
+                is_owned=(locked.goods_ownership == Procurement.GoodsOwnership.OWNED),
                 is_active=True,
             )
             LotStock.objects.create(
@@ -2037,8 +2038,8 @@ def _resolve_workspace_capital_snapshot(
 
     # Capital consumption is recorded by ProcurementReceiveBatchCapitalAllocation
     # rows produced below — _procurement_capital_available_by_partner subtracts
-    # those, so no separate ProcurementBalance ledger is needed. The aggregate
-    # check is implicit in the per-partner availability validation above.
+    # those, and the aggregate check is implicit in the per-partner availability
+    # validation above.
 
     partners_meta = []
     for member in members:

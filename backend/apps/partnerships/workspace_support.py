@@ -364,6 +364,13 @@ def upsert_procurement_terms_draft(tenant_id, procurement, terms_payload, schedu
     _validate_terms_payload_supplier(procurement, terms_payload)
     values = _normalize_terms_values(terms_payload)
 
+    from .policies import validate_procurement_combination
+    validate_procurement_combination(
+        funding_source=procurement.funding_source,
+        payment_timing=values['type'],
+        goods_ownership=procurement.goods_ownership,
+    )
+
     terms, _created = ProcurementTerms.objects.update_or_create(
         tenant_id=tenant_id,
         procurement=procurement,

@@ -14,7 +14,9 @@ from .models import Procurement, ProcurementTerms
 
 OWN_FUNDS = Procurement.FundingSource.OWN_FUNDS
 PARTNERSHIP = Procurement.FundingSource.PARTNERSHIP
-MUSHARAKA = 'MUSHARAKA'
+
+OWNED = Procurement.GoodsOwnership.OWNED
+CONSIGNED = Procurement.GoodsOwnership.CONSIGNED
 
 PREPAID = ProcurementTerms.Type.PREPAID
 PARTIAL = ProcurementTerms.Type.PARTIAL
@@ -25,6 +27,17 @@ ON_SALE = ProcurementTerms.Type.ON_SALE
 OWN_FUNDS_SETTLEMENTS = (PREPAID, PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
 PARTNERSHIP_SETTLEMENTS = (PREPAID,)
 SUPPLIER_REQUIRED_SETTLEMENTS = (PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
+
+# Legal procurement combinations: (funding_source, payment_timing, goods_ownership).
+# All other combinations are illegal and will be rejected by validate_procurement_combination.
+LEGAL_COMBINATIONS = frozenset({
+    (OWN_FUNDS, PREPAID, OWNED),
+    (OWN_FUNDS, PARTIAL, OWNED),
+    (OWN_FUNDS, DEFERRED, OWNED),
+    (OWN_FUNDS, INSTALLMENT, OWNED),
+    (OWN_FUNDS, ON_SALE, CONSIGNED),
+    (PARTNERSHIP, PREPAID, OWNED),
+})
 
 
 @dataclass(frozen=True)
@@ -37,7 +50,7 @@ class ProcurementPolicyContext:
     has_supplier: bool = False
     has_investment_agreement: bool = False
     has_items: bool = False
-    has_procurement_balance: bool = False
+    has_partnership_capital_activity: bool = False
     has_capital_activity: bool = False
     has_payment_activity: bool = False
     has_receive_batches: bool = False
@@ -62,40 +75,48 @@ class ProcurementPolicyResult:
         return not self.blocked_reasons
 
 
-def normalize_funding_source(funding_source: str) -> str:
-    """Map legacy funding labels to the E07 policy model."""
+def validate_procurement_combination(
+    funding_source: str,
+    payment_timing: str,
+    goods_ownership: str,
+) -> None:
+    """Raise ValueError if the combination is not in LEGAL_COMBINATIONS."""
+    combo = (funding_source, payment_timing, goods_ownership)
+    if combo not in LEGAL_COMBINATIONS:
+        raise ValueError(
+            f'Illegal procurement combination: '
+            f'funding={funding_source}, timing={payment_timing}, '
+            f'ownership={goods_ownership}.'
+        )
 
-    if funding_source == MUSHARAKA:
-        return PARTNERSHIP
+
+def normalize_funding_source(funding_source: str) -> str:
+    """Returns funding_source as-is (MUSHARAKA normalization removed in E09)."""
     return funding_source
 
 
 def allowed_settlements_for_funding(funding_source: str) -> tuple[str, ...]:
-    funding = normalize_funding_source(funding_source)
-    if funding == OWN_FUNDS:
+    if funding_source == OWN_FUNDS:
         return OWN_FUNDS_SETTLEMENTS
-    if funding == PARTNERSHIP:
+    if funding_source == PARTNERSHIP:
         return PARTNERSHIP_SETTLEMENTS
     return ()
 
 
 def evaluate_procurement_policy(context: ProcurementPolicyContext) -> ProcurementPolicyResult:
-    funding = normalize_funding_source(context.funding_source)
-    allowed_settlements = allowed_settlements_for_funding(context.funding_source)
+    funding = context.funding_source
+    allowed_settlements = allowed_settlements_for_funding(funding)
     blocked: list[str] = []
 
     if not allowed_settlements:
         blocked.append('Unsupported funding source.')
-
-    if context.funding_source == MUSHARAKA:
-        blocked.append('MUSHARAKA is legacy-only; use PARTNERSHIP in new flows.')
 
     if context.settlement_type and context.settlement_type not in allowed_settlements:
         blocked.append(
             f'{funding} does not allow {context.settlement_type} settlement in MVP.',
         )
 
-    if funding == OWN_FUNDS and context.has_procurement_balance:
+    if funding == OWN_FUNDS and context.has_partnership_capital_activity:
         blocked.append('OWN_FUNDS must not carry partnership capital activity.')
 
     if funding == PARTNERSHIP:
