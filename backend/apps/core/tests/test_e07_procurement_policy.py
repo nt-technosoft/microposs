@@ -27,17 +27,17 @@ class ProcurementPolicyTests(SimpleTestCase):
                 ProcurementTerms.Type.PARTIAL,
                 ProcurementTerms.Type.DEFERRED,
                 ProcurementTerms.Type.INSTALLMENT,
-                ProcurementTerms.Type.CONSIGNMENT,
+                ProcurementTerms.Type.ON_SALE,
             ),
         )
         self.assertNotIn('capital', result.visible_sections)
 
-    def test_own_funds_rejects_procurement_balance(self):
+    def test_own_funds_rejects_partnership_capital_activity(self):
         result = evaluate_procurement_policy(
             ProcurementPolicyContext(
                 funding_source=Procurement.FundingSource.OWN_FUNDS,
                 settlement_type=ProcurementTerms.Type.PREPAID,
-                has_procurement_balance=True,
+                has_partnership_capital_activity=True,
             ),
         )
 
@@ -63,7 +63,7 @@ class ProcurementPolicyTests(SimpleTestCase):
                 funding_source=Procurement.FundingSource.PARTNERSHIP,
                 settlement_type=ProcurementTerms.Type.PREPAID,
                 has_investment_agreement=True,
-                has_procurement_balance=True,
+                has_capital_activity=True,
             ),
         )
 
@@ -83,7 +83,7 @@ class ProcurementPolicyTests(SimpleTestCase):
                     settlement_type=ProcurementTerms.Type.DEFERRED,
                     has_supplier=True,
                     has_investment_agreement=True,
-                    has_procurement_balance=True,
+                    has_capital_activity=True,
                 ),
             )
 
@@ -93,7 +93,7 @@ class ProcurementPolicyTests(SimpleTestCase):
                 funding_source=Procurement.FundingSource.PARTNERSHIP,
                 settlement_type=ProcurementTerms.Type.PREPAID,
                 has_investment_agreement=False,
-                has_procurement_balance=True,
+                has_capital_activity=True,
             ),
         )
 
@@ -110,27 +110,9 @@ class ProcurementPolicyTests(SimpleTestCase):
                 funding_source=Procurement.FundingSource.PARTNERSHIP,
                 settlement_type=ProcurementTerms.Type.PREPAID,
                 has_investment_agreement=True,
-                has_procurement_balance=False,
                 has_capital_activity=False,
             ),
         )
 
         self.assertTrue(result.is_valid)
         self.assertFalse(result.readiness['capital_ready'])
-
-    def test_musharaka_is_legacy_alias_but_not_valid_new_flow(self):
-        result = evaluate_procurement_policy(
-            ProcurementPolicyContext(
-                funding_source='MUSHARAKA',
-                settlement_type=ProcurementTerms.Type.PREPAID,
-                has_investment_agreement=True,
-                has_procurement_balance=True,
-            ),
-        )
-
-        self.assertEqual(result.normalized_funding_source, Procurement.FundingSource.PARTNERSHIP)
-        self.assertFalse(result.is_valid)
-        self.assertIn(
-            'MUSHARAKA is legacy-only; use PARTNERSHIP in new flows.',
-            result.blocked_reasons,
-        )

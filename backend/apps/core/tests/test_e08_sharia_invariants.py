@@ -37,6 +37,7 @@ from apps.partnerships.models import (
 from apps.inventory.models import Lot
 
 from ._helpers import build_tenant, seed_received_procurement
+from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
 
 
 _ONE = Decimal('1.000000')
@@ -189,3 +190,55 @@ class DerivedAgreementBalanceInvariants(TestCase):
             for cur, value in expected.items()
         }
         self.assertEqual(derived, expected_view)
+
+
+class LotOwnershipInvariants(TestCase):
+    def test_owned_lot_has_is_owned_true(self):
+        ctx = build_tenant()
+        _, lot = seed_received_procurement(ctx)
+        self.assertTrue(lot.is_owned)
+
+    def test_consigned_lot_has_is_owned_false(self):
+        ctx = build_tenant()
+        proc = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=ctx['supplier'].id,
+        )
+        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
+        proc.save(update_fields=['goods_ownership'])
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{
+                    'product_variant_id': ctx['variant'].id,
+                    'quantity': 10,
+                    'unit_purchase_price': '5000.00',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                }],
+                'expenses': [],
+            }},
+        )
+        # ON_SALE + CONSIGNED is the legal combination; terms unlock items for receive.
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'ON_SALE',
+                'total_amount_due': '50000.00',
+                'currency_of_obligation': 'UZS',
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=proc,
+            action='RECEIVE_BATCH',
+            payload={'payload': {'warehouse_id': ctx['storage'].id}},
+        )
+        lot = Lot.objects.get(procurement_item__procurement=proc)
+        self.assertFalse(lot.is_owned)
