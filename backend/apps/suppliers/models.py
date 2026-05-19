@@ -84,6 +84,7 @@ class SupplierPayable(TenantModel):
         PROCUREMENT = 'PROCUREMENT', 'Из приёмки'
         AMENDMENT = 'AMENDMENT', 'Изменение условий'
         PENALTY = 'PENALTY', 'Штраф/пеня'
+        CONSIGNMENT_SALE = 'CONSIGNMENT_SALE', 'Продажа консигнации'
 
     supplier = models.ForeignKey(
         Supplier,

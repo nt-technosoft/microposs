@@ -316,6 +316,13 @@ def update_workspace_lines(
         for row in items_payload or []:
             _upsert_workspace_item(tenant_id, locked, row)
 
+        if expenses_payload and locked.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
+            raise ValueError(
+                'CONSIGNED procurement не поддерживает landed expenses. '
+                'Расходы на логистику/доставку для консигнации фиксируйте '
+                'как отдельные операционные расходы, не как cost basis товара.'
+            )
+
         for row in expenses_payload or []:
             _upsert_workspace_expense(tenant_id, locked, row)
 
@@ -2178,6 +2185,8 @@ def _sync_procurement_status_after_receive(procurement: Procurement, received_at
 
 
 def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurement, terms):
+    if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
+        return None  # CONSIGNED → payable создаётся per-sale, не at-receive
     if not terms or terms.type == ProcurementTerms.Type.PREPAID:
         return None
     existing = SupplierPayable.objects.filter(
@@ -2199,6 +2208,8 @@ def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurem
 
 
 def _record_receive_journal(*, tenant_id: int, procurement: Procurement, batch, amount: Decimal, payable, received_at) -> None:
+    if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
+        return  # CONSIGNED inventory не на нашем балансе — никакого journal
     if amount <= 0:
         return
     already_paid = Payment.objects.filter(
