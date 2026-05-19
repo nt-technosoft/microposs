@@ -1,7 +1,7 @@
 # E09 — Procurement Completeness (non-PREPAID, ON_SALE, returnability)
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~30%
+**Прогресс:** ~65%
 **Зависит от:** E07, E08 (DONE)
 **Блокирует:** E03 (Net Value требует корректного учёта CONSIGNED inventory), частично E05
 
@@ -115,17 +115,17 @@ Backend-only рефакторинг без новой функционально
 
 ### Фаза 2 — ON_SALE механика
 
-- [ ] T-2.1 Решить: где живёт trigger автомат-payable — в `sales/services.py`
-      напрямую или через OutboxEvent receiver в suppliers (см. открытые
-      вопросы).
-- [ ] T-2.2 Реализовать trigger: при `sale.completed` для каждого
-      `SaleLine` с `Lot.is_owned=false` создать (или дополнить) payable +
-      генерировать `Payment` когда пользователь оплачивает.
-- [ ] T-2.3 Service `pay_consignment_obligation(payable_id, allocations)` —
-      multi-cash оплата накопленных консигнационных обязательств.
-- [ ] T-2.4 Invariant-тесты: CONSIGNED Lot не может породить immediate payable
-      до продажи; первая продажа создаёт payable; multi-sale из одного
-      CONSIGNED Lot не дублирует payable.
+- [x] T-2.1 Решить: trigger в `sales/services.py` синхронно (Variant A). Outbox
+      только для audit, не как primary mechanism.
+- [x] T-2.2 Реализовать trigger: при `sale.completed` для каждого
+      `SaleLine` с `Lot.is_owned=false` создаётся `SupplierPayable(reason=CONSIGNMENT_SALE)`.
+      Модуль `apps/suppliers/consignment_obligations.py`. Journal: CR A/P (2000) не CR Inventory (1100).
+      OPEN-2 guards: CONSIGNED receive не создаёт payable и не пишет inventory-journal.
+      OPEN-4 guard: landed expenses запрещены для CONSIGNED procurement.
+- [x] T-2.3 Service оплаты — Variant A (без отдельного service). Существующий
+      `pay_supplier_payable` достаточен; UI фильтрует по `reason=CONSIGNMENT_SALE`.
+- [x] T-2.4 Invariant-тесты: `ConsignmentObligationInvariants` + `OwnedSaleNoConsignmentPayableInvariant`
+      в `test_e08_sharia_invariants.py`. 6 новых тестов.
 - [ ] T-2.5 UI (под контролем founder'а): отображение накопленного debt по
       консигнации, action оплаты, история консигнационных обязательств.
 
@@ -144,16 +144,8 @@ Backend-only рефакторинг без новой функционально
 
 ## Открытые вопросы
 
-- **? ON_SALE trigger architecture.** Где живёт логика автомат-payable при
-  продаже CONSIGNED Lot — напрямую в `sales/services.py` (синхронно) или
-  через OutboxEvent receiver в suppliers (асинхронно, decoupled)? Outbox
-  чище архитектурно (cross-domain), но добавляет latency и нужно строить
-  receiver. **Решение принимать в начале Фазы 2.**
-- **? Payable per sale or per lot?** Когда CONSIGNED Lot из 100 единиц
-  продаётся постепенно — создавать один payable, который наращивается с
-  каждой продажей, или новый payable per sale? Первый вариант проще для
-  UX («один счёт от поставщика»), второй точнее для аудита. **Решение в
-  Фазе 2.**
+- ~~**? ON_SALE trigger architecture.**~~ → решено 2026-05-19: Variant A — синхронно в `sales/services.py`, не через OutboxEvent. Модуль `apps/suppliers/consignment_obligations.py`. Outbox остаётся только для audit.
+- ~~**? Payable per sale or per lot?**~~ → решено 2026-05-19: per-SaleLine payable (не накопительный). Аудитная точность важнее UX-компактности. Агрегат «всего к оплате» — query `Σ open CONSIGNMENT_SALE payables for supplier X`.
 - ~~**? Миграция существующих CONSIGNMENT.**~~ → решено 2026-05-19: в dev DB 0 строк в `Procurement` и `ProcurementTerms`, поэтому migration тривиальная — `RemoveField`/`AddField` без backfill. Применено в T-1.2.
 - **? SupplierReturn vs ConsignmentReturn — разделить или обобщить?**
   Архитектурно: оставить `ConsignmentReturn` для CONSIGNED-Lot returns
@@ -182,6 +174,10 @@ Backend-only рефакторинг без новой функционально
   Если бизнес хочет привлечь инвестора и взять у поставщика отсрочку —
   это разные procurement-ы или операционная проблема. Архитектура не
   моделирует.
+- ✓ 2026-05-19: **OPEN-1 — cost field для consignment obligation.** Используем `ProcurementItem.unit_purchase_price` (operation currency) + `item.fx_rate`, не `Lot.unit_purchase_price` (тот уже в UZS). Каждая продажа получает независимый snapshot.
+- ✓ 2026-05-19: **OPEN-2 — CONSIGNED receive не трогает финансы.** Guards в `_ensure_supplier_payable_after_receive` и `_record_receive_journal`: CONSIGNED → return early. Только Lot-записи с `is_owned=False`, никакого journal и никакого payable при receive.
+- ✓ 2026-05-19: **OPEN-3 — wire-up в create_sale.** Вызов `record_consignment_obligation_for_sale_line` после `SaleLine.objects.create` внутри FIFO-loop. `record_sale_cogs_journal` расширен `consignment_legs` — CR 2000 (A/P) вместо CR 1100 (Inventory) для CONSIGNED slice.
+- ✓ 2026-05-19: **OPEN-4 — landed expenses запрещены для CONSIGNED.** Guard в `update_workspace_lines`: если `goods_ownership=CONSIGNED` и `expenses_payload` непустой → ValueError. Это гарантирует `landed_cost_per_unit == unit_purchase_price` для всех CONSIGNED Lot, journal сходится без 3-го counterparty.
 - ✓ 2026-05-19: **«Сроки поставки» — не ось.** Это атрибут конкретного
   `ReceiveBatch.received_at` (timestamp), а не классификация procurement-а.
   Соответственно стадии «заказал → оплатил → получил» — state machine
