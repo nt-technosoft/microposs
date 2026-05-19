@@ -690,22 +690,23 @@ def _normalize_terms_values(terms_payload: dict) -> dict:
         raise ValueError('terms.type is required.')
 
     total_amount_due = money(terms_payload['total_amount_due'])
-    raw_paid = terms_payload.get('paid_amount')
-    paid_amount = money(raw_paid if raw_paid not in (None, '') else '0')
-    if settlement_type == ProcurementTerms.Type.PREPAID:
-        paid_amount = total_amount_due
-    if paid_amount < 0:
-        raise ValueError('terms.paid_amount cannot be negative.')
-    if paid_amount > total_amount_due:
-        raise ValueError('terms.paid_amount cannot exceed total_amount_due.')
+
+    # paid_amount is derived from finance.Payment (PROCUREMENT_COST target).
+    # At terms creation, status is FULLY_PAID for PREPAID (synthetic full
+    # settlement at terms creation) or OPEN otherwise. Subsequent payments
+    # will transition status via the Payment write site.
+    initial_status = (
+        ProcurementTerms.Status.FULLY_PAID
+        if settlement_type == ProcurementTerms.Type.PREPAID
+        else ProcurementTerms.Status.OPEN
+    )
 
     return {
         'type': settlement_type,
         'currency_of_obligation': str(terms_payload.get('currency_of_obligation') or 'UZS').upper(),
         'fx_rate_at_obligation': Decimal(str(terms_payload.get('fx_rate_at_obligation') or 1)),
         'total_amount_due': total_amount_due,
-        'paid_amount': paid_amount,
-        'status': _terms_status_for_amounts(total_amount_due, paid_amount),
+        'status': initial_status,
         'deadline_date': terms_payload.get('deadline_date'),
         'consignment_agreement_id': terms_payload.get('consignment_agreement_id'),
         'notes': str(terms_payload.get('notes') or ''),

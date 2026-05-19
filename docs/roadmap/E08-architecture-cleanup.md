@@ -159,12 +159,17 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 
 ### Фаза 2 — Source-of-truth consolidation
 
-- [ ] T-2.1 `SupplierPayable.paid_amount`, `remaining_amount` → derived
+- [x] T-2.1 `SupplierPayable.paid_amount`, `remaining_amount` → derived
       property из агрегата `finance.Payment`.
-- [ ] T-2.2 `Supplier.outstanding_balance` → derived property.
-- [ ] T-2.3 `ProcurementTerms.paid_amount` → derived property.
-- [ ] T-2.4 Management command `validate_payable_consistency` для
-      переходного периода (логирует расхождения).
+- [x] T-2.2 `Supplier.outstanding_balance` → derived property.
+- [x] T-2.3 `ProcurementTerms.paid_amount` → derived property.
+      `PREPAID` — спецкейс: synthetic full-settlement при создании terms
+      (поставщик получил оплату до документа); `paid_amount == total_amount_due`
+      без linked Payment. Остальные типы — sum of finance.Payment events.
+- [x] T-2.4 Management command `validate_payable_consistency` —
+      переформулировано как permanent invariant guard: walks SupplierPayable
+      и ProcurementTerms, flags drift между stored `status` и derived
+      paid/remaining. Logs only, без мутаций. Полезно как CI smoke.
 - [ ] T-2.5 `InvestmentAgreement.balances` → derived (или явная projection
       `recompute_from_events`). Убрать `_mutate_agreement_balance`.
 - [ ] T-2.6 Удалить `ProcurementBalance`, `BalanceContribution`,

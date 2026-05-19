@@ -1125,11 +1125,6 @@ class ProcurementTerms(TenantModel):
         decimal_places=2,
         help_text='Total obligation in `currency_of_obligation` (Σ items × prices × fx).',
     )
-    paid_amount = models.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        default=Decimal('0'),
-    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -1161,8 +1156,44 @@ class ProcurementTerms(TenantModel):
         return f"Terms#{self.pk} type={self.type} status={self.status}"
 
     @property
+    def paid_amount(self) -> Decimal:
+        """
+        Derived: sum of linked finance.Payment(target=PROCUREMENT_COST,
+        target_id=self.procurement_id) functional UZS, converted to
+        obligation currency via `fx_rate_at_obligation` snapshot.
+
+        Special case: PREPAID terms represent a synthetic full-settlement at
+        terms creation (supplier paid in cash before the document existed),
+        so paid_amount == total_amount_due without requiring a linked
+        Payment. All other types derive from finance.Payment events.
+
+        See SupplierPayable.paid_amount for rationale on snapshot rate.
+        """
+        if self.type == self.Type.PREPAID:
+            return Decimal(str(self.total_amount_due or 0))
+
+        from apps.finance.models import Payment
+        from django.db.models import F, Sum
+
+        agg = Payment.objects.filter(
+            tenant_id=self.tenant_id,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=self.procurement_id,
+            status=Payment.Status.POSTED,
+        ).aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
+        total_uzs = agg['total_uzs'] or Decimal('0')
+        rate = Decimal(str(self.fx_rate_at_obligation or 1))
+        if rate == 0:
+            return Decimal('0')
+        capped = min(
+            Decimal(str(self.total_amount_due or 0)),
+            (Decimal(str(total_uzs)) / rate).quantize(Decimal('0.01')),
+        )
+        return capped
+
+    @property
     def remaining_amount(self) -> Decimal:
-        return Decimal(str(self.total_amount_due or 0)) - Decimal(str(self.paid_amount or 0))
+        return (Decimal(str(self.total_amount_due or 0)) - self.paid_amount).quantize(Decimal('0.01'))
 
 
 class ProcurementTermsAmendment(TenantModel):

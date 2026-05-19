@@ -15,6 +15,10 @@ from .models import (
 
 
 class SupplierSerializer(serializers.ModelSerializer):
+    outstanding_balance = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True,
+    )
+
     class Meta:
         model = Supplier
         fields = [
@@ -115,6 +119,12 @@ class PaymentScheduleSerializer(serializers.ModelSerializer):
 class SupplierPayableSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     schedule = serializers.SerializerMethodField()
+    paid_amount = serializers.DecimalField(
+        max_digits=16, decimal_places=2, read_only=True,
+    )
+    remaining_amount = serializers.DecimalField(
+        max_digits=16, decimal_places=2, read_only=True,
+    )
 
     class Meta:
         model = SupplierPayable
@@ -125,7 +135,10 @@ class SupplierPayableSerializer(serializers.ModelSerializer):
             'status', 'reason', 'deadline_date', 'notes',
             'schedule', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'paid_amount', 'remaining_amount',
+        ]
 
     def get_schedule(self, obj):
         terms = getattr(getattr(obj, 'procurement', None), 'terms', None)

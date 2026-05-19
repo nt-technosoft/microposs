@@ -96,10 +96,6 @@ def record_supplier_payment(
             notes=notes,
         )
 
-        supplier.outstanding_balance = models.F('outstanding_balance') - functional_amount
-        supplier.save(update_fields=['outstanding_balance', 'updated_at'])
-        supplier.refresh_from_db()
-
         # Create journal entry
         from apps.finance.services import record_supplier_payment_journal
         record_supplier_payment_journal(
@@ -124,16 +120,34 @@ def record_supplier_payment(
 
 
 def get_supplier_payables_summary(tenant_id: int) -> list[dict]:
-    """Get all suppliers with outstanding payables."""
-    return list(
-        Supplier.objects.filter(
-            tenant_id=tenant_id,
-            outstanding_balance__gt=0,
-            is_active=True,
-        ).values(
-            'id', 'name', 'phone', 'outstanding_balance',
-        ).order_by('-outstanding_balance')
+    """
+    Suppliers with at least one OPEN/PARTIALLY_PAID payable, with derived
+    outstanding UZS-equivalent balance. Source of truth is finance.Payment.
+    """
+    open_statuses = [
+        SupplierPayable.Status.OPEN,
+        SupplierPayable.Status.PARTIALLY_PAID,
+    ]
+    supplier_ids = (
+        SupplierPayable.objects
+        .filter(tenant_id=tenant_id, status__in=open_statuses)
+        .values_list('supplier_id', flat=True)
+        .distinct()
     )
+    rows = []
+    for supplier in Supplier.objects.filter(
+        tenant_id=tenant_id,
+        pk__in=list(supplier_ids),
+        is_active=True,
+    ):
+        rows.append({
+            'id': supplier.id,
+            'name': supplier.name,
+            'phone': supplier.phone,
+            'outstanding_balance': supplier.outstanding_balance,
+        })
+    rows.sort(key=lambda r: r['outstanding_balance'], reverse=True)
+    return rows
 
 
 # =========================================================================
@@ -163,39 +177,22 @@ def create_payable_from_procurement(
         raise ValueError('PREPAID terms do not produce a payable.')
 
     amount = _q(terms.total_amount_due)
-    paid = _q(getattr(terms, 'paid_amount', _ZERO) or _ZERO)
     if amount <= _ZERO:
         raise ValueError('Cannot create payable with non-positive amount.')
-    if paid < _ZERO:
-        raise ValueError('Cannot create payable with negative paid amount.')
-    if paid > amount:
-        raise ValueError('Cannot create payable with paid amount above original amount.')
 
-    remaining = _q(amount - paid)
-    if remaining <= _ZERO:
-        status = SupplierPayable.Status.FULLY_PAID
-    elif paid > _ZERO:
-        status = SupplierPayable.Status.PARTIALLY_PAID
-    else:
-        status = SupplierPayable.Status.OPEN
-
+    # paid_amount/remaining_amount/status are derived from finance.Payment.
+    # At payable creation, no Payments are linked yet → paid=0, status=OPEN.
     payable = SupplierPayable.objects.create(
         tenant_id=tenant_id,
         supplier_id=supplier_id,
         procurement_id=procurement_id,
         settlement=terms,
         original_amount=amount,
-        paid_amount=paid,
-        remaining_amount=remaining,
         currency_of_obligation=str(terms.currency_of_obligation or 'UZS').upper(),
         fx_rate_at_obligation=Decimal(str(terms.fx_rate_at_obligation or 1)),
-        status=status,
+        status=SupplierPayable.Status.OPEN,
         reason=SupplierPayable.Reason.PROCUREMENT,
         deadline_date=deadline_date,
-    )
-    Supplier.objects.filter(pk=supplier_id, tenant_id=tenant_id).update(
-        outstanding_balance=models.F('outstanding_balance') + remaining,
-        updated_at=timezone.now(),
     )
     return payable
 
@@ -341,9 +338,10 @@ def record_payable_payment(
 
         if total_obligation <= _ZERO:
             raise ValueError('Total allocation must yield a positive obligation amount.')
-        if total_obligation > payable.remaining_amount:
+        remaining_before = payable.remaining_amount
+        if total_obligation > remaining_before:
             raise ValueError(
-                f'Payment {total_obligation} exceeds remaining {payable.remaining_amount} '
+                f'Payment {total_obligation} exceeds remaining {remaining_before} '
                 f'on payable {payable_id}.'
             )
 
@@ -381,22 +379,19 @@ def record_payable_payment(
             client_request_id=client_request_id,
         )
 
-        # Update payable
-        new_paid = _q(Decimal(str(payable.paid_amount)) + total_obligation)
-        new_remaining = _q(Decimal(str(payable.original_amount)) - new_paid)
-        if new_remaining <= _ZERO:
+        # paid_amount/remaining_amount derive from finance.Payment created
+        # below. Status is the only stored bit we maintain explicitly so it
+        # remains queryable; transition is computed against pre-payment
+        # remaining vs this payment's obligation amount.
+        if total_obligation >= remaining_before:
             new_status = SupplierPayable.Status.FULLY_PAID
-            new_remaining = _ZERO
         else:
             new_status = SupplierPayable.Status.PARTIALLY_PAID
-        payable.paid_amount = new_paid
-        payable.remaining_amount = new_remaining
         payable.status = new_status
-        payable.save(update_fields=[
-            'paid_amount', 'remaining_amount', 'status', 'updated_at',
-        ])
+        payable.save(update_fields=['status', 'updated_at'])
 
-        # Update schedule entry if any
+        # Update schedule entry if any. PaymentSchedule.paid_amount is a
+        # separate per-installment aggregate (not in Phase 2 scope).
         if schedule_entry is not None:
             sched_paid = _q(Decimal(str(schedule_entry.paid_amount)) + total_obligation)
             schedule_entry.paid_amount = sched_paid
@@ -406,12 +401,6 @@ def record_payable_payment(
             schedule_entry.save(update_fields=[
                 'paid_amount', 'status', 'paid_at', 'updated_at',
             ])
-
-        # Update supplier aggregate (legacy balance — uses UZS functional)
-        Supplier.objects.filter(pk=payable.supplier_id, tenant_id=tenant_id).update(
-            outstanding_balance=models.F('outstanding_balance') - total_uzs,
-            updated_at=timezone.now(),
-        )
 
         from apps.finance.models import Payment
         from apps.finance.services import record_generic_cash_payment

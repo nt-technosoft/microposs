@@ -994,18 +994,13 @@ def pay_workspace_costs(
 
     terms = getattr(procurement, 'terms', None)
     if terms and terms.type == ProcurementTerms.Type.PARTIAL:
-        paid_delta = _payment_amount_for_terms(
-            amount=Decimal(str(amount)),
-            currency=str(payment_currency or cash_account.currency).upper(),
-            fx_rate=payment_fx_rate,
-            terms=terms,
-        )
-        terms.paid_amount = min(
-            Decimal(str(terms.total_amount_due)),
-            (Decimal(str(terms.paid_amount or 0)) + paid_delta).quantize(Decimal('0.01')),
-        )
-        terms.status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
-        terms.save(update_fields=['paid_amount', 'status', 'updated_at'])
+        # terms.paid_amount is derived from the finance.Payment we just
+        # created (PROCUREMENT_COST target). Only status is stored.
+        terms.refresh_from_db()
+        new_status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
+        if new_status != terms.status:
+            terms.status = new_status
+            terms.save(update_fields=['status', 'updated_at'])
 
     item_type = procurement.items.model
     expense_type = procurement.expenses.model

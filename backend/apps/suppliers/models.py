@@ -26,12 +26,6 @@ class Supplier(TenantModel):
     phone = models.CharField(max_length=50, blank=True, default='')
     email = models.EmailField(blank=True, default='')
     address = models.TextField(blank=True, default='')
-    outstanding_balance = models.DecimalField(
-        max_digits=14,
-        decimal_places=2,
-        default=Decimal('0'),
-        help_text='How much business owes this supplier (A/P).',
-    )
     default_payment_terms = models.CharField(
         max_length=16,
         choices=PaymentTerms.choices,
@@ -51,6 +45,24 @@ class Supplier(TenantModel):
 
     def __str__(self):
         return self.name
+
+    @property
+    def outstanding_balance(self) -> Decimal:
+        """
+        Derived A/P aggregate: sum of remaining UZS-equivalent across all
+        open payables. Source of truth is `finance.Payment`. Not stored.
+        """
+        total = Decimal('0')
+        for payable in self.payables.filter(
+            status__in=[
+                SupplierPayable.Status.OPEN,
+                SupplierPayable.Status.PARTIALLY_PAID,
+            ],
+        ):
+            remaining_in_obligation = payable.remaining_amount
+            rate = Decimal(str(payable.fx_rate_at_obligation or 1))
+            total += remaining_in_obligation * rate
+        return total.quantize(Decimal('0.01'))
 
 
 class SupplierPayable(TenantModel):
@@ -98,16 +110,6 @@ class SupplierPayable(TenantModel):
         decimal_places=2,
         validators=[MinValueValidator(Decimal('0.01'))],
     )
-    paid_amount = models.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        default=Decimal('0'),
-    )
-    remaining_amount = models.DecimalField(
-        max_digits=16,
-        decimal_places=2,
-        help_text='Computed = original_amount - paid_amount (kept consistent in services).',
-    )
     currency_of_obligation = models.CharField(max_length=3, default='UZS')
     fx_rate_at_obligation = models.DecimalField(
         max_digits=16,
@@ -139,22 +141,43 @@ class SupplierPayable(TenantModel):
             models.Index(fields=['tenant', 'status']),
             models.Index(fields=['tenant', 'deadline_date']),
         ]
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(paid_amount__gte=Decimal('0')),
-                name='supplier_payable_paid_amount_non_negative',
-            ),
-            models.CheckConstraint(
-                check=models.Q(remaining_amount__gte=Decimal('0')),
-                name='supplier_payable_remaining_non_negative',
-            ),
-        ]
 
     def __str__(self):
         return (
             f"Payable#{self.pk} {self.supplier.name} "
             f"{self.remaining_amount}/{self.original_amount} {self.currency_of_obligation}"
         )
+
+    @property
+    def paid_amount(self) -> Decimal:
+        """
+        Derived: sum of linked finance.Payment(target=SUPPLIER_PAYABLE),
+        converted from each payment's functional UZS to this payable's
+        `currency_of_obligation` via `fx_rate_at_obligation` snapshot.
+
+        The snapshot rate is the contractual rate (set at obligation creation
+        and never revalued — Islamic accounting principle). Using it here
+        means obligation reduction is fixed in obligation-currency terms,
+        not floating with FX market.
+        """
+        from apps.finance.models import Payment
+        from django.db.models import F, Sum
+
+        agg = Payment.objects.filter(
+            tenant_id=self.tenant_id,
+            target_type=Payment.TargetType.SUPPLIER_PAYABLE,
+            target_id=self.pk,
+            status=Payment.Status.POSTED,
+        ).aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
+        total_uzs = agg['total_uzs'] or Decimal('0')
+        rate = Decimal(str(self.fx_rate_at_obligation or 1))
+        if rate == 0:
+            return Decimal('0')
+        return (Decimal(str(total_uzs)) / rate).quantize(Decimal('0.01'))
+
+    @property
+    def remaining_amount(self) -> Decimal:
+        return (Decimal(str(self.original_amount or 0)) - self.paid_amount).quantize(Decimal('0.01'))
 
 
 class PaymentSchedule(TenantModel):

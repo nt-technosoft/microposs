@@ -147,6 +147,12 @@ class PaymentScheduleSerializer(serializers.ModelSerializer):
 
 class ProcurementTermsSerializer(serializers.ModelSerializer):
     schedule = PaymentScheduleSerializer(source='schedule_entries', many=True, read_only=True)
+    paid_amount = serializers.DecimalField(
+        max_digits=16, decimal_places=2, read_only=True,
+    )
+    remaining_amount = serializers.DecimalField(
+        max_digits=16, decimal_places=2, read_only=True,
+    )
 
     class Meta:
         model = ProcurementTerms
@@ -155,7 +161,7 @@ class ProcurementTermsSerializer(serializers.ModelSerializer):
             'total_amount_due', 'paid_amount', 'remaining_amount', 'status',
             'deadline_date', 'consignment_agreement', 'notes', 'schedule',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'paid_amount', 'remaining_amount']
 
 
 class AgreementPartnerSerializer(serializers.ModelSerializer):
@@ -947,7 +953,6 @@ class ProcurementTermsInputSerializer(serializers.Serializer):
     currency_of_obligation = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate_at_obligation = serializers.DecimalField(max_digits=16, decimal_places=6, required=False, default='1')
     total_amount_due = serializers.DecimalField(max_digits=16, decimal_places=2)
-    paid_amount = serializers.DecimalField(max_digits=16, decimal_places=2, required=False, default='0')
     deadline_date = serializers.DateField(required=False, allow_null=True)
     consignment_agreement_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)

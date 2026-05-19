@@ -343,10 +343,23 @@ def compute_aging_reports(tenant_id):
             },
         )
 
-    # Supplier aging (A/P)
+    # Supplier aging (A/P). outstanding_balance is now derived; query
+    # suppliers with at least one OPEN/PARTIALLY_PAID payable.
+    from apps.suppliers.models import SupplierPayable
+    supplier_ids_with_debt = (
+        SupplierPayable.objects.filter(
+            tenant_id=tenant_id,
+            status__in=[
+                SupplierPayable.Status.OPEN,
+                SupplierPayable.Status.PARTIALLY_PAID,
+            ],
+        )
+        .values_list('supplier_id', flat=True)
+        .distinct()
+    )
     suppliers = Supplier.objects.filter(
         tenant_id=tenant_id,
-        outstanding_balance__gt=0,
+        pk__in=list(supplier_ids_with_debt),
     )
 
     for supplier in suppliers:
