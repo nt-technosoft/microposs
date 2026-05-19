@@ -29,7 +29,7 @@
 | **E05** | Zakat Calculation | ⏸️ PAUSED | 0% | E01, E02, E03 | [→](./roadmap/E05-zakat.md) |
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟡 IN_PROGRESS | 70% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
-| **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟡 IN_PROGRESS | 0% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
+| **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟡 IN_PROGRESS | 90% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 
 **🔥 Активный спринт / P0:** E07 (Procurement Workspace Phase D) + E08 (Architecture Cleanup).
 Стратегия E07: controlled radical reset — новый procurement/investment/payment core и новый frontend workspace, старый intake/procurement код используется только как reference до switch-over.

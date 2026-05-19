@@ -10,7 +10,6 @@ from .models import (
     InvestmentAgreement,
     Procurement, ProcurementItem, ProcurementExpense,
     InvestmentContract, ContractPartner,
-    ProcurementBalance, BalanceContribution, BalanceWithdrawal,
     ProcurementPartnerLedger, PartnerLedgerEntry, DividendPayment,
 )
 
@@ -76,22 +75,6 @@ class ContractPartnerInline(admin.TabularInline):
 class InvestmentContractAdmin(admin.ModelAdmin):
     list_display = ('id', 'procurement', 'mudaraba_ratio', 'planned_budget', 'currency')
     inlines = [ContractPartnerInline]
-
-
-class BalanceContributionInline(admin.TabularInline):
-    model = BalanceContribution
-    extra = 0
-
-
-class BalanceWithdrawalInline(admin.TabularInline):
-    model = BalanceWithdrawal
-    extra = 0
-
-
-@admin.register(ProcurementBalance)
-class ProcurementBalanceAdmin(admin.ModelAdmin):
-    list_display = ('id', 'procurement', 'balances')
-    inlines = [BalanceContributionInline, BalanceWithdrawalInline]
 
 
 class PartnerLedgerEntryInline(admin.TabularInline):

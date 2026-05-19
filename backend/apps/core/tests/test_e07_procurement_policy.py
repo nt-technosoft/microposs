@@ -42,7 +42,10 @@ class ProcurementPolicyTests(SimpleTestCase):
         )
 
         self.assertFalse(result.is_valid)
-        self.assertIn('OWN_FUNDS must not use ProcurementBalance.', result.blocked_reasons)
+        self.assertIn(
+            'OWN_FUNDS must not carry partnership capital activity.',
+            result.blocked_reasons,
+        )
 
     def test_supplier_credit_requires_supplier(self):
         with self.assertRaisesMessage(ValueError, 'DEFERRED settlement requires supplier.'):

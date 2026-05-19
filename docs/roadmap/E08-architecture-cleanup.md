@@ -1,7 +1,7 @@
 # E08 — Architecture Cleanup & Source-of-Truth Consolidation
 
 **Статус:** 🟡 IN_PROGRESS
-**Прогресс:** 55% (Phase 0 + Phase 1 закрыты)
+**Прогресс:** 90% (Phase 0 + Phase 1 + Phase 2 закрыты; осталось Phase 3 — frontend closure внутри E07)
 **Зависит от:** E07 (целевая архитектура procurement workspace)
 **Блокирует:** E03 (Net Value), E05 (Zakat), E06 (Sharia certification) — все нуждаются в чистом источнике правды
 
@@ -170,12 +170,19 @@ E08 не дублирует её, а указывает: после Фазы 2 �
       переформулировано как permanent invariant guard: walks SupplierPayable
       и ProcurementTerms, flags drift между stored `status` и derived
       paid/remaining. Logs only, без мутаций. Полезно как CI smoke.
-- [ ] T-2.5 `InvestmentAgreement.balances` → derived (или явная projection
-      `recompute_from_events`). Убрать `_mutate_agreement_balance`.
-- [ ] T-2.6 Удалить `ProcurementBalance`, `BalanceContribution`,
-      `BalanceWithdrawal`, `ProcurementBalanceExchange`.
-- [ ] T-2.7 `allocate_workspace_capital` переходит на прямой путь Agreement
-      → BatchCapitalSnapshot (без посредника `ProcurementBalance`).
+- [x] T-2.5 `InvestmentAgreement.balances` → derived @property из событий
+      (contributions/withdrawals/allocations). `_mutate_agreement_balance`
+      удалён вместе с 2 call-sites. Поле `balances` JSONField снято.
+- [x] T-2.6 Удалены `ProcurementBalance`, `BalanceContribution`,
+      `BalanceWithdrawal`, `ProcurementBalanceExchange` (все модели + admin
+      + serializers + endpoint stubs). dev DB подтвердил 0 затронутых
+      записей. Bonus: добавлены `delete()` guards в
+      `AgreementContribution/Withdrawal/Allocation` (append-only ledger по
+      Key Business Rule #12).
+- [x] T-2.7 `allocate_workspace_capital` и `_resolve_workspace_capital_snapshot`
+      переписаны на прямой путь: AgreementAllocation → BatchCapitalSnapshot,
+      без `ProcurementBalance` посредника. `_procurement_capital_available_by_partner`
+      читает события `AgreementAllocation` напрямую.
 - [x] T-2.8 `ProcurementTerms` → `ImmutableMixin` + `LifecycleState` (DRAFT/ACTIVE).
       Per Variant A: ACTIVE — semantic fields frozen (только `status` /
       `updated_at` остаются мутабельны); changes only via
@@ -215,6 +222,25 @@ E08 не дублирует её, а указывает: после Фазы 2 �
 - ✓ 2026-05-18: senior-partner collaboration principles зафиксированы в
   `CLAUDE.md` и в `AGENTS.md` (короткой ссылкой) → workflow живёт между
   сессиями, не только в текущей.
+- ✓ 2026-05-19: **Phase 2 закрыта.** Денежная триада (`SupplierPayable.paid_amount`,
+  `Supplier.outstanding_balance`, `ProcurementTerms.paid_amount`) переведена на
+  derived @property над `finance.Payment`. `Supplier.outstanding_balance` — UZS
+  агрегат remaining payables; payable.paid_amount сводит PROCUREMENT_COST +
+  SUPPLIER_PAYABLE платежи (две фазы одной обязанности), делится на
+  fx_rate_at_obligation snapshot — контрактный курс, не floating.
+  `InvestmentAgreement.balances` — derived из append-only события
+  contribution/withdrawal/allocation; `_mutate_agreement_balance` снят.
+  ProcurementBalance + 3 satellite-модели удалены целиком (0 строк в dev DB);
+  `allocate_workspace_capital` идёт напрямую через AgreementAllocation. В
+  AgreementContribution/Withdrawal/Allocation добавлены delete-guards
+  (append-only по KBR #12). `ProcurementTerms` получил LifecycleState
+  DRAFT/ACTIVE с save-guard (Variant A: immutable от создания + DRAFT
+  отдельным статусом). FK-promotion: `SalePayment.account_id` и
+  `DividendPayment.paid_from_account_id` → ForeignKey(finance.CashAccount,
+  PROTECT). T-2.4: validate_payable_consistency как permanent invariant
+  guard. Новый test suite `test_e08_sharia_invariants.py` — 9 assertion-тестов
+  на Σ(profit_ratio)==1, Σ(capital_share)==1, FIFO NOT NULL, append-only,
+  immutable snapshots, derived balance consistency.
 - ✓ 2026-05-19: **Phase 2 архитектурные решения зафиксированы (до выполнения).**
   - **T-2.5 balances → derived с per-request memoization** (через
     `cached_property`, scoped to instance), не projection-table. Rationale:

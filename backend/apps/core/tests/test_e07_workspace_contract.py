@@ -6,7 +6,6 @@ from rest_framework.test import APITestCase
 from apps.inventory.models import Lot
 from apps.partnerships.models import (
     Procurement,
-    ProcurementBalance,
     ProcurementExpense,
     ProcurementItem,
     ProcurementTerms,
@@ -204,10 +203,6 @@ class ProcurementWorkspaceContractTests(TestCase):
 
         payload = build_workspace_payload(procurement)
         self.assertEqual(payload['flow']['current_step'], 'payment_obligation')
-        self.assertNotIn(
-            'PARTNERSHIP requires ProcurementBalance capital pool.',
-            [row['message'] for row in payload['policy']['blocked_reasons']],
-        )
 
         procurement = dispatch_workspace_action(
             tenant_id=self.ctx['business'].id,
@@ -289,25 +284,6 @@ class ProcurementWorkspaceContractTests(TestCase):
         self.assertEqual([str(value) for value in quantities], ['4.000', '6.000'])
         self.assertEqual(expense_targets, sorted(procurement.items.values_list('id', flat=True)))
         self.assertIn('SPLIT_ITEM', payload['policy']['allowed_actions'])
-
-    def test_own_funds_zero_legacy_balance_does_not_block_workspace(self):
-        procurement = create_workspace(
-            tenant_id=self.ctx['business'].id,
-            funding_source=Procurement.FundingSource.OWN_FUNDS,
-            supplier_id=self.ctx['supplier'].id,
-        )
-        ProcurementBalance.objects.create(
-            tenant_id=self.ctx['business'].id,
-            procurement=procurement,
-            balances={'USD': '0.00'},
-        )
-
-        payload = build_workspace_payload(procurement)
-
-        self.assertNotIn(
-            'OWN_FUNDS must not use ProcurementBalance.',
-            [row['message'] for row in payload['policy']['blocked_reasons']],
-        )
 
     def test_partial_settlement_requires_payment_and_creates_remainder_payable(self):
         procurement = create_workspace(

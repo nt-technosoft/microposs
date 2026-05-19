@@ -11,8 +11,8 @@ from .serializers import (
     AgreementAllocationSerializer,
     AgreementContributionSerializer,
     AgreementWithdrawalSerializer,
-    BalanceContributionCreateSerializer,
-    BalanceWithdrawalCreateSerializer,
+    AgreementContributionCreateSerializer,
+    AgreementWithdrawalCreateSerializer,
     DividendPaymentCreateSerializer,
     DividendPaymentSerializer,
     InvestmentAgreementCreateSerializer,
@@ -106,7 +106,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='contributions')
     def contributions(self, request, pk=None):
         agreement = self.get_object()
-        serializer = BalanceContributionCreateSerializer(data=request.data)
+        serializer = AgreementContributionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             contribution = add_agreement_contribution(
@@ -126,7 +126,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='withdrawals')
     def withdrawals(self, request, pk=None):
         agreement = self.get_object()
-        serializer = BalanceWithdrawalCreateSerializer(data=request.data)
+        serializer = AgreementWithdrawalCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             withdrawal = add_agreement_withdrawal(
@@ -306,7 +306,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='contributions')
     def contributions(self, request, pk=None):
         procurement = self.get_object()
-        serializer = BalanceContributionCreateSerializer(data=request.data)
+        serializer = AgreementContributionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             procurement = dispatch_workspace_action(

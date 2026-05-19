@@ -73,7 +73,6 @@ class InvestmentAgreement(TenantModel):
     )
     planned_budget = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
-    balances = models.JSONField(default=dict, help_text='Map<currency, decimal_string>')
     notes = models.TextField(blank=True, default='')
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
@@ -93,6 +92,38 @@ class InvestmentAgreement(TenantModel):
 
     def __str__(self):
         return f"InvestmentAgreement#{self.pk} {self.status}"
+
+    @property
+    def balances(self) -> dict:
+        """
+        Derived per-currency balance map. Source of truth is the append-only
+        event triad: AgreementContribution (+), AgreementWithdrawal (-),
+        AgreementAllocation (- TO_PROCUREMENT / + otherwise). Returns
+        {currency: 'decimal_string'} to keep the previous JSON shape that
+        API callers expect.
+        """
+        from decimal import Decimal as _D
+        totals: dict[str, _D] = {}
+
+        def _bump(cur: str, delta: _D) -> None:
+            key = str(cur or 'UZS').upper()
+            totals[key] = totals.get(key, _D('0')) + delta
+
+        for c in self.contributions.all():
+            _bump(c.currency, _D(str(c.amount)))
+        for w in self.withdrawals.all():
+            _bump(w.currency, -_D(str(w.amount)))
+        for a in self.allocations.all():
+            amt = _D(str(a.amount))
+            if a.direction == AgreementAllocation.Direction.TO_PROCUREMENT:
+                _bump(a.currency, -amt)
+            else:
+                _bump(a.currency, amt)
+
+        return {
+            cur: str(value.quantize(_D('0.01')))
+            for cur, value in totals.items()
+        }
 
 
 class AgreementPartner(TenantModel):
@@ -603,106 +634,6 @@ class ContractPartner(TenantModel):
         ]
 
 
-class ProcurementBalance(TenantModel):
-    """
-    Common pot for a procurement — multi-currency balance map.
-    Contributions and withdrawals mutate the `balances` JSON field.
-    """
-
-    procurement = models.OneToOneField(
-        Procurement,
-        on_delete=models.CASCADE,
-        related_name='balance',
-    )
-    balances = models.JSONField(
-        default=dict,
-        help_text='Map<currency, decimal_string>',
-    )
-
-    class Meta:
-        db_table = 'partnerships_procurement_balance'
-
-
-class BalanceContribution(TenantModel):
-    """A partner adds capital into the procurement balance."""
-
-    balance = models.ForeignKey(
-        ProcurementBalance,
-        on_delete=models.CASCADE,
-        related_name='contributions',
-    )
-    partner = models.ForeignKey(
-        'core.Partner',
-        on_delete=models.PROTECT,
-        related_name='contributions',
-    )
-    amount = models.DecimalField(max_digits=14, decimal_places=2)
-    currency = models.CharField(max_length=3, default='UZS')
-    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
-    date = models.DateTimeField()
-    notes = models.CharField(max_length=255, blank=True, default='')
-
-    class Meta:
-        db_table = 'partnerships_balance_contribution'
-        indexes = [
-            models.Index(fields=['balance']),
-            models.Index(fields=['partner']),
-        ]
-
-
-class BalanceWithdrawal(TenantModel):
-    """A spend from the common pot to pay for an item or expense."""
-
-    balance = models.ForeignKey(
-        ProcurementBalance,
-        on_delete=models.CASCADE,
-        related_name='withdrawals',
-    )
-    partner = models.ForeignKey(
-        'core.Partner',
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name='withdrawals',
-        help_text='Set when withdrawal attributed to a specific partner',
-    )
-    amount = models.DecimalField(max_digits=14, decimal_places=2)
-    currency = models.CharField(max_length=3, default='UZS')
-    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
-    date = models.DateTimeField()
-    reason = models.CharField(max_length=255, blank=True, default='')
-
-    class Meta:
-        db_table = 'partnerships_balance_withdrawal'
-        indexes = [
-            models.Index(fields=['balance']),
-        ]
-
-
-class ProcurementBalanceExchange(TenantModel):
-    """Explicit FX conversion inside a procurement balance."""
-
-    balance = models.ForeignKey(
-        ProcurementBalance,
-        on_delete=models.CASCADE,
-        related_name='exchanges',
-    )
-    from_currency = models.CharField(max_length=3, default='UZS')
-    from_amount = models.DecimalField(max_digits=14, decimal_places=2)
-    to_currency = models.CharField(max_length=3, default='USD')
-    to_amount = models.DecimalField(max_digits=14, decimal_places=2)
-    rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
-    date = models.DateTimeField()
-    notes = models.CharField(max_length=255, blank=True, default='')
-
-    class Meta:
-        db_table = 'partnerships_balance_exchange'
-        ordering = ['-date', '-id']
-        indexes = [
-            models.Index(fields=['balance']),
-        ]
-
-
 class AgreementContribution(TenantModel):
     """A partner adds money into the parent investment agreement balance."""
 
@@ -762,6 +693,9 @@ class AgreementContribution(TenantModel):
                 name='uq_agreement_contribution_idempotent',
             ),
         ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('AgreementContribution is append-only. Record a reversal instead.')
 
 
 class AgreementWithdrawal(TenantModel):
@@ -823,6 +757,9 @@ class AgreementWithdrawal(TenantModel):
                 name='uq_agreement_withdrawal_idempotent',
             ),
         ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('AgreementWithdrawal is append-only. Record a reversal instead.')
 
 
 class AgreementAllocation(TenantModel):
@@ -893,6 +830,9 @@ class AgreementAllocation(TenantModel):
             models.Index(fields=['confirmation_status']),
             models.Index(fields=['tenant', 'client_request_id']),
         ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('AgreementAllocation is append-only. Record a reversal instead.')
 
 
 class AgreementEvent(TenantModel):

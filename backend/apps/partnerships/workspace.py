@@ -23,8 +23,6 @@ from .models import (
     AgreementConfirmationStatus,
     AgreementContribution,
     AgreementPartner,
-    BalanceContribution,
-    BalanceWithdrawal,
     InvestmentAgreement,
     PartnerLedgerEntry,
     Procurement,
@@ -35,7 +33,6 @@ from .models import (
     ProcurementReceiveBatchCapitalAllocation,
     ProcurementReceiveBatchExpense,
     ProcurementReceiveBatchLine,
-    ProcurementBalance,
     ProcurementTerms,
 )
 from .policies import (
@@ -128,12 +125,12 @@ def create_workspace(
 
 def build_workspace_payload(procurement: Procurement) -> dict:
     terms = getattr(procurement, 'terms', None)
-    balance = getattr(procurement, 'balance', None)
     receive_batches = list(procurement.receive_batches.all())
     payables = list(SupplierPayable.objects.filter(procurement=procurement))
     has_items = procurement.items.exclude(
         lifecycle_state=ProcurementItem.LifecycleState.CANCELLED,
     ).exists()
+    capital_activity = _has_capital_activity(procurement)
     context = ProcurementPolicyContext(
         funding_source=procurement.funding_source,
         settlement_type=getattr(terms, 'type', None),
@@ -142,13 +139,10 @@ def build_workspace_payload(procurement: Procurement) -> dict:
         has_investment_agreement=bool(procurement.agreement_id),
         has_items=has_items,
         has_procurement_balance=(
-            balance is not None
-            and (
-                procurement.funding_source == Procurement.FundingSource.PARTNERSHIP
-                or _has_capital_activity(balance)
-            )
+            capital_activity
+            and procurement.funding_source != Procurement.FundingSource.PARTNERSHIP
         ),
-        has_capital_activity=_has_capital_activity(balance),
+        has_capital_activity=capital_activity,
         has_payment_activity=_has_payment_activity(procurement, payables),
         has_receive_batches=bool(receive_batches),
         has_installment_schedule=bool(terms and terms.schedule_entries.exists()),
@@ -159,7 +153,7 @@ def build_workspace_payload(procurement: Procurement) -> dict:
         'id': procurement.id,
         'status': procurement.status,
         'display': _display(procurement, policy),
-        'flow': _flow_payload(procurement, policy, terms, balance, payables, receive_batches, has_items),
+        'flow': _flow_payload(procurement, policy, terms, payables, receive_batches, has_items),
         'policy': _policy_payload(policy, terms),
         'readiness': _readiness_payload(policy.readiness, policy.blocked_reasons),
         'sections': _sections_payload(policy),
@@ -754,15 +748,8 @@ def allocate_workspace_capital(
         if locked_procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError('Cannot allocate capital to non-open procurement.')
 
-        balance, _ = ProcurementBalance.objects.select_for_update().get_or_create(
-            tenant_id=tenant_id,
-            procurement=locked_procurement,
-            defaults={'balances': {}},
-        )
         member_ids = set(locked_agreement.partners.values_list('partner_id', flat=True))
         available_by_partner = _agreement_available_by_partner(locked_agreement)
-        agreement_balances = dict(locked_agreement.balances or {})
-        procurement_balances = dict(balance.balances or {})
 
         for row in rows:
             partner_id = int(row['partner_id'])
@@ -778,13 +765,9 @@ def allocate_workspace_capital(
                 raise ValueError(
                     f'Partner balance is insufficient for {currency}: have {available}, need {amount}.'
                 )
-            if _money_get(agreement_balances, currency) < amount:
-                raise ValueError(
-                    f'Agreement balance is insufficient for {currency}: have {_money_get(agreement_balances, currency)}, need {amount}.'
-                )
 
-            _money_set(agreement_balances, currency, _money_get(agreement_balances, currency) - amount)
-            _money_set(procurement_balances, currency, _money_get(procurement_balances, currency) + amount)
+            # Single event records the capital movement; agreement.balances
+            # is derived from this allocation (and contributions/withdrawals).
             allocation = AgreementAllocation.objects.create(
                 tenant_id=tenant_id,
                 agreement=locked_agreement,
@@ -802,16 +785,8 @@ def allocate_workspace_capital(
                 actor_partner_id=partner_id,
                 client_request_id=client_request_id,
             )
-            contribution = BalanceContribution.objects.create(
-                tenant_id=tenant_id,
-                balance=balance,
-                partner_id=partner_id,
-                amount=amount,
-                currency=currency,
-                fx_rate=fx_rate,
-                date=date,
-                notes=f'agreement_allocation:{allocation.pk}',
-            )
+            # Update in-memory snapshot so subsequent rows see the deduction.
+            available_by_partner.setdefault(partner_id, {})[currency] = available - amount
             ledger = get_or_create_ledger(
                 procurement_id=locked_procurement.pk,
                 partner_id=partner_id,
@@ -823,15 +798,10 @@ def allocate_workspace_capital(
                 amount=amount,
                 currency=currency,
                 fx_rate=fx_rate,
-                source_ref=f'contribution:{contribution.pk}',
+                source_ref=f'allocation:{allocation.pk}',
                 date=date,
             )
             created.append(allocation)
-
-        locked_agreement.balances = agreement_balances
-        locked_agreement.save(update_fields=['balances', 'updated_at'])
-        balance.balances = procurement_balances
-        balance.save(update_fields=['balances', 'updated_at'])
         for allocation in created:
             record_agreement_event(
                 tenant_id=tenant_id,
@@ -877,7 +847,7 @@ def build_workspace_capital_allocation_preview(
     procurement = (
         Procurement.objects
         .filter(pk=procurement_id, tenant_id=tenant_id)
-        .prefetch_related('items', 'expenses', 'balance__contributions')
+        .prefetch_related('items', 'expenses')
         .get()
     )
     if procurement.funding_source != Procurement.FundingSource.PARTNERSHIP:
@@ -1299,7 +1269,6 @@ def _flow_payload(
     procurement: Procurement,
     policy,
     terms,
-    balance,
     payables,
     receive_batches,
     has_items: bool,
@@ -1307,8 +1276,8 @@ def _flow_payload(
     readiness = policy.readiness
     purchase_complete = has_items
     settlement_complete = bool(terms and readiness.get('settlement_ready'))
-    funding_complete = _funding_flow_complete(procurement, balance)
-    payment_complete = _payment_obligation_complete(procurement, terms, balance, payables)
+    funding_complete = _funding_flow_complete(procurement)
+    payment_complete = _payment_obligation_complete(procurement, terms, payables)
     receipt_complete = procurement.status in (
         Procurement.Status.RECEIVED,
         Procurement.Status.CLOSED,
@@ -1413,13 +1382,13 @@ def _flow_step(
     }
 
 
-def _funding_flow_complete(procurement: Procurement, balance) -> bool:
+def _funding_flow_complete(procurement: Procurement) -> bool:
     if procurement.funding_source == Procurement.FundingSource.OWN_FUNDS:
         return True
     return bool(procurement.agreement_id)
 
 
-def _payment_obligation_complete(procurement: Procurement, terms, balance, payables) -> bool:
+def _payment_obligation_complete(procurement: Procurement, terms, payables) -> bool:
     if procurement.status in (Procurement.Status.RECEIVED, Procurement.Status.CLOSED):
         return True
     if not terms:
@@ -1431,7 +1400,7 @@ def _payment_obligation_complete(procurement: Procurement, terms, balance, payab
     ):
         return True
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
-        return _has_capital_activity(balance)
+        return _has_capital_activity(procurement)
     return _has_payment_activity(procurement, payables)
 
 
@@ -1853,15 +1822,12 @@ def _normalize_currency(value: str | None) -> str:
     return 'USD' if str(value or 'UZS').upper() == 'USD' else 'UZS'
 
 
-def _has_capital_activity(balance) -> bool:
-    return bool(
-        balance
-        and (
-            balance.contributions.exists()
-            or balance.withdrawals.exists()
-            or balance.exchanges.exists()
-        )
-    )
+def _has_capital_activity(procurement: Procurement) -> bool:
+    """Any AgreementAllocation touched this procurement."""
+    return AgreementAllocation.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement=procurement,
+    ).exists()
 
 
 def _has_payment_activity(procurement: Procurement, payables) -> bool:
@@ -2069,22 +2035,10 @@ def _resolve_workspace_capital_snapshot(
             name = getattr(member.partner, 'display_name', str(partner_id))
             raise ValueError(f'Insufficient capital for {name}: have {available.get(partner_id, Decimal("0"))}, need {amount}.')
 
-    balance = ProcurementBalance.objects.select_for_update().get(procurement=procurement, tenant_id=tenant_id)
-    balances = dict(balance.balances or {})
-    if _money_get(balances, currency) < required:
-        raise ValueError(f'Procurement balance is insufficient for {currency}.')
-    _money_set(balances, currency, _money_get(balances, currency) - required)
-    balance.balances = balances
-    balance.save(update_fields=['balances', 'updated_at'])
-    BalanceWithdrawal.objects.create(
-        tenant_id=tenant_id,
-        balance=balance,
-        amount=required,
-        currency=currency,
-        fx_rate=Decimal('1'),
-        date=received_at,
-        reason='Receive batch capital consumed',
-    )
+    # Capital consumption is recorded by ProcurementReceiveBatchCapitalAllocation
+    # rows produced below — _procurement_capital_available_by_partner subtracts
+    # those, so no separate ProcurementBalance ledger is needed. The aggregate
+    # check is implicit in the per-partner availability validation above.
 
     partners_meta = []
     for member in members:
@@ -2141,14 +2095,24 @@ def _amount_uzs_to_currency(*, tenant_id: int, amount_uzs: Decimal, currency: st
 
 
 def _procurement_capital_available_by_partner(procurement: Procurement, currency: str) -> dict[int, Decimal]:
+    """
+    Capital allocated to this procurement and not yet consumed by a receive
+    batch, broken down by partner. Sources:
+      + AgreementAllocation(direction=TO_PROCUREMENT, currency)
+      - AgreementAllocation(direction=FROM_PROCUREMENT, currency)
+      - ProcurementReceiveBatchCapitalAllocation already snapshotted into a batch.
+    """
     contributions: dict[int, Decimal] = {}
-    balance = getattr(procurement, 'balance', None)
-    if balance is None:
-        return {}
-    for contribution in balance.contributions.filter(currency=currency):
-        contributions[contribution.partner_id] = (
-            contributions.get(contribution.partner_id, Decimal('0'))
-            + Decimal(str(contribution.amount))
+    for allocation in AgreementAllocation.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement=procurement,
+        currency=currency,
+    ):
+        delta = Decimal(str(allocation.amount))
+        if allocation.direction != AgreementAllocation.Direction.TO_PROCUREMENT:
+            delta = -delta
+        contributions[allocation.partner_id] = (
+            contributions.get(allocation.partner_id, Decimal('0')) + delta
         ).quantize(Decimal('0.01'))
     for allocation in ProcurementReceiveBatchCapitalAllocation.objects.filter(
         batch__procurement=procurement,
@@ -2276,14 +2240,6 @@ def _require_workspace_agreement(procurement: Procurement) -> InvestmentAgreemen
     return procurement.agreement
 
 
-def _money_get(values: dict, currency: str) -> Decimal:
-    return Decimal(str((values or {}).get(str(currency or 'UZS').upper(), '0'))).quantize(Decimal('0.01'))
-
-
-def _money_set(values: dict, currency: str, amount: Decimal) -> None:
-    values[str(currency or 'UZS').upper()] = str(Decimal(str(amount)).quantize(Decimal('0.01')))
-
-
 def _with_client_request_id(notes: str, client_request_id: str | None) -> str:
     if not client_request_id:
         return notes or ''
@@ -2323,8 +2279,7 @@ def _ensure_source_editable(procurement: Procurement) -> None:
         SupplierPayable.objects.filter(procurement=procurement),
     ):
         raise ValueError('Source cannot be edited after payment facts exist.')
-    balance = getattr(procurement, 'balance', None)
-    if _has_capital_activity(balance):
+    if _has_capital_activity(procurement):
         raise ValueError('Source cannot be edited after capital activity exists.')
 
 

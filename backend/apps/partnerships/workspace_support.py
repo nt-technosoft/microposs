@@ -96,7 +96,6 @@ def create_investment_agreement(
             currency=currency,
             notes=notes,
             client_request_id=client_request_id,
-            balances={},
         )
         for partner in partners:
             member = AgreementPartner.objects.create(
@@ -201,7 +200,6 @@ def add_agreement_contribution(
             notes=notes,
             client_request_id=client_request_id,
         )
-        _mutate_agreement_balance(agreement, currency, amount)
         if agreement.status == InvestmentAgreement.Status.OPEN:
             agreement.status = InvestmentAgreement.Status.ACTIVE
             agreement.save(update_fields=['status', 'updated_at'])
@@ -286,7 +284,6 @@ def add_agreement_withdrawal(
                 f'у выбранной стороны доступно только {money(available)} {currency}.'
             )
 
-        _mutate_agreement_balance(agreement, currency, -amount)
         withdrawal = AgreementWithdrawal.objects.create(
             tenant_id=tenant_id,
             agreement=agreement,
@@ -621,20 +618,6 @@ def _validate_agreement_formula(partners: list[dict], mudaraba_ratio: Decimal) -
             raise ValueError(
                 'Partner profit_share does not match planned capital shares and mudaraba_ratio.'
             )
-
-
-def _mutate_agreement_balance(agreement: InvestmentAgreement, currency: str, delta: Decimal) -> None:
-    currency = str(currency or 'UZS').upper()
-    balances = dict(agreement.balances or {})
-    next_value = Decimal(str(balances.get(currency, '0'))) + Decimal(str(delta))
-    if next_value < 0:
-        raise ValueError(
-            f'Недостаточно средств в договоре: доступно {money(balances.get(currency, "0"))} {currency}, '
-            f'нужно {money(abs(delta))} {currency}.'
-        )
-    balances[currency] = str(money(next_value))
-    agreement.balances = balances
-    agreement.save(update_fields=['balances', 'updated_at'])
 
 
 def _agreement_partner_available(

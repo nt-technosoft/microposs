@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.partnerships.models import PartnerLedgerEntry
+from apps.partnerships.models import AgreementAllocation, PartnerLedgerEntry
 from apps.partnerships.agreement_services import get_partner_aggregate
 from apps.sales.models import SalePayment
 from apps.sales.services import create_sale
@@ -40,18 +40,22 @@ class PartnerLedgerAggregateTests(TestCase):
 
         investor_capital_in = sum(
             (
-                contribution.amount
-                for contribution in procurement.balance.contributions.filter(
+                allocation.amount
+                for allocation in AgreementAllocation.objects.filter(
+                    procurement=procurement,
                     partner_id=ctx['investor'].id,
+                    direction=AgreementAllocation.Direction.TO_PROCUREMENT,
                 )
             ),
             Decimal('0.00'),
         )
         operator_capital_in = sum(
             (
-                contribution.amount
-                for contribution in procurement.balance.contributions.filter(
+                allocation.amount
+                for allocation in AgreementAllocation.objects.filter(
+                    procurement=procurement,
                     partner_id=ctx['operator'].id,
+                    direction=AgreementAllocation.Direction.TO_PROCUREMENT,
                 )
             ),
             Decimal('0.00'),

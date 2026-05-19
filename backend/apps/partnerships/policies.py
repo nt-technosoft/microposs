@@ -96,7 +96,7 @@ def evaluate_procurement_policy(context: ProcurementPolicyContext) -> Procuremen
         )
 
     if funding == OWN_FUNDS and context.has_procurement_balance:
-        blocked.append('OWN_FUNDS must not use ProcurementBalance.')
+        blocked.append('OWN_FUNDS must not carry partnership capital activity.')
 
     if funding == PARTNERSHIP:
         if not context.has_investment_agreement:
