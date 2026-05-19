@@ -1,7 +1,7 @@
 # E09 — Procurement Completeness (non-PREPAID, ON_SALE, returnability)
 
-**Статус:** `NOT_STARTED`
-**Прогресс:** 0%
+**Статус:** `IN_PROGRESS`
+**Прогресс:** ~30%
 **Зависит от:** E07, E08 (DONE)
 **Блокирует:** E03 (Net Value требует корректного учёта CONSIGNED inventory), частично E05
 
@@ -96,21 +96,21 @@ Backend-only рефакторинг без новой функционально
 
 ### Фаза 1 — Refactor (backend-only)
 
-- [ ] T-1.1 Добавить `Procurement.goods_ownership` поле (`OWNED | CONSIGNED`,
+- [x] T-1.1 Добавить `Procurement.goods_ownership` поле (`OWNED | CONSIGNED`,
       default `OWNED`) + миграция.
-- [ ] T-1.2 Переименовать `ProcurementTerms.Type.CONSIGNMENT` → `ON_SALE`;
+- [x] T-1.2 Переименовать `ProcurementTerms.Type.CONSIGNMENT` → `ON_SALE`;
       data migration (если есть CONSIGNMENT строки — выставить
       `Procurement.goods_ownership=CONSIGNED` для родительского procurement).
-- [ ] T-1.3 Добавить `Lot.is_owned` boolean; в `receive_workspace_batch`
+- [x] T-1.3 Добавить `Lot.is_owned` boolean; в `receive_workspace_batch`
       устанавливать из `procurement.goods_ownership` при создании.
-- [ ] T-1.4 Создать `validate_procurement_combination(funding_source,
+- [x] T-1.4 Создать `validate_procurement_combination(funding_source,
       payment_timing, goods_ownership)` в `policies.py`. Таблица легальных
       6 точек явно зафиксирована в коде.
-- [ ] T-1.5 Удалить MUSHARAKA legacy-нормализацию из `policies.py` +
+- [x] T-1.5 Удалить MUSHARAKA legacy-нормализацию из `policies.py` +
       связанный тест-страж.
-- [ ] T-1.6 Переименовать `ProcurementPolicyContext.has_procurement_balance`
+- [x] T-1.6 Переименовать `ProcurementPolicyContext.has_procurement_balance`
       → `has_partnership_capital_activity` (имя устарело после Phase 2).
-- [ ] T-1.7 Обновить тесты: `test_e07_procurement_policy.py` под новые
+- [x] T-1.7 Обновить тесты: `test_e07_procurement_policy.py` под новые
       имена, добавить invariant-тест на матрицу комбинаций.
 
 ### Фаза 2 — ON_SALE механика
@@ -154,9 +154,7 @@ Backend-only рефакторинг без новой функционально
   каждой продажей, или новый payable per sale? Первый вариант проще для
   UX («один счёт от поставщика»), второй точнее для аудита. **Решение в
   Фазе 2.**
-- **? Миграция существующих CONSIGNMENT.** Сколько строк в проде / dev?
-  Если 0 — простой rename миграция. Если есть — нужен data migration с
-  `goods_ownership=CONSIGNED`. **Проверить до Фазы 1.**
+- ~~**? Миграция существующих CONSIGNMENT.**~~ → решено 2026-05-19: в dev DB 0 строк в `Procurement` и `ProcurementTerms`, поэтому migration тривиальная — `RemoveField`/`AddField` без backfill. Применено в T-1.2.
 - **? SupplierReturn vs ConsignmentReturn — разделить или обобщить?**
   Архитектурно: оставить `ConsignmentReturn` для CONSIGNED-Lot returns
   (там consignment-specific логика), добавить отдельный `SupplierReturn`
