@@ -1,10 +1,25 @@
 # E07 — Procurement & Investment Workspace Re-architecture
 
-**Статус:** `IN_PROGRESS`
-**Прогресс:** 70%
-**Приоритет:** P0 — главный архитектурный цикл проекта
+**Статус:** 🟢 `DONE`
+**Прогресс:** 100% (закрыт 2026-05-19, переоценка после vacuum-брейншторма)
 **Зависит от:** E01, E04
-**Блокирует:** E03, E05, investor marketplace, стабильный procurement UX
+**Преемник:** E09 — Procurement Completeness (non-PREPAID, ON_SALE, returnability)
+
+> **Закрыто 2026-05-19** после vacuum-сессии. Controlled radical reset
+> достиг своей цели: partnership-track procurement workspace построен на
+> целевой архитектуре — единый `Procurement` с `FundingSource`,
+> `ReceiveBatch` с immutable snapshot, append-only ledger, `finance.Payment`
+> как универсальный документ оплаты. Что не было сделано в чек-листе
+> ниже — переоценено и распределено:
+>
+> - Frontend smoke tests (Phase D, Phase E) — отложены как преждевременная
+>   инфраструктура (architecture-first policy, no bureaucracy under
+>   unproven pain). Инварианты теперь покрыты бэкенд-тестами в
+>   `apps/core/tests/test_e08_sharia_invariants.py`.
+> - Расширение под non-PREPAID кредитные сценарии и ON_SALE для
+>   консигнации — выделены в новый эпик **E09 Procurement Completeness**.
+> - Поддержка returnability как cross-cutting функциональности — E09.3.
+> - Excel replay — отдельный track после стабилизации.
 
 ---
 

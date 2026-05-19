@@ -28,14 +28,24 @@
 | **E04** | Contract Types Formalization | 🟡 IN_PROGRESS | 60% | — | [→](./roadmap/E04-contract-types.md) |
 | **E05** | Zakat Calculation | ⏸️ PAUSED | 0% | E01, E02, E03 | [→](./roadmap/E05-zakat.md) |
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
-| **E07** | Procurement & Investment Workspace Re-architecture | 🟡 IN_PROGRESS | 70% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
-| **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟡 IN_PROGRESS | 90% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
+| **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
+| **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
+| **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | ⚪ NOT_STARTED | 0% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
 
-**🔥 Активный спринт / P0:** E07 (Procurement Workspace Phase D) + E08 (Architecture Cleanup).
-Стратегия E07: controlled radical reset — новый procurement/investment/payment core и новый frontend workspace, старый intake/procurement код используется только как reference до switch-over.
-E08 параллельно с E07: устраняет архитектурные долги (мёртвый код, дублирование источников правды для денежных балансов, FIFO loophole с `Lot.received_at`), не дублирует Phase D.
-E04 продолжается как связанный архитектурный контекст, E03/E05/E06 зависят от завершения E07 + E08.
-**E01/E02 завершены**: backend, frontend wizard, поставщики/оплаты, консигнационные возвраты, история связей товар↔поставщик.
+**🔥 Активный P0:** E09 — Procurement Completeness. Достраивает procurement matrix
+после controlled radical reset (E07/E08): non-PREPAID кредитные сценарии для
+OWN_FUNDS, расщепление CONSIGNMENT на независимые оси `payment_timing` и
+`goods_ownership`, returnability как cross-cutting attribute.
+
+**Закрыто (2026-05-19):** E07 (controlled radical reset партнёрского трека +
+canonical workspace flow) + E08 (cleanup, source-of-truth consolidation,
+FIFO loophole). Партнёрский приход, append-only ledger, derived balances,
+immutable lot snapshot, finance.Payment как универсальный документ —
+работают как target-архитектура.
+
+E04 — связанный архитектурный контекст. E03/E05/E06 ждут завершения E09.
+**E01/E02 завершены**: backend, frontend wizard, поставщики/оплаты,
+консигнационные возвраты, история связей товар↔поставщик.
 
 ---
 
@@ -44,16 +54,14 @@ E04 продолжается как связанный архитектурны�
 **Текущая последовательность работы:**
 
 ```
-E07 (новая архитектура Procurement + Investment Workspace) ──┐
-                                                              ├─→ E03 → E05 → E06
-E08 (cleanup, source-of-truth, гигиена legacy) ──────────────┘
+E07 + E08 (DONE 2026-05-19) ──→ E09 (Procurement Completeness) ──→ E03 → E05 → E06
 ```
 
-E07 и E08 идут параллельно/чередуясь: E08 устраняет долги, накопившиеся в
-controlled radical reset, E07 продолжает Phase D frontend workspace под
-прямым контролем founder'а. E03/E05/E06 не запускаются, пока E08 Фаза 2 не
-закрыта (без чистого источника правды Net Value / Zakat / Sharia
-сертификация не построятся).
+E07 + E08 закрыли controlled radical reset партнёрского трека и
+source-of-truth consolidation. E09 достраивает остальные комбинации
+procurement matrix (non-PREPAID кредитные, ON_SALE для консигнации,
+returnability), без этого Net Value / Zakat / Sharia certification
+не построятся корректно.
 
 E01/E02 завершены и теперь считаются историческим фундаментом, который может быть пересобран внутри E07. E04 идёт как связанный контекст для investment/contract layer.
 
