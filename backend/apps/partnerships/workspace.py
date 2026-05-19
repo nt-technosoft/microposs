@@ -977,6 +977,10 @@ def pay_workspace_costs(
     payment_currency = payload.get('currency') or cash_account.currency
     payment_fx_rate = payload.get('fx_rate')
 
+    terms = getattr(procurement, 'terms', None)
+    if terms is not None:
+        terms.activate()
+
     payment = record_generic_cash_payment(
         tenant_id=tenant_id,
         cash_account_id=cash_account.pk,
@@ -992,7 +996,6 @@ def pay_workspace_costs(
         notes=payload.get('notes', ''),
     )
 
-    terms = getattr(procurement, 'terms', None)
     if terms and terms.type == ProcurementTerms.Type.PARTIAL:
         # terms.paid_amount is derived from the finance.Payment we just
         # created (PROCUREMENT_COST target). Only status is stored.
@@ -1030,6 +1033,10 @@ def pay_workspace_supplier_payable(
         tenant_id=tenant_id,
         procurement=procurement,
     )
+
+    terms = getattr(procurement, 'terms', None)
+    if terms is not None:
+        terms.activate()
 
     allocations = payload.get('allocations')
     if not allocations:
@@ -1076,6 +1083,8 @@ def receive_workspace_batch(
             raise ValueError('INSTALLMENT settlement requires payment schedule.')
         if terms and terms.type == ProcurementTerms.Type.PARTIAL and not _has_procurement_cost_payment(locked):
             raise ValueError('PARTIAL settlement requires an upfront payment before receive.')
+        if terms is not None:
+            terms.activate()
         allowed_states = _receivable_line_states(locked, terms)
         requested_item_ids = {int(item_id) for item_id in payload.get('item_ids') or []}
         items_qs = (

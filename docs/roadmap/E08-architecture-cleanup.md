@@ -176,8 +176,14 @@ E08 не дублирует её, а указывает: после Фазы 2 �
       `BalanceWithdrawal`, `ProcurementBalanceExchange`.
 - [ ] T-2.7 `allocate_workspace_capital` переходит на прямой путь Agreement
       → BatchCapitalSnapshot (без посредника `ProcurementBalance`).
-- [ ] T-2.8 `ProcurementTerms` → `ImmutableMixin` после первого `Payment` или
-      `receive_batch`.
+- [x] T-2.8 `ProcurementTerms` → `ImmutableMixin` + `LifecycleState` (DRAFT/ACTIVE).
+      Per Variant A: ACTIVE — semantic fields frozen (только `status` /
+      `updated_at` остаются мутабельны); changes only via
+      `ProcurementTermsAmendment`. PREPAID активируется при создании
+      (synthetic full-settlement = факт), остальные типы — на первом
+      Payment / ReceiveBatch boundary (через `terms.activate()` в
+      `pay_workspace_costs`, `pay_workspace_supplier_payable`,
+      `receive_workspace_batch`).
 - [x] T-2.9 `SalePayment.account_id` → FK `finance.CashAccount`.
 - [x] T-2.10 `DividendPayment.paid_from_account_id` → FK `finance.CashAccount`.
 

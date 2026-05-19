@@ -180,8 +180,6 @@ def create_payable_from_procurement(
     if amount <= _ZERO:
         raise ValueError('Cannot create payable with non-positive amount.')
 
-    # paid_amount/remaining_amount/status are derived from finance.Payment.
-    # At payable creation, no Payments are linked yet → paid=0, status=OPEN.
     payable = SupplierPayable.objects.create(
         tenant_id=tenant_id,
         supplier_id=supplier_id,
@@ -194,6 +192,17 @@ def create_payable_from_procurement(
         reason=SupplierPayable.Reason.PROCUREMENT,
         deadline_date=deadline_date,
     )
+
+    # Pre-receive PROCUREMENT_COST payments against the procurement count
+    # against this payable too (same obligation, different phase). Reflect
+    # them in the initial stored status.
+    derived_paid = payable.paid_amount
+    if derived_paid >= amount:
+        payable.status = SupplierPayable.Status.FULLY_PAID
+        payable.save(update_fields=['status', 'updated_at'])
+    elif derived_paid > _ZERO:
+        payable.status = SupplierPayable.Status.PARTIALLY_PAID
+        payable.save(update_fields=['status', 'updated_at'])
     return payable
 
 

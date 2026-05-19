@@ -700,6 +700,14 @@ def _normalize_terms_values(terms_payload: dict) -> dict:
         if settlement_type == ProcurementTerms.Type.PREPAID
         else ProcurementTerms.Status.OPEN
     )
+    # PREPAID is locked the moment it is recorded — the synthetic settlement
+    # is already a fact, so lifecycle is ACTIVE. All other types start as
+    # DRAFT and activate at the first Payment / ReceiveBatch boundary.
+    initial_lifecycle = (
+        ProcurementTerms.LifecycleState.ACTIVE
+        if settlement_type == ProcurementTerms.Type.PREPAID
+        else ProcurementTerms.LifecycleState.DRAFT
+    )
 
     return {
         'type': settlement_type,
@@ -707,6 +715,7 @@ def _normalize_terms_values(terms_payload: dict) -> dict:
         'fx_rate_at_obligation': Decimal(str(terms_payload.get('fx_rate_at_obligation') or 1)),
         'total_amount_due': total_amount_due,
         'status': initial_status,
+        'lifecycle_state': initial_lifecycle,
         'deadline_date': terms_payload.get('deadline_date'),
         'consignment_agreement_id': terms_payload.get('consignment_agreement_id'),
         'notes': str(terms_payload.get('notes') or ''),

@@ -1107,12 +1107,26 @@ class ProcurementTerms(TenantModel):
         FULLY_PAID = 'FULLY_PAID', 'Полностью оплачены'
         CANCELLED = 'CANCELLED', 'Отменены'
 
+    class LifecycleState(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        ACTIVE = 'ACTIVE', 'Активный'
+
     procurement = models.OneToOneField(
         Procurement,
         on_delete=models.CASCADE,
         related_name='terms',
     )
     type = models.CharField(max_length=16, choices=Type.choices)
+    lifecycle_state = models.CharField(
+        max_length=8,
+        choices=LifecycleState.choices,
+        default=LifecycleState.DRAFT,
+        help_text=(
+            'DRAFT — terms still being negotiated, fully mutable. '
+            'ACTIVE — locked after first finance.Payment or ReceiveBatch; '
+            'semantic changes require ProcurementTermsAmendment.'
+        ),
+    )
     currency_of_obligation = models.CharField(max_length=3, default='UZS')
     fx_rate_at_obligation = models.DecimalField(
         max_digits=16,
@@ -1154,6 +1168,47 @@ class ProcurementTerms(TenantModel):
 
     def __str__(self):
         return f"Terms#{self.pk} type={self.type} status={self.status}"
+
+    _MUTABLE_AFTER_ACTIVATION = frozenset({
+        'status', 'lifecycle_state', 'updated_at',
+    })
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            original = ProcurementTerms.objects.filter(pk=self.pk).first()
+            if original is not None and original.lifecycle_state == self.LifecycleState.ACTIVE:
+                update_fields = kwargs.get('update_fields')
+                if update_fields is not None:
+                    changing = set(update_fields) - self._MUTABLE_AFTER_ACTIVATION
+                else:
+                    changing = set()
+                    for f in self._meta.fields:
+                        name = f.name
+                        if name in self._MUTABLE_AFTER_ACTIVATION:
+                            continue
+                        if getattr(original, name) != getattr(self, name):
+                            changing.add(name)
+                if changing:
+                    from apps.core.exceptions import ImmutableRecordError
+                    raise ImmutableRecordError(
+                        f"ProcurementTerms#{self.pk} is ACTIVE; "
+                        f"cannot modify {sorted(changing)}. Use "
+                        f"ProcurementTermsAmendment for semantic changes."
+                    )
+        super().save(*args, **kwargs)
+
+    def activate(self) -> bool:
+        """
+        Idempotent transition DRAFT → ACTIVE. Returns True if transition
+        happened, False if already ACTIVE. Called at the boundary moments
+        (first Payment, first ReceiveBatch) — see workspace_support for the
+        canonical activation points.
+        """
+        if self.lifecycle_state == self.LifecycleState.ACTIVE:
+            return False
+        self.lifecycle_state = self.LifecycleState.ACTIVE
+        self.save(update_fields=['lifecycle_state', 'updated_at'])
+        return True
 
     @property
     def paid_amount(self) -> Decimal:

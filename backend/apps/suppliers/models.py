@@ -151,24 +151,42 @@ class SupplierPayable(TenantModel):
     @property
     def paid_amount(self) -> Decimal:
         """
-        Derived: sum of linked finance.Payment(target=SUPPLIER_PAYABLE),
-        converted from each payment's functional UZS to this payable's
-        `currency_of_obligation` via `fx_rate_at_obligation` snapshot.
+        Derived: sum of finance.Payment rows that flowed against the same
+        underlying obligation — both PROCUREMENT_COST payments made against
+        the procurement before this payable existed, and SUPPLIER_PAYABLE
+        payments made directly against this payable after.
 
-        The snapshot rate is the contractual rate (set at obligation creation
-        and never revalued — Islamic accounting principle). Using it here
-        means obligation reduction is fixed in obligation-currency terms,
-        not floating with FX market.
+        The two targets represent two phases of the same supplier obligation
+        (upfront partial + post-receive remainder); pay_workspace_costs is
+        gated to OPEN procurement, so post-receive PROCUREMENT_COST writes
+        cannot double-count.
+
+        Functional UZS sum is then divided by `fx_rate_at_obligation`
+        (snapshot at obligation creation) to land in obligation currency —
+        the contractual rate, fixed and not revalued, per Islamic
+        accounting principle.
         """
         from apps.finance.models import Payment
-        from django.db.models import F, Sum
+        from django.db.models import F, Q, Sum
 
-        agg = Payment.objects.filter(
-            tenant_id=self.tenant_id,
+        targets = Q(
             target_type=Payment.TargetType.SUPPLIER_PAYABLE,
             target_id=self.pk,
-            status=Payment.Status.POSTED,
-        ).aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
+        )
+        if self.procurement_id is not None:
+            targets = targets | Q(
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=self.procurement_id,
+            )
+        agg = (
+            Payment.objects
+            .filter(
+                tenant_id=self.tenant_id,
+                status=Payment.Status.POSTED,
+            )
+            .filter(targets)
+            .aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
+        )
         total_uzs = agg['total_uzs'] or Decimal('0')
         rate = Decimal(str(self.fx_rate_at_obligation or 1))
         if rate == 0:
