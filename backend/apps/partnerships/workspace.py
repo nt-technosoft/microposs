@@ -1396,7 +1396,7 @@ def _payment_obligation_complete(procurement: Procurement, terms, payables) -> b
     if terms.type in (
         ProcurementTerms.Type.DEFERRED,
         ProcurementTerms.Type.INSTALLMENT,
-        ProcurementTerms.Type.CONSIGNMENT,
+        ProcurementTerms.Type.ON_SALE,
     ):
         return True
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:

@@ -241,11 +241,21 @@ class Procurement(ImmutableMixin, TenantModel):
         OWN_FUNDS = 'OWN_FUNDS', 'Собственные средства'
         PARTNERSHIP = 'PARTNERSHIP', 'Партнёрский капитал'
 
+    class GoodsOwnership(models.TextChoices):
+        OWNED = 'OWNED', 'Свой товар'
+        CONSIGNED = 'CONSIGNED', 'На реализации'
+
     funding_source = models.CharField(
         max_length=20,
         choices=FundingSource.choices,
         default=FundingSource.OWN_FUNDS,
         help_text='E07 target funding axis.',
+    )
+    goods_ownership = models.CharField(
+        max_length=12,
+        choices=GoodsOwnership.choices,
+        default=GoodsOwnership.OWNED,
+        help_text='E09: whether goods are owned by the business or on consignment.',
     )
     status = models.CharField(
         max_length=20,
@@ -1027,7 +1037,7 @@ class ProcurementTerms(TenantModel):
     Payment terms attached to a Procurement (OneToOne).
 
     Captures the obligation structure: type (PREPAID/PARTIAL/DEFERRED/
-    INSTALLMENT/CONSIGNMENT), obligation currency with FX snapshot, total
+    INSTALLMENT/ON_SALE), obligation currency with FX snapshot, total
     amount due, and (for DEFERRED) deadline / (for INSTALLMENT) a schedule
     in `suppliers.PaymentSchedule`.
 
@@ -1039,7 +1049,7 @@ class ProcurementTerms(TenantModel):
         PARTIAL = 'PARTIAL', 'Частичная оплата'
         DEFERRED = 'DEFERRED', 'Отсрочка'
         INSTALLMENT = 'INSTALLMENT', 'Рассрочка'
-        CONSIGNMENT = 'CONSIGNMENT', 'Консигнация'
+        ON_SALE = 'ON_SALE', 'Оплата после продажи'
 
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Открыты'
@@ -1095,7 +1105,7 @@ class ProcurementTerms(TenantModel):
         null=True,
         blank=True,
         related_name='procurement_terms',
-        help_text='Only for CONSIGNMENT type.',
+        help_text='Only for ON_SALE type.',
     )
     notes = models.TextField(blank=True, default='')
 

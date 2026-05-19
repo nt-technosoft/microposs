@@ -264,6 +264,10 @@ class Lot(TenantModel):
         ),
     )
     received_at = models.DateTimeField()
+    is_owned = models.BooleanField(
+        default=True,
+        help_text='E09: False for CONSIGNED lots — goods belong to supplier until sold.',
+    )
     is_active = models.BooleanField(
         default=True,
         help_text='False when total quantity_remaining across warehouses == 0.',
