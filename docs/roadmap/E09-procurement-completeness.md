@@ -156,6 +156,53 @@ Backend-only рефакторинг без новой функционально
   логично дать пользователю отдельный селектор «свой / на реализации»
   вместо смешанного с типом оплаты. **Решение после демо Фазы 1.**
 
+## MVP UX scope (зафиксировано 2026-05-19)
+
+Полноценный UI procurement должен покрыть 6 легальных комбинаций матрицы.
+Ниже — функциональный scope, отделяющий MVP от after-MVP, чтобы при
+проектировании карточек/секций не упереться в потолок и не делать лишнего.
+
+### В MVP (обязательно в первой реализации UI)
+
+- **Per-item ownership.** `goods_ownership` переносится с Procurement на
+  ProcurementItem. Реальный кейс: дистрибьютор шлёт 80% OWNED + 20%
+  CONSIGNED (free samples) в одной поставке. Архитектурный сдвиг —
+  влияет на `validate_procurement_combination` и legal-combinations
+  matrix. **Делать ДО основной UI работы.**
+- **Amendment items/expenses mid-receive.** Backend поддерживает
+  `ProcurementTermsAmendment` для terms; расширить для items/expenses.
+  UX — явный режим «амендмент» с записью before/after, иначе
+  пользователи начнут пересоздавать procurement-ы при любой
+  корректировке.
+- **Reverse receive batch.** Backend append-only, реверсал = новый
+  документ. UX — явный action «зафиксировать ошибку приёма» с
+  генерацией обратного движения и инверсией snapshot-а.
+- **Cancel procurement в OPEN после первого платежа.** Отдельное от
+  `terms.lifecycle` правило: запрет если есть `finance.Payment` или
+  ReceiveBatch, иначе можно. Чёткое правило в state machine.
+- **Discrepancy on receive с reason codes.** `damaged` / `missing` /
+  `quality_reject`. Поле на ReceiveBatchLine. Без reason codes данные
+  грязные, аудит невозможен.
+- **Document attachments на receive batch.** Минимум одно фото
+  накладной. Новая модель `ReceiveBatchAttachment` (или generic
+  attachment). Audit trail + supplier-trust.
+
+### After MVP (намеренно отложено)
+
+- **Returnability** (E09 Phase 3) — ~95% товаров невозвратные; делаем
+  когда появится реальная бизнес-боль.
+- **Cash-flow inline** — идёт пакетом с E03 Net Value.
+- **Templates / clone procurement** — quality-of-life, не блокер.
+- **Multi-editor conflict protection** — badge «кто редактирует»,
+  soft-lock. Текущая база уже позволяет нескольким пользователям
+  редактировать; защита от конфликтов — слой поверх, добавляется когда
+  команды реально начнут вступать в конфликты.
+
+### Не в scope E09 вообще
+
+Recurring procurement, QC gate, supplier scoring, barcode scan,
+currency mid-flight change, approval workflow, PO numbers, tax line.
+
 ## Решённые вопросы (история)
 
 - ✓ 2026-05-19: **`HYBRID` источник денег — не нужен.** PARTNERSHIP уже
