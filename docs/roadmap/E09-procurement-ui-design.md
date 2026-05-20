@@ -108,8 +108,15 @@ attachments.
 
 ### UX
 
-- **Терms split**: general timing (PREPAID/PARTIAL/etc.) — в top-карточке
-  «Поставщик+оплата». Детали (deadline, schedule) — в карточке «Оплата».
+- **Терms split**: general timing (PREPAID/PARTIAL/AT_RECEIPT/etc.) — в
+  top-карточке «Поставщик+оплата». Детали (deadline, schedule) — в
+  карточке «Оплата».
+- **Multi-payment per procurement разрешён** (revision 2026-05-20).
+  Блокирует редактирование items не первый payment, а `confirm`. После
+  confirm — accumulating payments + multiple ReceiveBatches.
+- **AT_RECEIPT — combined action** (новое 2026-05-20). Payment-карточка
+  скрыта; в карточке «Приём» primary action = «Принять и оплатить»,
+  одной транзакцией создаёт ReceiveBatch + Payment + Snapshot.
 - **Amendment с before/after**, hard cancel только в DRAFT.
 - **Discrepancy at receive**: per-line `qty_planned` vs `qty_received`
   + reason code (`damaged` / `missing_expected_later` / `quality_reject`
@@ -129,26 +136,109 @@ attachments.
 price» (для quick-created без цены) или опциональная подсказка о
 пересмотре цены (для существующих с изменившейся себестоимостью).
 
-## Conditional UI matrix (Step 5 preview)
+## Conditional UI matrix (full, 8 legal combinations)
 
-Полная матрица будет в Step 5. Carcass:
+### По оси `payment_timing`
 
-| Timing | Items | Payment section | Receive |
+| Timing | Items (после confirm) | Payment секция | Receive |
 |---|---|---|---|
-| PREPAID | Editable до первой оплаты | Single payment до receive | Receive после оплаты |
-| PARTIAL | Editable до confirm | Upfront + payable на остаток | Receive в любой момент |
-| DEFERRED | Editable до confirm | Payable + deadline picker | Receive раньше платежа |
-| INSTALLMENT | Editable до confirm | Schedule builder + payable N due dates | Receive раньше платежей |
-| ON_SALE | Editable до confirm | НЕТ (через продажи) | Receive создаёт CONSIGNED stock |
+| **PREPAID** | amendments only | Multi-payment, primary = «оплатить остаток» | Доступен только когда `Σ payments ≥ Σ cost of items being received` |
+| **AT_RECEIPT** | amendments only | **СКРЫТА** (объединена с Receive) | Combined action «Принять и оплатить» — одной транзакцией ReceiveBatch + Payment |
+| **PARTIAL** | amendments only | Upfront amount + payable на остаток + multi-payment | Available в любой момент |
+| **DEFERRED** | amendments only | Payable + deadline picker + multi-payment к payable | Available раньше платежей |
+| **INSTALLMENT** | amendments only | Schedule builder + payable с N due dates + multi-payment | Available раньше платежей |
+| **ON_SALE** | amendments only | **СКРЫТА** (накопительные obligations через продажи) | Создаёт CONSIGNED stock; payable per-sale |
 
-Плюс ось PARTNERSHIP добавляет:
-- Карточка «Финансирование» (capital allocation)
-- Header подсвечивает «партнёрский приход»
-- Перед confirm — обязательная привязка к InvestmentAgreement
+### По оси `funding_source`
 
-Плюс ось goods_ownership (после refactor T-MVP-1):
-- CONSIGNED: запрет landed expenses, отдельная подсветка в header,
-  receive создаёт `is_owned=false` lots
+**OWN_FUNDS**:
+- Карточка «Финансирование» скрыта целиком
+- Header нейтральный
+- Payment source = `CashAccount`
+
+**PARTNERSHIP**:
+- Карточка «Финансирование» появляется между «Расходы» и «Оплата»
+  - Capital allocation: planned shares + edit для actual
+  - Список AgreementContributions/Allocations для контекста
+- Header подсвечивает «Партнёрский приход — Договор #N — Инвестор: X»
+- Confirm требует привязки к `InvestmentAgreement`
+- Payment source = `CapitalPool` (через `AgreementAllocation`)
+
+### По оси `goods_ownership`
+
+**OWNED**: дефолт. Стандартный inventory journal при receive.
+
+**CONSIGNED**:
+- Header помечает «Товар на реализации»
+- Карточка «Расходы» **disabled** (landed expenses запрещены для CONSIGNED — guard на бэке)
+- Receive создаёт Lots с `is_owned=False`
+- Inventory journal при receive подавлен (нет 1100 debit)
+- Карточка «Оплата» в этой комбинации не используется напрямую — payable
+  накапливается через продажи (см. ON_SALE строку)
+
+### 8 легальных комбинаций (cross-product)
+
+| # | Funding | Timing | Ownership | UX-следствие |
+|---|---|---|---|---|
+| 1 | OWN_FUNDS | PREPAID | OWNED | Стандартный «оплатил → получил» |
+| 2 | OWN_FUNDS | **AT_RECEIPT** | OWNED | **Combined «принять и оплатить»** |
+| 3 | OWN_FUNDS | PARTIAL | OWNED | Upfront + payable |
+| 4 | OWN_FUNDS | DEFERRED | OWNED | Получил → плати к deadline |
+| 5 | OWN_FUNDS | INSTALLMENT | OWNED | Получил → плати по графику |
+| 6 | OWN_FUNDS | ON_SALE | CONSIGNED | Консигнация |
+| 7 | PARTNERSHIP | PREPAID | OWNED | Инвестор оплатил, потом получили |
+| 8 | PARTNERSHIP | **AT_RECEIPT** | OWNED | **Инвестор: combined принять+оплатить** |
+
+Все остальные точки (28 из 36) — blocked `validate_procurement_combination`.
+
+## Два UX-пути для одного procurement (Multi-payment scenario)
+
+Один и тот же экран поддерживает оба пути, пользователь выбирает естественно:
+
+**Путь A — «DRAFT весь период»** (для коротких циклов и неуверенности):
+- Procurement сидит в DRAFT в течение всей закупочной активности
+- Items / expenses свободно правятся, ничего не блокируется
+- Когда готов — confirm + payment + receive в одной сессии
+- Простой mental model, рекомендуется для одно-визитных закупок
+
+**Путь B — «Confirm в начале, накопительная активность»** (для долгих циклов, партнёрских):
+- Procurement создаётся, подтверждается early (фиксирует поставщика, агреемент, timing)
+- Дальше накопительно:
+  - Payments по мере фактических трат (multiple Payment-events)
+  - Amendments к items при необходимости (с записью before/after)
+  - Multiple ReceiveBatches по мере прибытия товара
+- Инвестор видит активность real-time
+- Рекомендуется для китайских поездок, многонедельных закупок
+
+UX не форсит выбор. Карточки «Оплата» и «Приём» естественно показывают
+multi-payment / multi-batch view когда нужно (если есть >1 событие).
+
+## Правила blocking (обновлено 2026-05-20)
+
+Что блокирует редактирование структуры procurement:
+
+1. **DRAFT → OPEN (confirm)**: блокирует items/expenses от silent edit.
+   После — только amendments с before/after.
+2. **Первый ReceiveBatch**: окончательно фиксирует Lot-snapshot для уже
+   принятых строк. Амендменты возможны только для НЕпринятых строк.
+3. **CLOSED**: всё заморожено, никаких изменений.
+
+Что НЕ блокирует (revision 2026-05-20):
+- Первый Payment **больше не блокирует items**. Multi-payment-flow
+  легитимен.
+- Может быть несколько ReceiveBatches с разными snapshots.
+
+### Особые правила по timing для receive
+
+- **PREPAID** + receive: разрешён только когда `Σ Payments ≥ Σ cost of items
+  being received in this batch`. То есть можно частично принять, если частично
+  оплачено.
+- **AT_RECEIPT** + receive: ReceiveBatch и Payment создаются атомарно одной
+  транзакцией. Decouple запрещён.
+- **DEFERRED / INSTALLMENT / PARTIAL** + receive: разрешён в любой момент
+  после confirm, payments могут быть до и после.
+- **ON_SALE** + receive: создаёт CONSIGNED stock без payable; обязательства
+  накапливаются через продажи (E09 Phase 2).
 
 ## MVP scope reminder (из E09 эпика)
 

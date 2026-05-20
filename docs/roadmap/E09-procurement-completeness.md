@@ -22,13 +22,15 @@ cross-cutting attribute. Без этого Net Value считается неко
 После E07 (controlled radical reset) и E08 (source-of-truth consolidation)
 партнёрский трек и базовая архитектура зацементированы. Vacuum-сессия от
 2026-05-19 показала, что procurement matrix лучше моделировать через 3
-независимые оси:
+независимые оси (расширены 2026-05-20 после уточнения семантики
+AT_RECEIPT):
 
 - **funding_source** — `OWN_FUNDS | PARTNERSHIP`
-- **payment_timing** — `PREPAID | PARTIAL | DEFERRED | INSTALLMENT | ON_SALE`
+- **payment_timing** — `PREPAID | AT_RECEIPT | PARTIAL | DEFERRED | INSTALLMENT | ON_SALE`
 - **goods_ownership** — `OWNED | CONSIGNED`
 
-Из 30 теоретических комбинаций легально 6. Сейчас в коде:
+Из 36 теоретических комбинаций легально **8** (расширилось с 6 после
+добавления AT_RECEIPT в обе legitimate-партнёрские точки). Сейчас в коде:
 
 - Ось `funding_source` есть как `Procurement.funding_source` ✓
 - Ось `payment_timing` живёт внутри `ProcurementTerms.type`, но **CONSIGNMENT
@@ -221,6 +223,29 @@ currency mid-flight change, approval workflow, PO numbers, tax line.
   Если бизнес хочет привлечь инвестора и взять у поставщика отсрочку —
   это разные procurement-ы или операционная проблема. Архитектура не
   моделирует.
+  → пересмотрено 2026-05-20 (см. ниже): добавлен AT_RECEIPT для
+  партнёрского, потому что AT_RECEIPT не делегирует финансирование
+  поставщику.
+- ✓ 2026-05-20: **AT_RECEIPT как 6-е значение payment_timing.**
+  Семантика — оплата в момент получения (один combined action
+  «принять и оплатить», без отдельной payment-карточки). Архитектурно
+  ближе к PREPAID (никакой A/P), но UX-радикально другое. Реальный
+  частый кейс: товар привозят, отдают деньги, оприходуют — одной
+  операцией.
+- ✓ 2026-05-20: **PARTNERSHIP допускает PREPAID и AT_RECEIPT.**
+  Пересмотр предыдущего правила. Реальное архитектурное требование к
+  партнёрскому: инвестор (или бизнес через агреемент) — источник
+  капитала, поставщик не даёт credit. Этому удовлетворяют ОБЕ —
+  PREPAID (capital flows до receive) и AT_RECEIPT (capital flows
+  одновременно с receive). НЕ удовлетворяют DEFERRED / INSTALLMENT /
+  PARTIAL / ON_SALE (там поставщик extends credit либо нет
+  upfront-commitment).
+- ✓ 2026-05-20: **Multi-payment per procurement разрешён.**
+  `confirm` (а не первый payment) блокирует редактирование items.
+  После confirm — sколько угодно Payments накопительно + сколько
+  угодно ReceiveBatch-ей. Это нужно для «китайских поездок» где
+  закупка идёт неделями: инвестор видит активность в real-time. Items
+  изменяются только через amendment с before/after.
 - ✓ 2026-05-19: **OPEN-1 — cost field для consignment obligation.** Используем `ProcurementItem.unit_purchase_price` (operation currency) + `item.fx_rate`, не `Lot.unit_purchase_price` (тот уже в UZS). Каждая продажа получает независимый snapshot.
 - ✓ 2026-05-19: **OPEN-2 — CONSIGNED receive не трогает финансы.** Guards в `_ensure_supplier_payable_after_receive` и `_record_receive_journal`: CONSIGNED → return early. Только Lot-записи с `is_owned=False`, никакого journal и никакого payable при receive.
 - ✓ 2026-05-19: **OPEN-3 — wire-up в create_sale.** Вызов `record_consignment_obligation_for_sale_line` после `SaleLine.objects.create` внутри FIFO-loop. `record_sale_cogs_journal` расширен `consignment_legs` — CR 2000 (A/P) вместо CR 1100 (Inventory) для CONSIGNED slice.
