@@ -30,7 +30,7 @@
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
-| **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🟡 IN_PROGRESS | ~65% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
+| **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🟡 IN_PROGRESS | ~85% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
 
 **🔥 Активный P0:** E09 — Procurement Completeness. Достраивает procurement matrix
 после controlled radical reset (E07/E08): non-PREPAID кредитные сценарии для

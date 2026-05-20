@@ -1,7 +1,7 @@
 # E09 — Procurement Completeness (non-PREPAID, ON_SALE, returnability)
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~65%
+**Прогресс:** ~85%
 **Зависит от:** E07, E08 (DONE)
 **Блокирует:** E03 (Net Value требует корректного учёта CONSIGNED inventory), частично E05
 
@@ -95,6 +95,17 @@ Backend-only рефакторинг без новой функционально
 если приоритет — Net Value (E03) сначала.
 
 ## Задачи (чек-лист)
+
+### Wave A — Backend preconditions for UI rebuild (DONE 2026-05-20)
+
+- [x] S-1: AT_RECEIPT timing — combined receive+pay action + policies guard + legal combinations expanded to 8
+- [x] S-2: Per-item goods_ownership — `Procurement.goods_ownership` → `@property`, field moved to `ProcurementItem`; MIXED derived
+- [x] S-3: Discrepancy reason codes on `ProcurementReceiveBatchLine` — `quantity_planned`, `quantity_received`, `discrepancy_reason`
+- [x] S-4: Generic `apps/attachments/` app — `Attachment` model, `attach_file`/`list_attachments`/`detach` services, API endpoints
+- [x] S-5: Cancel procurement action — `cancel_workspace_procurement` + `CANCEL_PROCUREMENT` action dispatch; blocked if payments or batches exist
+- [x] S-6: Reverse receive batch — `reverse_workspace_receive_batch` + `Lot.reversed` field + FIFO filter update; STRICT reject if lots sold (OPEN-S6.1 resolved)
+- [x] S-7: Amendment model — `ProcurementAmendment` (append-only), `apply_items_amendment`, `apply_expenses_amendment`; `payment_status` block in workspace payload (OPEN-S7.1 resolved: amendments don't touch payments)
+- [x] S-8: PREPAID receive coverage constraint — `_check_prepaid_coverage` in `receive_workspace_batch`; other timings exempt
 
 ### Фаза 1 — Refactor (backend-only)
 
@@ -254,3 +265,6 @@ currency mid-flight change, approval workflow, PO numbers, tax line.
   `ReceiveBatch.received_at` (timestamp), а не классификация procurement-а.
   Соответственно стадии «заказал → оплатил → получил» — state machine
   одного и того же Procurement, а не оси.
+- ✓ 2026-05-20: **Wave A backend завершено.** 8 слайсов, 42 теста (1 skipped — OPEN-S1.1 PARTNERSHIP×AT_RECEIPT pending Opus). Commits: feat(E09-wave-A-1) → feat(E09-wave-A-8) на ветке vacuum-rework-claude. Wave B (UI rebuild) под контролем founder'а.
+- ✓ 2026-05-20: **OPEN-S6.1 — STRICT reject при sold lots.** `reverse_workspace_receive_batch` поднимает ValueError если любой Lot из batch уже продан. Post-sale corrections — отдельный action, не в E09 MVP.
+- ✓ 2026-05-20: **OPEN-S7.1 — amendment не трогает payments.** `apply_items_amendment` / `apply_expenses_amendment` меняют только items/expenses. Delta поверхностируется через `payment_status` блок в workspace payload (obligation = item costs sum, paid = Payments sum). Пользователь сам инициирует refund/top-up.
