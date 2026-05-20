@@ -2034,6 +2034,7 @@ def _item_payload(item) -> dict:
         'unit_purchase_price': str(item.unit_purchase_price),
         'currency': item.currency,
         'fx_rate': str(item.fx_rate),
+        'goods_ownership': item.goods_ownership,
         'lifecycle_state': item.lifecycle_state,
         'payment_state': _legacy_payment_state(item.lifecycle_state),
         'received_quantity': str(_received_quantity(item)),

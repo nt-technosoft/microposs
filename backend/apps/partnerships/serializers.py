@@ -62,7 +62,8 @@ class ProcurementItemSerializer(serializers.ModelSerializer):
         model = ProcurementItem
         fields = [
             'id', 'product_variant', 'product_variant_name', 'quantity',
-            'unit_purchase_price', 'currency', 'fx_rate', 'lifecycle_state',
+            'unit_purchase_price', 'currency', 'fx_rate', 'goods_ownership',
+            'lifecycle_state',
         ]
         read_only_fields = ['id']
 
