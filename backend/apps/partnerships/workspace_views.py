@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -49,7 +50,7 @@ class ProcurementWorkspaceDetailView(APIView):
     permission_classes = [IsOwner | IsWarehouse]
 
     def get_object(self, request, pk: int):
-        return workspace_queryset(request.tenant_id).get(pk=pk)
+        return get_object_or_404(workspace_queryset(request.tenant_id), pk=pk)
 
     def get(self, request, pk: int):
         return Response(build_workspace_payload(self.get_object(request, pk)))
@@ -59,7 +60,7 @@ class ProcurementWorkspaceActionView(APIView):
     permission_classes = [IsOwner | IsWarehouse]
 
     def post(self, request, pk: int, action: str):
-        procurement = workspace_queryset(request.tenant_id).get(pk=pk)
+        procurement = get_object_or_404(workspace_queryset(request.tenant_id), pk=pk)
         try:
             procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
