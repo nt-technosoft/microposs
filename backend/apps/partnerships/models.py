@@ -477,6 +477,13 @@ class ProcurementReceiveBatch(TenantModel):
 class ProcurementReceiveBatchLine(TenantModel):
     """A received procurement item snapshot inside a receive batch."""
 
+    class DiscrepancyReason(models.TextChoices):
+        NONE = 'NONE', 'Без расхождения'
+        MISSING_EXPECTED_LATER = 'MISSING_EXPECTED_LATER', 'Не привезли, ждём'
+        DAMAGED = 'DAMAGED', 'Повреждён'
+        QUALITY_REJECT = 'QUALITY_REJECT', 'Отказ по качеству'
+        ACCEPT_AS_SHORTFALL = 'ACCEPT_AS_SHORTFALL', 'Закрыть с недостачей'
+
     batch = models.ForeignKey(
         ProcurementReceiveBatch,
         on_delete=models.CASCADE,
@@ -492,7 +499,13 @@ class ProcurementReceiveBatchLine(TenantModel):
         on_delete=models.PROTECT,
         related_name='receive_batch_line',
     )
-    quantity = models.DecimalField(max_digits=14, decimal_places=3)
+    quantity_planned = models.DecimalField(max_digits=14, decimal_places=3)
+    quantity_received = models.DecimalField(max_digits=14, decimal_places=3, default=Decimal('0'))
+    discrepancy_reason = models.CharField(
+        max_length=30,
+        choices=DiscrepancyReason.choices,
+        default=DiscrepancyReason.NONE,
+    )
     unit_purchase_price_uzs = models.DecimalField(max_digits=20, decimal_places=2)
     allocated_expense_uzs = models.DecimalField(max_digits=20, decimal_places=2)
     landed_cost_per_unit_uzs = models.DecimalField(max_digits=20, decimal_places=2)

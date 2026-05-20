@@ -88,7 +88,8 @@ class ProcurementReceiveBatchLineSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProcurementReceiveBatchLine
         fields = [
-            'id', 'item', 'lot', 'product_variant_name', 'quantity',
+            'id', 'item', 'lot', 'product_variant_name',
+            'quantity_planned', 'quantity_received', 'discrepancy_reason',
             'unit_purchase_price_uzs', 'allocated_expense_uzs', 'landed_cost_per_unit_uzs',
         ]
         read_only_fields = ['id']

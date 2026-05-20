@@ -1097,6 +1097,31 @@ def receive_workspace_batch(
             raise ValueError('No receivable items selected.')
 
         selected_item_ids = {item.id for item in items}
+
+        # Parse and validate discrepancy info from payload (Slice 3 / Wave A)
+        raw_discrepancies = payload.get('item_discrepancies') or {}
+        discrepancy_map: dict[int, dict] = {}
+        for item in items:
+            raw = raw_discrepancies.get(str(item.id)) or raw_discrepancies.get(item.id) or {}
+            qty_planned = Decimal(str(item.quantity))
+            qty_received_raw = raw.get('qty_received')
+            qty_received = Decimal(str(qty_received_raw)) if qty_received_raw is not None else qty_planned
+            reason = str(raw.get('discrepancy_reason') or ProcurementReceiveBatchLine.DiscrepancyReason.NONE).upper()
+            if qty_received > qty_planned:
+                raise ValueError(
+                    f'Item #{item.id}: qty_received ({qty_received}) cannot exceed '
+                    f'qty_planned ({qty_planned}).'
+                )
+            if qty_received < qty_planned and reason == ProcurementReceiveBatchLine.DiscrepancyReason.NONE:
+                raise ValueError(
+                    f'Item #{item.id}: discrepancy_reason is required when qty_received ({qty_received}) '
+                    f'< qty_planned ({qty_planned}).'
+                )
+            discrepancy_map[item.id] = {
+                'qty_received': qty_received,
+                'reason': reason,
+            }
+
         has_delayed_lines = ProcurementItem.objects.filter(
             tenant_id=tenant_id,
             procurement=locked,
@@ -1149,11 +1174,27 @@ def receive_workspace_batch(
 
         from apps.inventory.models import Lot, LotStock, StockMovement
 
+        items_to_mark_received: list[int] = []
+
         for item, allocated_expense_uzs in zip(items, expense_allocations_uzs):
+            disc = discrepancy_map[item.id]
+            qty_received = disc['qty_received']
+            discrepancy_reason = disc['reason']
+            qty_planned = Decimal(str(item.quantity))
+
+            # ACCEPT_AS_SHORTFALL → consider item fully received at qty_received
+            if discrepancy_reason == ProcurementReceiveBatchLine.DiscrepancyReason.ACCEPT_AS_SHORTFALL:
+                ProcurementItem.objects.filter(pk=item.id).update(quantity=qty_received)
+                item.quantity = qty_received
+                items_to_mark_received.append(item.id)
+            elif qty_received >= qty_planned:
+                items_to_mark_received.append(item.id)
+            # else: partial with MISSING_EXPECTED_LATER/DAMAGED/QUALITY_REJECT → item stays open
+
             item_unit_price_uzs = (
                 Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
             ).quantize(Decimal('0.01'))
-            quantity = int(Decimal(str(item.quantity)))
+            quantity = int(qty_received)
             if quantity <= 0:
                 raise ValueError('Item quantity must be positive.')
             landed_per_unit = (
@@ -1191,7 +1232,9 @@ def receive_workspace_batch(
                 batch=batch,
                 item=item,
                 lot=lot,
-                quantity=item.quantity,
+                quantity_planned=qty_planned,
+                quantity_received=qty_received,
+                discrepancy_reason=discrepancy_reason,
                 unit_purchase_price_uzs=item_unit_price_uzs,
                 allocated_expense_uzs=allocated_expense_uzs,
                 landed_cost_per_unit_uzs=landed_per_unit,
@@ -1205,10 +1248,11 @@ def receive_workspace_batch(
                 allocated_amount_uzs=_expense_value_uzs(expense),
             )
 
-        ProcurementItem.objects.filter(pk__in=[item.id for item in items]).update(
-            lifecycle_state=ProcurementItem.LifecycleState.RECEIVED,
-            updated_at=received_at,
-        )
+        if items_to_mark_received:
+            ProcurementItem.objects.filter(pk__in=items_to_mark_received).update(
+                lifecycle_state=ProcurementItem.LifecycleState.RECEIVED,
+                updated_at=received_at,
+            )
         if expenses:
             ProcurementExpense.objects.filter(pk__in=[expense.id for expense in expenses]).update(
                 lifecycle_state=ProcurementExpense.LifecycleState.RECEIVED,
@@ -1907,7 +1951,7 @@ def _legacy_payment_state(lifecycle_state: str) -> str:
 
 def _received_quantity(item) -> Decimal:
     total = sum(
-        (Decimal(str(row.quantity)) for row in item.receive_batch_lines.all()),
+        (Decimal(str(row.quantity_received)) for row in item.receive_batch_lines.all()),
         Decimal('0'),
     )
     return total.quantize(Decimal('0.001'))
