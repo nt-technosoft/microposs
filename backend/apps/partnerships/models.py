@@ -1046,6 +1046,7 @@ class ProcurementTerms(TenantModel):
 
     class Type(models.TextChoices):
         PREPAID = 'PREPAID', 'Полная предоплата'
+        AT_RECEIPT = 'AT_RECEIPT', 'Оплата по получению'
         PARTIAL = 'PARTIAL', 'Частичная оплата'
         DEFERRED = 'DEFERRED', 'Отсрочка'
         INSTALLMENT = 'INSTALLMENT', 'Рассрочка'

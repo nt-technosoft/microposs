@@ -19,24 +19,27 @@ OWNED = Procurement.GoodsOwnership.OWNED
 CONSIGNED = Procurement.GoodsOwnership.CONSIGNED
 
 PREPAID = ProcurementTerms.Type.PREPAID
+AT_RECEIPT = ProcurementTerms.Type.AT_RECEIPT
 PARTIAL = ProcurementTerms.Type.PARTIAL
 DEFERRED = ProcurementTerms.Type.DEFERRED
 INSTALLMENT = ProcurementTerms.Type.INSTALLMENT
 ON_SALE = ProcurementTerms.Type.ON_SALE
 
-OWN_FUNDS_SETTLEMENTS = (PREPAID, PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
-PARTNERSHIP_SETTLEMENTS = (PREPAID,)
+OWN_FUNDS_SETTLEMENTS = (PREPAID, AT_RECEIPT, PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
+PARTNERSHIP_SETTLEMENTS = (PREPAID, AT_RECEIPT)
 SUPPLIER_REQUIRED_SETTLEMENTS = (PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
 
 # Legal procurement combinations: (funding_source, payment_timing, goods_ownership).
 # All other combinations are illegal and will be rejected by validate_procurement_combination.
 LEGAL_COMBINATIONS = frozenset({
     (OWN_FUNDS, PREPAID, OWNED),
+    (OWN_FUNDS, AT_RECEIPT, OWNED),
     (OWN_FUNDS, PARTIAL, OWNED),
     (OWN_FUNDS, DEFERRED, OWNED),
     (OWN_FUNDS, INSTALLMENT, OWNED),
     (OWN_FUNDS, ON_SALE, CONSIGNED),
     (PARTNERSHIP, PREPAID, OWNED),
+    (PARTNERSHIP, AT_RECEIPT, OWNED),
 })
 
 

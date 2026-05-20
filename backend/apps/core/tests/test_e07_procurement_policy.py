@@ -24,6 +24,7 @@ class ProcurementPolicyTests(SimpleTestCase):
             result.allowed_settlements,
             (
                 ProcurementTerms.Type.PREPAID,
+                ProcurementTerms.Type.AT_RECEIPT,
                 ProcurementTerms.Type.PARTIAL,
                 ProcurementTerms.Type.DEFERRED,
                 ProcurementTerms.Type.INSTALLMENT,
@@ -57,7 +58,7 @@ class ProcurementPolicyTests(SimpleTestCase):
                 ),
             )
 
-    def test_partnership_allows_only_prepaid_in_mvp(self):
+    def test_partnership_allows_prepaid_and_at_receipt(self):
         result = evaluate_procurement_policy(
             ProcurementPolicyContext(
                 funding_source=Procurement.FundingSource.PARTNERSHIP,
@@ -68,7 +69,10 @@ class ProcurementPolicyTests(SimpleTestCase):
         )
 
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.allowed_settlements, (ProcurementTerms.Type.PREPAID,))
+        self.assertEqual(
+            result.allowed_settlements,
+            (ProcurementTerms.Type.PREPAID, ProcurementTerms.Type.AT_RECEIPT),
+        )
         self.assertIn('capital', result.visible_sections)
         self.assertIn('pay_from_capital_pool', result.allowed_actions)
 

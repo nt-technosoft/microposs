@@ -919,6 +919,9 @@ def pay_workspace_costs(
 ) -> Payment:
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
         raise ValueError('PARTNERSHIP cost payments require capital pool actions first.')
+    terms = getattr(procurement, 'terms', None)
+    if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
+        raise ValueError('AT_RECEIPT procurement pays only at receive moment, use receive action.')
     if procurement.status != Procurement.Status.OPEN:
         raise ValueError('Costs can be paid only while procurement is OPEN.')
 
@@ -1002,6 +1005,9 @@ def pay_workspace_supplier_payable(
     payload: dict,
     client_request_id: str | None = None,
 ):
+    terms = getattr(procurement, 'terms', None)
+    if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
+        raise ValueError('AT_RECEIPT procurement pays only at receive moment, use receive action.')
     payable_id = payload.get('payable_id')
     if not payable_id:
         raise ValueError('payable_id is required.')
@@ -1060,6 +1066,14 @@ def receive_workspace_batch(
             raise ValueError('INSTALLMENT settlement requires payment schedule.')
         if terms and terms.type == ProcurementTerms.Type.PARTIAL and not _has_procurement_cost_payment(locked):
             raise ValueError('PARTIAL settlement requires an upfront payment before receive.')
+        if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
+            if not payload.get('payment_payload'):
+                raise ValueError('AT_RECEIPT procurement requires payment_payload in receive action.')
+            if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+                raise ValueError(
+                    'OPEN-S1.1: PARTNERSHIP × AT_RECEIPT payment allocation needs architect decision. '
+                    'See E09-wave-A-execution-plan.md Slice 1 OPEN-S1.1.'
+                )
         if terms is not None:
             terms.activate()
         allowed_states = _receivable_line_states(locked, terms)
@@ -1208,6 +1222,33 @@ def receive_workspace_batch(
             received_at=received_at,
         )
         upsert_supplier_links_for_items(tenant_id, locked, items, received_at)
+
+        at_receipt_payment = None
+        if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
+            pp = payload['payment_payload']
+            cash_account = CashAccount.objects.get(
+                pk=pp['cash_account_id'], tenant_id=tenant_id, is_active=True,
+            )
+            at_receipt_payment = record_generic_cash_payment(
+                tenant_id=tenant_id,
+                cash_account_id=cash_account.pk,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=locked.pk,
+                amount=Decimal(str(pp['amount'])),
+                currency=pp.get('currency') or cash_account.currency,
+                fx_rate=pp.get('fx_rate'),
+                counterpart_account_code='1100',
+                operation_type='procurement_payment',
+                description=f'Procurement #{locked.pk} AT_RECEIPT payment',
+                client_request_id=pp.get('client_request_id'),
+                notes=pp.get('notes', ''),
+            )
+            terms.refresh_from_db()
+            new_status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
+            if new_status != terms.status:
+                terms.status = new_status
+                terms.save(update_fields=['status', 'updated_at'])
+
         publish_event(
             event_type='procurement.receive_batch_posted',
             payload={
@@ -1217,6 +1258,7 @@ def receive_workspace_batch(
                 'items_count': len(items),
                 'total_inventory_uzs': str(total_inventory_uzs),
                 'payable_id': payable.id if payable else None,
+                'at_receipt_payment_id': at_receipt_payment.id if at_receipt_payment else None,
             },
             tenant_id=tenant_id,
         )
