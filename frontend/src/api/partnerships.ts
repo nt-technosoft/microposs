@@ -2,7 +2,7 @@ import api from './client'
 
 export type WorkspaceStatus = 'OPEN' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CLOSED' | 'CANCELLED'
 export type WorkspaceFundingSource = 'OWN_FUNDS' | 'PARTNERSHIP'
-export type WorkspaceSettlementType = 'PREPAID' | 'PARTIAL' | 'DEFERRED' | 'INSTALLMENT' | 'CONSIGNMENT'
+export type WorkspaceSettlementType = 'PREPAID' | 'AT_RECEIPT' | 'PARTIAL' | 'DEFERRED' | 'INSTALLMENT' | 'ON_SALE'
 export type WorkspaceSectionKey = 'overview' | 'source' | 'items' | 'settlement' | 'capital' | 'receive' | 'history'
 export type WorkspaceFlowStepKey =
   | 'purchase_intent'
