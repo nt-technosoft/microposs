@@ -223,15 +223,14 @@ class LotOwnershipInvariants(TestCase):
             funding_source=Procurement.FundingSource.OWN_FUNDS,
             supplier_id=ctx['supplier'].id,
         )
-        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
-        proc.save(update_fields=['goods_ownership'])
         dispatch_workspace_action(
             tenant_id=ctx['business'].id,
             procurement=proc,
             action='UPDATE_ITEMS',
             payload={'payload': {
                 'items': [{'product_variant_id': ctx['variant'].id, 'quantity': 5,
-                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1'}],
+                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1',
+                           'goods_ownership': 'CONSIGNED'}],
                 'expenses': [],
             }},
         )
@@ -254,13 +253,12 @@ class LotOwnershipInvariants(TestCase):
             funding_source=Procurement.FundingSource.OWN_FUNDS,
             supplier_id=ctx['supplier'].id,
         )
-        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
-        proc.save(update_fields=['goods_ownership'])
         dispatch_workspace_action(
             tenant_id=ctx['business'].id, procurement=proc, action='UPDATE_ITEMS',
             payload={'payload': {
                 'items': [{'product_variant_id': ctx['variant'].id, 'quantity': 10,
-                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1'}],
+                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1',
+                           'goods_ownership': 'CONSIGNED'}],
                 'expenses': [],
             }},
         )
@@ -283,9 +281,6 @@ class LotOwnershipInvariants(TestCase):
             funding_source=Procurement.FundingSource.OWN_FUNDS,
             supplier_id=ctx['supplier'].id,
         )
-        proc.goods_ownership = Procurement.GoodsOwnership.CONSIGNED
-        proc.save(update_fields=['goods_ownership'])
-
         dispatch_workspace_action(
             tenant_id=ctx['business'].id,
             procurement=proc,
@@ -297,6 +292,7 @@ class LotOwnershipInvariants(TestCase):
                     'unit_purchase_price': '5000.00',
                     'currency': 'UZS',
                     'fx_rate': '1',
+                    'goods_ownership': 'CONSIGNED',
                 }],
                 'expenses': [],
             }},

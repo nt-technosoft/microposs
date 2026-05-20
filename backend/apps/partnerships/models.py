@@ -244,18 +244,14 @@ class Procurement(ImmutableMixin, TenantModel):
     class GoodsOwnership(models.TextChoices):
         OWNED = 'OWNED', 'Свой товар'
         CONSIGNED = 'CONSIGNED', 'На реализации'
+        # MIXED is derived (not stored) — returned by Procurement.goods_ownership property
+        MIXED = 'MIXED', 'Смешанный'
 
     funding_source = models.CharField(
         max_length=20,
         choices=FundingSource.choices,
         default=FundingSource.OWN_FUNDS,
         help_text='E07 target funding axis.',
-    )
-    goods_ownership = models.CharField(
-        max_length=12,
-        choices=GoodsOwnership.choices,
-        default=GoodsOwnership.OWNED,
-        help_text='E09: whether goods are owned by the business or on consignment.',
     )
     status = models.CharField(
         max_length=20,
@@ -306,6 +302,20 @@ class Procurement(ImmutableMixin, TenantModel):
     def __str__(self):
         return f"Procurement#{self.pk} {self.funding_source}/{self.status}"
 
+    @property
+    def goods_ownership(self) -> str:
+        """Derived from ProcurementItem.goods_ownership — OWNED, CONSIGNED, or MIXED."""
+        ownerships = set(
+            self.items.values_list('goods_ownership', flat=True).distinct()
+        )
+        if not ownerships:
+            return self.GoodsOwnership.OWNED
+        if ownerships == {'OWNED'}:
+            return self.GoodsOwnership.OWNED
+        if ownerships == {'CONSIGNED'}:
+            return self.GoodsOwnership.CONSIGNED
+        return self.GoodsOwnership.MIXED
+
 
 class ProcurementItem(TenantModel):
     """A line item on a procurement — product variant + planned quantity."""
@@ -330,6 +340,15 @@ class ProcurementItem(TenantModel):
     unit_purchase_price = models.DecimalField(max_digits=14, decimal_places=6)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    goods_ownership = models.CharField(
+        max_length=12,
+        choices=[
+            (Procurement.GoodsOwnership.OWNED, Procurement.GoodsOwnership.OWNED.label),
+            (Procurement.GoodsOwnership.CONSIGNED, Procurement.GoodsOwnership.CONSIGNED.label),
+        ],
+        default=Procurement.GoodsOwnership.OWNED,
+        help_text='E09 Wave A: per-item ownership axis (OWNED or CONSIGNED).',
+    )
     lifecycle_state = models.CharField(
         max_length=24,
         choices=LifecycleState.choices,

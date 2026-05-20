@@ -17,6 +17,7 @@ PARTNERSHIP = Procurement.FundingSource.PARTNERSHIP
 
 OWNED = Procurement.GoodsOwnership.OWNED
 CONSIGNED = Procurement.GoodsOwnership.CONSIGNED
+MIXED = Procurement.GoodsOwnership.MIXED
 
 PREPAID = ProcurementTerms.Type.PREPAID
 AT_RECEIPT = ProcurementTerms.Type.AT_RECEIPT
@@ -40,6 +41,12 @@ LEGAL_COMBINATIONS = frozenset({
     (OWN_FUNDS, ON_SALE, CONSIGNED),
     (PARTNERSHIP, PREPAID, OWNED),
     (PARTNERSHIP, AT_RECEIPT, OWNED),
+    # MIXED: OWNED + CONSIGNED items in one procurement (OWN_FUNDS only, no ON_SALE)
+    (OWN_FUNDS, PREPAID, MIXED),
+    (OWN_FUNDS, AT_RECEIPT, MIXED),
+    (OWN_FUNDS, PARTIAL, MIXED),
+    (OWN_FUNDS, DEFERRED, MIXED),
+    (OWN_FUNDS, INSTALLMENT, MIXED),
 })
 
 

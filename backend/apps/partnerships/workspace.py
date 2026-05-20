@@ -435,12 +435,16 @@ def dispatch_workspace_action(
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
     item_id = row.get('id') or row.get('item_id')
+    raw_ownership = str(row.get('goods_ownership') or Procurement.GoodsOwnership.OWNED).upper()
+    if raw_ownership not in (Procurement.GoodsOwnership.OWNED, Procurement.GoodsOwnership.CONSIGNED):
+        raise ValueError(f'Invalid goods_ownership value for item: {raw_ownership}. Use OWNED or CONSIGNED.')
     values = {
         'product_variant_id': int(row['product_variant_id']),
         'quantity': Decimal(str(row['quantity'])),
         'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
         'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
+        'goods_ownership': raw_ownership,
     }
     if item_id:
         item = _draft_item_for_update(tenant_id, procurement, int(item_id))
@@ -1164,7 +1168,7 @@ def receive_workspace_batch(
                 landed_cost_per_unit=landed_per_unit,
                 contract_snapshot=contract_snapshot,
                 received_at=received_at,
-                is_owned=(locked.goods_ownership == Procurement.GoodsOwnership.OWNED),
+                is_owned=(item.goods_ownership == Procurement.GoodsOwnership.OWNED),
                 is_active=True,
             )
             LotStock.objects.create(
