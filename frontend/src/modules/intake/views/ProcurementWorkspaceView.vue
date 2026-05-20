@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
@@ -9,6 +9,7 @@ import ProcurementBottomActionBar from '@/modules/intake/components/workspace/Pr
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
 import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
 import ProcurementCardExpenses from '@/modules/intake/components/workspace/ProcurementCardExpenses.vue'
+import ProcurementCardFinancing from '@/modules/intake/components/workspace/ProcurementCardFinancing.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
@@ -18,6 +19,10 @@ const { procurement, isLoading, error } = storeToRefs(store)
 const toast = useToast()
 
 const supplierPickerOpen = ref(false)
+
+const isPartnership = computed(() =>
+  procurement.value?.documents.source.funding_source === 'PARTNERSHIP',
+)
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -79,6 +84,22 @@ async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<vo
     await store.dispatch('UPDATE_EXPENSES', { expenses })
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Не удалось обновить расходы')
+  }
+}
+
+async function onLinkAgreement(agreementId: number): Promise<void> {
+  try {
+    await store.dispatch('LINK_INVESTMENT_AGREEMENT', { agreement_id: agreementId })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось привязать договор')
+  }
+}
+
+async function onSaveAllocations(allocations: Array<{ partner_id: number; amount: string }>): Promise<void> {
+  try {
+    await store.dispatch('ALLOCATE_CAPITAL', { allocations })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось сохранить распределение')
   }
 }
 
@@ -158,6 +179,12 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @update-expenses="onUpdateExpenses"
           @delete-expense="onDeleteExpense"
+        />
+        <ProcurementCardFinancing
+          v-if="isPartnership"
+          :procurement="procurement"
+          @link-agreement="onLinkAgreement"
+          @save-allocations="onSaveAllocations"
         />
       </div>
     </main>
