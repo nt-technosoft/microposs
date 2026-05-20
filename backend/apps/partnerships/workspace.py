@@ -2062,13 +2062,19 @@ def _payment_status_block(terms, payments: list, items=None) -> dict:
     Obligation is derived from current item costs (UZS) so amendments are immediately reflected."""
     if items is not None:
         obligation = sum(
-            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
-            for item in items
-            if item.lifecycle_state not in ('CANCELLED', 'RECEIVED')
+            (
+                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
+                for item in items
+                if item.lifecycle_state not in ('CANCELLED', 'RECEIVED')
+            ),
+            Decimal('0'),
         ).quantize(Decimal('0.01'))
     else:
         obligation = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
-    paid = sum(Decimal(str(p.amount)) for p in payments).quantize(Decimal('0.01')) if payments else Decimal('0')
+    paid = (
+        sum((Decimal(str(p.amount)) for p in payments), Decimal('0')).quantize(Decimal('0.01'))
+        if payments else Decimal('0')
+    )
     delta = paid - obligation
     if obligation == 0 and paid == 0:
         state = 'unpaid'
@@ -2258,7 +2264,10 @@ def _receive_batch_payload(batch) -> dict:
                 'lot_id': line.lot_id,
                 'product_variant_id': line.item.product_variant_id,
                 'product_variant_name': str(line.item.product_variant),
-                'quantity': str(line.quantity),
+                'quantity_planned': str(line.quantity_planned),
+                'quantity_received': str(line.quantity_received),
+                'quantity': str(line.quantity_received),
+                'discrepancy_reason': line.discrepancy_reason,
                 'unit_purchase_price_uzs': str(line.unit_purchase_price_uzs),
                 'allocated_expense_uzs': str(line.allocated_expense_uzs),
                 'landed_cost_per_unit_uzs': str(line.landed_cost_per_unit_uzs),
