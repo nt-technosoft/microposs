@@ -63,6 +63,7 @@ ACTION_MAP = {
     'receive': 'RECEIVE_BATCH',
     'amend_terms': 'AMEND_SETTLEMENT',
     'view_history': 'VIEW_HISTORY',
+    'cancel': 'CANCEL_PROCUREMENT',
 }
 
 SECTION_TITLES = {
@@ -430,7 +431,62 @@ def dispatch_workspace_action(
             payload=mutation_payload,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'CANCEL_PROCUREMENT':
+        return cancel_workspace_procurement(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            payload=mutation_payload,
+        )
     raise ValueError(f'Workspace action {action} is not implemented yet.')
+
+
+def cancel_workspace_procurement(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    payload: dict,
+) -> Procurement:
+    with transaction.atomic():
+        locked = Procurement.objects.select_for_update().get(pk=procurement.pk, tenant_id=tenant_id)
+
+        if locked.status in (
+            Procurement.Status.PARTIALLY_RECEIVED,
+            Procurement.Status.RECEIVED,
+            Procurement.Status.CLOSED,
+        ):
+            raise ValueError(
+                f'Cannot cancel procurement in status {locked.status}. '
+                f'Only OPEN procurements with no payments or receive batches can be cancelled.'
+            )
+        if locked.status == Procurement.Status.CANCELLED:
+            return locked
+
+        if locked.status == Procurement.Status.OPEN:
+            has_payment = Payment.objects.filter(
+                tenant_id=tenant_id,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=locked.pk,
+            ).exists()
+            if has_payment:
+                raise ValueError('Cannot cancel OPEN procurement with existing payments.')
+            has_batch = locked.receive_batches.exists()
+            if has_batch:
+                raise ValueError('Cannot cancel OPEN procurement with existing receive batches.')
+
+        locked.status = Procurement.Status.CANCELLED
+        locked.save(update_fields=['status', 'updated_at'])
+
+        terms = getattr(locked, 'terms', None)
+        if terms is not None:
+            terms.lifecycle_state = ProcurementTerms.LifecycleState.DRAFT
+            terms.save(update_fields=['lifecycle_state', 'updated_at'])
+
+        publish_event(
+            event_type='procurement.cancelled',
+            payload={'procurement_id': locked.pk, 'reason': payload.get('reason', '')},
+            tenant_id=tenant_id,
+        )
+        return locked
 
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
