@@ -34,6 +34,7 @@ def allocate_lot(
             quantity_remaining__gt=0,
             lot__product_variant_id=product_variant_id,
             lot__is_active=True,
+            lot__reversed=False,
         )
         .select_related('lot', 'lot__receipt')
         .order_by('lot__received_at', 'lot__id')

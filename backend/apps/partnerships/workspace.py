@@ -64,6 +64,7 @@ ACTION_MAP = {
     'amend_terms': 'AMEND_SETTLEMENT',
     'view_history': 'VIEW_HISTORY',
     'cancel': 'CANCEL_PROCUREMENT',
+    'reverse_batch': 'REVERSE_BATCH',
 }
 
 SECTION_TITLES = {
@@ -437,6 +438,16 @@ def dispatch_workspace_action(
             procurement=procurement,
             payload=mutation_payload,
         )
+    if normalized == 'REVERSE_BATCH':
+        batch_id = mutation_payload.get('batch_id')
+        if not batch_id:
+            raise ValueError('REVERSE_BATCH action requires batch_id in payload.')
+        reverse_workspace_receive_batch(
+            tenant_id=tenant_id,
+            batch_id=int(batch_id),
+            reason=mutation_payload.get('reason', ''),
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     raise ValueError(f'Workspace action {action} is not implemented yet.')
 
 
@@ -487,6 +498,115 @@ def cancel_workspace_procurement(
             tenant_id=tenant_id,
         )
         return locked
+
+
+def reverse_workspace_receive_batch(
+    *,
+    tenant_id: int,
+    batch_id: int,
+    reason: str = '',
+) -> 'ProcurementReceiveBatch':
+    from apps.inventory.models import Lot, LotStock, StockMovement
+
+    with transaction.atomic():
+        batch = (
+            ProcurementReceiveBatch.objects
+            .select_for_update()
+            .select_related('procurement')
+            .get(pk=batch_id, tenant_id=tenant_id)
+        )
+
+        if batch.is_reversal:
+            raise ValueError(f'Batch #{batch_id} is already a reversal — cannot reverse a reversal.')
+        if batch.reversal_batches.exists():
+            raise ValueError(f'Batch #{batch_id} has already been reversed.')
+
+        lot_ids = list(
+            ProcurementReceiveBatchLine.objects
+            .filter(tenant_id=tenant_id, batch=batch)
+            .values_list('lot_id', flat=True)
+        )
+        sold_lot_ids = list(
+            Lot.objects
+            .filter(pk__in=lot_ids)
+            .filter(sale_lines__isnull=False)
+            .values_list('pk', flat=True)
+            .distinct()
+        )
+        if sold_lot_ids:
+            raise ValueError(
+                f'Cannot reverse batch #{batch_id}: lots {sorted(sold_lot_ids)} have existing sales. '
+                'Post-sale inventory corrections are not supported in E09 MVP.'
+            )
+
+        procurement = batch.procurement
+        received_at = timezone.now()
+
+        reversal_batch = ProcurementReceiveBatch(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            warehouse=batch.warehouse,
+            received_at=received_at,
+            items_count=batch.items_count,
+            total_inventory_uzs=-batch.total_inventory_uzs,
+            is_reversal=True,
+            reversed_batch=batch,
+        )
+        reversal_batch.save()
+
+        items_to_reopen: list[int] = []
+        for line in batch.lines.select_related('lot', 'item').all():
+            lot = line.lot
+            qty = int(line.quantity_received)
+
+            Lot.objects.filter(pk=lot.pk).update(reversed=True, is_active=False)
+            LotStock.objects.filter(lot=lot, warehouse=batch.warehouse).update(quantity_remaining=0)
+
+            StockMovement.objects.create(
+                tenant_id=tenant_id,
+                lot=lot,
+                movement_type=StockMovement.MovementType.ADJUSTMENT,
+                quantity=-qty,
+                from_location=batch.warehouse,
+                reference_type='procurement_receive_batch_reversal',
+                reference_id=reversal_batch.pk,
+            )
+            items_to_reopen.append(line.item_id)
+
+        if items_to_reopen:
+            ProcurementItem.objects.filter(pk__in=items_to_reopen).update(
+                lifecycle_state=ProcurementItem.LifecycleState.READY_FOR_RECEIVE,
+                updated_at=received_at,
+            )
+
+        _sync_procurement_status_after_reversal(procurement, received_at)
+
+        publish_event(
+            event_type='receive_batch.reversed',
+            payload={
+                'procurement_id': procurement.pk,
+                'original_batch_id': batch.pk,
+                'reversal_batch_id': reversal_batch.pk,
+                'reason': reason,
+            },
+            tenant_id=tenant_id,
+        )
+        return reversal_batch
+
+
+def _sync_procurement_status_after_reversal(procurement: Procurement, reversed_at) -> None:
+    active_non_reversal_batches = (
+        ProcurementReceiveBatch.objects
+        .filter(tenant_id=procurement.tenant_id, procurement=procurement, is_reversal=False)
+        .exclude(reversal_batches__isnull=False)
+        .exists()
+    )
+    new_status = Procurement.Status.PARTIALLY_RECEIVED if active_non_reversal_batches else Procurement.Status.OPEN
+    if procurement.status != new_status:
+        Procurement.objects.filter(pk=procurement.pk).update(
+            status=new_status, updated_at=reversed_at,
+        )
+        procurement.status = new_status
 
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:

@@ -456,6 +456,14 @@ class ProcurementReceiveBatch(TenantModel):
     received_at = models.DateTimeField()
     items_count = models.PositiveIntegerField(default=0)
     total_inventory_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    is_reversal = models.BooleanField(default=False)
+    reversed_batch = models.ForeignKey(
+        'self',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='reversal_batches',
+    )
 
     class Meta:
         db_table = 'partnerships_procurement_receive_batch'

@@ -272,6 +272,10 @@ class Lot(TenantModel):
         default=True,
         help_text='False when total quantity_remaining across warehouses == 0.',
     )
+    reversed = models.BooleanField(
+        default=False,
+        help_text='E09 Slice 6: True when the receive batch that created this lot was reversed. Excluded from FIFO.',
+    )
 
     class Meta:
         db_table = 'inventory_lot'
