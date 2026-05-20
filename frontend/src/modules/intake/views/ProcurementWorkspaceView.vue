@@ -8,6 +8,7 @@ import ProcurementHeader from '@/modules/intake/components/workspace/Procurement
 import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
 import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
+import ProcurementCardExpenses from '@/modules/intake/components/workspace/ProcurementCardExpenses.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
@@ -73,6 +74,34 @@ async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
   }
 }
 
+async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<void> {
+  try {
+    await store.dispatch('UPDATE_EXPENSES', { expenses })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось обновить расходы')
+  }
+}
+
+async function onDeleteExpense(expenseId: number): Promise<void> {
+  if (!procurement.value) return
+  const remaining = procurement.value.documents.expenses
+    .filter((ex) => ex.id !== expenseId)
+    .map((ex) => ({
+      id: ex.id,
+      expense_type: ex.expense_type,
+      amount: parseFloat(ex.amount) || 0,
+      currency: ex.currency,
+      fx_rate: ex.fx_rate,
+      allocation_method: ex.allocation_method,
+      target_item_ids: ex.target_item_ids,
+    }))
+  try {
+    await store.dispatch('UPDATE_EXPENSES', { expenses: remaining })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось удалить расход')
+  }
+}
+
 async function onDeleteItem(itemId: number): Promise<void> {
   if (!procurement.value) return
   const remaining = procurement.value.documents.items
@@ -124,6 +153,11 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @update-items="onUpdateItems"
           @delete-item="onDeleteItem"
+        />
+        <ProcurementCardExpenses
+          :procurement="procurement"
+          @update-expenses="onUpdateExpenses"
+          @delete-expense="onDeleteExpense"
         />
       </div>
     </main>
