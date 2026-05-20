@@ -3,11 +3,15 @@ import { onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
+import { useToast } from '@/composables/useToast'
+import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
+import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useProcurementWorkspaceStore()
 const { procurement, isLoading, error } = storeToRefs(store)
+const toast = useToast()
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -19,6 +23,18 @@ async function ensureWorkspace(): Promise<void> {
   }
 }
 
+function handleMenuAction(actionKey: string): void {
+  toast.info(`Будет реализовано: ${actionKey}`)
+}
+
+async function handlePrimaryAction(actionKey: string): Promise<void> {
+  try {
+    await store.dispatch(actionKey, {})
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Ошибка выполнения действия')
+  }
+}
+
 onMounted(ensureWorkspace)
 watch(() => route.params.id, ensureWorkspace)
 onBeforeUnmount(() => store.$reset())
@@ -26,11 +42,14 @@ onBeforeUnmount(() => store.$reset())
 
 <template>
   <div class="workspace">
-    <!-- Header сюда в B-2 -->
-    <header class="workspace-header-placeholder">
-      <button class="back-btn" @click="router.back()" aria-label="Назад">←</button>
-      <h1>{{ procurement ? `Приход #${procurement.id}` : 'Новый приход' }}</h1>
-    </header>
+    <ProcurementHeader
+      :procurement-id="procurement?.id ?? null"
+      :status="procurement?.status ?? null"
+      :title="procurement?.display.title ?? 'Новый приход'"
+      :subtitle="procurement?.display.subtitle ?? null"
+      @back="router.back()"
+      @menu-action="handleMenuAction"
+    />
 
     <main class="workspace-body">
       <div v-if="isLoading" class="state state-loading">Загрузка…</div>
@@ -42,10 +61,12 @@ onBeforeUnmount(() => store.$reset())
       </div>
     </main>
 
-    <!-- Bottom action bar сюда в B-2 -->
-    <footer class="workspace-action-bar-placeholder">
-      <button class="action-btn" disabled>Сохранить черновик</button>
-    </footer>
+    <ProcurementBottomActionBar
+      :action-key="procurement?.display.next_action.key ?? null"
+      :action-label="procurement?.display.next_action.label ?? null"
+      :reason="procurement?.display.next_action.reason ?? null"
+      @click="handlePrimaryAction"
+    />
   </div>
 </template>
 
@@ -55,40 +76,6 @@ onBeforeUnmount(() => store.$reset())
   display: grid;
   grid-template-rows: auto 1fr auto;
   background: var(--color-bg-secondary);
-}
-
-.workspace-header-placeholder {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
-  backdrop-filter: blur(14px);
-}
-
-.workspace-header-placeholder h1 {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  text-align: center;
-}
-
-.back-btn {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-size: 24px;
 }
 
 .workspace-body {
@@ -122,31 +109,5 @@ onBeforeUnmount(() => store.$reset())
 
 .state-error {
   color: var(--color-error);
-}
-
-.workspace-action-bar-placeholder {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-bg-primary);
-  border-top: 1px solid var(--color-border-subtle);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.04);
-}
-
-.action-btn {
-  flex: 1;
-  min-height: 48px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--color-brand-600);
-  color: white;
-  font-weight: var(--font-semibold);
-  font-size: var(--text-base);
-}
-
-.action-btn:disabled {
-  opacity: 0.55;
 }
 </style>
