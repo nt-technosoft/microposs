@@ -1477,6 +1477,8 @@ def receive_workspace_batch(
                     'OPEN-S1.1: PARTNERSHIP × AT_RECEIPT payment allocation needs architect decision. '
                     'See E09-wave-A-execution-plan.md Slice 1 OPEN-S1.1.'
                 )
+        if terms and terms.type == ProcurementTerms.Type.PREPAID:
+            _check_prepaid_coverage(tenant_id, locked, payload)
         if terms is not None:
             terms.activate()
         allowed_states = _receivable_line_states(locked, terms)
@@ -2362,6 +2364,63 @@ def _has_capital_activity(procurement: Procurement) -> bool:
 
 def _has_payment_activity(procurement: Procurement, payables) -> bool:
     return any(item.lifecycle_state != item.LifecycleState.DRAFT for item in procurement.items.all()) or bool(payables)
+
+
+def _check_prepaid_coverage(tenant_id: int, procurement: Procurement, payload: dict) -> None:
+    """PREPAID: items being received must not exceed total payments made so far."""
+    from apps.inventory.models import Lot
+
+    total_paid_uzs = (
+        Payment.objects
+        .filter(
+            tenant_id=tenant_id,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.id,
+            status=Payment.Status.POSTED,
+        )
+        .aggregate(total=models.Sum('amount'))['total'] or Decimal('0')
+    )
+    total_paid_uzs = Decimal(str(total_paid_uzs)).quantize(Decimal('0.01'))
+
+    item_discrepancies = payload.get('item_discrepancies') or {}
+    requested_item_ids = {int(x) for x in payload.get('item_ids') or []}
+
+    items_qs = ProcurementItem.objects.filter(
+        tenant_id=tenant_id,
+        procurement=procurement,
+        lifecycle_state__in=(
+            ProcurementItem.LifecycleState.DRAFT,
+            ProcurementItem.LifecycleState.READY_FOR_RECEIVE,
+        ),
+    )
+    if requested_item_ids:
+        items_qs = items_qs.filter(pk__in=requested_item_ids)
+
+    cost_uzs = Decimal('0')
+    for item in items_qs:
+        raw = item_discrepancies.get(str(item.id)) or item_discrepancies.get(item.id) or {}
+        qty_received_raw = raw.get('qty_received')
+        qty = Decimal(str(qty_received_raw)) if qty_received_raw is not None else Decimal(str(item.quantity))
+        item_cost_uzs = qty * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
+        cost_uzs += item_cost_uzs
+
+    already_received_cost_uzs = Decimal('0')
+    for lot in Lot.objects.filter(
+        tenant_id=tenant_id,
+        procurement_item__procurement=procurement,
+        reversed=False,
+    ):
+        already_received_cost_uzs += (
+            Decimal(str(lot.quantity_initial)) * Decimal(str(lot.unit_purchase_price))
+        )
+
+    total_cost_uzs = (cost_uzs + already_received_cost_uzs).quantize(Decimal('0.01'))
+    if total_cost_uzs > total_paid_uzs:
+        raise ValueError(
+            f'Cannot receive items exceeding payment coverage in PREPAID procurement. '
+            f'Total cost: {total_cost_uzs} UZS, total paid: {total_paid_uzs} UZS. '
+            f'Pay {total_cost_uzs - total_paid_uzs} UZS more before receiving.'
+        )
 
 
 def _has_procurement_cost_payment(procurement: Procurement) -> bool:

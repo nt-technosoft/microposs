@@ -120,13 +120,14 @@ class PerItemOwnershipLotCreationTests(TestCase):
             funding_source=OWN_FUNDS,
         )
         # Set PREPAID terms (MIXED × OWN_FUNDS × PREPAID is legal)
+        # Items total: sum(i*1000 for i in 1..10) = 55000 UZS
         dispatch_workspace_action(
             tenant_id=self.ctx['business'].id,
             procurement=proc,
             action='UPDATE_SETTLEMENT',
             payload={'payload': {
                 'type': 'PREPAID',
-                'total_amount_due': '9000',
+                'total_amount_due': '55000',
                 'currency_of_obligation': 'UZS',
                 'fx_rate_at_obligation': '1',
             }},
@@ -146,7 +147,7 @@ class PerItemOwnershipLotCreationTests(TestCase):
             }},
         )
 
-        # Pay so items move to READY_FOR_RECEIVE (PREPAID requirement)
+        # Pay full amount so items move to READY_FOR_RECEIVE (PREPAID coverage constraint)
         from apps.finance.models import CashAccount
         CashAccount.objects.filter(pk=self.ctx['cash_account'].pk).update(
             balance=Decimal('100000'),
@@ -157,7 +158,7 @@ class PerItemOwnershipLotCreationTests(TestCase):
             action='PAY_COSTS',
             payload={'payload': {
                 'cash_account_id': self.ctx['cash_account'].id,
-                'amount': '9000',
+                'amount': '55000',
                 'currency': 'UZS',
             }},
         )
