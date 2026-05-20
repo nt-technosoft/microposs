@@ -16,6 +16,25 @@ header / scroll body / sticky bottom action bar) и Pinia store. Body
 
 ---
 
+## Architectural baseline (применяется ко всему Wave B)
+
+Перед началом любого Wave B slice — обязательно прочитать раздел
+**Frontend decomposition rules** в `CLAUDE.md`. Ключевые правила:
+
+- Файл `.vue` ≤ 300 строк, иначе декомпозируем.
+- Sheets / dialogs / pickers — отдельные файлы.
+- Stores = state + actions; **никакой UI logic в сторе**.
+- Composables для derived state, если повторяется в 2+ местах.
+- KISS over patterns: не дробить компоненты ради красоты.
+
+Эти правила — baseline для Sonnet. Любая попытка вкатать большой
+god-component (> 300 строк) — STOP и surface, скорее всего нужна
+декомпозиция.
+
+Для Slice B-1 это означает: shell view ≤ 200 строк (включая template
+и стили), store ≤ 150 строк. Не должно быть проблем — slice
+intentionally минимальный.
+
 ## Pre-flight reads
 
 Перед Slice 1 прочитать:

@@ -122,6 +122,17 @@ reference this section, not redefine the rules.
 - AbortController pattern for all data-loading functions; cancel in onBeforeUnmount
 - Debounce 300ms on currency switches and search inputs
 
+### Frontend decomposition rules
+
+Cleanliness without over-engineering. Apply pragmatically — simple is better than abstract.
+
+- **Component decomposition.** Each domain section is its own component, not stuffed into a god-view. Soft target ≤300 lines per `.vue` file; above that the file is probably doing too much — decompose into sub-components or extract logic into composables.
+- **Composables for shared/derived logic.** If state derivation appears in 2+ components, or `setup()` exceeds ~80 lines of script, extract a `use<Name>` composable in `modules/<domain>/composables/` (or `src/composables/` if cross-domain).
+- **Stores hold state + actions only, no UI logic.** No reactive UI strings, no formatted display values — those belong in components or composables. Stores expose plain data; components map to UI.
+- **Sheets / dialogs / pickers are isolated components**, not inline templates with `v-if`. Even if used once — separate file. Reusing existing ones (`MoneyCurrencyInput`, `BaseSelect`, picker sheets) is preferred over building new.
+- **Props down, events up.** Standard Vue 3 pattern. No mutation of props. No reaching into parent via injection unless intentionally provided.
+- **KISS over patterns.** Simple solutions beat abstract ones. Three similar lines is better than a premature `useThree` composable. Decompose when a real reason appears (size, reuse, complexity), not for aesthetic uniformity.
+
 ## Vacuum Rework Note
 - E07 is the current P0 and follows **controlled radical reset**.
 - Do not treat old procurement/intake backend or UI as target architecture. Use old code only as reference for business rules and edge cases.
