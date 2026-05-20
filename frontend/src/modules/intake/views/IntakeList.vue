@@ -398,39 +398,6 @@ function onFilterChange(value: StatusFilter): void {
   color: #C2410C;
 }
 
-/* ── Status badges ──────────────────────────────────────────────────────── */
-
-.badge-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.badge-status--gray {
-  background: var(--color-bg-sunken);
-  color: var(--color-text-secondary);
-}
-
-.badge-status--green {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-}
-
-.badge-status--blue {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-}
-
-.badge-status--orange {
-  background: #FFF7ED;
-  color: #C2410C;
-}
-
 /* ── State boxes ────────────────────────────────────────────────────────── */
 
 .state-box {
