@@ -7,6 +7,7 @@ import { useToast } from '@/composables/useToast'
 import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
 import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
+import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
@@ -64,6 +65,34 @@ function onCreateNewSupplier(): void {
   toast.info('Создание поставщика — будет реализовано')
 }
 
+async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
+  try {
+    await store.dispatch('UPDATE_ITEMS', { items })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось обновить товары')
+  }
+}
+
+async function onDeleteItem(itemId: number): Promise<void> {
+  if (!procurement.value) return
+  const remaining = procurement.value.documents.items
+    .filter((it) => it.id !== itemId)
+    .map((it) => ({
+      id: it.id,
+      product_variant_id: it.product_variant_id,
+      quantity: parseFloat(it.quantity) || 0,
+      unit_purchase_price: parseFloat(it.unit_purchase_price) || 0,
+      currency: it.currency,
+      fx_rate: it.fx_rate,
+      goods_ownership: it.goods_ownership,
+    }))
+  try {
+    await store.dispatch('UPDATE_ITEMS', { items: remaining })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось удалить товар')
+  }
+}
+
 onMounted(ensureWorkspace)
 watch(() => route.params.id, ensureWorkspace)
 onBeforeUnmount(() => store.$reset())
@@ -90,6 +119,11 @@ onBeforeUnmount(() => store.$reset())
           @update-source="onUpdateSource"
           @update-settlement="onUpdateSettlement"
           @open-supplier-picker="supplierPickerOpen = true"
+        />
+        <ProcurementCardItems
+          :procurement="procurement"
+          @update-items="onUpdateItems"
+          @delete-item="onDeleteItem"
         />
       </div>
     </main>

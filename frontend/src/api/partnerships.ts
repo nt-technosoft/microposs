@@ -114,6 +114,7 @@ export interface ProcurementWorkspacePayload {
       received_quantity: string
       remaining_quantity: string
       locked_reason: string | null
+      goods_ownership: 'OWNED' | 'CONSIGNED'
     }>
     expenses: Array<{
       id: number
@@ -829,6 +830,7 @@ export interface ProcurementUpsertPayload {
     unit_purchase_price: number
     currency?: string
     fx_rate?: string
+    goods_ownership?: 'OWNED' | 'CONSIGNED'
   }>
   expenses?: Array<{
     id?: number
