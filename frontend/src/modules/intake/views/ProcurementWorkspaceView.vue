@@ -1,17 +1,21 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
 import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
+import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
+import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useProcurementWorkspaceStore()
 const { procurement, isLoading, error } = storeToRefs(store)
 const toast = useToast()
+
+const supplierPickerOpen = ref(false)
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -35,6 +39,31 @@ async function handlePrimaryAction(actionKey: string): Promise<void> {
   }
 }
 
+async function onUpdateSource(payload: { supplier_id?: number | null; funding_source?: string }): Promise<void> {
+  try {
+    await store.dispatch('UPDATE_SOURCE', payload as Record<string, unknown>)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось обновить источник')
+  }
+}
+
+async function onUpdateSettlement(payload: { type: string }): Promise<void> {
+  try {
+    await store.dispatch('UPDATE_SETTLEMENT', payload as Record<string, unknown>)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось обновить условия')
+  }
+}
+
+function onSupplierSelect(supplierId: number): void {
+  supplierPickerOpen.value = false
+  onUpdateSource({ supplier_id: supplierId })
+}
+
+function onCreateNewSupplier(): void {
+  toast.info('Создание поставщика — будет реализовано')
+}
+
 onMounted(ensureWorkspace)
 watch(() => route.params.id, ensureWorkspace)
 onBeforeUnmount(() => store.$reset())
@@ -56,8 +85,12 @@ onBeforeUnmount(() => store.$reset())
       <div v-else-if="error" class="state state-error">{{ error }}</div>
       <div v-else-if="!procurement" class="state state-empty">Нет данных</div>
       <div v-else class="cards-container">
-        <!-- Карточки добавляются в B-3 .. B-9 -->
-        <div class="card-placeholder">Карточки появятся в следующих slice-ах</div>
+        <ProcurementCardSupplier
+          :procurement="procurement"
+          @update-source="onUpdateSource"
+          @update-settlement="onUpdateSettlement"
+          @open-supplier-picker="supplierPickerOpen = true"
+        />
       </div>
     </main>
 
@@ -66,6 +99,13 @@ onBeforeUnmount(() => store.$reset())
       :action-label="procurement?.display.next_action.label ?? null"
       :reason="procurement?.display.next_action.reason ?? null"
       @click="handlePrimaryAction"
+    />
+
+    <WorkspaceSupplierPickerSheet
+      v-model:open="supplierPickerOpen"
+      :selected-id="procurement?.documents.procurement.supplier_id ?? null"
+      @select="onSupplierSelect"
+      @create-new="onCreateNewSupplier"
     />
   </div>
 </template>
@@ -91,15 +131,6 @@ onBeforeUnmount(() => store.$reset())
   margin: 0 auto;
 }
 
-.card-placeholder {
-  padding: var(--space-4);
-  background: var(--color-bg-primary);
-  border: 1px dashed var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
 .state {
   min-height: 200px;
   display: grid;
@@ -107,7 +138,5 @@ onBeforeUnmount(() => store.$reset())
   color: var(--color-text-secondary);
 }
 
-.state-error {
-  color: var(--color-error);
-}
+.state-error { color: var(--color-error); }
 </style>
