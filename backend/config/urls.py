@@ -27,6 +27,7 @@ urlpatterns = [
         path('customers/', include('apps.customers.urls')),
         path('risk/', include('apps.risk.urls')),
         path('analytics/', include('apps.analytics.urls')),
+        path('attachments/', include('apps.attachments.urls')),
     ])),
 
     # OpenAPI
