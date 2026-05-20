@@ -1,15 +1,14 @@
 """
-E09 Wave A — Slice 1: AT_RECEIPT combined receive+pay action tests.
+E09 Wave A — Slice 1 / OPEN-S1.1: AT_RECEIPT combined receive+pay action tests.
 
 Tests cover:
-  * Combined receive+pay creates both ReceiveBatch and Payment atomically
-  * Missing payment_payload rejected
+  * Combined receive+pay creates both ReceiveBatch and Payment atomically (OWN_FUNDS)
+  * Missing payment_payload rejected for OWN_FUNDS AT_RECEIPT
   * pay_workspace_costs / pay_workspace_supplier_payable blocked on AT_RECEIPT
   * LEGAL_COMBINATIONS accepts both AT_RECEIPT variants
-  * PARTNERSHIP × AT_RECEIPT is blocked pending OPEN-S1.1 resolution
+  * PARTNERSHIP × AT_RECEIPT: explicit allocations, derived allocations, insufficient capital
 """
 
-import pytest
 from decimal import Decimal
 
 from django.test import SimpleTestCase, TestCase
@@ -26,6 +25,8 @@ from apps.partnerships.workspace import (
     receive_workspace_batch,
 )
 from apps.finance.models import CashAccount, Payment
+from apps.inventory.models import Lot
+from apps.partnerships.models import ProcurementReceiveBatchCapitalAllocation
 
 from ._helpers import build_tenant
 
@@ -141,7 +142,131 @@ class AtReceiptCombinedActionTests(TestCase):
                 },
             )
 
-    @pytest.mark.skip(reason='OPEN-S1.1: PARTNERSHIP × AT_RECEIPT payment allocation needs architect decision.')
-    def test_at_receipt_partnership_uses_capital_pool(self):
-        """PARTNERSHIP AT_RECEIPT receive uses capital pool allocation (OPEN-S1.1 unresolved)."""
-        pass
+    def _build_partnership_at_receipt_procurement(self, ctx, *, total_uzs='5000', qty=5, unit_price='1000'):
+        """PARTNERSHIP + AT_RECEIPT procurement with capital contributed but NOT yet allocated."""
+        from django.utils import timezone
+        from apps.finance.models import ExchangeRate
+        from apps.finance.fx_rates import upsert_exchange_rate
+
+        proc = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        proc = dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': '0.571429',
+                'planned_budget': total_uzs,
+                'currency': 'UZS',
+                'partners': [
+                    {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
+                     'planned_capital_share': str(int(total_uzs) * 7 // 10),
+                     'profit_share': '0.4'},
+                    {'partner_id': ctx['operator'].id, 'role': 'OPERATOR',
+                     'planned_capital_share': str(int(total_uzs) - int(total_uzs) * 7 // 10),
+                     'profit_share': '0.6'},
+                ],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'AT_RECEIPT',
+                'total_amount_due': total_uzs,
+                'currency_of_obligation': 'UZS',
+            }},
+        )
+        proc = dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=proc,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': qty,
+                'unit_purchase_price': unit_price,
+                'currency': 'UZS', 'fx_rate': '1',
+            }]}},
+        )
+        # Contribute capital to the agreement pool (both partners)
+        inv_amount = str(int(total_uzs) * 7 // 10)
+        op_amount = str(int(total_uzs) - int(total_uzs) * 7 // 10)
+        for partner_id, amount in (
+            (ctx['investor'].id, inv_amount),
+            (ctx['operator'].id, op_amount),
+        ):
+            CashAccount.objects.filter(pk=ctx['card_account'].pk).update(balance=Decimal('100000'))
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id, procurement=proc,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'cash_account_id': ctx['card_account'].id,
+                }},
+            )
+        proc.refresh_from_db()
+        return proc
+
+    def test_partnership_at_receipt_derives_from_planned_shares(self):
+        """PARTNERSHIP × AT_RECEIPT without capital_allocations → derives from planned shares."""
+        proc = self._build_partnership_at_receipt_procurement(self.ctx)
+        batch = receive_workspace_batch(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            payload={'warehouse_id': self.ctx['store'].id},
+        )
+        self.assertIsNotNone(batch.pk)
+        allocs = ProcurementReceiveBatchCapitalAllocation.objects.filter(
+            tenant_id=self.ctx['business'].id, batch=batch,
+        )
+        self.assertEqual(allocs.count(), 2)
+        lot = Lot.objects.get(procurement_item__procurement=proc)
+        self.assertTrue(lot.contract_snapshot.get('partners'))
+
+    def test_partnership_at_receipt_with_explicit_allocations(self):
+        """PARTNERSHIP × AT_RECEIPT with explicit capital_allocations uses provided amounts."""
+        proc = self._build_partnership_at_receipt_procurement(self.ctx)
+        proc.refresh_from_db()
+        agreement = proc.agreement
+        members = list(agreement.partners.all())
+        total_uzs = Decimal('5000')
+        explicit_allocs = [
+            {'partner_id': members[0].partner_id, 'amount': '3500', 'currency': 'UZS'},
+            {'partner_id': members[1].partner_id, 'amount': '1500', 'currency': 'UZS'},
+        ]
+        batch = receive_workspace_batch(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            payload={
+                'warehouse_id': self.ctx['store'].id,
+                'capital_allocations': explicit_allocs,
+            },
+        )
+        self.assertIsNotNone(batch.pk)
+        alloc_amounts = {
+            a.partner_id: a.amount_contract_currency
+            for a in ProcurementReceiveBatchCapitalAllocation.objects.filter(batch=batch)
+        }
+        self.assertEqual(sum(alloc_amounts.values()), total_uzs)
+
+    def test_partnership_at_receipt_insufficient_capital_rejected(self):
+        """PARTNERSHIP × AT_RECEIPT with explicit allocation exceeding pool → ValueError."""
+        proc = self._build_partnership_at_receipt_procurement(self.ctx)
+        agreement = proc.agreement
+        members = list(agreement.partners.all())
+        with self.assertRaises(ValueError, msg='Over-allocation must raise ValueError'):
+            receive_workspace_batch(
+                tenant_id=self.ctx['business'].id,
+                procurement=proc,
+                payload={
+                    'warehouse_id': self.ctx['store'].id,
+                    'capital_allocations': [
+                        {'partner_id': members[0].partner_id, 'amount': '999999', 'currency': 'UZS'},
+                        {'partner_id': members[1].partner_id, 'amount': '999999', 'currency': 'UZS'},
+                    ],
+                },
+            )

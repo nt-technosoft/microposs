@@ -1470,13 +1470,9 @@ def receive_workspace_batch(
         if terms and terms.type == ProcurementTerms.Type.PARTIAL and not _has_procurement_cost_payment(locked):
             raise ValueError('PARTIAL settlement requires an upfront payment before receive.')
         if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
-            if not payload.get('payment_payload'):
-                raise ValueError('AT_RECEIPT procurement requires payment_payload in receive action.')
-            if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
-                raise ValueError(
-                    'OPEN-S1.1: PARTNERSHIP × AT_RECEIPT payment allocation needs architect decision. '
-                    'See E09-wave-A-execution-plan.md Slice 1 OPEN-S1.1.'
-                )
+            if locked.funding_source == Procurement.FundingSource.OWN_FUNDS:
+                if not payload.get('payment_payload'):
+                    raise ValueError('AT_RECEIPT OWN_FUNDS procurement requires payment_payload in receive action.')
         if terms and terms.type == ProcurementTerms.Type.PREPAID:
             _check_prepaid_coverage(tenant_id, locked, payload)
         if terms is not None:
@@ -1546,6 +1542,14 @@ def receive_workspace_batch(
         contract_snapshot: dict = {}
         capital_rows: list[dict] = []
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
+                _pre_allocate_at_receipt_partnership_capital(
+                    tenant_id=tenant_id,
+                    procurement=locked,
+                    required_uzs=total_inventory_uzs,
+                    raw_allocations=payload.get('capital_allocations'),
+                    received_at=received_at,
+                )
             contract_snapshot, capital_rows = _resolve_workspace_capital_snapshot(
                 tenant_id=tenant_id,
                 procurement=locked,
@@ -1674,29 +1678,32 @@ def receive_workspace_batch(
 
         at_receipt_payment = None
         if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
-            pp = payload['payment_payload']
-            cash_account = CashAccount.objects.get(
-                pk=pp['cash_account_id'], tenant_id=tenant_id, is_active=True,
-            )
-            at_receipt_payment = record_generic_cash_payment(
-                tenant_id=tenant_id,
-                cash_account_id=cash_account.pk,
-                target_type=Payment.TargetType.PROCUREMENT_COST,
-                target_id=locked.pk,
-                amount=Decimal(str(pp['amount'])),
-                currency=pp.get('currency') or cash_account.currency,
-                fx_rate=pp.get('fx_rate'),
-                counterpart_account_code='1100',
-                operation_type='procurement_payment',
-                description=f'Procurement #{locked.pk} AT_RECEIPT payment',
-                client_request_id=pp.get('client_request_id'),
-                notes=pp.get('notes', ''),
-            )
-            terms.refresh_from_db()
-            new_status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
-            if new_status != terms.status:
-                terms.status = new_status
-                terms.save(update_fields=['status', 'updated_at'])
+            if locked.funding_source == Procurement.FundingSource.OWN_FUNDS:
+                pp = payload['payment_payload']
+                cash_account = CashAccount.objects.get(
+                    pk=pp['cash_account_id'], tenant_id=tenant_id, is_active=True,
+                )
+                at_receipt_payment = record_generic_cash_payment(
+                    tenant_id=tenant_id,
+                    cash_account_id=cash_account.pk,
+                    target_type=Payment.TargetType.PROCUREMENT_COST,
+                    target_id=locked.pk,
+                    amount=Decimal(str(pp['amount'])),
+                    currency=pp.get('currency') or cash_account.currency,
+                    fx_rate=pp.get('fx_rate'),
+                    counterpart_account_code='1100',
+                    operation_type='procurement_payment',
+                    description=f'Procurement #{locked.pk} AT_RECEIPT payment',
+                    client_request_id=pp.get('client_request_id'),
+                    notes=pp.get('notes', ''),
+                )
+                terms.refresh_from_db()
+                new_status = _terms_status_for_paid_amount(terms.total_amount_due, terms.paid_amount)
+                if new_status != terms.status:
+                    terms.status = new_status
+                    terms.save(update_fields=['status', 'updated_at'])
+            # PARTNERSHIP × AT_RECEIPT: capital was drawn atomically via
+            # _pre_allocate_at_receipt_partnership_capital; no separate CashAccount payment.
 
         publish_event(
             event_type='procurement.receive_batch_posted',
@@ -2575,6 +2582,77 @@ def _payments_for_procurement(procurement: Procurement, payables) -> list[Paymen
         .filter(target_filter)
         .order_by('-paid_at', '-id')
     )
+
+
+def _pre_allocate_at_receipt_partnership_capital(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    required_uzs: Decimal,
+    raw_allocations: list[dict] | None,
+    received_at,
+) -> None:
+    """
+    PARTNERSHIP × AT_RECEIPT: atomically draw from the agreement's capital pool
+    by creating AgreementAllocation(TO_PROCUREMENT) records so that
+    _resolve_workspace_capital_snapshot can proceed normally.
+    Derives amounts from planned shares when raw_allocations is absent.
+    """
+    agreement = _require_workspace_agreement(procurement)
+    currency = str(agreement.currency or 'UZS').upper()
+    required = _amount_uzs_to_currency(
+        tenant_id=tenant_id, amount_uzs=required_uzs, currency=currency, received_at=received_at,
+    )
+    if required <= 0:
+        raise ValueError('AT_RECEIPT receive batch capital requirement must be positive.')
+
+    members = list(agreement.partners.select_related('partner').all())
+    if not members:
+        raise ValueError('Investment agreement has no partners.')
+    member_by_id = {m.partner_id: m for m in members}
+    available_by_partner = _agreement_available_by_partner(agreement)
+    available_flat = {
+        pid: avail.get(currency, Decimal('0'))
+        for pid, avail in available_by_partner.items()
+    }
+
+    if raw_allocations:
+        amounts: dict[int, Decimal] = {}
+        for row in raw_allocations:
+            pid = int(row['partner_id'])
+            if pid not in member_by_id:
+                raise ValueError(f'AT_RECEIPT capital allocation: partner {pid} not in agreement.')
+            amt = Decimal(str(row['amount'])).quantize(Decimal('0.01'))
+            amounts[pid] = (amounts.get(pid, Decimal('0')) + amt).quantize(Decimal('0.01'))
+    else:
+        amounts = _auto_capital_amounts(required, members, available_flat)
+
+    for pid, amount in amounts.items():
+        avail = available_flat.get(pid, Decimal('0'))
+        if amount - avail > Decimal('0.01'):
+            member = member_by_id[pid]
+            name = getattr(member.partner, 'display_name', str(pid))
+            raise ValueError(
+                f'AT_RECEIPT: Insufficient capital for {name}: have {avail} {currency}, need {amount}.'
+            )
+
+    for pid, amount in amounts.items():
+        if amount <= Decimal('0'):
+            continue
+        AgreementAllocation.objects.create(
+            tenant_id=tenant_id,
+            agreement=agreement,
+            procurement=procurement,
+            partner_id=pid,
+            direction=AgreementAllocation.Direction.TO_PROCUREMENT,
+            amount=amount,
+            currency=currency,
+            fx_rate=Decimal('1'),
+            date=received_at,
+            notes='AT_RECEIPT auto-allocation',
+            source=AgreementActionSource.BUSINESS_RECORDED,
+            confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+        )
 
 
 def _resolve_workspace_capital_snapshot(
