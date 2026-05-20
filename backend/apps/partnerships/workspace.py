@@ -65,6 +65,8 @@ ACTION_MAP = {
     'view_history': 'VIEW_HISTORY',
     'cancel': 'CANCEL_PROCUREMENT',
     'reverse_batch': 'REVERSE_BATCH',
+    'amend_items': 'AMEND_ITEMS',
+    'amend_expenses': 'AMEND_EXPENSES',
 }
 
 SECTION_TITLES = {
@@ -448,6 +450,24 @@ def dispatch_workspace_action(
             reason=mutation_payload.get('reason', ''),
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'AMEND_ITEMS':
+        apply_items_amendment(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            new_items_payload=mutation_payload.get('items', []),
+            reason=mutation_payload.get('reason', ''),
+            user_id=user_id,
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'AMEND_EXPENSES':
+        apply_expenses_amendment(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            new_expenses_payload=mutation_payload.get('expenses', []),
+            reason=mutation_payload.get('reason', ''),
+            user_id=user_id,
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     raise ValueError(f'Workspace action {action} is not implemented yet.')
 
 
@@ -607,6 +627,209 @@ def _sync_procurement_status_after_reversal(procurement: Procurement, reversed_a
             status=new_status, updated_at=reversed_at,
         )
         procurement.status = new_status
+
+
+def apply_items_amendment(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    new_items_payload: list[dict],
+    reason: str = '',
+    user_id: int | None = None,
+) -> 'ProcurementAmendment':
+    from apps.partnerships.models import ProcurementAmendment
+
+    ALLOWED = (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED)
+    if procurement.status not in ALLOWED:
+        raise ValueError(
+            f'Items amendment only allowed in OPEN or PARTIALLY_RECEIVED status, '
+            f'got {procurement.status}.'
+        )
+
+    with transaction.atomic():
+        locked = Procurement.objects.select_for_update().get(pk=procurement.pk, tenant_id=tenant_id)
+        if locked.status not in ALLOWED:
+            raise ValueError(
+                f'Items amendment only allowed in OPEN or PARTIALLY_RECEIVED status, '
+                f'got {locked.status}.'
+            )
+
+        before_snapshot = _items_snapshot(locked)
+
+        # Validate: cannot remove or zero-out items with qty already received
+        received_item_ids = set(
+            ProcurementReceiveBatchLine.objects
+            .filter(tenant_id=tenant_id, batch__procurement=locked)
+            .values_list('item_id', flat=True)
+            .distinct()
+        )
+        cancel_item_ids = {int(v) for v in (new_items_payload or []) if _is_cancel_row(v)}
+        for item_id in cancel_item_ids:
+            if item_id in received_item_ids:
+                raise ValueError(
+                    f'Cannot cancel item {item_id}: it already has received quantities in a batch.'
+                )
+
+        for row in new_items_payload or []:
+            if _is_cancel_row(row):
+                item = ProcurementItem.objects.get(
+                    pk=int(row.get('id') or row.get('item_id')),
+                    tenant_id=tenant_id,
+                    procurement=locked,
+                )
+                item.lifecycle_state = ProcurementItem.LifecycleState.CANCELLED
+                item.save(update_fields=['lifecycle_state', 'updated_at'])
+            else:
+                _upsert_workspace_item_for_amendment(tenant_id, locked, row)
+
+        after_snapshot = _items_snapshot(locked)
+        return ProcurementAmendment.objects.create(
+            tenant_id=tenant_id,
+            procurement=locked,
+            target_type=ProcurementAmendment.TargetType.ITEMS,
+            amended_at=timezone.now(),
+            changed_by_id=user_id,
+            before=before_snapshot,
+            after=after_snapshot,
+            reason=reason,
+        )
+
+
+def apply_expenses_amendment(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    new_expenses_payload: list[dict],
+    reason: str = '',
+    user_id: int | None = None,
+) -> 'ProcurementAmendment':
+    from apps.partnerships.models import ProcurementAmendment
+
+    ALLOWED = (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED)
+    if procurement.status not in ALLOWED:
+        raise ValueError(
+            f'Expenses amendment only allowed in OPEN or PARTIALLY_RECEIVED status, '
+            f'got {procurement.status}.'
+        )
+
+    with transaction.atomic():
+        locked = Procurement.objects.select_for_update().get(pk=procurement.pk, tenant_id=tenant_id)
+        if locked.status not in ALLOWED:
+            raise ValueError(
+                f'Expenses amendment only allowed in OPEN or PARTIALLY_RECEIVED status, '
+                f'got {locked.status}.'
+            )
+
+        before_snapshot = _expenses_snapshot(locked)
+
+        cancel_expense_ids = {int(v) for v in (new_expenses_payload or []) if _is_cancel_row(v)}
+        received_expense_ids = set(
+            ProcurementReceiveBatchExpense.objects
+            .filter(tenant_id=tenant_id, batch__procurement=locked)
+            .values_list('expense_id', flat=True)
+            .distinct()
+        )
+        for expense_id in cancel_expense_ids:
+            if expense_id in received_expense_ids:
+                raise ValueError(
+                    f'Cannot cancel expense {expense_id}: it already has received facts in a batch.'
+                )
+
+        for row in new_expenses_payload or []:
+            if _is_cancel_row(row):
+                expense = ProcurementExpense.objects.get(
+                    pk=int(row.get('id') or row.get('expense_id')),
+                    tenant_id=tenant_id,
+                    procurement=locked,
+                )
+                expense.lifecycle_state = ProcurementExpense.LifecycleState.CANCELLED
+                expense.save(update_fields=['lifecycle_state', 'updated_at'])
+            else:
+                _upsert_workspace_expense(tenant_id, locked, row)
+
+        after_snapshot = _expenses_snapshot(locked)
+        return ProcurementAmendment.objects.create(
+            tenant_id=tenant_id,
+            procurement=locked,
+            target_type=ProcurementAmendment.TargetType.EXPENSES,
+            amended_at=timezone.now(),
+            changed_by_id=user_id,
+            before=before_snapshot,
+            after=after_snapshot,
+            reason=reason,
+        )
+
+
+def _is_cancel_row(row) -> bool:
+    if isinstance(row, dict):
+        return bool(row.get('_cancel') or row.get('cancel'))
+    return False
+
+
+def _items_snapshot(procurement: Procurement) -> list[dict]:
+    return [
+        {
+            'id': item.id,
+            'product_variant_id': item.product_variant_id,
+            'quantity': str(item.quantity),
+            'unit_purchase_price': str(item.unit_purchase_price),
+            'currency': item.currency,
+            'fx_rate': str(item.fx_rate),
+            'goods_ownership': item.goods_ownership,
+            'lifecycle_state': item.lifecycle_state,
+        }
+        for item in procurement.items.order_by('id')
+    ]
+
+
+def _expenses_snapshot(procurement: Procurement) -> list[dict]:
+    return [
+        {
+            'id': expense.id,
+            'expense_type': expense.expense_type,
+            'amount': str(expense.amount),
+            'currency': expense.currency,
+            'fx_rate': str(expense.fx_rate),
+            'lifecycle_state': expense.lifecycle_state,
+        }
+        for expense in procurement.expenses.order_by('id')
+    ]
+
+
+def _amendment_item_for_update(tenant_id: int, procurement: Procurement, item_id: int) -> ProcurementItem:
+    item = ProcurementItem.objects.select_for_update().get(
+        pk=item_id, tenant_id=tenant_id, procurement=procurement,
+    )
+    blocked = (ProcurementItem.LifecycleState.RECEIVED, ProcurementItem.LifecycleState.CANCELLED)
+    if item.lifecycle_state in blocked:
+        raise ValueError(
+            f'Cannot amend item {item_id} in state {item.lifecycle_state}.'
+        )
+    return item
+
+
+def _upsert_workspace_item_for_amendment(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
+    item_id = row.get('id') or row.get('item_id')
+    raw_ownership = str(row.get('goods_ownership') or Procurement.GoodsOwnership.OWNED).upper()
+    if raw_ownership not in (Procurement.GoodsOwnership.OWNED, Procurement.GoodsOwnership.CONSIGNED):
+        raise ValueError(f'Invalid goods_ownership value for item: {raw_ownership}. Use OWNED or CONSIGNED.')
+    values = {
+        'product_variant_id': int(row['product_variant_id']),
+        'quantity': Decimal(str(row['quantity'])),
+        'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
+        'currency': str(row.get('currency') or 'UZS').upper(),
+        'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
+        'goods_ownership': raw_ownership,
+    }
+    if item_id:
+        item = _amendment_item_for_update(tenant_id, procurement, int(item_id))
+        for key, val in values.items():
+            setattr(item, key, val)
+        item.save(update_fields=list(values.keys()) + ['updated_at'])
+        return item
+    return ProcurementItem.objects.create(
+        tenant_id=tenant_id, procurement=procurement, **values,
+    )
 
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
@@ -1789,6 +2012,7 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
         'investment': _investment_payload(procurement),
         'receive_batches': [_receive_batch_payload(batch) for batch in receive_batches],
         'lots_preview': [],
+        'payment_status': _payment_status_block(terms, payments, items=list(procurement.items.all())),
     }
 
 
@@ -1821,6 +2045,38 @@ def _expense_payload(expense) -> dict:
         'lifecycle_state': expense.lifecycle_state,
         'payment_state': _legacy_payment_state(expense.lifecycle_state),
         'locked_reason': None if expense.lifecycle_state == expense.LifecycleState.DRAFT else 'Expense already has facts.',
+    }
+
+
+def _payment_status_block(terms, payments: list, items=None) -> dict:
+    """obligation vs paid delta — surfaced to UI after item/expense amendments (OPEN-S7.1).
+    Obligation is derived from current item costs (UZS) so amendments are immediately reflected."""
+    if items is not None:
+        obligation = sum(
+            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
+            for item in items
+            if item.lifecycle_state not in ('CANCELLED', 'RECEIVED')
+        ).quantize(Decimal('0.01'))
+    else:
+        obligation = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
+    paid = sum(Decimal(str(p.amount)) for p in payments).quantize(Decimal('0.01')) if payments else Decimal('0')
+    delta = paid - obligation
+    if obligation == 0 and paid == 0:
+        state = 'unpaid'
+    elif paid == 0:
+        state = 'unpaid'
+    elif delta < 0:
+        state = 'underpaid'
+    elif delta == 0:
+        state = 'paid_full'
+    else:
+        state = 'overpaid'
+    return {
+        'obligation_amount': str(obligation),
+        'paid_amount': str(paid),
+        'delta': str(delta),
+        'state': state,
+        'currency': str(getattr(terms, 'currency_of_obligation', 'UZS')) if terms else 'UZS',
     }
 
 

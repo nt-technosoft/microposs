@@ -1376,3 +1376,42 @@ class ConsignmentReturnLine(TenantModel):
             models.Index(fields=['consignment_return']),
             models.Index(fields=['lot']),
         ]
+
+
+class ProcurementAmendment(TenantModel):
+    """
+    Append-only audit record for changes to items or expenses after OPEN/PARTIALLY_RECEIVED.
+    Before/after snapshots are stored as JSON. Payments are not affected — delta is surfaced
+    to the UI via the workspace payload's payment_status block (E09 Slice 7 / OPEN-S7.1).
+    """
+
+    class TargetType(models.TextChoices):
+        ITEMS = 'ITEMS', 'Товары'
+        EXPENSES = 'EXPENSES', 'Расходы'
+        SUPPLIER = 'SUPPLIER', 'Поставщик'
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='amendments',
+    )
+    target_type = models.CharField(max_length=20, choices=TargetType.choices)
+    amended_at = models.DateTimeField()
+    changed_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    before = models.JSONField()
+    after = models.JSONField()
+    reason = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_procurement_amendment'
+        indexes = [
+            models.Index(fields=['procurement', 'amended_at']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('ProcurementAmendment is append-only.')
