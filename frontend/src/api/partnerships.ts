@@ -174,6 +174,13 @@ export interface ProcurementWorkspacePayload {
       paid_at: string
       journal_entry_id: number | null
     }>
+    payment_status: {
+      obligation_amount: string
+      paid_amount: string
+      delta: string
+      state: 'unpaid' | 'underpaid' | 'paid_full' | 'overpaid'
+      currency: string
+    }
     investment: {
       agreement_id: number
       agreement_label: string

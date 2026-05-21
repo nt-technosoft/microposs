@@ -10,6 +10,7 @@ import ProcurementCardSupplier from '@/modules/intake/components/workspace/Procu
 import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
 import ProcurementCardExpenses from '@/modules/intake/components/workspace/ProcurementCardExpenses.vue'
 import ProcurementCardFinancing from '@/modules/intake/components/workspace/ProcurementCardFinancing.vue'
+import ProcurementCardPayment from '@/modules/intake/components/workspace/ProcurementCardPayment.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
@@ -84,6 +85,14 @@ async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<vo
     await store.dispatch('UPDATE_EXPENSES', { expenses })
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Не удалось обновить расходы')
+  }
+}
+
+async function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    await store.dispatch(actionKey, payload)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Ошибка платежа')
   }
 }
 
@@ -185,6 +194,11 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @link-agreement="onLinkAgreement"
           @save-allocations="onSaveAllocations"
+        />
+        <ProcurementCardPayment
+          v-if="procurement.documents.settlement?.type !== 'AT_RECEIPT'"
+          :procurement="procurement"
+          @dispatch="onPaymentDispatch"
         />
       </div>
     </main>
