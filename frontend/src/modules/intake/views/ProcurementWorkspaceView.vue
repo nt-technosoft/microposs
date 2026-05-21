@@ -15,6 +15,7 @@ import ProcurementCardReceive from '@/modules/intake/components/workspace/Procur
 import ProcurementCardHistory from '@/modules/intake/components/workspace/ProcurementCardHistory.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 import WorkspaceAgreementPickerSheet from '@/modules/intake/components/workspace/WorkspaceAgreementPickerSheet.vue'
+import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +25,8 @@ const toast = useToast()
 
 const supplierPickerOpen = ref(false)
 const partnershipPickerOpen = ref(false)
+const amendSheetOpen = ref(false)
+const amendTarget = ref<'items' | 'expenses'>('items')
 
 const isPartnership = computed(() =>
   procurement.value?.documents.source.funding_source === 'PARTNERSHIP',
@@ -40,7 +43,20 @@ async function ensureWorkspace(): Promise<void> {
 }
 
 function handleMenuAction(actionKey: string): void {
+  if (actionKey === 'amend') {
+    amendTarget.value = 'items'
+    amendSheetOpen.value = true
+    return
+  }
   toast.info(`Будет реализовано: ${actionKey}`)
+}
+
+async function onAmendDispatch(actionKey: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    await store.dispatch(actionKey, payload)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось применить корректировку')
+  }
 }
 
 async function handlePrimaryAction(actionKey: string): Promise<void> {
@@ -249,6 +265,14 @@ onBeforeUnmount(() => store.$reset())
       :selected-agreement-id="procurement?.documents.source.investment_agreement_id ?? null"
       @select="onPartnershipAgreementSelect"
       @create-new="toast.info('Создание договора — откройте через карточку Финансирование')"
+    />
+
+    <AmendmentSheet
+      v-if="procurement"
+      v-model:open="amendSheetOpen"
+      :procurement="procurement"
+      :target="amendTarget"
+      @dispatch="onAmendDispatch"
     />
   </div>
 </template>
