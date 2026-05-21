@@ -230,6 +230,9 @@ export interface ProcurementWorkspacePayload {
         product_variant_id: number
         product_variant_name: string
         quantity: string
+        quantity_planned: string
+        quantity_received: string
+        discrepancy_reason: string
         unit_purchase_price_uzs: string
         allocated_expense_uzs: string
         landed_cost_per_unit_uzs: string
