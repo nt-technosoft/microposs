@@ -63,63 +63,66 @@ function fmtDate(iso: string): string {
       </div>
     </button>
 
-    <template v-if="isExpanded">
-      <!-- Attachments section -->
-      <div class="section">
-        <div class="section-label">Документы</div>
-        <div v-if="isLoadingAttachments" class="loading-text">Загрузка…</div>
-        <AttachmentList
-          v-else
-          :attachments="attachments"
-          :can-delete="canEdit"
-          @view="() => {}"
-          @delete="onDeleteAttachment"
-        />
-      </div>
+    <Transition name="expand">
+      <div v-if="isExpanded" class="expanded-body">
+        <!-- Attachments section -->
+        <div class="section">
+          <div class="section-label">Документы</div>
+          <div v-if="isLoadingAttachments" class="loading-text">Загрузка…</div>
+          <AttachmentList
+            v-else
+            :attachments="attachments"
+            :can-delete="canEdit"
+            @view="() => {}"
+            @delete="onDeleteAttachment"
+          />
+        </div>
 
-      <div v-if="canEdit" class="section">
-        <div class="section-label">Прикрепить файл</div>
-        <AttachmentUploader
-          attachable-type="procurement"
-          :attachable-id="procurementId"
-          default-kind="INVOICE"
-          @uploaded="onUploaded"
-        />
-      </div>
+        <div v-if="canEdit" class="section">
+          <div class="section-label">Прикрепить файл</div>
+          <AttachmentUploader
+            attachable-type="procurement"
+            :attachable-id="procurementId"
+            default-kind="INVOICE"
+            @uploaded="onUploaded"
+          />
+        </div>
 
-      <!-- Events timeline -->
-      <div v-if="history.length" class="section">
-        <div class="section-label">События</div>
-        <div class="timeline">
-          <div v-for="(event, idx) in visibleHistory" :key="idx" class="timeline-row">
-            <div class="tl-dot" />
-            <div class="tl-content">
-              <span class="tl-title">{{ event.title }}</span>
-              <span class="tl-date">{{ fmtDate(event.date) }}</span>
+        <!-- Events timeline -->
+        <div v-if="history.length" class="section">
+          <div class="section-label">События</div>
+          <div class="timeline">
+            <div v-for="(event, idx) in visibleHistory" :key="idx" class="timeline-row">
+              <div class="tl-dot" />
+              <div class="tl-content">
+                <span class="tl-title">{{ event.title }}</span>
+                <span class="tl-date">{{ fmtDate(event.date) }}</span>
+              </div>
             </div>
           </div>
+          <button
+            v-if="history.length > 10 && !showAllHistory"
+            class="show-all-btn"
+            type="button"
+            @click="showAllHistory = true"
+          >
+            Показать все ({{ history.length }})
+          </button>
         </div>
-        <button
-          v-if="history.length > 10 && !showAllHistory"
-          class="show-all-btn"
-          type="button"
-          @click="showAllHistory = true"
-        >
-          Показать все ({{ history.length }})
-        </button>
       </div>
-    </template>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
 .history-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); }
-.card-header { display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; padding: 0; cursor: pointer; text-align: left; width: 100%; }
+.card-header { display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; padding: 0; cursor: pointer; text-align: left; width: 100%; min-height: 44px; }
 .card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .header-right { display: flex; align-items: center; gap: var(--space-2); }
 .att-count { font-size: var(--text-xs); font-weight: var(--font-semibold); padding: 2px 6px; background: var(--color-brand-100); color: var(--color-brand-700); border-radius: var(--radius-full); }
 .hist-count { font-size: var(--text-xs); color: var(--color-text-secondary); }
 .chevron { color: var(--color-text-tertiary); }
+.expanded-body { display: grid; gap: var(--space-3); }
 .section { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--color-border-subtle); }
 .section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
 .loading-text { font-size: var(--text-sm); color: var(--color-text-secondary); }
@@ -130,4 +133,16 @@ function fmtDate(iso: string): string {
 .tl-title { font-size: var(--text-sm); color: var(--color-text-primary); }
 .tl-date { font-size: var(--text-xs); color: var(--color-text-secondary); }
 .show-all-btn { background: transparent; border: 0; color: var(--color-brand-600); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; padding: 0; text-align: left; }
+
+.expand-enter-active { animation: expand-in 150ms var(--ease-out); }
+.expand-leave-active { animation: expand-in 100ms var(--ease-in) reverse; }
+
+@keyframes expand-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .expand-enter-active, .expand-leave-active { animation: none; }
+}
 </style>

@@ -111,6 +111,10 @@ function goToPartnershipCreate(): void {
   router.push({ name: 'procurement-create', query: { mode: 'partnership' } })
 }
 
+function goToCreatePostFact(): void {
+  router.push({ name: 'procurement-create' })
+}
+
 function onFilterChange(value: StatusFilter): void {
   activeFilter.value = value
   loadProcurementList()
@@ -147,6 +151,9 @@ function onFilterChange(value: StatusFilter): void {
           {{ chip.label }}
         </button>
       </div>
+      <p class="fact-entry">
+        Уже получили товар? <button class="fact-link" type="button" @click="goToCreatePostFact">Завести по факту →</button>
+      </p>
     </template>
 
     <div class="content">
@@ -462,6 +469,22 @@ function onFilterChange(value: StatusFilter): void {
 @keyframes shimmer {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+.fact-entry {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.fact-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--color-brand-600);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
 }
 
 /* ── Reduced motion ─────────────────────────────────────────────────────── */

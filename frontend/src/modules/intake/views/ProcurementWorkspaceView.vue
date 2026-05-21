@@ -47,7 +47,10 @@ async function ensureWorkspace(): Promise<void> {
 
 async function dispatch(action: string, payload: Record<string, unknown> = {}): Promise<void> {
   try { await store.dispatch(action, payload) }
-  catch (err) { toast.error(err instanceof Error ? err.message : 'Ошибка операции') }
+  catch (err) {
+    const detail = (err as any)?.response?.data?.detail
+    toast.error(detail ?? (err instanceof Error ? err.message : 'Ошибка операции'))
+  }
 }
 
 function handleMenuAction(actionKey: string): void {
