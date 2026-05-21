@@ -2,6 +2,7 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { Plus, Check } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import WorkspaceQuickSupplierSheet from './WorkspaceQuickSupplierSheet.vue'
 import { fetchSuppliers } from '@/api/suppliers'
 import { useDebounce } from '@/composables/useDebounce'
 import type { Supplier } from '@/types/models'
@@ -14,12 +15,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:open': [value: boolean]
   select: [supplierId: number]
-  'create-new': []
 }>()
 
 const search = ref('')
 const suppliers = ref<Supplier[]>([])
 const isLoading = ref(false)
+const quickCreateOpen = ref(false)
 let abortController: AbortController | null = null
 
 async function loadSuppliers(query: string): Promise<void> {
@@ -58,8 +59,8 @@ function onSelect(supplier: Supplier): void {
   emit('update:open', false)
 }
 
-function onCreateNew(): void {
-  emit('create-new')
+function onQuickCreated(supplierId: number): void {
+  emit('select', supplierId)
   emit('update:open', false)
 }
 </script>
@@ -94,12 +95,17 @@ function onCreateNew(): void {
         </li>
       </ul>
 
-      <button class="create-btn" type="button" @click="onCreateNew">
+      <button class="create-btn" type="button" @click="quickCreateOpen = true">
         <Plus :size="14" :stroke-width="2.5" />
         Создать нового поставщика
       </button>
     </div>
   </AppBottomSheet>
+
+  <WorkspaceQuickSupplierSheet
+    v-model:open="quickCreateOpen"
+    @created="onQuickCreated"
+  />
 </template>
 
 <style scoped>

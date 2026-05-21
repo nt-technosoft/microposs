@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Copy, Send, UserPlus } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
+import WorkspaceQuickPartnerSheet from './WorkspaceQuickPartnerSheet.vue'
 import { createInvestorInvite, fetchPartners, type InvestorInvite, type Partner } from '@/api/core'
 import { createInvestmentAgreement, type InvestmentAgreementDetail } from '@/api/partnerships'
 import { useIdempotency } from '@/composables/useIdempotency'
@@ -32,6 +33,7 @@ const inviteName = ref('')
 const inviteEmail = ref('')
 const isInviting = ref(false)
 const createdInvite = ref<InvestorInvite | null>(null)
+const quickPartnerOpen = ref(false)
 
 const investorOptions = computed(() => partners.value.filter((partner) => partner.role === 'INVESTOR' && partner.is_active))
 const operatorPartner = computed(() => partners.value.find((partner) => partner.role === 'OPERATOR' && partner.is_active) ?? null)
@@ -165,6 +167,11 @@ async function submit(): Promise<void> {
   }
 }
 
+function onPartnerCreated(partner: Partner): void {
+  partners.value = [...partners.value, partner]
+  investorId.value = partner.id
+}
+
 onMounted(loadPartners)
 </script>
 
@@ -176,10 +183,16 @@ onMounted(loadPartners)
           <h2>Инвестор</h2>
           <p>Бизнес участвует в договоре автоматически. Выберите только внешнего инвестора.</p>
         </div>
-        <button class="ghost-action" type="button" @click="inviteOpen = true">
-          <UserPlus :size="15" :stroke-width="2" />
-          Пригласить
-        </button>
+        <div class="panel-head-actions">
+          <button class="ghost-action" type="button" @click="quickPartnerOpen = true">
+            <UserPlus :size="15" :stroke-width="2" />
+            Создать
+          </button>
+          <button class="ghost-action" type="button" @click="inviteOpen = true">
+            <Send :size="15" :stroke-width="2" />
+            Пригласить
+          </button>
+        </div>
       </div>
 
       <div v-if="isLoading" class="muted">Загрузка инвесторов…</div>
@@ -309,6 +322,11 @@ onMounted(loadPartners)
       {{ saving ? 'Создание…' : 'Создать договор' }}
     </button>
 
+    <WorkspaceQuickPartnerSheet
+      v-model:open="quickPartnerOpen"
+      @created="onPartnerCreated"
+    />
+
     <AppBottomSheet :open="inviteOpen" title="Пригласить инвестора" @close="inviteOpen = false">
       <div class="invite-sheet">
         <input v-model="inviteName" class="input-field" placeholder="Имя инвестора" />
@@ -375,6 +393,12 @@ h2,
 
 .panel-note {
   margin: -4px 0 2px;
+}
+
+.panel-head-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .ghost-action {

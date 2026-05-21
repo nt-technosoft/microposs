@@ -1,7 +1,7 @@
 from django.contrib.auth.models import Group, User
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -37,10 +37,14 @@ from .services import (
 )
 
 
-class PartnerViewSet(viewsets.ReadOnlyModelViewSet):
+class PartnerViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = PartnerSerializer
     permission_classes = [IsOwner]
+    http_method_names = ['get', 'post', 'head', 'options']
     ordering = ['role', 'display_name']
+
+    def perform_create(self, serializer):
+        serializer.save(tenant_id=self.request.tenant_id)
 
     def get_queryset(self):
         queryset = Partner.objects.filter(tenant_id=self.request.tenant_id)

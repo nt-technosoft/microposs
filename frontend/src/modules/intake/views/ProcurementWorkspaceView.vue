@@ -77,9 +77,6 @@ function onSupplierSelect(supplierId: number): void {
   onUpdateSource({ supplier_id: supplierId })
 }
 
-function onCreateNewSupplier(): void {
-  toast.info('Создание поставщика — будет реализовано')
-}
 
 async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
   await dispatch('UPDATE_ITEMS', { items })
@@ -196,7 +193,6 @@ onBeforeUnmount(() => store.$reset())
       v-model:open="supplierPickerOpen"
       :selected-id="procurement?.documents.procurement.supplier_id ?? null"
       @select="onSupplierSelect"
-      @create-new="onCreateNewSupplier"
     />
 
     <WorkspaceAgreementPickerSheet

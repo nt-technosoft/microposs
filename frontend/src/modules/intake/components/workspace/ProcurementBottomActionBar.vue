@@ -1,4 +1,27 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
+const ACTION_LABELS_RU: Record<string, string> = {
+  UPDATE_SOURCE: 'Выбрать поставщика',
+  UPDATE_ITEMS: 'Добавить товары',
+  UPDATE_EXPENSES: 'Добавить расходы',
+  UPDATE_SETTLEMENT: 'Выбрать условия',
+  CREATE_INVESTMENT_AGREEMENT: 'Создать договор',
+  LINK_INVESTMENT_AGREEMENT: 'Привязать договор',
+  RECORD_CAPITAL_CONTRIBUTION: 'Внести капитал',
+  ALLOCATE_CAPITAL: 'Распределить капитал',
+  PAY_COSTS: 'Оплатить',
+  PAY_SUPPLIER_PAYABLE: 'Оплатить поставщика',
+  GENERATE_INSTALLMENT_SCHEDULE: 'Сгенерировать график',
+  RECEIVE_BATCH: 'Принять товар',
+  AMEND_SETTLEMENT: 'Изменить условия',
+  AMEND_ITEMS: 'Изменить товары',
+  AMEND_EXPENSES: 'Изменить расходы',
+  RETURN_CONSIGNMENT: 'Вернуть консигнацию',
+  CLOSE_WORKSPACE: 'Закрыть приход',
+  CANCEL_WORKSPACE: 'Отменить приход',
+}
+
 const props = defineProps<{
   actionKey: string | null
   actionLabel: string | null
@@ -8,6 +31,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   click: [actionKey: string]
 }>()
+
+const displayLabel = computed(() => {
+  if (!props.actionLabel) return 'Сохранить черновик'
+  return ACTION_LABELS_RU[props.actionLabel] ?? props.actionLabel
+})
 
 function handleClick(): void {
   if (props.actionKey) {
@@ -25,7 +53,7 @@ function handleClick(): void {
         :disabled="!actionKey"
         @click="handleClick"
       >
-        {{ actionLabel ?? 'Сохранить черновик' }}
+        {{ displayLabel }}
       </button>
       <p v-if="reason" class="action-hint">{{ reason }}</p>
     </div>

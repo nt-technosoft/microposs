@@ -64,6 +64,17 @@ export interface BusinessRegistrationRequest {
   created_at: string
 }
 
+export interface PartnerCreatePayload {
+  display_name: string
+  role: 'INVESTOR' | 'OPERATOR'
+  is_active?: boolean
+}
+
+export async function createPartner(payload: PartnerCreatePayload): Promise<Partner> {
+  const { data } = await api.post<Partner>('/api/v1/core/partners/', payload)
+  return data
+}
+
 export async function fetchPartners(params?: {
   role?: 'INVESTOR' | 'OPERATOR'
   is_active?: boolean

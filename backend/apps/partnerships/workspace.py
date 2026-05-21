@@ -69,6 +69,27 @@ ACTION_MAP = {
     'amend_expenses': 'AMEND_EXPENSES',
 }
 
+ACTION_LABELS = {
+    'UPDATE_SOURCE': 'Выбрать поставщика',
+    'UPDATE_ITEMS': 'Добавить товары',
+    'UPDATE_EXPENSES': 'Добавить расходы',
+    'UPDATE_SETTLEMENT': 'Выбрать условия',
+    'CREATE_INVESTMENT_AGREEMENT': 'Создать договор',
+    'LINK_INVESTMENT_AGREEMENT': 'Привязать договор',
+    'RECORD_CAPITAL_CONTRIBUTION': 'Внести капитал',
+    'ALLOCATE_CAPITAL': 'Распределить капитал',
+    'PAY_COSTS': 'Оплатить',
+    'PAY_SUPPLIER_PAYABLE': 'Оплатить поставщика',
+    'GENERATE_INSTALLMENT_SCHEDULE': 'Сгенерировать график',
+    'RECEIVE_BATCH': 'Принять товар',
+    'AMEND_SETTLEMENT': 'Изменить условия',
+    'AMEND_ITEMS': 'Изменить товары',
+    'AMEND_EXPENSES': 'Изменить расходы',
+    'RETURN_CONSIGNMENT': 'Вернуть консигнацию',
+    'CLOSE_WORKSPACE': 'Закрыть приход',
+    'CANCEL_WORKSPACE': 'Отменить приход',
+}
+
 SECTION_TITLES = {
     'overview': 'Overview',
     'source': 'Source',
@@ -1733,7 +1754,7 @@ def _display(procurement: Procurement, policy) -> dict:
         'primary_currency': _primary_currency(procurement),
         'next_action': {
             'key': next_action,
-            'label': next_action,
+            'label': ACTION_LABELS.get(next_action, next_action) if next_action else None,
             'reason': policy.blocked_reasons[0] if policy.blocked_reasons else None,
         },
     }
