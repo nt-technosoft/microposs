@@ -12,6 +12,7 @@ import ProcurementCardExpenses from '@/modules/intake/components/workspace/Procu
 import ProcurementCardFinancing from '@/modules/intake/components/workspace/ProcurementCardFinancing.vue'
 import ProcurementCardPayment from '@/modules/intake/components/workspace/ProcurementCardPayment.vue'
 import ProcurementCardReceive from '@/modules/intake/components/workspace/ProcurementCardReceive.vue'
+import ProcurementCardHistory from '@/modules/intake/components/workspace/ProcurementCardHistory.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 
 const route = useRoute()
@@ -213,6 +214,7 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @dispatch="onReceiveDispatch"
         />
+        <ProcurementCardHistory :procurement="procurement" />
       </div>
     </main>
 
