@@ -362,7 +362,10 @@ def upsert_procurement_terms_draft(tenant_id, procurement, terms_payload, schedu
         raise ValueError('Нельзя менять условия поставщика после оприходования; используйте изменение условий.')
 
     _validate_terms_payload_supplier(procurement, terms_payload)
-    values = _normalize_terms_values(terms_payload)
+    # Merge with existing terms so partial UI updates (e.g. just `type`)
+    # preserve currency_of_obligation, fx_rate, deadline_date, etc.
+    existing = getattr(procurement, 'terms', None)
+    values = _normalize_terms_values(terms_payload, existing=existing, procurement=procurement)
 
     from .policies import validate_procurement_combination
     validate_procurement_combination(
@@ -674,25 +677,69 @@ def _terms_status_for_amounts(total_amount_due: Decimal, paid_amount: Decimal):
     return ProcurementTerms.Status.OPEN
 
 
-def _normalize_terms_values(terms_payload: dict) -> dict:
-    settlement_type = (terms_payload.get('type') or '').upper()
+def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=None) -> dict:
+    """
+    Normalize terms payload. Lenient to partial updates:
+      - If `type` missing, takes from existing.
+      - If `total_amount_due` missing, derives from procurement.items (Σ qty × price × fx)
+        — single source of truth, UI doesn't need to recompute.
+      - Other fields (currency, fx, deadline, notes) fall back to existing then defaults.
+    """
+    settlement_type = (
+        terms_payload.get('type')
+        or (existing.type if existing else None)
+        or ''
+    ).upper()
     if not settlement_type:
         raise ValueError('terms.type is required.')
 
-    total_amount_due = money(terms_payload['total_amount_due'])
+    if 'total_amount_due' in terms_payload:
+        total_amount_due = money(terms_payload['total_amount_due'])
+    elif existing is not None:
+        total_amount_due = money(existing.total_amount_due)
+    elif procurement is not None:
+        total_amount_due = sum(
+            (
+                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or 1))
+                for item in procurement.items.exclude(lifecycle_state='CANCELLED')
+            ),
+            Decimal('0'),
+        )
+        total_amount_due = money(total_amount_due)
+    else:
+        raise ValueError('terms.total_amount_due is required (no existing terms and no procurement context).')
 
-    # paid_amount is derived from finance.Payment (PROCUREMENT_COST target).
-    # At terms creation, status is FULLY_PAID for PREPAID (synthetic full
-    # settlement at terms creation) or OPEN otherwise. Subsequent payments
-    # will transition status via the Payment write site.
+    currency_of_obligation = (
+        terms_payload.get('currency_of_obligation')
+        or (existing.currency_of_obligation if existing else None)
+        or 'UZS'
+    )
+    fx_rate_at_obligation = (
+        terms_payload.get('fx_rate_at_obligation')
+        if 'fx_rate_at_obligation' in terms_payload
+        else (existing.fx_rate_at_obligation if existing else 1)
+    )
+    deadline_date = (
+        terms_payload.get('deadline_date')
+        if 'deadline_date' in terms_payload
+        else (existing.deadline_date if existing else None)
+    )
+    consignment_agreement_id = (
+        terms_payload.get('consignment_agreement_id')
+        if 'consignment_agreement_id' in terms_payload
+        else (existing.consignment_agreement_id if existing else None)
+    )
+    notes = (
+        terms_payload.get('notes')
+        if 'notes' in terms_payload
+        else (existing.notes if existing else '')
+    )
+
     initial_status = (
         ProcurementTerms.Status.FULLY_PAID
         if settlement_type == ProcurementTerms.Type.PREPAID
         else ProcurementTerms.Status.OPEN
     )
-    # PREPAID is locked the moment it is recorded — the synthetic settlement
-    # is already a fact, so lifecycle is ACTIVE. All other types start as
-    # DRAFT and activate at the first Payment / ReceiveBatch boundary.
     initial_lifecycle = (
         ProcurementTerms.LifecycleState.ACTIVE
         if settlement_type == ProcurementTerms.Type.PREPAID
@@ -701,14 +748,14 @@ def _normalize_terms_values(terms_payload: dict) -> dict:
 
     return {
         'type': settlement_type,
-        'currency_of_obligation': str(terms_payload.get('currency_of_obligation') or 'UZS').upper(),
-        'fx_rate_at_obligation': Decimal(str(terms_payload.get('fx_rate_at_obligation') or 1)),
+        'currency_of_obligation': str(currency_of_obligation).upper(),
+        'fx_rate_at_obligation': Decimal(str(fx_rate_at_obligation or 1)),
         'total_amount_due': total_amount_due,
         'status': initial_status,
         'lifecycle_state': initial_lifecycle,
-        'deadline_date': terms_payload.get('deadline_date'),
-        'consignment_agreement_id': terms_payload.get('consignment_agreement_id'),
-        'notes': str(terms_payload.get('notes') or ''),
+        'deadline_date': deadline_date,
+        'consignment_agreement_id': consignment_agreement_id,
+        'notes': str(notes or ''),
     }
 
 
