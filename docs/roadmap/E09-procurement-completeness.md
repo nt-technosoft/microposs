@@ -1,7 +1,7 @@
 # E09 — Procurement Completeness (non-PREPAID, ON_SALE, returnability)
 
-**Статус:** `IN_PROGRESS`
-**Прогресс:** ~85%
+**Статус:** `IN_REVIEW`
+**Прогресс:** ~95%
 **Зависит от:** E07, E08 (DONE)
 **Блокирует:** E03 (Net Value требует корректного учёта CONSIGNED inventory), частично E05
 
@@ -81,6 +81,23 @@ AT_RECEIPT):
 Backend-only рефакторинг без новой функциональности: расщепить CONSIGNMENT
 на две оси, добавить `goods_ownership` и `Lot.is_owned`, чистка legacy.
 Не трогает UI. План пригоден для делегирования Сонету.
+
+### Wave B — Frontend workspace rebuild (DONE 2026-05-21)
+
+- [x] B-1: Shell + routing + store — новый `ProcurementWorkspaceView.vue` + Pinia store; заменил 405-строчный монолит
+- [x] B-2: `ProcurementHeader` + `ProcurementBottomActionBar` — status badge, back nav, action menu, динамический CTA из backend payload
+- [x] B-3: `ProcurementCardSupplier` — supplier picker, funding toggle, settlement timing chips; PARTNERSHIP chip откладывает dispatch до выбора agreement; preconditions на timing chips (supplier required)
+- [x] B-4: `ProcurementCardItems` + `ProcurementItemRow` — список товаров, per-item goods_ownership, add/edit/delete
+- [x] B-5: `ProcurementCardExpenses` — landed expenses с allocation method picker; заблокирована целиком для CONSIGNED (OPEN-4 guard)
+- [x] B-6: `ProcurementCardFinancing` (PARTNERSHIP only) + `WorkspaceSupplierPickerSheet` + `WorkspaceAgreementPickerSheet`
+- [x] B-7: `ProcurementCardPayment` + `PaymentMakeSheet` — multi-timing payment card; AT_RECEIPT прячет карточку полностью
+- [x] B-8: `ProcurementCardReceive` + `ReceiveBatchConfirmSheet` — приёмка с discrepancy capture (qty + reason code) + capital snapshot для PARTNERSHIP
+- [x] B-9: `ProcurementCardHistory` + `AttachmentList` + `AttachmentUploader` — collapsible история + вложения (Wave A S-4 backend)
+- [x] B-10: AT_RECEIPT combined receive+pay — OWN_FUNDS cash account picker + payment block встроены в `ReceiveBatchConfirmSheet`
+- [x] B-11: `useProcurementReadiness` composable — единый источник readiness/visibility; `items_ready` и capital section переключены на backend source
+- [x] B-12: `AmendmentSheet` — inline амендмент items/expenses с обязательным reason; cancel rows через `_cancel` flag
+- [x] B-13: `ProcurementCancelDialog` + `ReverseReceiveBatchDialog` + консолидация `dispatch()` helper в view (−7× try/catch, view ≤262 строк)
+- [x] B-14: Polish — expand-transition на `CardHistory` (150ms), извлечение `{detail}` из Axios errors в dispatch, entry point «Завести по факту» в `IntakeList`
 
 ### Фаза 2 — ON_SALE механика
 
@@ -217,6 +234,8 @@ Recurring procurement, QC gate, supplier scoring, barcode scan,
 currency mid-flight change, approval workflow, PO numbers, tax line.
 
 ## Решённые вопросы (история)
+
+- ✓ 2026-05-21: **Wave B frontend rebuild — закрыта (14/14 slices).** Все карточки workspace реализованы, компоненты держат бюджет ≤300 строк, view-orchestrator ≤262 строк. Два элемента polish деferred по итогам B-14: per-card loading skeletons (рефакторинг объёма, не polish) и swipe-down на AppBottomSheet (нет gesture-инфраструктуры). Оба не блокируют operational use; вернуться если появится реальная пользовательская боль. Оставшиеся ~5% = golden-path верификация 8 легальных комбинаций procurement matrix.
 
 - ✓ 2026-05-19: **`HYBRID` источник денег — не нужен.** PARTNERSHIP уже
   покрывает оба сценария мудараба + мушарака через `AgreementPartner.role`

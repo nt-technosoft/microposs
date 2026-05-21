@@ -30,12 +30,15 @@
 | **E06** | Sharia Certification (institutional path) | 🟡 RESEARCH_DONE | ~15% | E04, E05 | [→](./roadmap/E06-sharia-certification.md) |
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
-| **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🟡 IN_PROGRESS | ~85% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
+| **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🔵 IN_REVIEW | ~95% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
 
-**🔥 Активный P0:** E09 — Procurement Completeness. Достраивает procurement matrix
-после controlled radical reset (E07/E08): non-PREPAID кредитные сценарии для
-OWN_FUNDS, расщепление CONSIGNMENT на независимые оси `payment_timing` и
-`goods_ownership`, returnability как cross-cutting attribute.
+**🔥 Активный P0:** E03 — Real Value Reporting (Net Asset View). Разблокирован
+завершением E09 Wave B. E09 остаётся в IN_REVIEW (golden-path верификация 8
+комбинаций матрицы, Phase 3 returnability намеренно deferred).
+
+**Предыдущий P0 (2026-05-19 — 2026-05-21):** E09 — Procurement Completeness.
+Wave A (backend, 8 slices) + Wave B (frontend rebuild, 14 slices) завершены.
+~95%, остаток — верификация и Phase 3 returnability (after-MVP).
 
 **Закрыто (2026-05-19):** E07 (controlled radical reset партнёрского трека +
 canonical workspace flow) + E08 (cleanup, source-of-truth consolidation,
