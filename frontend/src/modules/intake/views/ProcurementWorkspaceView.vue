@@ -16,6 +16,8 @@ import ProcurementCardHistory from '@/modules/intake/components/workspace/Procur
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 import WorkspaceAgreementPickerSheet from '@/modules/intake/components/workspace/WorkspaceAgreementPickerSheet.vue'
 import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet.vue'
+import ProcurementCancelDialog from '@/modules/intake/components/workspace/ProcurementCancelDialog.vue'
+import ReverseReceiveBatchDialog from '@/modules/intake/components/workspace/ReverseReceiveBatchDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +29,8 @@ const supplierPickerOpen = ref(false)
 const partnershipPickerOpen = ref(false)
 const amendSheetOpen = ref(false)
 const amendTarget = ref<'items' | 'expenses'>('items')
+const cancelDialogOpen = ref(false)
+const reverseDialogOpen = ref(false)
 
 const isPartnership = computed(() =>
   procurement.value?.documents.source.funding_source === 'PARTNERSHIP',
@@ -42,45 +46,28 @@ async function ensureWorkspace(): Promise<void> {
   }
 }
 
+async function dispatch(action: string, payload: Record<string, unknown> = {}): Promise<void> {
+  try { await store.dispatch(action, payload) }
+  catch (err) { toast.error(err instanceof Error ? err.message : 'Ошибка операции') }
+}
+
 function handleMenuAction(actionKey: string): void {
-  if (actionKey === 'amend') {
-    amendTarget.value = 'items'
-    amendSheetOpen.value = true
-    return
-  }
+  if (actionKey === 'amend') { amendTarget.value = 'items'; amendSheetOpen.value = true; return }
+  if (actionKey === 'cancel') { cancelDialogOpen.value = true; return }
+  if (actionKey === 'reverse_receive') { reverseDialogOpen.value = true; return }
   toast.info(`Будет реализовано: ${actionKey}`)
 }
 
-async function onAmendDispatch(actionKey: string, payload: Record<string, unknown>): Promise<void> {
-  try {
-    await store.dispatch(actionKey, payload)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось применить корректировку')
-  }
-}
-
 async function handlePrimaryAction(actionKey: string): Promise<void> {
-  try {
-    await store.dispatch(actionKey, {})
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Ошибка выполнения действия')
-  }
+  await dispatch(actionKey)
 }
 
 async function onUpdateSource(payload: { supplier_id?: number | null; funding_source?: string }): Promise<void> {
-  try {
-    await store.dispatch('UPDATE_SOURCE', payload as Record<string, unknown>)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось обновить источник')
-  }
+  await dispatch('UPDATE_SOURCE', payload as Record<string, unknown>)
 }
 
 async function onUpdateSettlement(payload: { type: string }): Promise<void> {
-  try {
-    await store.dispatch('UPDATE_SETTLEMENT', payload as Record<string, unknown>)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось обновить условия')
-  }
+  await dispatch('UPDATE_SETTLEMENT', payload as Record<string, unknown>)
 }
 
 function onSupplierSelect(supplierId: number): void {
@@ -93,100 +80,50 @@ function onCreateNewSupplier(): void {
 }
 
 async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
-  try {
-    await store.dispatch('UPDATE_ITEMS', { items })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось обновить товары')
-  }
+  await dispatch('UPDATE_ITEMS', { items })
 }
 
 async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<void> {
-  try {
-    await store.dispatch('UPDATE_EXPENSES', { expenses })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось обновить расходы')
-  }
-}
-
-async function onReceiveDispatch(actionKey: string, payload: Record<string, unknown>): Promise<void> {
-  try {
-    await store.dispatch(actionKey, payload)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Ошибка приёмки')
-  }
-}
-
-async function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>): Promise<void> {
-  try {
-    await store.dispatch(actionKey, payload)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Ошибка платежа')
-  }
+  await dispatch('UPDATE_EXPENSES', { expenses })
 }
 
 async function onPartnershipAgreementSelect(agreementId: number): Promise<void> {
   partnershipPickerOpen.value = false
-  try {
-    await store.dispatch('UPDATE_SOURCE', { funding_source: 'PARTNERSHIP', investment_agreement_id: agreementId })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось привязать партнёрский источник')
-  }
+  await dispatch('UPDATE_SOURCE', { funding_source: 'PARTNERSHIP', investment_agreement_id: agreementId })
 }
 
 async function onLinkAgreement(agreementId: number): Promise<void> {
-  try {
-    await store.dispatch('LINK_INVESTMENT_AGREEMENT', { agreement_id: agreementId })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось привязать договор')
-  }
+  await dispatch('LINK_INVESTMENT_AGREEMENT', { agreement_id: agreementId })
 }
 
 async function onSaveAllocations(allocations: Array<{ partner_id: number; amount: string }>): Promise<void> {
-  try {
-    await store.dispatch('ALLOCATE_CAPITAL', { allocations })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось сохранить распределение')
-  }
+  await dispatch('ALLOCATE_CAPITAL', { allocations })
+}
+
+async function onCancelConfirm(reason: string): Promise<void> {
+  await dispatch('CANCEL_WORKSPACE', { reason })
 }
 
 async function onDeleteExpense(expenseId: number): Promise<void> {
   if (!procurement.value) return
   const remaining = procurement.value.documents.expenses
     .filter((ex) => ex.id !== expenseId)
-    .map((ex) => ({
-      id: ex.id,
-      expense_type: ex.expense_type,
-      amount: parseFloat(ex.amount) || 0,
-      currency: ex.currency,
-      fx_rate: ex.fx_rate,
-      allocation_method: ex.allocation_method,
-      target_item_ids: ex.target_item_ids,
+    .map(({ id, expense_type, amount, currency, fx_rate, allocation_method, target_item_ids }) => ({
+      id, expense_type, amount: parseFloat(amount) || 0, currency, fx_rate, allocation_method, target_item_ids,
     }))
-  try {
-    await store.dispatch('UPDATE_EXPENSES', { expenses: remaining })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось удалить расход')
-  }
+  await dispatch('UPDATE_EXPENSES', { expenses: remaining })
 }
 
 async function onDeleteItem(itemId: number): Promise<void> {
   if (!procurement.value) return
   const remaining = procurement.value.documents.items
     .filter((it) => it.id !== itemId)
-    .map((it) => ({
-      id: it.id,
-      product_variant_id: it.product_variant_id,
-      quantity: parseFloat(it.quantity) || 0,
-      unit_purchase_price: parseFloat(it.unit_purchase_price) || 0,
-      currency: it.currency,
-      fx_rate: it.fx_rate,
-      goods_ownership: it.goods_ownership,
+    .map(({ id, product_variant_id, quantity, unit_purchase_price, currency, fx_rate, goods_ownership }) => ({
+      id, product_variant_id,
+      quantity: parseFloat(quantity) || 0, unit_purchase_price: parseFloat(unit_purchase_price) || 0,
+      currency, fx_rate, goods_ownership,
     }))
-  try {
-    await store.dispatch('UPDATE_ITEMS', { items: remaining })
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Не удалось удалить товар')
-  }
+  await dispatch('UPDATE_ITEMS', { items: remaining })
 }
 
 onMounted(ensureWorkspace)
@@ -236,11 +173,11 @@ onBeforeUnmount(() => store.$reset())
         <ProcurementCardPayment
           v-if="procurement.documents.settlement?.type !== 'AT_RECEIPT'"
           :procurement="procurement"
-          @dispatch="onPaymentDispatch"
+          @dispatch="(k, p) => dispatch(k, p)"
         />
         <ProcurementCardReceive
           :procurement="procurement"
-          @dispatch="onReceiveDispatch"
+          @dispatch="(k, p) => dispatch(k, p)"
         />
         <ProcurementCardHistory :procurement="procurement" />
       </div>
@@ -272,7 +209,21 @@ onBeforeUnmount(() => store.$reset())
       v-model:open="amendSheetOpen"
       :procurement="procurement"
       :target="amendTarget"
-      @dispatch="onAmendDispatch"
+      @dispatch="(k, p) => dispatch(k, p)"
+    />
+
+    <ProcurementCancelDialog
+      v-if="procurement"
+      v-model:open="cancelDialogOpen"
+      :procurement="procurement"
+      @confirm="onCancelConfirm"
+    />
+
+    <ReverseReceiveBatchDialog
+      v-if="procurement"
+      v-model:open="reverseDialogOpen"
+      :procurement="procurement"
+      @dispatch="(k, p) => dispatch(k, p)"
     />
   </div>
 </template>

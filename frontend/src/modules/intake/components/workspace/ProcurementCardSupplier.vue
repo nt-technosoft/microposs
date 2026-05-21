@@ -33,11 +33,23 @@ const ALL_TIMINGS = [
   { key: 'ON_SALE', label: 'На реализации' },
 ] as const
 
+const SUPPLIER_REQUIRED = new Set(['PARTIAL', 'DEFERRED', 'INSTALLMENT', 'ON_SALE'])
+
 const visibleTimings = computed(() =>
   isPartnership.value
     ? ALL_TIMINGS.filter((t) => t.key === 'PREPAID' || t.key === 'AT_RECEIPT')
     : ALL_TIMINGS,
 )
+
+const hasDisabledTimings = computed(() =>
+  !isPartnership.value &&
+  !procDoc.value.supplier_id &&
+  visibleTimings.value.some((t) => SUPPLIER_REQUIRED.has(t.key)),
+)
+
+function timingDisabled(key: string): boolean {
+  return SUPPLIER_REQUIRED.has(key) && !procDoc.value.supplier_id
+}
 
 function setFunding(funding: string): void {
   if (funding === currentFunding.value) return
@@ -45,7 +57,7 @@ function setFunding(funding: string): void {
 }
 
 function setTiming(type: string): void {
-  if (type === currentTiming.value) return
+  if (type === currentTiming.value || timingDisabled(type)) return
   emit('update-settlement', { type })
 }
 </script>
@@ -104,11 +116,15 @@ function setTiming(type: string): void {
         v-for="t in visibleTimings"
         :key="t.key"
         class="timing-chip"
-        :class="{ active: currentTiming === t.key }"
+        :class="{ active: currentTiming === t.key, disabled: timingDisabled(t.key) }"
+        :disabled="timingDisabled(t.key)"
         type="button"
         @click="setTiming(t.key)"
       >{{ t.label }}</button>
     </div>
+    <p v-if="hasDisabledTimings" class="timing-hint">
+      Для отсрочки / рассрочки / частичной / на реализации нужно сначала выбрать поставщика.
+    </p>
 
     <!-- Agreement stub for PARTNERSHIP -->
     <div v-if="isPartnership" class="agreement-stub">
@@ -232,6 +248,18 @@ function setTiming(type: string): void {
   background: var(--color-brand-600);
   color: white;
   font-weight: var(--font-semibold);
+}
+
+.timing-chip.disabled, .timing-chip:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.timing-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
 }
 
 .agreement-stub {
