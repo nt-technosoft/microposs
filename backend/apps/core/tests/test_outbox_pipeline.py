@@ -51,11 +51,10 @@ class OutboxPipelineTests(TestCase):
             .values_list('event_type', flat=True)
         )
         self.assertTrue({
-            'procurement.opened',
-            'procurement.contribution_added',
-            'procurement.items_paid',
-            'procurement.expenses_paid',
-            'procurement.received',
+            'investment_agreement.opened',
+            'investment_agreement.contribution_added',
+            'investment_agreement.allocated_to_procurement',
+            'procurement.receive_batch_posted',
             'lot.transfer',
             'pos_session.opened',
             'sale.completed',
@@ -94,8 +93,6 @@ class OutboxPipelineTests(TestCase):
             account_id=ctx['cash_account'].id,
         )
 
-        ctx['supplier'].outstanding_balance = Decimal('500000.00')
-        ctx['supplier'].save(update_fields=['outstanding_balance', 'updated_at'])
         record_supplier_payment(
             tenant_id=ctx['business'].id,
             supplier_id=ctx['supplier'].id,

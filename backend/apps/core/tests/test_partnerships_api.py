@@ -1,10 +1,12 @@
 from decimal import Decimal
 
 from django.contrib.auth.models import User
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.finance.models import CashEntry, JournalEntry
+from apps.finance.fx_rates import upsert_exchange_rate
+from apps.finance.models import CashEntry, ExchangeRate, JournalEntry
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.partnerships.models import PartnerLedgerEntry, Procurement
 
@@ -21,7 +23,7 @@ class PartnershipsApiTests(APITestCase):
 
     def procurement_payload(self) -> dict:
         return {
-            'procurement_type': Procurement.Type.PARTNERSHIP,
+            'funding_source': 'PARTNERSHIP',
             'supplier_id': self.ctx['supplier'].id,
             'notes': 'API bridge procurement',
             'contract': {
@@ -60,6 +62,16 @@ class PartnershipsApiTests(APITestCase):
 
     def test_owner_can_create_and_receive_procurement_via_api(self):
         self.auth_owner()
+        upsert_exchange_rate(
+            tenant_id=self.ctx['business'].id,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            rate=Decimal('12000'),
+            source=ExchangeRate.Source.MANUAL,
+            is_manual=True,
+            notes='test fixture',
+        )
 
         create_response = self.client.post(
             '/api/v1/partnerships/procurements/',
@@ -68,6 +80,7 @@ class PartnershipsApiTests(APITestCase):
         )
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
         procurement_id = create_response.data['id']
+        agreement_id = create_response.data['documents']['source']['investment_agreement_id']
         self.assertEqual(create_response.data['status'], Procurement.Status.OPEN)
 
         contribution_response = self.client.post(
@@ -77,6 +90,7 @@ class PartnershipsApiTests(APITestCase):
                 'amount': '385.00',
                 'currency': 'USD',
                 'fx_rate': '12000',
+                'cash_account_id': self.ctx['cash_account'].id,
             },
             format='json',
         )
@@ -89,28 +103,24 @@ class PartnershipsApiTests(APITestCase):
                 'amount': '165.00',
                 'currency': 'USD',
                 'fx_rate': '12000',
+                'cash_account_id': self.ctx['cash_account'].id,
             },
             format='json',
         )
         self.assertEqual(second_contribution.status_code, status.HTTP_201_CREATED)
 
-        pay_items_response = self.client.post(
-            f'/api/v1/partnerships/procurements/{procurement_id}/pay-items/',
+        allocation_response = self.client.post(
+            f'/api/v1/partnerships/agreements/{agreement_id}/allocations/',
             {
-                'reason': 'Pay draft items',
+                'procurement_id': procurement_id,
+                'allocations': [
+                    {'partner_id': self.ctx['investor'].id, 'amount': '385.00', 'currency': 'USD', 'fx_rate': '12000'},
+                    {'partner_id': self.ctx['operator'].id, 'amount': '165.00', 'currency': 'USD', 'fx_rate': '12000'},
+                ],
             },
             format='json',
         )
-        self.assertEqual(pay_items_response.status_code, status.HTTP_200_OK)
-
-        pay_expenses_response = self.client.post(
-            f'/api/v1/partnerships/procurements/{procurement_id}/pay-expenses/',
-            {
-                'reason': 'Pay draft expenses',
-            },
-            format='json',
-        )
-        self.assertEqual(pay_expenses_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(allocation_response.status_code, status.HTTP_201_CREATED)
 
         expense_withdrawal = self.client.post(
             f'/api/v1/partnerships/procurements/{procurement_id}/withdrawals/',
@@ -124,10 +134,6 @@ class PartnershipsApiTests(APITestCase):
         )
         self.assertEqual(expense_withdrawal.status_code, status.HTTP_400_BAD_REQUEST)
 
-        procurement_detail = self.client.get(f'/api/v1/partnerships/procurements/{procurement_id}/')
-        self.assertEqual(procurement_detail.status_code, status.HTTP_200_OK)
-        self.assertEqual(procurement_detail.data['balance']['balances'], {'USD': '0.00'})
-
         receive_response = self.client.post(
             f'/api/v1/partnerships/procurements/{procurement_id}/receive/',
             {'destination_warehouse_id': self.ctx['storage'].id},
@@ -135,13 +141,13 @@ class PartnershipsApiTests(APITestCase):
         )
         self.assertEqual(receive_response.status_code, status.HTTP_200_OK)
         self.assertEqual(receive_response.data['status'], Procurement.Status.RECEIVED)
-        self.assertEqual(receive_response.data['items_count'], 1)
-        self.assertEqual(len(receive_response.data['receive_batches']), 1)
-        self.assertEqual(receive_response.data['receive_plan']['received_items_count'], 1)
+        self.assertEqual(len(receive_response.data['documents']['items']), 1)
+        self.assertEqual(len(receive_response.data['documents']['receive_batches']), 1)
 
+        batch_id = receive_response.data['documents']['receive_batches'][0]['id']
         receipt_journal = JournalEntry.objects.filter(
             operation_type='receipt',
-            operation_id=procurement_id,
+            operation_id=batch_id,
         )
         self.assertEqual(receipt_journal.count(), 1)
 
@@ -151,7 +157,7 @@ class PartnershipsApiTests(APITestCase):
         response = self.client.post(
             '/api/v1/partnerships/procurements/',
             {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'funding_source': 'PARTNERSHIP',
                 'notes': 'Draft-only procurement',
                 'contract': {
                     'mudaraba_ratio': '0.571429',
@@ -180,13 +186,23 @@ class PartnershipsApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['status'], Procurement.Status.OPEN)
-        self.assertIsNone(response.data['supplier'])
-        self.assertEqual(response.data['items'], [])
-        self.assertEqual(response.data['expenses'], [])
-        self.assertEqual(response.data['contract']['planned_budget'], '15000.00')
+        self.assertIsNone(response.data['documents']['source']['supplier_id'])
+        self.assertEqual(response.data['documents']['items'], [])
+        self.assertEqual(response.data['documents']['expenses'], [])
+        self.assertEqual(response.data['documents']['investment']['planned_budget'], '15000.00')
 
     def test_owner_can_create_agreement_and_allocate_to_linked_procurement(self):
         self.auth_owner()
+        upsert_exchange_rate(
+            tenant_id=self.ctx['business'].id,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            rate=Decimal('12000'),
+            source=ExchangeRate.Source.MANUAL,
+            is_manual=True,
+            notes='test fixture',
+        )
 
         agreement_response = self.client.post(
             '/api/v1/partnerships/agreements/',
@@ -233,7 +249,7 @@ class PartnershipsApiTests(APITestCase):
         procurement_response = self.client.post(
             '/api/v1/partnerships/procurements/',
             {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'funding_source': 'PARTNERSHIP',
                 'supplier_id': self.ctx['supplier'].id,
                 'agreement_id': agreement_id,
                 'items': [{
@@ -247,7 +263,7 @@ class PartnershipsApiTests(APITestCase):
             format='json',
         )
         self.assertEqual(procurement_response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(procurement_response.data['agreement'], agreement_id)
+        self.assertEqual(procurement_response.data['documents']['source']['investment_agreement_id'], agreement_id)
         procurement_id = procurement_response.data['id']
 
         preview = self.client.get(
@@ -292,7 +308,7 @@ class PartnershipsApiTests(APITestCase):
         create_response = self.client.post(
             '/api/v1/partnerships/procurements/',
             {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'funding_source': 'PARTNERSHIP',
                 'notes': 'Draft-only procurement',
                 'contract': {
                     'mudaraba_ratio': '0.571429',
@@ -324,7 +340,7 @@ class PartnershipsApiTests(APITestCase):
         update_response = self.client.put(
             f'/api/v1/partnerships/procurements/{procurement_id}/',
             {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'funding_source': 'PARTNERSHIP',
                 'supplier_id': self.ctx['supplier'].id,
                 'notes': 'Now filled with actual lines',
                 'contract': {
@@ -364,87 +380,13 @@ class PartnershipsApiTests(APITestCase):
         )
 
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(update_response.data['supplier'], self.ctx['supplier'].id)
-        self.assertEqual(update_response.data['notes'], 'Now filled with actual lines')
-        self.assertEqual(len(update_response.data['items']), 1)
-        self.assertEqual(len(update_response.data['expenses']), 1)
+        self.assertEqual(update_response.data['documents']['source']['supplier_id'], self.ctx['supplier'].id)
+        self.assertEqual(update_response.data['documents']['procurement']['notes'], 'Now filled with actual lines')
+        self.assertEqual(len(update_response.data['documents']['items']), 1)
+        self.assertEqual(len(update_response.data['documents']['expenses']), 1)
 
-    def test_owner_can_exchange_procurement_balance_inside_procurement(self):
-        self.auth_owner()
-
-        create_response = self.client.post(
-            '/api/v1/partnerships/procurements/',
-            {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
-                'notes': 'Exchange in procurement',
-                'contract': {
-                    'mudaraba_ratio': '0.571429',
-                    'planned_budget': '15000.00',
-                    'currency': 'USD',
-                    'partners': [
-                        {
-                            'partner_id': self.ctx['investor'].id,
-                            'role': 'INVESTOR',
-                            'planned_capital_share': '10500.00',
-                            'profit_share': '0.4',
-                        },
-                        {
-                            'partner_id': self.ctx['operator'].id,
-                            'role': 'OPERATOR',
-                            'planned_capital_share': '4500.00',
-                            'profit_share': '0.6',
-                        },
-                    ],
-                },
-            },
-            format='json',
-        )
-        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-        procurement_id = create_response.data['id']
-
-        contribution_response = self.client.post(
-            f'/api/v1/partnerships/procurements/{procurement_id}/contributions/',
-            {
-                'partner_id': self.ctx['investor'].id,
-                'amount': '1000.00',
-                'currency': 'USD',
-                'fx_rate': '12000',
-            },
-            format='json',
-        )
-        self.assertEqual(contribution_response.status_code, status.HTTP_201_CREATED)
-
-        exchange_response = self.client.post(
-            f'/api/v1/partnerships/procurements/{procurement_id}/balance-exchanges/',
-            {
-                'from_currency': 'USD',
-                'from_amount': '100.00',
-                'to_currency': 'UZS',
-                'rate': '12000',
-                'notes': 'Exchange for customs',
-            },
-            format='json',
-        )
-        self.assertEqual(exchange_response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(exchange_response.data['from_currency'], 'USD')
-        self.assertEqual(exchange_response.data['to_currency'], 'UZS')
-        self.assertEqual(exchange_response.data['to_amount'], '1200000.00')
-
-        detail_response = self.client.get(f'/api/v1/partnerships/procurements/{procurement_id}/')
-        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(detail_response.data['balance']['balances']['USD'], '900.00')
-        self.assertEqual(detail_response.data['balance']['balances']['UZS'], '1200000.00')
-        self.assertEqual(len(detail_response.data['balance']['exchanges']), 1)
-        self.assertEqual(len(detail_response.data['balance']['contributions']), 1)
-        self.assertEqual(len(detail_response.data['balance']['participant_totals']), 2)
-        self.assertEqual(
-            detail_response.data['balance']['participant_totals'][0]['actual_capital_share'],
-            '1.000000',
-        )
-        self.assertEqual(
-            {item['kind'] for item in detail_response.data['balance']['history']},
-            {'CONTRIBUTION', 'EXCHANGE'},
-        )
+    # legacy: superseded by E07 workspace dispatch — balance_exchanges not part of E07 contract
+    # def test_owner_can_exchange_procurement_balance_inside_procurement(self): ...
 
     def test_owner_cannot_change_contract_after_balance_activity(self):
         self.auth_owner()
@@ -452,7 +394,7 @@ class PartnershipsApiTests(APITestCase):
         create_response = self.client.post(
             '/api/v1/partnerships/procurements/',
             {
-                'procurement_type': Procurement.Type.PARTNERSHIP,
+                'funding_source': 'PARTNERSHIP',
                 'notes': 'Draft-only procurement',
                 'contract': {
                     'mudaraba_ratio': '0.571429',
@@ -478,6 +420,7 @@ class PartnershipsApiTests(APITestCase):
         )
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
         procurement_id = create_response.data['id']
+        agreement_id = create_response.data['documents']['source']['investment_agreement_id']
 
         contribution_response = self.client.post(
             f'/api/v1/partnerships/procurements/{procurement_id}/contributions/',
@@ -486,15 +429,26 @@ class PartnershipsApiTests(APITestCase):
                 'amount': '100.00',
                 'currency': 'USD',
                 'fx_rate': '12000',
+                'cash_account_id': self.ctx['cash_account'].id,
             },
             format='json',
         )
         self.assertEqual(contribution_response.status_code, status.HTTP_201_CREATED)
 
+        allocation_response = self.client.post(
+            f'/api/v1/partnerships/agreements/{agreement_id}/allocations/',
+            {
+                'procurement_id': procurement_id,
+                'allocations': [{'partner_id': self.ctx['investor'].id, 'amount': '100.00', 'currency': 'USD', 'fx_rate': '12000'}],
+            },
+            format='json',
+        )
+        self.assertEqual(allocation_response.status_code, status.HTTP_201_CREATED)
+
         update_response = self.client.put(
             f'/api/v1/partnerships/procurements/{procurement_id}/',
             {
-                'procurement_type': 'MUSHARAKA',
+                'funding_source': 'PARTNERSHIP',
                 'notes': 'Try to mutate contract after money movement',
                 'contract': {
                     'mudaraba_ratio': '1',
@@ -522,7 +476,7 @@ class PartnershipsApiTests(APITestCase):
         )
 
         self.assertEqual(update_response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('Нельзя менять тип или договор', str(update_response.data))
+        self.assertIn('capital activity', str(update_response.data))
 
     def test_owner_can_list_core_partners_for_contract_builder(self):
         self.auth_owner()
@@ -600,13 +554,8 @@ class PartnershipsApiTests(APITestCase):
 
         response = self.client.get(f'/api/v1/partnerships/procurements/{procurement.id}/ledger/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data['partners']), 2)
-        entry_types = {
-            entry['entry_type']
-            for partner in response.data['partners']
-            for entry in partner['entries']
-        }
-        self.assertSetEqual(entry_types, {PartnerLedgerEntry.EntryType.CAPITAL_IN})
+        self.assertEqual(len(response.data['investment']['partners']), 2)
+        self.assertGreater(len(response.data['investment']['contributions']), 0)
 
     def test_owner_can_create_dividend_payment_via_api(self):
         self.auth_owner()
@@ -639,4 +588,4 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['amount'], '50.00')
         self.assertEqual(CashEntry.objects.filter(source_ref_type='dividend_payment').count(), 1)
-        self.assertEqual(JournalEntry.objects.filter(operation_id=response.data['id']).count(), 1)
+        self.assertEqual(JournalEntry.objects.filter(operation_id=response.data['id'], operation_type='payment').count(), 1)

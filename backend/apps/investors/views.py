@@ -89,7 +89,7 @@ class InvestorProcurementView(APIView):
             payload = [
                 {
                     'id': ledger.procurement_id,
-                    'procurement_type': ledger.procurement.procurement_type,
+                    'procurement_type': ledger.procurement.funding_source,
                     'status': ledger.procurement.status,
                     'opened_at': ledger.procurement.opened_at,
                     'received_at': ledger.procurement.received_at,
@@ -102,7 +102,7 @@ class InvestorProcurementView(APIView):
         ledger = ledgers.prefetch_related('entries').get(procurement_id=procurement_id)
         payload = {
             'id': ledger.procurement_id,
-            'procurement_type': ledger.procurement.procurement_type,
+            'procurement_type': ledger.procurement.funding_source,
             'status': ledger.procurement.status,
             'opened_at': ledger.procurement.opened_at,
             'received_at': ledger.procurement.received_at,

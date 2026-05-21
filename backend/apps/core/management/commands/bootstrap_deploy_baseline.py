@@ -415,9 +415,88 @@ class Command(BaseCommand):
         ).first()
 
         if procurement is None:
-            # TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
-            # Legacy open_procurement/add_contribution/receive_procurement removed in E08 T-1.4.
-            return False
+            from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
+            procurement = create_workspace(
+                tenant_id=business.id,
+                funding_source=Procurement.FundingSource.PARTNERSHIP,
+                supplier_id=baseline['supplier'].id,
+                notes=BASELINE_PROCUREMENT_NOTES,
+                client_request_id=str(BASELINE_PROCUREMENT_REQUEST_ID),
+            )
+            procurement = dispatch_workspace_action(
+                tenant_id=business.id,
+                procurement=procurement,
+                action='CREATE_INVESTMENT_AGREEMENT',
+                payload={'payload': {
+                    'mudaraba_ratio': Decimal('0.571429'),
+                    'planned_budget': Decimal('200.00'),
+                    'currency': 'USD',
+                    'partners': [
+                        {
+                            'partner_id': baseline['investor_partner'].id,
+                            'role': 'INVESTOR',
+                            'planned_capital_share': Decimal('140.00'),
+                            'profit_share': Decimal('0.4'),
+                        },
+                        {
+                            'partner_id': baseline['operator'].id,
+                            'role': 'OPERATOR',
+                            'planned_capital_share': Decimal('60.00'),
+                            'profit_share': Decimal('0.6'),
+                        },
+                    ],
+                }},
+                user_id=users['owner'].id,
+            )
+            procurement = dispatch_workspace_action(
+                tenant_id=business.id,
+                procurement=procurement,
+                action='UPDATE_ITEMS',
+                payload={'payload': {
+                    'items': [{
+                        'product_variant_id': variant,
+                        'quantity': Decimal('10'),
+                        'unit_purchase_price': Decimal('10.00'),
+                        'currency': 'USD',
+                        'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
+                    }],
+                }},
+                user_id=users['owner'].id,
+            )
+            dollar_account = baseline['cash_accounts']['KASSA DOLLAR']
+            for partner_id, amount in [
+                (baseline['investor_partner'].id, Decimal('140.00')),
+                (baseline['operator'].id, Decimal('60.00')),
+            ]:
+                dispatch_workspace_action(
+                    tenant_id=business.id,
+                    procurement=procurement,
+                    action='RECORD_CAPITAL_CONTRIBUTION',
+                    payload={'payload': {
+                        'partner_id': partner_id,
+                        'amount': amount,
+                        'currency': 'USD',
+                        'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
+                        'cash_account_id': dollar_account.id,
+                    }},
+                    user_id=users['owner'].id,
+                )
+            procurement = dispatch_workspace_action(
+                tenant_id=business.id,
+                procurement=procurement,
+                action='ALLOCATE_CAPITAL',
+                payload={'payload': {'allocations': [
+                    {'partner_id': baseline['investor_partner'].id, 'amount': Decimal('140.00'), 'currency': 'USD', 'fx_rate': DEFAULT_DEMO_USD_UZS_RATE},
+                    {'partner_id': baseline['operator'].id, 'amount': Decimal('60.00'), 'currency': 'USD', 'fx_rate': DEFAULT_DEMO_USD_UZS_RATE},
+                ]}},
+            )
+            procurement = dispatch_workspace_action(
+                tenant_id=business.id,
+                procurement=procurement,
+                action='RECEIVE_BATCH',
+                payload={'payload': {'warehouse_id': baseline['storage'].id}},
+            )
+            procurement = Procurement.objects.get(pk=procurement.pk)
 
         lot = Lot.objects.filter(
             tenant=business,

@@ -85,12 +85,13 @@ class Command(BaseCommand):
         warehouse,
         cashier_user,
     ):
-        """
-        TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
-        The legacy open_procurement/add_contribution/receive_procurement functions were
-        removed in E08 Phase 1 (T-1.4).
-        """
-        raise NotImplementedError('Partnership demo flow requires E07 Phase D rewrite.')
+        from apps.partnerships.workspace import create_workspace
+        create_workspace(
+            tenant_id=business.id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=supplier.id,
+            notes='Demo partnership procurement',
+        )
 
     def handle(self, *args, **options):
         require_debug_or_confirmation(
@@ -321,7 +322,7 @@ class Command(BaseCommand):
             # ─── Procurement → Sale demo (idempotent: skip if already seeded) ─
             existing_demo = Procurement.objects.filter(
                 tenant=business,
-                procurement_type=Procurement.Type.PARTNERSHIP,
+                funding_source=Procurement.FundingSource.PARTNERSHIP,
             ).first()
             if existing_demo is None:
                 self._seed_partnership_flow(

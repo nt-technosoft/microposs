@@ -807,6 +807,7 @@ class AgreementContributionCreateSerializer(serializers.Serializer):
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
     notes = serializers.CharField(required=False, default='', allow_blank=True)
+    cash_account_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class AgreementWithdrawalCreateSerializer(serializers.Serializer):

@@ -347,7 +347,7 @@ class Command(BaseCommand):
 
         procurement = (
             Procurement.objects
-            .filter(tenant=business, procurement_type=Procurement.Type.PARTNERSHIP)
+            .filter(tenant=business, funding_source=Procurement.FundingSource.PARTNERSHIP)
             .order_by('id')
             .first()
         )
