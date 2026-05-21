@@ -735,16 +735,21 @@ def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=N
         else (existing.notes if existing else '')
     )
 
-    initial_status = (
-        ProcurementTerms.Status.FULLY_PAID
-        if settlement_type == ProcurementTerms.Type.PREPAID
-        else ProcurementTerms.Status.OPEN
-    )
-    initial_lifecycle = (
-        ProcurementTerms.LifecycleState.ACTIVE
-        if settlement_type == ProcurementTerms.Type.PREPAID
-        else ProcurementTerms.LifecycleState.DRAFT
-    )
+    # Preserve existing status/lifecycle when terms already exist (partial
+    # UI updates). For brand-new terms — always start as OPEN/DRAFT regardless
+    # of timing type. Status/lifecycle transitions happen explicitly on the
+    # first Payment / ReceiveBatch event (see pay_workspace_costs and
+    # receive_workspace_batch which call terms.activate()).
+    #
+    # Previous version eagerly set PREPAID → FULLY_PAID/ACTIVE on creation,
+    # but that broke UI flow: user picks PREPAID first, then can't change
+    # timing because ACTIVE terms reject field mutations via ImmutableMixin.
+    if existing is not None:
+        initial_status = existing.status
+        initial_lifecycle = existing.lifecycle_state
+    else:
+        initial_status = ProcurementTerms.Status.OPEN
+        initial_lifecycle = ProcurementTerms.LifecycleState.DRAFT
 
     return {
         'type': settlement_type,
