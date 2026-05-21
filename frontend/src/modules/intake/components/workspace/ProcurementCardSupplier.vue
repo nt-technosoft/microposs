@@ -11,6 +11,7 @@ const emit = defineEmits<{
   'update-source': [payload: { supplier_id?: number | null; funding_source?: string }]
   'update-settlement': [payload: { type: string }]
   'open-supplier-picker': []
+  'request-partnership': []
 }>()
 
 const source = computed(() => props.procurement.documents.source)
@@ -41,10 +42,6 @@ const visibleTimings = computed(() =>
 function setFunding(funding: string): void {
   if (funding === currentFunding.value) return
   emit('update-source', { funding_source: funding })
-  // If switching to PARTNERSHIP and current timing is not compatible, reset
-  if (funding === 'PARTNERSHIP' && currentTiming.value && currentTiming.value !== 'PREPAID' && currentTiming.value !== 'AT_RECEIPT') {
-    emit('update-settlement', { type: 'PREPAID' })
-  }
 }
 
 function setTiming(type: string): void {
@@ -73,7 +70,7 @@ function setTiming(type: string): void {
         class="funding-chip"
         :class="{ active: isPartnership }"
         type="button"
-        @click="setFunding('PARTNERSHIP')"
+        @click="emit('request-partnership')"
       >Партнёрский</button>
     </div>
 

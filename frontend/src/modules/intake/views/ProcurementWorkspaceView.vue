@@ -14,6 +14,7 @@ import ProcurementCardPayment from '@/modules/intake/components/workspace/Procur
 import ProcurementCardReceive from '@/modules/intake/components/workspace/ProcurementCardReceive.vue'
 import ProcurementCardHistory from '@/modules/intake/components/workspace/ProcurementCardHistory.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
+import WorkspaceAgreementPickerSheet from '@/modules/intake/components/workspace/WorkspaceAgreementPickerSheet.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,6 +23,7 @@ const { procurement, isLoading, error } = storeToRefs(store)
 const toast = useToast()
 
 const supplierPickerOpen = ref(false)
+const partnershipPickerOpen = ref(false)
 
 const isPartnership = computed(() =>
   procurement.value?.documents.source.funding_source === 'PARTNERSHIP',
@@ -103,6 +105,15 @@ async function onPaymentDispatch(actionKey: string, payload: Record<string, unkn
     await store.dispatch(actionKey, payload)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Ошибка платежа')
+  }
+}
+
+async function onPartnershipAgreementSelect(agreementId: number): Promise<void> {
+  partnershipPickerOpen.value = false
+  try {
+    await store.dispatch('UPDATE_SOURCE', { funding_source: 'PARTNERSHIP', investment_agreement_id: agreementId })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Не удалось привязать партнёрский источник')
   }
 }
 
@@ -188,6 +199,7 @@ onBeforeUnmount(() => store.$reset())
           @update-source="onUpdateSource"
           @update-settlement="onUpdateSettlement"
           @open-supplier-picker="supplierPickerOpen = true"
+          @request-partnership="partnershipPickerOpen = true"
         />
         <ProcurementCardItems
           :procurement="procurement"
@@ -230,6 +242,13 @@ onBeforeUnmount(() => store.$reset())
       :selected-id="procurement?.documents.procurement.supplier_id ?? null"
       @select="onSupplierSelect"
       @create-new="onCreateNewSupplier"
+    />
+
+    <WorkspaceAgreementPickerSheet
+      v-model:open="partnershipPickerOpen"
+      :selected-agreement-id="procurement?.documents.source.investment_agreement_id ?? null"
+      @select="onPartnershipAgreementSelect"
+      @create-new="toast.info('Создание договора — откройте через карточку Финансирование')"
     />
   </div>
 </template>
