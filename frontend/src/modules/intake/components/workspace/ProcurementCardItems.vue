@@ -19,7 +19,7 @@ const editingItemId = ref<number | null>(null)
 
 const items = computed(() => props.procurement.documents.items)
 const canEdit = computed(() => props.procurement.status === 'OPEN')
-const isFilled = computed(() => items.value.length > 0)
+const isFilled = computed(() => props.procurement.readiness['items_ready']?.ok ?? items.value.length > 0)
 
 const totalUzs = computed(() =>
   items.value.reduce((sum, it) => {

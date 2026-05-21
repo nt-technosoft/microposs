@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
+import { useProcurementReadiness } from '@/modules/intake/composables/useProcurementReadiness'
 import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
 import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
@@ -32,9 +33,7 @@ const amendTarget = ref<'items' | 'expenses'>('items')
 const cancelDialogOpen = ref(false)
 const reverseDialogOpen = ref(false)
 
-const isPartnership = computed(() =>
-  procurement.value?.documents.source.funding_source === 'PARTNERSHIP',
-)
+const { capitalSectionVisible } = useProcurementReadiness(procurement)
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -165,7 +164,7 @@ onBeforeUnmount(() => store.$reset())
           @delete-expense="onDeleteExpense"
         />
         <ProcurementCardFinancing
-          v-if="isPartnership"
+          v-if="capitalSectionVisible"
           :procurement="procurement"
           @link-agreement="onLinkAgreement"
           @save-allocations="onSaveAllocations"
