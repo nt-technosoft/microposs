@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { fetchLocations } from '@/api/inventory'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import type { Location } from '@/types/models'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -36,10 +37,15 @@ const receivedAt = ref(new Date().toISOString().slice(0, 10))
 const lines = ref<LineState[]>([])
 const capAllocs = ref<CapAlloc[]>([])
 const warehouses = ref<Location[]>([])
+const cashAccounts = ref<CashAccountRecord[]>([])
+const selectedCashAccountId = ref<number | null>(null)
+const paymentAmount = ref('')
 const errors = ref<Record<number, string>>({})
 
 const investment = computed(() => props.procurement.documents.investment)
 const isPartnership = computed(() => props.procurement.documents.source.funding_source === 'PARTNERSHIP')
+const isAtReceipt = computed(() => props.procurement.documents.settlement?.type === 'AT_RECEIPT')
+const isOwnFunds = computed(() => !isPartnership.value)
 
 const receivableItems = computed(() =>
   props.procurement.documents.items.filter(
@@ -93,6 +99,15 @@ watch(() => props.open, async (isOpen) => {
   if (!warehouseId.value && warehouses.value.length) {
     warehouseId.value = warehouses.value[0].id
   }
+  if (isAtReceipt.value && isOwnFunds.value) {
+    if (!cashAccounts.value.length) {
+      try { cashAccounts.value = await fetchCashAccounts() } catch { cashAccounts.value = [] }
+    }
+    if (!selectedCashAccountId.value && cashAccounts.value.length) {
+      selectedCashAccountId.value = cashAccounts.value[0].id
+    }
+    paymentAmount.value = String(receiveBatchCostUzs.value)
+  }
 })
 
 function onQtyChange(itemId: number, val: string): void {
@@ -104,6 +119,9 @@ function onQtyChange(itemId: number, val: string): void {
     l.reason = 'MISSING_EXPECTED_LATER'
   }
   if (isPartnership.value) prefillCapAllocs()
+  if (isAtReceipt.value && isOwnFunds.value) {
+    paymentAmount.value = String(receiveBatchCostUzs.value)
+  }
 }
 
 function validate(): boolean {
@@ -122,6 +140,7 @@ function validate(): boolean {
 
 function onSave(): void {
   if (!validate() || !warehouseId.value) return
+  if (isAtReceipt.value && isOwnFunds.value && !selectedCashAccountId.value) return
   const itemDiscrepancies: Record<string, { qty_received: string; discrepancy_reason: string }> = {}
   for (const l of lines.value) {
     itemDiscrepancies[String(l.itemId)] = { qty_received: l.qtyReceived, discrepancy_reason: l.reason }
@@ -134,13 +153,21 @@ function onSave(): void {
   if (isPartnership.value && capAllocs.value.length) {
     payload.capital_allocations = capAllocs.value.map((a) => ({ partner_id: a.partnerId, amount: a.amount }))
   }
+  if (isAtReceipt.value && isOwnFunds.value) {
+    const acct = cashAccounts.value.find((a) => a.id === selectedCashAccountId.value)
+    payload.payment_payload = {
+      cash_account_id: selectedCashAccountId.value,
+      amount: paymentAmount.value,
+      currency: acct?.currency ?? 'UZS',
+    }
+  }
   emit('dispatch', 'RECEIVE_BATCH', payload)
   emit('update:open', false)
 }
 </script>
 
 <template>
-  <AppBottomSheet :open="open" title="Приёмка товара" @close="emit('update:open', false)">
+  <AppBottomSheet :open="open" :title="isAtReceipt ? 'Принять и оплатить' : 'Приёмка товара'" @close="emit('update:open', false)">
     <div class="sheet-body">
       <div class="section-label">Склад</div>
       <select class="select-field" :value="warehouseId" @change="warehouseId = Number(($event.target as HTMLSelectElement).value)">
@@ -180,6 +207,35 @@ function onSave(): void {
         <div v-if="errors[item.id]" class="error-text">{{ errors[item.id] }}</div>
       </div>
 
+      <!-- AT_RECEIPT OWN_FUNDS: payment block -->
+      <template v-if="isAtReceipt && isOwnFunds">
+        <div class="section-label">Оплата при получении</div>
+        <select
+          class="select-field"
+          :value="selectedCashAccountId"
+          @change="selectedCashAccountId = Number(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-if="!cashAccounts.length" :value="null">Загрузка…</option>
+          <option v-for="a in cashAccounts" :key="a.id" :value="a.id">
+            {{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}
+          </option>
+        </select>
+        <label class="qty-input-label">
+          Сумма (UZS):
+          <input
+            class="input-field"
+            type="number"
+            min="0"
+            step="1"
+            :value="paymentAmount"
+            @input="paymentAmount = ($event.target as HTMLInputElement).value"
+          />
+        </label>
+        <p v-if="receiveBatchCostUzs > 0 && parseFloat(paymentAmount) < receiveBatchCostUzs" class="hint-warn">
+          Сумма меньше стоимости приёмки ({{ receiveBatchCostUzs.toLocaleString('ru-RU') }} сум)
+        </p>
+      </template>
+
       <!-- PARTNERSHIP capital allocation -->
       <template v-if="isPartnership && investment">
         <div class="section-label">Распределение капитала</div>
@@ -199,10 +255,11 @@ function onSave(): void {
       <button
         class="primary-btn"
         type="button"
-        :disabled="!warehouseId || !receivableItems.length"
+        :disabled="!warehouseId || !receivableItems.length || (isAtReceipt && isOwnFunds && !selectedCashAccountId)"
         @click="onSave"
       >
-        Принять ({{ Math.round(totalReceived) }} из {{ Math.round(totalPlanned) }})
+        {{ isAtReceipt ? 'Принять и оплатить' : 'Принять' }}
+        ({{ Math.round(totalReceived) }} из {{ Math.round(totalPlanned) }})
       </button>
     </div>
   </AppBottomSheet>
@@ -227,4 +284,5 @@ function onSave(): void {
 .cap-currency { font-size: var(--text-sm); color: var(--color-text-secondary); flex-shrink: 0; }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
+.hint-warn { margin: 0; font-size: var(--text-xs); color: #92400E; }
 </style>
