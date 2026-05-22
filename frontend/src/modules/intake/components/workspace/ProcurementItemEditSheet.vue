@@ -13,7 +13,7 @@ import type { ProductVariant } from '@/types/models'
 import type { SelectOption } from './types'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
-type SavePayload = { id?: number; product_variant_id: number; quantity: number; unit_purchase_price: number; currency: string; fx_rate: string; goods_ownership: 'OWNED' | 'CONSIGNED' }
+type SavePayload = { id?: number; product_variant_id: number; quantity: number; unit_purchase_price: number; currency: string; fx_rate: string }
 
 const props = defineProps<{ open: boolean; procurement: ProcurementWorkspacePayload; editingItemId: number | null }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; save: [payload: SavePayload]; delete: [itemId: number] }>()
@@ -24,7 +24,6 @@ const qty = ref('1')
 const price = ref('')
 const currency = ref<'UZS' | 'USD'>('UZS')
 const fxRateLocal = ref('1')
-const ownership = ref<'OWNED' | 'CONSIGNED'>('OWNED')
 
 const vpOpen = ref(false); const vpSearch = ref(''); const vpCategory = ref<number | null>(null)
 const vpVariants = ref<ProductVariant[]>([]); const catOptions = ref<SelectOption<number | null>[]>([])
@@ -37,8 +36,6 @@ const { rate: fetchedFx, load: loadFx } = useFxRate()
 const editItem = computed<Item | null>(() =>
   props.editingItemId ? (props.procurement.documents.items.find((i) => i.id === props.editingItemId) ?? null) : null,
 )
-const isOnSale = computed(() => props.procurement.documents.settlement?.type === 'ON_SALE')
-const effectiveOwnership = computed<'OWNED' | 'CONSIGNED'>(() => isOnSale.value ? 'CONSIGNED' : ownership.value)
 const variantDisplay = (v: ProductVariant) => v.product_name ?? v.display_sku ?? v.sku ?? String(v.id)
 
 watch(fetchedFx, (r) => { if (r) fxRateLocal.value = r })
@@ -54,11 +51,10 @@ watch(() => props.open, (isOpen) => {
     variantId.value = it.product_variant_id; variantName.value = it.product_variant_name
     qty.value = it.quantity; price.value = it.unit_purchase_price
     currency.value = it.currency === 'USD' ? 'USD' : 'UZS'
-    fxRateLocal.value = it.fx_rate; ownership.value = it.goods_ownership
+    fxRateLocal.value = it.fx_rate
   } else {
     variantId.value = null; variantName.value = ''; qty.value = '1'
     price.value = ''; currency.value = 'UZS'; fxRateLocal.value = '1'
-    ownership.value = isOnSale.value ? 'CONSIGNED' : 'OWNED'
   }
   if (!catOptions.value.length) loadCategories()
 })
@@ -102,7 +98,6 @@ function onSave(): void {
     unit_purchase_price: parseFloat(price.value) || 0,
     currency: currency.value,
     fx_rate: fxRateLocal.value,
-    goods_ownership: effectiveOwnership.value,
   })
   emit('update:open', false)
 }
@@ -134,13 +129,6 @@ function onDelete(): void {
         <input class="input-field" type="number" min="0" step="0.01" :value="fxRateLocal" @input="fxRateLocal = ($event.target as HTMLInputElement).value" />
       </template>
 
-      <div class="section-label">Тип товара</div>
-      <div class="toggle-row">
-        <button class="toggle-chip" :class="{ active: effectiveOwnership === 'OWNED' }" type="button" :disabled="isOnSale" @click="ownership = 'OWNED'">Собственный</button>
-        <button class="toggle-chip" :class="{ active: effectiveOwnership === 'CONSIGNED' }" type="button" :disabled="isOnSale" @click="ownership = 'CONSIGNED'">Реализация</button>
-      </div>
-      <p v-if="isOnSale" class="hint">Тип оплаты «На реализации» — все товары на реализации.</p>
-
       <button class="primary-btn" type="button" :disabled="!variantId" @click="onSave">Сохранить</button>
       <button v-if="editingItemId" class="danger-btn" type="button" @click="onDelete">Удалить строку</button>
     </div>
@@ -167,11 +155,6 @@ function onDelete(): void {
 .variant-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; text-align: left; }
 .variant-btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
-.toggle-row { display: flex; gap: var(--space-2); }
-.toggle-chip { flex: 1; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-full); background: transparent; color: var(--color-text-secondary); font-size: var(--text-sm); cursor: pointer; }
-.toggle-chip.active { border-color: var(--color-brand-600); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
-.toggle-chip:disabled { opacity: .55; cursor: not-allowed; }
-.hint { margin: 0; font-size: var(--text-xs); color: var(--color-text-secondary); }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
 .danger-btn { min-height: 44px; border: 1px solid rgba(239,68,68,.35); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }

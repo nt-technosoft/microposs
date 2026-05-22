@@ -33,6 +33,13 @@ const amendTarget = ref<'items' | 'expenses'>('items')
 const cancelDialogOpen = ref(false)
 const reverseDialogOpen = ref(false)
 
+const paymentError = ref<string | null>(null)
+const lastPaymentCashAccountId = ref<number | null>(null)
+const lastPaymentAction = ref<string | null>(null)
+const lastPaymentPayload = ref<Record<string, unknown> | null>(null)
+
+const PAYMENT_ACTIONS = new Set(['PAY_COSTS', 'PAY_SUPPLIER_PAYABLE'])
+
 const { capitalSectionVisible } = useProcurementReadiness(procurement)
 
 async function ensureWorkspace(): Promise<void> {
@@ -46,11 +53,29 @@ async function ensureWorkspace(): Promise<void> {
 }
 
 async function dispatch(action: string, payload: Record<string, unknown> = {}): Promise<void> {
-  try { await store.dispatch(action, payload) }
-  catch (err) {
-    const detail = (err as any)?.response?.data?.detail
-    toast.error(detail ?? (err instanceof Error ? err.message : 'Ошибка операции'))
+  if (PAYMENT_ACTIONS.has(action)) {
+    lastPaymentAction.value = action
+    lastPaymentPayload.value = payload
+    lastPaymentCashAccountId.value = (payload.cash_account_id as number | null) ?? null
+    paymentError.value = null
   }
+  try {
+    await store.dispatch(action, payload)
+    if (PAYMENT_ACTIONS.has(action)) paymentError.value = null
+  } catch (err) {
+    const detail = (err as any)?.response?.data?.detail
+    const msg = detail ?? (err instanceof Error ? err.message : 'Ошибка операции')
+    if (PAYMENT_ACTIONS.has(action)) {
+      paymentError.value = msg
+    } else {
+      toast.error(msg)
+    }
+  }
+}
+
+async function retryLastPayment(): Promise<void> {
+  if (!lastPaymentAction.value || !lastPaymentPayload.value) return
+  await dispatch(lastPaymentAction.value, lastPaymentPayload.value)
 }
 
 function handleMenuAction(actionKey: string): void {
@@ -104,25 +129,11 @@ async function onCancelConfirm(reason: string): Promise<void> {
 }
 
 async function onDeleteExpense(expenseId: number): Promise<void> {
-  if (!procurement.value) return
-  const remaining = procurement.value.documents.expenses
-    .filter((ex) => ex.id !== expenseId)
-    .map(({ id, expense_type, amount, currency, fx_rate, allocation_method, target_item_ids }) => ({
-      id, expense_type, amount: parseFloat(amount) || 0, currency, fx_rate, allocation_method, target_item_ids,
-    }))
-  await dispatch('UPDATE_EXPENSES', { expenses: remaining })
+  await dispatch('UPDATE_EXPENSES', { cancel_expense_ids: [expenseId] })
 }
 
 async function onDeleteItem(itemId: number): Promise<void> {
-  if (!procurement.value) return
-  const remaining = procurement.value.documents.items
-    .filter((it) => it.id !== itemId)
-    .map(({ id, product_variant_id, quantity, unit_purchase_price, currency, fx_rate, goods_ownership }) => ({
-      id, product_variant_id,
-      quantity: parseFloat(quantity) || 0, unit_purchase_price: parseFloat(unit_purchase_price) || 0,
-      currency, fx_rate, goods_ownership,
-    }))
-  await dispatch('UPDATE_ITEMS', { items: remaining })
+  await dispatch('UPDATE_ITEMS', { cancel_item_ids: [itemId] })
 }
 
 onMounted(ensureWorkspace)
@@ -172,7 +183,10 @@ onBeforeUnmount(() => store.$reset())
         <ProcurementCardPayment
           v-if="procurement.documents.settlement?.type !== 'AT_RECEIPT'"
           :procurement="procurement"
+          :payment-error="paymentError"
+          :last-payment-cash-account-id="lastPaymentCashAccountId"
           @dispatch="(k, p) => dispatch(k, p)"
+          @retry-payment="retryLastPayment"
         />
         <ProcurementCardReceive
           :procurement="procurement"

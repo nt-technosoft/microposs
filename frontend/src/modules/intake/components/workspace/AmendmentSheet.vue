@@ -10,7 +10,7 @@ type Expense = ProcurementWorkspacePayload['documents']['expenses'][number]
 interface DraftItem {
   id: number; name: string; qty: string; price: string
   currency: string; fx_rate: string; product_variant_id: number
-  goods_ownership: string; cancelled: boolean
+  cancelled: boolean
 }
 
 interface DraftExpense {
@@ -62,7 +62,7 @@ function fromItem(i: Item): DraftItem {
   return {
     id: i.id, name: i.product_variant_name, qty: i.quantity,
     price: i.unit_purchase_price, currency: i.currency, fx_rate: i.fx_rate,
-    product_variant_id: i.product_variant_id, goods_ownership: i.goods_ownership,
+    product_variant_id: i.product_variant_id,
     cancelled: false,
   }
 }
@@ -90,7 +90,7 @@ function buildItemPayload(): Record<string, unknown>[] {
     .map((i) => ({
       id: i.id, product_variant_id: i.product_variant_id,
       quantity: parseFloat(i.qty) || 0, unit_purchase_price: parseFloat(i.price) || 0,
-      currency: i.currency, fx_rate: i.fx_rate, goods_ownership: i.goods_ownership,
+      currency: i.currency, fx_rate: i.fx_rate,
     }))
   const cancelled = draftItems.value
     .filter((i) => i.cancelled)

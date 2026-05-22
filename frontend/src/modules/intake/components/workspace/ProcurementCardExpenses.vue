@@ -17,12 +17,14 @@ const emit = defineEmits<{
 const editSheetOpen = ref(false)
 const editingExpenseId = ref<number | null>(null)
 
-const items = computed(() => props.procurement.documents.items)
-const expenses = computed(() => props.procurement.documents.expenses)
-const canEdit = computed(() => props.procurement.status === 'OPEN')
-const isConsigned = computed(() =>
-  items.value.length > 0 && items.value.every((i) => i.goods_ownership === 'CONSIGNED'),
+const items = computed(() =>
+  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
 )
+const expenses = computed(() =>
+  props.procurement.documents.expenses.filter((ex) => ex.lifecycle_state !== 'CANCELLED'),
+)
+const canEdit = computed(() => props.procurement.status === 'OPEN')
+const isConsigned = computed(() => props.procurement.documents.settlement?.type === 'ON_SALE')
 const isFilled = computed(() => expenses.value.length > 0)
 
 const totalUzs = computed(() =>

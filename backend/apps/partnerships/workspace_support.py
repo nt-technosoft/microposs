@@ -23,6 +23,8 @@ from .models import (
     CapitalCommitment,
     InvestmentAgreement,
     PartnerLedgerEntry,
+    Procurement,
+    ProcurementItem,
     ProcurementTerms,
     ProcurementTermsAmendment,
     ProcurementPartnerLedger,
@@ -367,17 +369,35 @@ def upsert_procurement_terms_draft(tenant_id, procurement, terms_payload, schedu
     existing = getattr(procurement, 'terms', None)
     values = _normalize_terms_values(terms_payload, existing=existing, procurement=procurement)
 
+    # goods_ownership is derived from timing (ON_SALE → CONSIGNED, else → OWNED).
+    # Validate the resulting combination so backend stays the canonical guard.
+    new_timing = values['type']
+    derived_ownership = (
+        Procurement.GoodsOwnership.CONSIGNED
+        if new_timing == ProcurementTerms.Type.ON_SALE
+        else Procurement.GoodsOwnership.OWNED
+    )
     from .policies import validate_procurement_combination
     validate_procurement_combination(
         funding_source=procurement.funding_source,
-        payment_timing=values['type'],
-        goods_ownership=procurement.goods_ownership,
+        payment_timing=new_timing,
+        goods_ownership=derived_ownership,
     )
 
     terms, _created = ProcurementTerms.objects.update_or_create(
         tenant_id=tenant_id,
         procurement=procurement,
         defaults=values,
+    )
+
+    # Cascade derived ownership onto existing draft items so the denormalized
+    # copy (used at receive-time to set Lot.is_owned) stays consistent with
+    # the settlement type. Only DRAFT items are touched — READY/RECEIVED items
+    # are immutable.
+    procurement.items.filter(
+        lifecycle_state=ProcurementItem.LifecycleState.DRAFT,
+    ).exclude(goods_ownership=derived_ownership).update(
+        goods_ownership=derived_ownership,
     )
 
     if values['type'] == ProcurementTerms.Type.INSTALLMENT:
@@ -405,8 +425,13 @@ def generate_installment_schedule(*, tenant_id: int, procurement, payload: dict)
     if first_due_date is None:
         raise ValueError('first_due_date is required.')
     interval = str(payload.get('interval') or 'MONTHLY').upper()
-    if interval not in {'MONTHLY', 'WEEKLY'}:
+    if interval not in {'MONTHLY', 'WEEKLY', 'CUSTOM'}:
         raise ValueError('Unsupported installment interval.')
+    interval_days = 0
+    if interval == 'CUSTOM':
+        interval_days = int(payload.get('interval_days') or 0)
+        if interval_days <= 0:
+            raise ValueError('interval_days must be positive for CUSTOM interval.')
 
     total = money(payload.get('total_amount') or terms.remaining_amount)
     if total <= 0:
@@ -423,7 +448,7 @@ def generate_installment_schedule(*, tenant_id: int, procurement, payload: dict)
             accumulated += amount
         rows.append({
             'sequence_number': index,
-            'due_date': _next_due_date(first_due_date, interval, index - 1),
+            'due_date': _next_due_date(first_due_date, interval, index - 1, interval_days),
             'amount': amount,
             'currency': terms.currency_of_obligation,
         })
@@ -693,11 +718,17 @@ def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=N
     if not settlement_type:
         raise ValueError('terms.type is required.')
 
+    # Source-of-truth for total: items × prices × fx. For DRAFT terms (the
+    # OPEN edit window) we always re-derive — terms.total_amount_due is a
+    # denormalized cache. Preserving stale existing.total_amount_due caused
+    # zero-total bugs when the type was picked before items were added.
+    # Explicit payload override still wins (used by amendment flows).
     if 'total_amount_due' in terms_payload:
         total_amount_due = money(terms_payload['total_amount_due'])
-    elif existing is not None:
-        total_amount_due = money(existing.total_amount_due)
-    elif procurement is not None:
+    elif procurement is not None and (
+        existing is None
+        or existing.lifecycle_state != ProcurementTerms.LifecycleState.ACTIVE
+    ):
         total_amount_due = sum(
             (
                 Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or 1))
@@ -706,6 +737,8 @@ def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=N
             Decimal('0'),
         )
         total_amount_due = money(total_amount_due)
+    elif existing is not None:
+        total_amount_due = money(existing.total_amount_due)
     else:
         raise ValueError('terms.total_amount_due is required (no existing terms and no procurement context).')
 
@@ -800,11 +833,13 @@ def _coerce_date(value):
     return parsed
 
 
-def _next_due_date(first_due_date, interval: str, offset: int):
+def _next_due_date(first_due_date, interval: str, offset: int, interval_days: int = 0):
     if offset == 0:
         return first_due_date
     if interval == 'WEEKLY':
         return first_due_date + timedelta(days=7 * offset)
+    if interval == 'CUSTOM':
+        return first_due_date + timedelta(days=interval_days * offset)
 
     month_index = first_due_date.month - 1 + offset
     year = first_due_date.year + month_index // 12

@@ -14,18 +14,27 @@ const emit = defineEmits<{
 }>()
 
 const count = ref('3')
-const interval = ref<'MONTHLY' | 'WEEKLY'>('MONTHLY')
+const interval = ref<'MONTHLY' | 'WEEKLY' | 'CUSTOM'>('MONTHLY')
+const intervalDays = ref('14')
 const firstDate = ref('')
 
-const canSave = () => parseInt(count.value) > 0 && firstDate.value.length > 0
+const canSave = () => {
+  if (parseInt(count.value) <= 0 || firstDate.value.length === 0) return false
+  if (interval.value === 'CUSTOM' && parseInt(intervalDays.value) <= 0) return false
+  return true
+}
 
 function onSave(): void {
   if (!canSave()) return
-  emit('dispatch', 'GENERATE_INSTALLMENT_SCHEDULE', {
+  const payload: Record<string, unknown> = {
     installments_count: parseInt(count.value),
     first_due_date: firstDate.value,
     interval: interval.value,
-  })
+  }
+  if (interval.value === 'CUSTOM') {
+    payload.interval_days = parseInt(intervalDays.value)
+  }
+  emit('dispatch', 'GENERATE_INSTALLMENT_SCHEDULE', payload)
   emit('update:open', false)
 }
 </script>
@@ -45,7 +54,13 @@ function onSave(): void {
       <div class="chips-row">
         <button class="chip" :class="{ active: interval === 'MONTHLY' }" type="button" @click="interval = 'MONTHLY'">Ежемесячно</button>
         <button class="chip" :class="{ active: interval === 'WEEKLY' }" type="button" @click="interval = 'WEEKLY'">Еженедельно</button>
+        <button class="chip" :class="{ active: interval === 'CUSTOM' }" type="button" @click="interval = 'CUSTOM'">Свой интервал</button>
       </div>
+
+      <template v-if="interval === 'CUSTOM'">
+        <div class="section-label">Дней между платежами</div>
+        <input class="input-field" type="number" min="1" max="365" v-model="intervalDays" />
+      </template>
 
       <div class="section-label">Дата первого платежа</div>
       <input class="input-field" type="date" v-model="firstDate" />

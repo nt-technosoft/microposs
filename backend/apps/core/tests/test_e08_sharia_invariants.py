@@ -229,10 +229,16 @@ class LotOwnershipInvariants(TestCase):
             action='UPDATE_ITEMS',
             payload={'payload': {
                 'items': [{'product_variant_id': ctx['variant'].id, 'quantity': 5,
-                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1',
-                           'goods_ownership': 'CONSIGNED'}],
+                           'unit_purchase_price': '3000.00', 'currency': 'UZS', 'fx_rate': '1'}],
                 'expenses': [],
             }},
+        )
+        # ownership flips to CONSIGNED only after settlement type is ON_SALE
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {'type': 'ON_SALE'}},
         )
         with self.assertRaises(ValueError, msg='CONSIGNED procurement must reject landed expenses'):
             dispatch_workspace_action(

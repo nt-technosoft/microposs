@@ -6,7 +6,7 @@ import ProcurementItemEditSheet from './ProcurementItemEditSheet.vue'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
-type ActionItem = { id?: number; product_variant_id: number; quantity: number; unit_purchase_price: number; currency: string; fx_rate: string; goods_ownership: 'OWNED' | 'CONSIGNED' }
+type ActionItem = { id?: number; product_variant_id: number; quantity: number; unit_purchase_price: number; currency: string; fx_rate: string }
 
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
@@ -17,7 +17,9 @@ const emit = defineEmits<{
 const editSheetOpen = ref(false)
 const editingItemId = ref<number | null>(null)
 
-const items = computed(() => props.procurement.documents.items)
+const items = computed(() =>
+  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
+)
 const canEdit = computed(() => props.procurement.status === 'OPEN')
 const isFilled = computed(() => props.procurement.readiness['items_ready']?.ok ?? items.value.length > 0)
 
@@ -52,7 +54,6 @@ function toActionItem(it: Item): ActionItem {
     unit_purchase_price: parseFloat(it.unit_purchase_price) || 0,
     currency: it.currency,
     fx_rate: it.fx_rate,
-    goods_ownership: it.goods_ownership,
   }
 }
 

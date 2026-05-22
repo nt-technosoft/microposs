@@ -351,6 +351,34 @@ def update_workspace_lines(
         for row in expenses_payload or []:
             _upsert_workspace_expense(tenant_id, locked, row)
 
+        _resync_draft_terms_total(tenant_id, locked)
+
+
+def _resync_draft_terms_total(tenant_id: int, procurement: Procurement) -> None:
+    """Keep terms.total_amount_due in sync with items × prices × fx while in DRAFT.
+
+    After items change, the denormalized total on DRAFT terms is recomputed so
+    INSTALLMENT/PARTIAL/DEFERRED screens see the current obligation. ACTIVE
+    terms are immutable and skipped — amendments cover that path explicitly.
+    """
+    terms = ProcurementTerms.objects.filter(
+        tenant_id=tenant_id, procurement=procurement,
+        lifecycle_state=ProcurementTerms.LifecycleState.DRAFT,
+    ).first()
+    if terms is None:
+        return
+    total = sum(
+        (
+            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or 1))
+            for item in procurement.items.exclude(lifecycle_state=ProcurementItem.LifecycleState.CANCELLED)
+        ),
+        Decimal('0'),
+    )
+    new_total = total.quantize(Decimal('0.01'))
+    if terms.total_amount_due != new_total:
+        terms.total_amount_due = new_total
+        terms.save(update_fields=['total_amount_due', 'updated_at'])
+
 
 def dispatch_workspace_action(
     *,
@@ -831,16 +859,13 @@ def _amendment_item_for_update(tenant_id: int, procurement: Procurement, item_id
 
 def _upsert_workspace_item_for_amendment(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
     item_id = row.get('id') or row.get('item_id')
-    raw_ownership = str(row.get('goods_ownership') or Procurement.GoodsOwnership.OWNED).upper()
-    if raw_ownership not in (Procurement.GoodsOwnership.OWNED, Procurement.GoodsOwnership.CONSIGNED):
-        raise ValueError(f'Invalid goods_ownership value for item: {raw_ownership}. Use OWNED or CONSIGNED.')
     values = {
         'product_variant_id': int(row['product_variant_id']),
         'quantity': Decimal(str(row['quantity'])),
         'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
         'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
-        'goods_ownership': raw_ownership,
+        'goods_ownership': procurement.goods_ownership,
     }
     if item_id:
         item = _amendment_item_for_update(tenant_id, procurement, int(item_id))
@@ -855,16 +880,13 @@ def _upsert_workspace_item_for_amendment(tenant_id: int, procurement: Procuremen
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
     item_id = row.get('id') or row.get('item_id')
-    raw_ownership = str(row.get('goods_ownership') or Procurement.GoodsOwnership.OWNED).upper()
-    if raw_ownership not in (Procurement.GoodsOwnership.OWNED, Procurement.GoodsOwnership.CONSIGNED):
-        raise ValueError(f'Invalid goods_ownership value for item: {raw_ownership}. Use OWNED or CONSIGNED.')
     values = {
         'product_variant_id': int(row['product_variant_id']),
         'quantity': Decimal(str(row['quantity'])),
         'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
         'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
-        'goods_ownership': raw_ownership,
+        'goods_ownership': procurement.goods_ownership,
     }
     if item_id:
         item = _draft_item_for_update(tenant_id, procurement, int(item_id))
@@ -929,8 +951,15 @@ def _draft_item_for_update(tenant_id: int, procurement: Procurement, item_id: in
         tenant_id=tenant_id,
         procurement=procurement,
     )
+    if item.lifecycle_state == ProcurementItem.LifecycleState.CANCELLED:
+        raise ValueError('Эта строка уже отменена.')
+    if item.lifecycle_state == ProcurementItem.LifecycleState.RECEIVED:
+        raise ValueError('Строка уже оприходована — изменения через корректировку (Amendment).')
     if item.lifecycle_state != ProcurementItem.LifecycleState.DRAFT:
-        raise ValueError('Only draft item lines can be edited.')
+        raise ValueError(
+            'Строка уже зафиксирована платежом — прямое удаление недоступно. '
+            'Используйте «Корректировку» в меню для изменения после оплаты.'
+        )
     return item
 
 
@@ -940,8 +969,15 @@ def _draft_expense_for_update(tenant_id: int, procurement: Procurement, expense_
         tenant_id=tenant_id,
         procurement=procurement,
     )
+    if expense.lifecycle_state == ProcurementExpense.LifecycleState.CANCELLED:
+        raise ValueError('Этот расход уже отменён.')
+    if expense.lifecycle_state == ProcurementExpense.LifecycleState.RECEIVED:
+        raise ValueError('Расход уже оприходован — изменения через корректировку (Amendment).')
     if expense.lifecycle_state != ProcurementExpense.LifecycleState.DRAFT:
-        raise ValueError('Only draft expense lines can be edited.')
+        raise ValueError(
+            'Расход уже зафиксирован платежом — прямое удаление недоступно. '
+            'Используйте «Корректировку» в меню для изменения после оплаты.'
+        )
     return expense
 
 

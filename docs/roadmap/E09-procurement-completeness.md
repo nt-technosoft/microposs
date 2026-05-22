@@ -117,6 +117,7 @@ Backend-only рефакторинг без новой функционально
 
 - [x] S-1: AT_RECEIPT timing — combined receive+pay action + policies guard + legal combinations expanded to 8; PARTNERSHIP×AT_RECEIPT draws from capital pool (explicit or derived from planned shares, OPEN-S1.1 resolved 2026-05-20)
 - [x] S-2: Per-item goods_ownership — `Procurement.goods_ownership` → `@property`, field moved to `ProcurementItem`; MIXED derived
+      → superseded 2026-05-21: MIXED убран целиком, `Procurement.goods_ownership` теперь derived из `terms.type` (ON_SALE → CONSIGNED, иначе OWNED), `ProcurementItem.goods_ownership` остаётся denormalized cache для Lot creation. Per-item toggle убран из UI.
 - [x] S-3: Discrepancy reason codes on `ProcurementReceiveBatchLine` — `quantity_planned`, `quantity_received`, `discrepancy_reason`
 - [x] S-4: Generic `apps/attachments/` app — `Attachment` model, `attach_file`/`list_attachments`/`detach` services, API endpoints
 - [x] S-5: Cancel procurement action — `cancel_workspace_procurement` + `CANCEL_PROCUREMENT` action dispatch; blocked if payments or batches exist
@@ -234,6 +235,45 @@ Recurring procurement, QC gate, supplier scoring, barcode scan,
 currency mid-flight change, approval workflow, PO numbers, tax line.
 
 ## Решённые вопросы (история)
+
+- ✓ 2026-05-22: **Cancel/edit semantics зафиксированы.** Прямое удаление item/expense
+  через `cancel_item_ids` / `cancel_expense_ids` разрешено только пока строка
+  в `lifecycle_state=DRAFT` (нет связанных Payment / ReceiveBatch). После Payment
+  строка переходит в `READY_FOR_RECEIVE` — изменения через **Amendment flow**
+  (workspace menu → «Корректировка» → AmendmentSheet с обязательным reason).
+  Это согласовано с append-only audit принципом: post-payment изменения
+  обязательны фиксируются как `ProcurementAmendment(before, after, reason)`.
+  Frontend (ProcurementCardItems / ProcurementCardExpenses) фильтрует
+  `lifecycle_state==CANCELLED` строки из visible list — иначе на UI появлялись
+  «zombie» строки после успешного cancel. Error messages из `_draft_item_for_update`
+  / `_draft_expense_for_update` локализованы и явно указывают путь обхода
+  (Amendment).
+
+- ✓ 2026-05-21: **MIXED ownership убран; goods_ownership — derived, не user choice.**
+  Реальные UI-проверки (sessions 2026-05-21) показали, что выбор «На реализации»
+  при товарах OWNED падал с illegal-combination и без ясного выхода. Решение:
+  `goods_ownership` derive из `payment_timing` (ON_SALE → CONSIGNED, иначе → OWNED).
+  Per-item toggle (Wave A T-2) убран из UI; `_upsert_workspace_item` игнорирует
+  `goods_ownership` в payload; `upsert_procurement_terms_draft` каскадирует
+  derived ownership на все DRAFT items. `LEGAL_COMBINATIONS` сокращён до 8 точек
+  (MIXED-строки удалены). Free-samples-в-одной-поставке сценарий моделируется
+  отдельным ON_SALE procurement. Принцип: UI не предлагает выбор там, где
+  система может вывести значение из других выборов.
+  → Wave A T-2 (per-item goods_ownership) considered superseded.
+
+- ✓ 2026-05-21: **INSTALLMENT total=0 после смены типа — fixed.**
+  `_normalize_terms_values` пересчитывает `total_amount_due` из items для
+  DRAFT terms (preserve only после activate). `update_workspace_lines`
+  ресинхронизирует total через `_resync_draft_terms_total` после изменения
+  items. Корень: terms был создан до items → total=0 → existing-preserve
+  ветка сохраняла 0 при всех последующих переключениях. `terms.total_amount_due`
+  теперь denormalized cache, source of truth — items × prices × fx.
+
+- ✓ 2026-05-21: **CUSTOM periodicity для installment schedule.**
+  `generate_installment_schedule` принимает `interval='CUSTOM'` +
+  `interval_days: int` для произвольной кадреники (двухнедельная,
+  трёхнедельная и т.п.). Frontend: третий chip «Свой интервал» + поле
+  «дней между платежами». Datepicker замены отложены до общего редизайна.
 
 - ✓ 2026-05-21: **Wave B frontend rebuild — закрыта (14/14 slices).** Все карточки workspace реализованы, компоненты держат бюджет ≤300 строк, view-orchestrator ≤262 строк. Два элемента polish деferred по итогам B-14: per-card loading skeletons (рефакторинг объёма, не polish) и swipe-down на AppBottomSheet (нет gesture-инфраструктуры). Оба не блокируют operational use; вернуться если появится реальная пользовательская боль. Оставшиеся ~5% = golden-path верификация 8 легальных комбинаций procurement matrix.
 

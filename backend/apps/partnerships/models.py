@@ -244,8 +244,6 @@ class Procurement(ImmutableMixin, TenantModel):
     class GoodsOwnership(models.TextChoices):
         OWNED = 'OWNED', 'Свой товар'
         CONSIGNED = 'CONSIGNED', 'На реализации'
-        # MIXED is derived (not stored) — returned by Procurement.goods_ownership property
-        MIXED = 'MIXED', 'Смешанный'
 
     funding_source = models.CharField(
         max_length=20,
@@ -304,17 +302,16 @@ class Procurement(ImmutableMixin, TenantModel):
 
     @property
     def goods_ownership(self) -> str:
-        """Derived from ProcurementItem.goods_ownership — OWNED, CONSIGNED, or MIXED."""
-        ownerships = set(
-            self.items.values_list('goods_ownership', flat=True).distinct()
-        )
-        if not ownerships:
-            return self.GoodsOwnership.OWNED
-        if ownerships == {'OWNED'}:
-            return self.GoodsOwnership.OWNED
-        if ownerships == {'CONSIGNED'}:
+        """Derived from payment_timing: ON_SALE → CONSIGNED, else → OWNED.
+
+        Goods ownership is not a user choice — it follows the settlement type.
+        Items keep a denormalized copy for Lot creation, kept in sync by
+        upsert_procurement_terms_draft's cascade.
+        """
+        terms = getattr(self, 'terms', None)
+        if terms is not None and terms.type == ProcurementTerms.Type.ON_SALE:
             return self.GoodsOwnership.CONSIGNED
-        return self.GoodsOwnership.MIXED
+        return self.GoodsOwnership.OWNED
 
 
 class ProcurementItem(TenantModel):

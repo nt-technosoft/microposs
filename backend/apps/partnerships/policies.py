@@ -17,7 +17,6 @@ PARTNERSHIP = Procurement.FundingSource.PARTNERSHIP
 
 OWNED = Procurement.GoodsOwnership.OWNED
 CONSIGNED = Procurement.GoodsOwnership.CONSIGNED
-MIXED = Procurement.GoodsOwnership.MIXED
 
 PREPAID = ProcurementTerms.Type.PREPAID
 AT_RECEIPT = ProcurementTerms.Type.AT_RECEIPT
@@ -31,7 +30,9 @@ PARTNERSHIP_SETTLEMENTS = (PREPAID, AT_RECEIPT)
 SUPPLIER_REQUIRED_SETTLEMENTS = (PARTIAL, DEFERRED, INSTALLMENT, ON_SALE)
 
 # Legal procurement combinations: (funding_source, payment_timing, goods_ownership).
-# All other combinations are illegal and will be rejected by validate_procurement_combination.
+# goods_ownership is derived from payment_timing (ON_SALE → CONSIGNED, else → OWNED),
+# never a user choice. MIXED ownership was removed: free-samples-in-one-shipment
+# scenarios are modelled as a separate ON_SALE procurement.
 LEGAL_COMBINATIONS = frozenset({
     (OWN_FUNDS, PREPAID, OWNED),
     (OWN_FUNDS, AT_RECEIPT, OWNED),
@@ -41,12 +42,6 @@ LEGAL_COMBINATIONS = frozenset({
     (OWN_FUNDS, ON_SALE, CONSIGNED),
     (PARTNERSHIP, PREPAID, OWNED),
     (PARTNERSHIP, AT_RECEIPT, OWNED),
-    # MIXED: OWNED + CONSIGNED items in one procurement (OWN_FUNDS only, no ON_SALE)
-    (OWN_FUNDS, PREPAID, MIXED),
-    (OWN_FUNDS, AT_RECEIPT, MIXED),
-    (OWN_FUNDS, PARTIAL, MIXED),
-    (OWN_FUNDS, DEFERRED, MIXED),
-    (OWN_FUNDS, INSTALLMENT, MIXED),
 })
 
 
