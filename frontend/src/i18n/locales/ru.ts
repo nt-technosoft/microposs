@@ -60,6 +60,7 @@ const ru = {
     products: 'Товары',
     procurements: 'Приход',
     reports: 'Отчёты',
+    cash: 'Касса',
     more: 'Ещё',
     settings: 'Настройки',
     main: 'Основная навигация',

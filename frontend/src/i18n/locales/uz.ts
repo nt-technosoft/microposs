@@ -62,6 +62,7 @@ const uz: typeof ru = {
     products: 'Tovarlar',
     procurements: 'Kirim',
     reports: 'Hisobotlar',
+    cash: 'Kassa',
     more: 'Yana',
     settings: 'Sozlamalar',
     main: 'Asosiy navigatsiya',

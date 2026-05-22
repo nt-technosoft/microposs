@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { CheckCircle, AlertCircle } from 'lucide-vue-next'
+import { CheckCircle, AlertCircle, PlusCircle } from 'lucide-vue-next'
 import PaymentMakeSheet from './PaymentMakeSheet.vue'
 import PaymentScheduleEditor from './PaymentScheduleEditor.vue'
 import ConsignmentObligationsBlock from './ConsignmentObligationsBlock.vue'
+import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
-const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
+const props = defineProps<{
+  procurement: ProcurementWorkspacePayload
+  paymentError?: string | null
+  lastPaymentCashAccountId?: number | null
+}>()
 const emit = defineEmits<{
   dispatch: [actionKey: string, payload: Record<string, unknown>]
+  'retry-payment': []
 }>()
 
 const paySheetOpen = ref(false)
@@ -17,6 +24,32 @@ const paySheetDefaultAmount = ref<string | undefined>(undefined)
 const paySheetPayableId = ref<number | undefined>(undefined)
 const paySheetScheduleEntryId = ref<number | undefined>(undefined)
 const scheduleEditorOpen = ref(false)
+
+const depositSheetOpen = ref(false)
+const depositAccount = ref<CashAccountRecord | null>(null)
+
+const showTopUpHint = computed(() => {
+  const err = props.paymentError
+  if (!err) return false
+  const lower = err.toLowerCase()
+  return lower.includes('недостаточно') || lower.includes('insufficient') || lower.includes('balance')
+})
+
+async function openTopUp(): Promise<void> {
+  if (!props.lastPaymentCashAccountId) return
+  try {
+    const accounts = await fetchCashAccounts()
+    depositAccount.value = accounts.find((a) => a.id === props.lastPaymentCashAccountId) ?? null
+  } catch {
+    depositAccount.value = null
+  }
+  depositSheetOpen.value = true
+}
+
+function onDeposited(): void {
+  depositSheetOpen.value = false
+  emit('retry-payment')
+}
 
 const settlement = computed(() => props.procurement.documents.settlement)
 const paymentStatus = computed(() => props.procurement.documents.payment_status)
@@ -117,6 +150,16 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
         <span class="ob-label">Остаток</span>
         <span class="ob-value warn">{{ fmt(remainingAmount) }} {{ paymentStatus.currency }}</span>
       </div>
+    </div>
+
+    <!-- Insufficient balance inline hint -->
+    <div v-if="showTopUpHint" class="topup-hint">
+      <AlertCircle :size="14" :stroke-width="2" class="topup-icon" />
+      <span>{{ paymentError }}</span>
+      <button class="topup-btn" type="button" @click="openTopUp">
+        <PlusCircle :size="14" :stroke-width="2" />
+        Пополнить кассу
+      </button>
     </div>
 
     <!-- PARTNERSHIP: payment done via financing (B-6 allocation) -->
@@ -221,6 +264,13 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     @dispatch="onPaymentDispatch"
   />
 
+  <CashDepositSheet
+    :open="depositSheetOpen"
+    :account="depositAccount"
+    @close="depositSheetOpen = false"
+    @deposited="onDeposited"
+  />
+
   <PaymentScheduleEditor
     v-if="settlement"
     v-model:open="scheduleEditorOpen"
@@ -262,4 +312,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 .entry-paid { flex-shrink: 0; font-size: var(--text-sm); color: var(--color-success); }
 .action-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
 .action-btn.secondary { color: var(--color-text-secondary); }
+.topup-hint { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-danger-50, rgba(239, 68, 68, 0.08)); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--color-danger-700, #b91c1c); flex-wrap: wrap; }
+.topup-icon { flex-shrink: 0; }
+.topup-btn { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; padding: var(--space-1) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); cursor: pointer; background: transparent; color: var(--color-brand-700); flex-shrink: 0; }
 </style>

@@ -37,6 +37,8 @@ from .models import (
     CurrencyExchange,
     Refund,
     OwnerContribution,
+    OwnerDrawing,
+    CashTransfer,
 )
 from .serializers import (
     AccountSerializer, AccountCreateSerializer,
@@ -53,6 +55,8 @@ from .serializers import (
     CashEntrySerializer, CurrencyExchangeSerializer, CurrencyExchangeCreateSerializer,
     RefundSerializer, RefundCreateSerializer,
     OwnerContributionSerializer, OwnerContributionCreateSerializer,
+    OwnerDrawingSerializer, OwnerDrawingCreateSerializer,
+    CashTransferSerializer, CashTransferCreateSerializer,
 )
 from .services import (
     get_trial_balance,
@@ -60,6 +64,8 @@ from .services import (
     exchange_currency,
     refund_customer,
     record_owner_contribution,
+    record_owner_drawing,
+    record_cash_transfer,
     get_sales_profitability_rows,
     get_product_profitability_rows,
     get_procurement_profitability_rows,
@@ -318,6 +324,70 @@ class OwnerContributionViewSet(viewsets.ModelViewSet):
             notes=data.get('notes', ''),
         )
         return Response(OwnerContributionSerializer(contribution).data, status=status.HTTP_201_CREATED)
+
+
+class OwnerDrawingViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return OwnerDrawing.objects.filter(tenant_id=self.request.tenant_id).select_related('from_account')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return OwnerDrawingCreateSerializer
+        return OwnerDrawingSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = OwnerDrawingCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            drawing = record_owner_drawing(
+                tenant_id=request.tenant_id,
+                from_account_id=data['from_account_id'],
+                amount=data['amount'],
+                currency=data.get('currency', 'UZS'),
+                notes=data.get('notes', ''),
+                client_request_id=data.get('client_request_id'),
+            )
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(OwnerDrawingSerializer(drawing).data, status=status.HTTP_201_CREATED)
+
+
+class CashTransferViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsOwner]
+    ordering = ['-date', '-id']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        return CashTransfer.objects.filter(tenant_id=self.request.tenant_id).select_related(
+            'from_account', 'to_account',
+        )
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CashTransferCreateSerializer
+        return CashTransferSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = CashTransferCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            transfer = record_cash_transfer(
+                tenant_id=request.tenant_id,
+                from_account_id=data['from_account_id'],
+                to_account_id=data['to_account_id'],
+                amount=data['amount'],
+                notes=data.get('notes', ''),
+                client_request_id=data.get('client_request_id'),
+            )
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(CashTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
 
 
 class AccountViewSet(viewsets.ModelViewSet):

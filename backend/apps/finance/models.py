@@ -572,3 +572,72 @@ class OwnerContribution(TenantModel):
 
     def __str__(self):
         return f"OwnerContribution {self.amount}{self.currency} → {self.to_account}"
+
+
+class OwnerDrawing(TenantModel):
+    """
+    Owner withdrawal from a CashAccount.
+    DR Owner Drawings (3001) | CR CashAccount.
+    Symmetric to OwnerContribution — a separate accounting fact.
+    """
+
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+    from_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='drawings',
+    )
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        db_table = 'finance_owner_drawing'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return f"OwnerDrawing {self.amount}{self.currency} ← {self.from_account}"
+
+
+class CashTransfer(TenantModel):
+    """
+    Same-currency transfer between two CashAccounts.
+    DR to_account linked | CR from_account linked.
+    For cross-currency movements use CurrencyExchange instead.
+    """
+
+    from_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='transfers_out',
+    )
+    to_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='transfers_in',
+    )
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3)
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        db_table = 'finance_cash_transfer'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return f"CashTransfer {self.amount}{self.currency} {self.from_account} → {self.to_account}"

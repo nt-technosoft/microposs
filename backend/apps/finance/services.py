@@ -11,8 +11,8 @@ from apps.core.services import publish_event
 
 from .models import (
     Account, CashAccount, CashEntry, CurrencyExchange, Expense,
-    JournalEntry, JournalLine, OwnerContribution, Payment, PaymentAllocation,
-    Refund,
+    JournalEntry, JournalLine, OwnerContribution, OwnerDrawing, CashTransfer,
+    Payment, PaymentAllocation, Refund,
 )
 from .fx_rates import (
     get_fx_rate_for_date,
@@ -1273,6 +1273,205 @@ def record_owner_contribution(
         )
 
     return contribution
+
+
+def record_owner_drawing(
+    *,
+    tenant_id: int,
+    from_account_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    date=None,
+    notes: str = '',
+    client_request_id=None,
+) -> OwnerDrawing:
+    """
+    Record owner withdrawal from a CashAccount.
+    DR Owner Drawings (3001) | CR CashAccount.
+    """
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Drawing amount must be > 0')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = OwnerDrawing.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=from_account_id, tenant_id=tenant_id,
+        )
+        if account.balance < amount:
+            raise ValueError(
+                f'Insufficient balance in {account.name}: have {account.balance}, need {amount}.'
+            )
+
+        drawing = OwnerDrawing.objects.create(
+            tenant_id=tenant_id,
+            amount=amount,
+            currency=currency,
+            from_account=account,
+            date=date,
+            notes=notes,
+            client_request_id=client_request_id,
+        )
+
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=date,
+            source_ref_type='owner_drawing',
+            source_ref_id=drawing.pk,
+        )
+
+        if account.linked_account_id:
+            record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=cash_entry,
+                operation_type='owner_drawing',
+                operation_id=drawing.pk,
+                counterpart_account_code='3001',
+                description=f'Owner drawing #{drawing.pk}',
+                date=date,
+            )
+
+        publish_event(
+            event_type='finance.owner_drawing',
+            payload={
+                'drawing_id': drawing.pk,
+                'amount': str(amount),
+                'currency': currency,
+                'account_id': account.pk,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return drawing
+
+
+def record_cash_transfer(
+    *,
+    tenant_id: int,
+    from_account_id: int,
+    to_account_id: int,
+    amount: Decimal,
+    date=None,
+    notes: str = '',
+    client_request_id=None,
+) -> CashTransfer:
+    """
+    Transfer funds between two same-currency CashAccounts.
+    DR to_account linked | CR from_account linked.
+    For cross-currency movements use exchange_currency() instead.
+    """
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Transfer amount must be > 0')
+
+    if from_account_id == to_account_id:
+        raise ValueError('Cannot transfer to the same account.')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = CashTransfer.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        from_account = CashAccount.objects.select_for_update().get(
+            pk=from_account_id, tenant_id=tenant_id,
+        )
+        to_account = CashAccount.objects.select_for_update().get(
+            pk=to_account_id, tenant_id=tenant_id,
+        )
+
+        if from_account.currency != to_account.currency:
+            raise ValueError(
+                f'CashTransfer requires same currency: '
+                f'{from_account.currency} ≠ {to_account.currency}. '
+                f'Use CurrencyExchange for cross-currency movements.'
+            )
+
+        currency = from_account.currency
+
+        if from_account.balance < amount:
+            raise ValueError(
+                f'Insufficient balance in {from_account.name}: '
+                f'have {from_account.balance}, need {amount}.'
+            )
+
+        transfer = CashTransfer.objects.create(
+            tenant_id=tenant_id,
+            from_account=from_account,
+            to_account=to_account,
+            amount=amount,
+            currency=currency,
+            date=date,
+            notes=notes,
+            client_request_id=client_request_id,
+        )
+
+        create_cash_entry(
+            tenant_id=tenant_id,
+            account=from_account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=date,
+            source_ref_type='cash_transfer',
+            source_ref_id=transfer.pk,
+        )
+        create_cash_entry(
+            tenant_id=tenant_id,
+            account=to_account,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=date,
+            source_ref_type='cash_transfer',
+            source_ref_id=transfer.pk,
+        )
+
+        if from_account.linked_account_id and to_account.linked_account_id:
+            from_code = from_account.linked_account.code
+            to_code = to_account.linked_account.code
+            create_journal_entry(
+                tenant_id=tenant_id,
+                operation_type='cash_transfer',
+                operation_id=transfer.pk,
+                lines=[
+                    {'account_code': to_code, 'debit': amount, 'credit': Decimal('0'),
+                     'description': f'Cash transfer #{transfer.pk}'},
+                    {'account_code': from_code, 'debit': Decimal('0'), 'credit': amount,
+                     'description': f'Cash transfer #{transfer.pk}'},
+                ],
+                description=f'Cash transfer #{transfer.pk}: {from_account.name} → {to_account.name}',
+                date=date,
+            )
+
+        publish_event(
+            event_type='finance.cash_transfer',
+            payload={
+                'transfer_id': transfer.pk,
+                'from_account_id': from_account.pk,
+                'to_account_id': to_account.pk,
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return transfer
 
 
 def _money(value: Decimal | int | float | str) -> Decimal:

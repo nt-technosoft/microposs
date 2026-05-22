@@ -18,6 +18,8 @@ from .models import (
     CurrencyExchange,
     Refund,
     OwnerContribution,
+    OwnerDrawing,
+    CashTransfer,
 )
 
 
@@ -396,3 +398,33 @@ class OwnerContributionCreateSerializer(serializers.Serializer):
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     to_account_id = serializers.IntegerField()
     notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class OwnerDrawingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OwnerDrawing
+        fields = ['id', 'amount', 'currency', 'from_account', 'date', 'notes']
+        read_only_fields = ['id']
+
+
+class OwnerDrawingCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    from_account_id = serializers.IntegerField()
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class CashTransferSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CashTransfer
+        fields = ['id', 'from_account', 'to_account', 'amount', 'currency', 'date', 'notes']
+        read_only_fields = ['id']
+
+
+class CashTransferCreateSerializer(serializers.Serializer):
+    from_account_id = serializers.IntegerField()
+    to_account_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)

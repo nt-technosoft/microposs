@@ -62,6 +62,7 @@ const en: typeof ru = {
     products: 'Products',
     procurements: 'Intake',
     reports: 'Reports',
+    cash: 'Cash',
     more: 'More',
     settings: 'Settings',
     main: 'Main navigation',

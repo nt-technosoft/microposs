@@ -9,6 +9,7 @@ import {
   Package,
   Download,
   BarChart3,
+  Wallet,
   Settings,
 } from 'lucide-vue-next'
 
@@ -31,6 +32,7 @@ const allTabs: NavItem[] = [
   { name: 'products', labelKey: 'nav.products', icon: Package, path: '/products', roles: ['owner', 'warehouse'] },
   { name: 'procurements', labelKey: 'nav.procurements', icon: Download, path: '/procurements', roles: ['owner', 'warehouse'] },
   { name: 'reports', labelKey: 'nav.reports', icon: BarChart3, path: '/reports', roles: ['owner'] },
+  { name: 'cash', labelKey: 'nav.cash', icon: Wallet, path: '/finance/cash', roles: ['owner'] },
   { name: 'more', labelKey: 'nav.more', icon: Settings, path: '/settings', roles: ['owner', 'cashier', 'warehouse'] },
 ]
 

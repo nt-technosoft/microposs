@@ -185,6 +185,12 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/finance/cash',
+    name: 'cash-accounts',
+    component: () => import('@/modules/finance/views/CashAccountsView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/finance/exchange',
     name: 'finance-exchange',
     component: () => import('@/modules/finance/views/CurrencyExchangeView.vue'),

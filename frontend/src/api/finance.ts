@@ -342,6 +342,22 @@ export interface OwnerContributionCreatePayload {
   notes?: string
 }
 
+export interface OwnerDrawingCreatePayload {
+  amount: string | number
+  currency?: string
+  from_account_id: number
+  notes?: string
+  client_request_id?: string
+}
+
+export interface CashTransferCreatePayload {
+  from_account_id: number
+  to_account_id: number
+  amount: string | number
+  notes?: string
+  client_request_id?: string
+}
+
 interface BackendDailySummary {
   date: string
   total_revenue: string
@@ -678,5 +694,34 @@ export async function createOwnerContribution(
   notes: string
 }> {
   const { data } = await api.post('/api/v1/finance/owner-contributions/', payload)
+  return data
+}
+
+export async function createOwnerDrawing(
+  payload: OwnerDrawingCreatePayload,
+): Promise<{
+  id: number
+  amount: string
+  currency: string
+  from_account: number
+  date: string
+  notes: string
+}> {
+  const { data } = await api.post('/api/v1/finance/owner-drawings/', payload)
+  return data
+}
+
+export async function createCashTransfer(
+  payload: CashTransferCreatePayload,
+): Promise<{
+  id: number
+  from_account: number
+  to_account: number
+  amount: string
+  currency: string
+  date: string
+  notes: string
+}> {
+  const { data } = await api.post('/api/v1/finance/cash-transfers/', payload)
   return data
 }
