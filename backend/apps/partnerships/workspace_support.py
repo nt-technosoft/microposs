@@ -718,35 +718,52 @@ def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=N
     if not settlement_type:
         raise ValueError('terms.type is required.')
 
-    # Source-of-truth for total: items × prices × fx. For DRAFT terms (the
-    # OPEN edit window) we always re-derive — terms.total_amount_due is a
-    # denormalized cache. Preserving stale existing.total_amount_due caused
-    # zero-total bugs when the type was picked before items were added.
-    # Explicit payload override still wins (used by amendment flows).
+    # Source-of-truth for total: items × prices (NO fx_rate — fx is for UZS
+    # reporting only, not for obligation amounts).  For DRAFT terms (the OPEN
+    # edit window) we always re-derive — terms.total_amount_due is a
+    # denormalized cache.  Explicit payload override still wins (amendment
+    # flows).  All items MUST share one currency; that currency becomes
+    # currency_of_obligation.
     if 'total_amount_due' in terms_payload:
         total_amount_due = money(terms_payload['total_amount_due'])
+        # currency_of_obligation resolved below from payload/existing
+        _items_currency = None
     elif procurement is not None and (
         existing is None
         or existing.lifecycle_state != ProcurementTerms.LifecycleState.ACTIVE
     ):
-        total_amount_due = sum(
-            (
-                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or 1))
-                for item in procurement.items.exclude(lifecycle_state='CANCELLED')
-            ),
-            Decimal('0'),
-        )
-        total_amount_due = money(total_amount_due)
+        active_items = list(procurement.items.exclude(lifecycle_state='CANCELLED'))
+        _item_currencies = {
+            str(item.currency or 'UZS').upper()
+            for item in active_items
+        }
+        if len(_item_currencies) > 1:
+            raise ValueError(
+                'Все товары прихода должны быть в одной валюте. '
+                f'Найдено: {", ".join(sorted(_item_currencies))}.'
+            )
+        _items_currency = _item_currencies.pop() if _item_currencies else None
+        total_amount_due = money(sum(
+            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
+            for item in active_items
+        ))
     elif existing is not None:
         total_amount_due = money(existing.total_amount_due)
+        _items_currency = None
     else:
         raise ValueError('terms.total_amount_due is required (no existing terms and no procurement context).')
 
-    currency_of_obligation = (
-        terms_payload.get('currency_of_obligation')
-        or (existing.currency_of_obligation if existing else None)
-        or 'UZS'
-    )
+    _payload_cob = terms_payload.get('currency_of_obligation')
+    _existing_cob = existing.currency_of_obligation if existing else None
+    if _items_currency:
+        # Items unambiguously set the currency. Payload may confirm but not override.
+        if _payload_cob and str(_payload_cob).upper() != _items_currency:
+            raise ValueError(
+                f'currency_of_obligation "{_payload_cob}" does not match items currency "{_items_currency}".'
+            )
+        currency_of_obligation = _items_currency
+    else:
+        currency_of_obligation = _payload_cob or _existing_cob or 'UZS'
     fx_rate_at_obligation = (
         terms_payload.get('fx_rate_at_obligation')
         if 'fx_rate_at_obligation' in terms_payload

@@ -355,11 +355,12 @@ def update_workspace_lines(
 
 
 def _resync_draft_terms_total(tenant_id: int, procurement: Procurement) -> None:
-    """Keep terms.total_amount_due in sync with items × prices × fx while in DRAFT.
+    """Keep terms.total_amount_due and currency_of_obligation in sync with items while in DRAFT.
 
-    After items change, the denormalized total on DRAFT terms is recomputed so
-    INSTALLMENT/PARTIAL/DEFERRED screens see the current obligation. ACTIVE
-    terms are immutable and skipped — amendments cover that path explicitly.
+    Obligation amount = Σ(qty × unit_purchase_price) in items' currency.
+    fx_rate is for UZS reporting only — not used here.
+    Mixed-currency items raise so UI catches the configuration error early.
+    ACTIVE terms are immutable and skipped.
     """
     terms = ProcurementTerms.objects.filter(
         tenant_id=tenant_id, procurement=procurement,
@@ -367,17 +368,30 @@ def _resync_draft_terms_total(tenant_id: int, procurement: Procurement) -> None:
     ).first()
     if terms is None:
         return
-    total = sum(
-        (
-            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or 1))
-            for item in procurement.items.exclude(lifecycle_state=ProcurementItem.LifecycleState.CANCELLED)
-        ),
-        Decimal('0'),
+    active_items = list(
+        procurement.items.exclude(lifecycle_state=ProcurementItem.LifecycleState.CANCELLED)
     )
-    new_total = total.quantize(Decimal('0.01'))
+    item_currencies = {str(item.currency or 'UZS').upper() for item in active_items}
+    if len(item_currencies) > 1:
+        raise ValueError(
+            'Все товары прихода должны быть в одной валюте. '
+            f'Найдено: {", ".join(sorted(item_currencies))}.'
+        )
+    new_currency = item_currencies.pop() if item_currencies else str(terms.currency_of_obligation or 'UZS').upper()
+    new_total = sum(
+        Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
+        for item in active_items
+    ).quantize(Decimal('0.01'))
+
+    update_fields = ['updated_at']
     if terms.total_amount_due != new_total:
         terms.total_amount_due = new_total
-        terms.save(update_fields=['total_amount_due', 'updated_at'])
+        update_fields.append('total_amount_due')
+    if str(terms.currency_of_obligation or 'UZS').upper() != new_currency:
+        terms.currency_of_obligation = new_currency
+        update_fields.append('currency_of_obligation')
+    if len(update_fields) > 1:
+        terms.save(update_fields=update_fields)
 
 
 def dispatch_workspace_action(
@@ -1408,16 +1422,26 @@ def pay_workspace_costs(
         raise ValueError('No draft items or expenses selected for payment.')
 
     cash_account = CashAccount.objects.get(pk=cash_account_id, tenant_id=tenant_id, is_active=True)
-    amount = payload.get('amount')
-    if amount is None:
-        if cash_account.currency != 'UZS':
-            raise ValueError('amount is required when CashAccount currency is not UZS.')
-        amount = _draft_cost_total_uzs(selected_items, selected_expenses)
-
-    payment_currency = payload.get('currency') or cash_account.currency
-    payment_fx_rate = payload.get('fx_rate')
 
     terms = getattr(procurement, 'terms', None)
+    currency_of_obligation = (
+        str(terms.currency_of_obligation).upper() if terms and terms.currency_of_obligation
+        else _derive_items_currency(list(selected_items))
+    )
+
+    if str(cash_account.currency).upper() != currency_of_obligation:
+        raise ValueError(
+            f'Касса в {cash_account.currency}, обязательство в {currency_of_obligation}. '
+            f'Сделайте обмен валют через «Касса → Обменять валюту».'
+        )
+
+    payment_currency = currency_of_obligation
+    payment_fx_rate = payload.get('fx_rate')
+
+    amount = payload.get('amount')
+    if amount is None:
+        amount = _draft_cost_total_in_obligation_currency(selected_items, selected_expenses)
+
     if terms is not None:
         terms.activate()
 
@@ -1488,10 +1512,16 @@ def pay_workspace_supplier_payable(
         if not cash_account_id or amount is None:
             raise ValueError('cash_account_id and amount are required.')
         account = CashAccount.objects.get(pk=cash_account_id, tenant_id=tenant_id, is_active=True)
+        obligation_currency = str(payable.currency_of_obligation).upper()
+        if str(account.currency).upper() != obligation_currency:
+            raise ValueError(
+                f'Касса в {account.currency}, обязательство в {obligation_currency}. '
+                f'Сделайте обмен валют через «Касса → Обменять валюту».'
+            )
         allocations = [{
             'cash_account_id': cash_account_id,
             'amount': amount,
-            'currency': payload.get('currency') or account.currency,
+            'currency': obligation_currency,
         }]
 
     return record_payable_payment(
@@ -2635,6 +2665,37 @@ def _draft_cost_total_uzs(items, expenses) -> Decimal:
         for expense in expenses
     )
     return (item_total + expense_total).quantize(Decimal('0.01'))
+
+
+def _draft_cost_total_in_obligation_currency(items, expenses) -> Decimal:
+    """Total cost in items' native currency (no fx conversion).
+
+    fx_rate is for UZS reporting only — obligation amounts stay in items' currency.
+    Expenses are treated as same-currency as items (they must be).
+    """
+    item_total = sum(
+        Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
+        for item in items
+    )
+    expense_total = sum(
+        Decimal(str(expense.amount))
+        for expense in expenses
+    )
+    return (item_total + expense_total).quantize(Decimal('0.01'))
+
+
+def _derive_items_currency(items) -> str:
+    """Return the single currency shared by all items, or 'UZS' if no items.
+
+    Raises ValueError on mixed currencies.
+    """
+    currencies = {str(item.currency or 'UZS').upper() for item in items}
+    if len(currencies) > 1:
+        raise ValueError(
+            'Все товары прихода должны быть в одной валюте. '
+            f'Найдено: {", ".join(sorted(currencies))}.'
+        )
+    return currencies.pop() if currencies else 'UZS'
 
 
 def _payments_for_procurement(procurement: Procurement, payables) -> list[Payment]:

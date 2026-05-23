@@ -152,47 +152,34 @@ class SupplierPayable(TenantModel):
     @property
     def paid_amount(self) -> Decimal:
         """
-        Derived: sum of finance.Payment rows that flowed against the same
-        underlying obligation — both PROCUREMENT_COST payments made against
-        the procurement before this payable existed, and SUPPLIER_PAYABLE
-        payments made directly against this payable after.
-
-        The two targets represent two phases of the same supplier obligation
-        (upfront partial + post-receive remainder); pay_workspace_costs is
-        gated to OPEN procurement, so post-receive PROCUREMENT_COST writes
-        cannot double-count.
-
-        Functional UZS sum is then divided by `fx_rate_at_obligation`
-        (snapshot at obligation creation) to land in obligation currency —
-        the contractual rate, fixed and not revalued, per Islamic
-        accounting principle.
+        Two sources:
+        1. SupplierPayment rows linked to this payable via FK — operation_amount
+           is already in obligation currency, no fx needed.
+        2. Pre-payable PROCUREMENT_COST finance.Payment rows (PARTIAL settlement
+           scenario: upfront PAY_COSTS before receive, payable created at receive).
+           These are in UZS functional; converted via fx_rate_at_obligation.
         """
-        from apps.finance.models import Payment
-        from django.db.models import F, Q, Sum
+        from django.db.models import F, Sum
+        sp_total = self.payments.aggregate(total=Sum('operation_amount'))['total'] or Decimal('0')
 
-        targets = Q(
-            target_type=Payment.TargetType.SUPPLIER_PAYABLE,
-            target_id=self.pk,
-        )
         if self.procurement_id is not None:
-            targets = targets | Q(
-                target_type=Payment.TargetType.PROCUREMENT_COST,
-                target_id=self.procurement_id,
+            from apps.finance.models import Payment
+            agg = (
+                Payment.objects
+                .filter(
+                    tenant_id=self.tenant_id,
+                    status=Payment.Status.POSTED,
+                    target_type=Payment.TargetType.PROCUREMENT_COST,
+                    target_id=self.procurement_id,
+                )
+                .aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
             )
-        agg = (
-            Payment.objects
-            .filter(
-                tenant_id=self.tenant_id,
-                status=Payment.Status.POSTED,
-            )
-            .filter(targets)
-            .aggregate(total_uzs=Sum(F('amount') * F('fx_rate')))
-        )
-        total_uzs = agg['total_uzs'] or Decimal('0')
-        rate = Decimal(str(self.fx_rate_at_obligation or 1))
-        if rate == 0:
-            return Decimal('0')
-        return (Decimal(str(total_uzs)) / rate).quantize(Decimal('0.01'))
+            total_uzs = Decimal(str(agg['total_uzs'] or 0))
+            rate = Decimal(str(self.fx_rate_at_obligation or 1))
+            if rate and total_uzs:
+                sp_total = sp_total + (total_uzs / rate)
+
+        return sp_total.quantize(Decimal('0.01'))
 
     @property
     def remaining_amount(self) -> Decimal:
