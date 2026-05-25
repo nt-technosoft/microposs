@@ -10,6 +10,7 @@ const EXPENSE_LABELS: Record<string, string> = {
   LOGISTICS: 'Логистика',
   CUSTOMS: 'Таможня',
   FEE: 'Комиссия',
+  OTHER: 'Прочее',
 }
 const METHOD_LABELS: Record<string, string> = {
   BY_VALUE: 'по стоимости',
@@ -63,9 +64,9 @@ function tryDelete(): void {
 .expense-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); cursor: pointer; }
 .expense-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .expense-type { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.expense-detail { font-size: var(--text-xs); color: var(--color-text-secondary); }
+.expense-detail { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
 .expense-target { font-size: var(--text-xs); color: var(--color-text-tertiary); }
 .expense-actions { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; }
-.delete-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid rgba(239,68,68,.2); border-radius: var(--radius-md); background: rgba(239,68,68,.06); color: var(--color-error); cursor: pointer; }
+.delete-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid color-mix(in srgb, var(--color-error) 20%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-error) 6%, transparent); color: var(--color-error); cursor: pointer; }
 .chevron { color: var(--color-text-tertiary); }
 </style>

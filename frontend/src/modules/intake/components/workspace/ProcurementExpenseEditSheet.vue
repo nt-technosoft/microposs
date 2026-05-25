@@ -12,6 +12,7 @@ const EXPENSE_TYPES = [
   { key: 'LOGISTICS', label: 'Логистика' },
   { key: 'CUSTOMS', label: 'Таможня' },
   { key: 'FEE', label: 'Комиссия' },
+  { key: 'OTHER', label: 'Прочее' },
 ] as const
 
 const ALLOC_METHODS = [
@@ -98,11 +99,6 @@ function onDelete(): void {
       <div class="section-label">Сумма</div>
       <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" />
 
-      <template v-if="currency !== 'UZS'">
-        <div class="section-label">Курс USD/UZS</div>
-        <input class="input-field" type="number" min="0" step="0.01" :value="fxRateLocal" @input="fxRateLocal = ($event.target as HTMLInputElement).value" />
-      </template>
-
       <div class="section-label">Метод распределения</div>
       <div class="chips-row">
         <button v-for="m in ALLOC_METHODS" :key="m.key" class="chip" :class="{ active: allocMethod === m.key }" type="button" @click="allocMethod = m.key">{{ m.label }}</button>
@@ -134,11 +130,10 @@ function onDelete(): void {
 .chip { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-full); background: transparent; color: var(--color-text-secondary); font-size: var(--text-sm); cursor: pointer; }
 .chip.active { border-color: var(--color-brand-600); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
 .chip:disabled { opacity: .55; cursor: not-allowed; }
-.input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
 .items-checklist { display: grid; gap: var(--space-2); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); max-height: 30vh; overflow-y: auto; }
 .check-row { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 .check-label { font-size: var(--text-sm); color: var(--color-text-primary); }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.danger-btn { min-height: 44px; border: 1px solid rgba(239,68,68,.35); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
+.danger-btn { min-height: 44px; border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
 </style>
