@@ -125,6 +125,10 @@ async function onDeleteItem(itemId: number): Promise<void> {
   await dispatch('UPDATE_ITEMS', { cancel_item_ids: [itemId] })
 }
 
+async function onSplitItem(payload: { item_id: number; quantity: number }): Promise<void> {
+  await dispatch('SPLIT_ITEM', payload)
+}
+
 onMounted(ensureWorkspace)
 watch(() => route.params.id, ensureWorkspace)
 onBeforeUnmount(() => store.$reset())
@@ -161,6 +165,7 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @update-items="onUpdateItems"
           @delete-item="onDeleteItem"
+          @split-item="onSplitItem"
         />
         <ProcurementCardExpenses
           :procurement="procurement"

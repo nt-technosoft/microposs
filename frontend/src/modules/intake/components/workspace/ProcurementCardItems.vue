@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { CheckCircle, AlertCircle, Plus } from 'lucide-vue-next'
 import ProcurementItemRow from './ProcurementItemRow.vue'
 import ProcurementItemEditSheet from './ProcurementItemEditSheet.vue'
+import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
@@ -12,10 +13,19 @@ const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
   'update-items': [items: ActionItem[]]
   'delete-item': [itemId: number]
+  'split-item': [payload: { item_id: number; quantity: number }]
 }>()
 
 const editSheetOpen = ref(false)
 const editingItemId = ref<number | null>(null)
+
+const splitSheetOpen = ref(false)
+const splittingItemId = ref<number | null>(null)
+const splitQty = ref('')
+
+const splittingItem = computed(() =>
+  items.value.find((it) => it.id === splittingItemId.value) ?? null,
+)
 
 const items = computed(() =>
   props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
@@ -73,6 +83,19 @@ function onSheetSave(payload: ActionItem): void {
 function onSheetDelete(itemId: number): void {
   emit('delete-item', itemId)
 }
+
+function openSplit(itemId: number): void {
+  splittingItemId.value = itemId
+  splitQty.value = ''
+  splitSheetOpen.value = true
+}
+
+function onSplitConfirm(): void {
+  const qty = parseFloat(splitQty.value)
+  if (!splittingItemId.value || !qty || qty <= 0) return
+  emit('split-item', { item_id: splittingItemId.value, quantity: qty })
+  splitSheetOpen.value = false
+}
 </script>
 
 <template>
@@ -98,6 +121,7 @@ function onSheetDelete(itemId: number): void {
         :is-editable="canEdit && !item.locked_reason"
         @click="openEdit(item.id)"
         @delete="onSheetDelete"
+        @split="openSplit"
       />
     </div>
 
@@ -121,6 +145,26 @@ function onSheetDelete(itemId: number): void {
     @save="onSheetSave"
     @delete="onSheetDelete"
   />
+
+  <AppBottomSheet :open="splitSheetOpen" title="Разделить позицию" @close="splitSheetOpen = false">
+    <div class="split-sheet-body">
+      <div v-if="splittingItem" class="split-item-name">{{ splittingItem.product_variant_name }}</div>
+      <div class="split-hint">Введите количество для отделения в отдельную строку (не более {{ splittingItem ? parseFloat(splittingItem.quantity) - 1 : '' }} шт.).</div>
+      <input
+        class="split-input"
+        type="number"
+        min="1"
+        :max="splittingItem ? parseFloat(splittingItem.quantity) - 1 : undefined"
+        step="1"
+        inputmode="numeric"
+        placeholder="Количество"
+        v-model="splitQty"
+      />
+      <button class="split-confirm-btn" type="button" :disabled="!splitQty || parseFloat(splitQty) <= 0" @click="onSplitConfirm">
+        Разделить
+      </button>
+    </div>
+  </AppBottomSheet>
 </template>
 
 <style scoped>
@@ -208,4 +252,11 @@ function onSheetDelete(itemId: number): void {
   font-weight: var(--font-semibold);
   cursor: pointer;
 }
+
+.split-sheet-body { display: grid; gap: var(--space-3); padding: var(--space-4); }
+.split-item-name { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
+.split-hint { font-size: var(--text-xs); color: var(--color-text-secondary); }
+.split-input { width: 100%; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); font-size: var(--text-base); background: var(--color-bg-secondary); color: var(--color-text-primary); }
+.split-confirm-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: none; border-radius: var(--radius-md); background: var(--color-brand-600); color: white; font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
+.split-confirm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

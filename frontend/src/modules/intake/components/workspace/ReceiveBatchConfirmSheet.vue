@@ -45,13 +45,26 @@ const errors = ref<Record<number, string>>({})
 const investment = computed(() => props.procurement.documents.investment)
 const isPartnership = computed(() => props.procurement.documents.source.funding_source === 'PARTNERSHIP')
 const isAtReceipt = computed(() => props.procurement.documents.settlement?.type === 'AT_RECEIPT')
+const isPrepaid = computed(() => props.procurement.documents.settlement?.type === 'PREPAID')
 const isOwnFunds = computed(() => !isPartnership.value)
 
 const receivableItems = computed(() =>
-  props.procurement.documents.items.filter(
-    (it) => parseFloat(it.remaining_quantity) > 0 &&
-             it.lifecycle_state !== 'RECEIVED' && it.lifecycle_state !== 'CANCELLED',
-  ),
+  props.procurement.documents.items.filter((it) => {
+    if (parseFloat(it.remaining_quantity) <= 0) return false
+    if (it.lifecycle_state === 'RECEIVED' || it.lifecycle_state === 'CANCELLED') return false
+    if (isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    return true
+  }),
+)
+
+const blockedPrepaidItems = computed(() =>
+  isPrepaid.value
+    ? props.procurement.documents.items.filter(
+        (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' &&
+                 it.lifecycle_state !== 'RECEIVED' &&
+                 it.lifecycle_state !== 'CANCELLED',
+      )
+    : [],
 )
 
 const totalReceived = computed(() => lines.value.reduce((s, l) => s + (parseFloat(l.qtyReceived) || 0), 0))
@@ -182,7 +195,10 @@ function onSave(): void {
         <span class="step-label">Приём товаров</span>
       </div>
 
-      <div class="section-label">Товары</div>
+      <div class="section-label">Товары к приёмке</div>
+      <div v-if="receivableItems.length === 0" class="no-items-hint">
+        Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
+      </div>
       <div v-for="item in receivableItems" :key="item.id" class="item-block">
         <div class="item-name">{{ item.product_variant_name }}</div>
         <div class="item-qty-row">
@@ -211,6 +227,15 @@ function onSave(): void {
         </div>
         <div v-if="errors[item.id]" class="error-text">{{ errors[item.id] }}</div>
       </div>
+
+      <!-- PREPAID: blocked items notice -->
+      <template v-if="blockedPrepaidItems.length">
+        <div class="section-label">Ожидают оплаты</div>
+        <div v-for="item in blockedPrepaidItems" :key="item.id" class="blocked-item-row">
+          <span class="blocked-item-name">{{ item.product_variant_name }}</span>
+          <span class="blocked-item-qty">{{ item.quantity }} шт.</span>
+        </div>
+      </template>
 
       <!-- AT_RECEIPT OWN_FUNDS: payment block -->
       <div v-if="isAtReceipt" class="step-header">
@@ -298,4 +323,8 @@ function onSave(): void {
 .step-header { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-subtle); margin-top: var(--space-1); }
 .step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-full); background: var(--color-brand-500); color: white; font-size: var(--text-xs); font-weight: var(--font-semibold); flex-shrink: 0; }
 .step-label { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
+.no-items-hint { font-size: var(--text-sm); color: var(--color-text-secondary); padding: var(--space-2) 0; }
+.blocked-item-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: color-mix(in srgb, var(--color-warning) 8%, transparent); border-radius: var(--radius-md); }
+.blocked-item-name { font-size: var(--text-sm); color: var(--color-text-secondary); }
+.blocked-item-qty { font-size: var(--text-sm); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
 </style>

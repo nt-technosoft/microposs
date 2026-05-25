@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronRight, Trash2, Package } from 'lucide-vue-next'
+import { ChevronRight, Trash2, Package, Scissors } from 'lucide-vue-next'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
 
 const props = defineProps<{ item: Item; isEditable: boolean }>()
-const emit = defineEmits<{ click: [id: number]; delete: [id: number] }>()
+const emit = defineEmits<{ click: [id: number]; delete: [id: number]; split: [id: number] }>()
+
+const canSplit = computed(() => props.isEditable && (parseFloat(props.item.quantity) || 0) > 1)
 
 const isConsigned = computed(() => props.item.goods_ownership === 'CONSIGNED')
 
@@ -42,6 +44,9 @@ function tryDelete(): void {
       </div>
     </div>
     <div class="item-actions" @click.stop @keydown.stop>
+      <button v-if="canSplit" class="split-btn" type="button" @click="emit('split', item.id)">
+        <Scissors :size="14" :stroke-width="2" />
+      </button>
       <button v-if="isEditable" class="delete-btn" type="button" @click="tryDelete">
         <Trash2 :size="14" :stroke-width="2" />
       </button>
@@ -92,15 +97,28 @@ function tryDelete(): void {
 
 .item-actions { display: flex; align-items: center; gap: var(--space-1); flex-shrink: 0; }
 
+.split-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
 .delete-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  border: 1px solid color-mix(in srgb, var(--color-error) 30%, transparent);
   border-radius: var(--radius-md);
-  background: rgba(239, 68, 68, 0.06);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
   color: var(--color-error);
   cursor: pointer;
 }
