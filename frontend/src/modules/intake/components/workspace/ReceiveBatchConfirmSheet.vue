@@ -24,7 +24,7 @@ interface LineState {
   reason: ReasonKey
 }
 
-interface CapAlloc { partnerId: number; amount: string }
+interface CapAlloc { partnerId: number; amount: string; currency: string; isCorrected?: boolean }
 
 const props = defineProps<{ open: boolean; procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
@@ -70,26 +70,45 @@ const blockedPrepaidItems = computed(() =>
 const totalReceived = computed(() => lines.value.reduce((s, l) => s + (parseFloat(l.qtyReceived) || 0), 0))
 const totalPlanned = computed(() => receivableItems.value.reduce((s, it) => s + (parseFloat(it.remaining_quantity) || 0), 0))
 
-const receiveBatchCostUzs = computed(() => {
-  let total = 0
+const receiveBatchCostByCurrency = computed((): Record<string, number> => {
+  const totals: Record<string, number> = {}
   for (const l of lines.value) {
     const item = receivableItems.value.find((it) => it.id === l.itemId)
     if (!item) continue
-    const qty = parseFloat(l.qtyReceived) || 0
+    const qty = parseInt(l.qtyReceived) || 0
     const price = parseFloat(item.unit_purchase_price) || 0
-    const fx = parseFloat(item.fx_rate) || 1
-    total += qty * price * fx
+    const cur = item.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + qty * price
   }
-  return Math.round(total)
+  return totals
 })
+
+const batchObligationCurrency = computed((): string => {
+  const currencies = Object.keys(receiveBatchCostByCurrency.value)
+  return currencies[0] ?? (props.procurement.documents.payment_status?.currency ?? 'UZS')
+})
+
+const batchObligationTotal = computed((): number =>
+  receiveBatchCostByCurrency.value[batchObligationCurrency.value] ?? 0,
+)
 
 function prefillCapAllocs(): void {
   const inv = investment.value
   if (!inv) return
-  capAllocs.value = inv.partners.map((p) => ({
-    partnerId: p.partner_id,
-    amount: String(Math.round(receiveBatchCostUzs.value * (parseFloat(p.planned_capital_share) || 0))),
-  }))
+  const total = batchObligationTotal.value
+  const currency = batchObligationCurrency.value
+  capAllocs.value = inv.partners.map((p) => {
+    const contractedAmount = total * (parseFloat(p.profit_share) || 0)
+    const availableStr = inv.available_by_partner[String(p.partner_id)]?.[currency] ?? '0'
+    const available = parseFloat(availableStr) || 0
+    const amount = Math.min(contractedAmount, available)
+    return {
+      partnerId: p.partner_id,
+      amount: amount.toFixed(2),
+      currency,
+      isCorrected: amount < contractedAmount - 0.001,
+    }
+  })
 }
 
 function intQty(val: string | number): string {
@@ -123,7 +142,7 @@ watch(() => props.open, async (isOpen) => {
     if (!selectedCashAccountId.value && cashAccounts.value.length) {
       selectedCashAccountId.value = cashAccounts.value[0].id
     }
-    paymentAmount.value = String(receiveBatchCostUzs.value)
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
   }
 })
 
@@ -137,7 +156,7 @@ function onQtyChange(itemId: number, val: string): void {
   }
   if (isPartnership.value) prefillCapAllocs()
   if (isAtReceipt.value && isOwnFunds.value) {
-    paymentAmount.value = String(receiveBatchCostUzs.value)
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
   }
 }
 
@@ -168,7 +187,7 @@ function onSave(): void {
     item_discrepancies: itemDiscrepancies,
   }
   if (isPartnership.value && capAllocs.value.length) {
-    payload.capital_allocations = capAllocs.value.map((a) => ({ partner_id: a.partnerId, amount: a.amount }))
+    payload.capital_allocations = capAllocs.value.map((a) => ({ partner_id: a.partnerId, amount: a.amount, currency: a.currency }))
   }
   if (isAtReceipt.value && isOwnFunds.value) {
     const acct = cashAccounts.value.find((a) => a.id === selectedCashAccountId.value)
@@ -260,34 +279,38 @@ function onSave(): void {
           </option>
         </select>
         <label class="qty-input-label">
-          Сумма (UZS):
+          Сумма ({{ batchObligationCurrency }}):
           <input
             class="input-field"
             type="number"
             min="0"
-            step="1"
+            step="0.01"
             :value="paymentAmount"
             @input="paymentAmount = ($event.target as HTMLInputElement).value"
           />
         </label>
-        <p v-if="receiveBatchCostUzs > 0 && parseFloat(paymentAmount) < receiveBatchCostUzs" class="hint-warn">
-          Сумма меньше стоимости приёмки ({{ receiveBatchCostUzs.toLocaleString('ru-RU') }} сум)
+        <p v-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="hint-warn">
+          Сумма меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
         </p>
       </template>
 
       <!-- PARTNERSHIP capital allocation -->
       <template v-if="isPartnership && investment">
-        <div class="section-label">Распределение капитала</div>
+        <div class="section-label">Распределение капитала ({{ batchObligationCurrency }})</div>
         <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="cap-row">
-          <span class="cap-name">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? `#${alloc.partnerId}` }}</span>
+          <span class="cap-name" :class="{ 'cap-corrected': alloc.isCorrected }">
+            {{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? `#${alloc.partnerId}` }}
+            <span v-if="alloc.isCorrected" class="cap-correction-hint">↓ лимит</span>
+          </span>
           <input
             class="cap-input"
             type="number"
             min="0"
+            step="0.01"
             :value="alloc.amount"
             @input="alloc.amount = ($event.target as HTMLInputElement).value"
           />
-          <span class="cap-currency">UZS</span>
+          <span class="cap-currency">{{ alloc.currency }}</span>
         </div>
       </template>
 
@@ -318,7 +341,9 @@ function onSave(): void {
 .reason-row { margin-top: 2px; }
 .error-text { font-size: var(--text-xs); color: var(--color-error); }
 .cap-row { display: flex; align-items: center; gap: var(--space-2); }
-.cap-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; }
+.cap-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; display: flex; align-items: center; gap: var(--space-1); }
+.cap-corrected { color: var(--color-warning); }
+.cap-correction-hint { font-size: var(--text-xs); color: var(--color-warning); }
 .cap-input { width: 120px; min-height: 40px; padding: 0 var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); text-align: right; }
 .cap-currency { font-size: var(--text-sm); color: var(--color-text-secondary); flex-shrink: 0; }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
