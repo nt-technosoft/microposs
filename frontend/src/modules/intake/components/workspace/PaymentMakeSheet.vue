@@ -12,6 +12,8 @@ const props = defineProps<{
   paymentType: 'cost' | 'payable' | 'schedule-entry'
   payableId?: number
   scheduleEntryId?: number
+  itemIds?: number[]
+  expenseIds?: number[]
 }>()
 
 const emit = defineEmits<{
@@ -77,7 +79,10 @@ function onSave(): void {
     notes: notes.value,
   }
   if (props.paymentType === 'cost') {
-    emit('dispatch', 'PAY_COSTS', base)
+    const payload: Record<string, unknown> = { ...base }
+    if (props.itemIds?.length) payload.item_ids = props.itemIds
+    if (props.expenseIds?.length) payload.expense_ids = props.expenseIds
+    emit('dispatch', 'PAY_COSTS', payload)
   } else {
     emit('dispatch', 'PAY_SUPPLIER_PAYABLE', {
       ...base,

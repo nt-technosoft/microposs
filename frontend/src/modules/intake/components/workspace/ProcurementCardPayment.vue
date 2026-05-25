@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { CheckCircle, AlertCircle, PlusCircle } from 'lucide-vue-next'
+import { CheckCircle, AlertCircle, PlusCircle, Square, CheckSquare } from 'lucide-vue-next'
 import PaymentMakeSheet from './PaymentMakeSheet.vue'
 import PaymentScheduleEditor from './PaymentScheduleEditor.vue'
 import ConsignmentObligationsBlock from './ConsignmentObligationsBlock.vue'
@@ -23,7 +23,13 @@ const paySheetType = ref<'cost' | 'payable' | 'schedule-entry'>('cost')
 const paySheetDefaultAmount = ref<string | undefined>(undefined)
 const paySheetPayableId = ref<number | undefined>(undefined)
 const paySheetScheduleEntryId = ref<number | undefined>(undefined)
+const paySheetItemIds = ref<number[] | undefined>(undefined)
+const paySheetExpenseIds = ref<number[] | undefined>(undefined)
 const scheduleEditorOpen = ref(false)
+
+const selectionMode = ref(false)
+const selectedItemIds = ref<Set<number>>(new Set())
+const selectedExpenseIds = ref<Set<number>>(new Set())
 
 const depositSheetOpen = ref(false)
 const depositAccount = ref<CashAccountRecord | null>(null)
@@ -75,6 +81,30 @@ const remainingAmount = computed(() => {
 
 const firstOpenPayable = computed(() => payables.value.find((p) => p.status !== 'PAID') ?? null)
 
+const selectionTotal = computed((): Record<string, number> => {
+  const totals: Record<string, number> = {}
+  for (const it of props.procurement.documents.items) {
+    if (!selectedItemIds.value.has(it.id)) continue
+    const cur = it.currency || 'UZS'
+    const val = (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0)
+    totals[cur] = (totals[cur] ?? 0) + val
+  }
+  for (const ex of props.procurement.documents.expenses) {
+    if (!selectedExpenseIds.value.has(ex.id)) continue
+    const cur = ex.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + (parseFloat(ex.amount) || 0)
+  }
+  return totals
+})
+
+const selectionCurrencies = computed(() => Object.keys(selectionTotal.value))
+const selectionMixed = computed(() => selectionCurrencies.value.length > 1)
+const selectionAmount = computed((): string => {
+  if (selectionMixed.value || !selectionCurrencies.value.length) return ''
+  const cur = selectionCurrencies.value[0]
+  return String(selectionTotal.value[cur] ?? 0)
+})
+
 const daysUntilDeadline = computed(() => {
   const d = settlement.value?.deadline_date
   if (!d) return null
@@ -95,15 +125,42 @@ function openPayFull(): void {
   paySheetDefaultAmount.value = remainingAmount.value
   paySheetPayableId.value = undefined
   paySheetScheduleEntryId.value = undefined
+  paySheetItemIds.value = undefined
+  paySheetExpenseIds.value = undefined
   paySheetOpen.value = true
 }
 
 function openPayPartial(): void {
+  selectionMode.value = true
+  selectedItemIds.value = new Set()
+  selectedExpenseIds.value = new Set()
+}
+
+function cancelSelection(): void {
+  selectionMode.value = false
+}
+
+function openPaySelected(): void {
   paySheetType.value = 'cost'
-  paySheetDefaultAmount.value = undefined
+  paySheetDefaultAmount.value = selectionAmount.value || undefined
   paySheetPayableId.value = undefined
   paySheetScheduleEntryId.value = undefined
+  paySheetItemIds.value = selectedItemIds.value.size ? [...selectedItemIds.value] : undefined
+  paySheetExpenseIds.value = selectedExpenseIds.value.size ? [...selectedExpenseIds.value] : undefined
+  selectionMode.value = false
   paySheetOpen.value = true
+}
+
+function toggleItem(id: number): void {
+  const s = new Set(selectedItemIds.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  selectedItemIds.value = s
+}
+
+function toggleExpense(id: number): void {
+  const s = new Set(selectedExpenseIds.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  selectedExpenseIds.value = s
 }
 
 function openPayPayable(): void {
@@ -162,13 +219,8 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
       </button>
     </div>
 
-    <!-- PARTNERSHIP: payment done via financing (B-6 allocation) -->
-    <template v-if="isPartnership">
-      <div class="info-text">Оплата через инвестиционный договор — см. раздел «Финансирование».</div>
-    </template>
-
     <!-- ON_SALE: consignment obligations -->
-    <template v-else-if="isOnSale">
+    <template v-if="isOnSale">
       <ConsignmentObligationsBlock :procurement="procurement" @pay="openPayPayable" />
     </template>
 
@@ -248,8 +300,48 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
         </div>
       </div>
       <template v-if="!isFilled">
-        <button class="action-btn" type="button" @click="openPayFull">Оплатить полностью</button>
-        <button class="action-btn secondary" type="button" @click="openPayPartial">Оплатить частично</button>
+        <!-- Selection mode -->
+        <template v-if="selectionMode">
+          <div class="selection-section">
+            <div class="selection-header">Выберите товары для оплаты</div>
+            <div
+              v-for="it in procurement.documents.items"
+              :key="it.id"
+              class="selection-row"
+              role="button"
+              @click="toggleItem(it.id)"
+            >
+              <component :is="selectedItemIds.has(it.id) ? CheckSquare : Square" :size="18" :stroke-width="2" class="sel-icon" :class="{ checked: selectedItemIds.has(it.id) }" />
+              <span class="sel-name">{{ it.product_variant_name }}</span>
+              <span class="sel-amount">{{ ((parseFloat(it.quantity)||0)*(parseFloat(it.unit_purchase_price)||0)).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ it.currency }}</span>
+            </div>
+            <template v-if="procurement.documents.expenses.length">
+              <div class="selection-header">Расходы</div>
+              <div
+                v-for="ex in procurement.documents.expenses"
+                :key="ex.id"
+                class="selection-row"
+                role="button"
+                @click="toggleExpense(ex.id)"
+              >
+                <component :is="selectedExpenseIds.has(ex.id) ? CheckSquare : Square" :size="18" :stroke-width="2" class="sel-icon" :class="{ checked: selectedExpenseIds.has(ex.id) }" />
+                <span class="sel-name">{{ ex.expense_type }}</span>
+                <span class="sel-amount">{{ (parseFloat(ex.amount)||0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ ex.currency }}</span>
+              </div>
+            </template>
+            <div v-if="selectionMixed" class="warn-text">Выбранные позиции в разных валютах — платите раздельно</div>
+            <div class="selection-actions">
+              <button class="action-btn" type="button" :disabled="!selectedItemIds.size && !selectedExpenseIds.size || selectionMixed" @click="openPaySelected">
+                Оплатить выбранное
+              </button>
+              <button class="action-btn secondary" type="button" @click="cancelSelection">Отмена</button>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <button class="action-btn" type="button" @click="openPayFull">Оплатить полностью</button>
+          <button class="action-btn secondary" type="button" @click="openPayPartial">Оплатить частично</button>
+        </template>
       </template>
     </template>
   </div>
@@ -261,6 +353,8 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     :payment-type="paySheetType"
     :payable-id="paySheetPayableId"
     :schedule-entry-id="paySheetScheduleEntryId"
+    :item-ids="paySheetItemIds"
+    :expense-ids="paySheetExpenseIds"
     @dispatch="onPaymentDispatch"
   />
 
@@ -312,6 +406,15 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 .entry-paid { flex-shrink: 0; font-size: var(--text-sm); color: var(--color-success); }
 .action-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
 .action-btn.secondary { color: var(--color-text-secondary); }
+.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.selection-section { display: grid; gap: var(--space-2); }
+.selection-header { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; padding: var(--space-1) 0; }
+.selection-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); cursor: pointer; }
+.sel-icon { flex-shrink: 0; color: var(--color-text-tertiary); }
+.sel-icon.checked { color: var(--color-brand-600); }
+.sel-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.selection-actions { display: grid; gap: var(--space-2); margin-top: var(--space-1); }
 .topup-hint { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-danger-50, rgba(239, 68, 68, 0.08)); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--color-danger-700, #b91c1c); flex-wrap: wrap; }
 .topup-icon { flex-shrink: 0; }
 .topup-btn { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; padding: var(--space-1) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); cursor: pointer; background: transparent; color: var(--color-brand-700); flex-shrink: 0; }
