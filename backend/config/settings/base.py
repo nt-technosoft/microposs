@@ -54,6 +54,8 @@ LOCAL_APPS = [
     'apps.risk',
     'apps.analytics',
     'apps.attachments',
+    'apps.integrations',
+    'apps.integrations.yespos',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
