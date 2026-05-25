@@ -23,18 +23,22 @@ const items = computed(() =>
 const canEdit = computed(() => props.procurement.status === 'OPEN')
 const isFilled = computed(() => props.procurement.readiness['items_ready']?.ok ?? items.value.length > 0)
 
-const totalUzs = computed(() =>
-  items.value.reduce((sum, it) => {
-    const qty = parseFloat(it.quantity) || 0
-    const price = parseFloat(it.unit_purchase_price) || 0
-    const fx = parseFloat(it.fx_rate) || 1
-    return sum + qty * price * fx
-  }, 0),
-)
+const totalsByCurrency = computed(() => {
+  const map: Record<string, number> = {}
+  for (const it of items.value) {
+    const cur = (it.currency || 'UZS').toUpperCase()
+    const amount = (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0)
+    map[cur] = (map[cur] ?? 0) + amount
+  }
+  return map
+})
 
-const totalDisplay = computed(() =>
-  Math.round(totalUzs.value).toLocaleString('ru-RU'),
-)
+function formatTotal(amount: number, currency: string): string {
+  const formatted = amount % 1 === 0
+    ? Math.round(amount).toLocaleString('ru-RU')
+    : amount.toFixed(2)
+  return `${formatted} ${currency}`
+}
 
 function openAdd(): void {
   editingItemId.value = null
@@ -97,10 +101,12 @@ function onSheetDelete(itemId: number): void {
       />
     </div>
 
-    <div v-if="items.length" class="totals-row">
-      <span class="totals-label">Итого</span>
-      <span class="totals-value">{{ totalDisplay }} UZS</span>
-    </div>
+    <template v-if="Object.keys(totalsByCurrency).length">
+      <div v-for="(amount, currency) in totalsByCurrency" :key="currency" class="totals-row">
+        <span class="totals-label">Итого</span>
+        <span class="totals-value">{{ formatTotal(amount, currency) }}</span>
+      </div>
+    </template>
 
     <button class="add-btn" type="button" @click="openAdd">
       <Plus :size="14" :stroke-width="2.5" />

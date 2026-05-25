@@ -27,13 +27,21 @@ const canEdit = computed(() => props.procurement.status === 'OPEN')
 const isConsigned = computed(() => props.procurement.documents.settlement?.type === 'ON_SALE')
 const isFilled = computed(() => expenses.value.length > 0)
 
-const totalUzs = computed(() =>
-  expenses.value.reduce((sum, ex) => {
-    const amt = parseFloat(ex.amount) || 0
-    const fx = parseFloat(ex.fx_rate) || 1
-    return sum + amt * fx
-  }, 0),
-)
+const totalsByCurrency = computed(() => {
+  const map: Record<string, number> = {}
+  for (const ex of expenses.value) {
+    const cur = (ex.currency || 'UZS').toUpperCase()
+    map[cur] = (map[cur] ?? 0) + (parseFloat(ex.amount) || 0)
+  }
+  return map
+})
+
+function formatTotal(amount: number, currency: string): string {
+  const formatted = amount % 1 === 0
+    ? Math.round(amount).toLocaleString('ru-RU')
+    : amount.toFixed(2)
+  return `${formatted} ${currency}`
+}
 
 function openAdd(): void { editingExpenseId.value = null; editSheetOpen.value = true }
 function openEdit(id: number): void { editingExpenseId.value = id; editSheetOpen.value = true }
@@ -99,10 +107,12 @@ function onSheetDelete(expenseId: number): void {
         />
       </div>
 
-      <div v-if="isFilled" class="totals-row">
-        <span class="totals-label">Итого расходов</span>
-        <span class="totals-value">{{ Math.round(totalUzs).toLocaleString('ru-RU') }} UZS</span>
-      </div>
+      <template v-if="Object.keys(totalsByCurrency).length">
+        <div v-for="(amount, currency) in totalsByCurrency" :key="currency" class="totals-row">
+          <span class="totals-label">Итого расходов</span>
+          <span class="totals-value">{{ formatTotal(amount, currency) }}</span>
+        </div>
+      </template>
 
       <button class="add-btn" type="button" @click="openAdd">
         <Plus :size="14" :stroke-width="2.5" />
