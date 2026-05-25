@@ -15,7 +15,6 @@ import ProcurementCardPayment from '@/modules/intake/components/workspace/Procur
 import ProcurementCardReceive from '@/modules/intake/components/workspace/ProcurementCardReceive.vue'
 import ProcurementCardHistory from '@/modules/intake/components/workspace/ProcurementCardHistory.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
-import WorkspaceAgreementPickerSheet from '@/modules/intake/components/workspace/WorkspaceAgreementPickerSheet.vue'
 import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet.vue'
 import ProcurementCancelDialog from '@/modules/intake/components/workspace/ProcurementCancelDialog.vue'
 import ReverseReceiveBatchDialog from '@/modules/intake/components/workspace/ReverseReceiveBatchDialog.vue'
@@ -27,7 +26,6 @@ const { procurement, isLoading, error } = storeToRefs(store)
 const toast = useToast()
 
 const supplierPickerOpen = ref(false)
-const partnershipPickerOpen = ref(false)
 const amendSheetOpen = ref(false)
 const amendTarget = ref<'items' | 'expenses'>('items')
 const cancelDialogOpen = ref(false)
@@ -41,6 +39,7 @@ const lastPaymentPayload = ref<Record<string, unknown> | null>(null)
 const PAYMENT_ACTIONS = new Set(['PAY_COSTS', 'PAY_SUPPLIER_PAYABLE'])
 
 const { capitalSectionVisible } = useProcurementReadiness(procurement)
+const isPartnership = computed(() => procurement.value?.policy.funding_source === 'PARTNERSHIP')
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -117,7 +116,6 @@ async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<vo
 }
 
 async function onPartnershipAgreementSelect(agreementId: number): Promise<void> {
-  partnershipPickerOpen.value = false
   await dispatch('UPDATE_SOURCE', { funding_source: 'PARTNERSHIP', investment_agreement_id: agreementId })
 }
 
@@ -162,6 +160,12 @@ onBeforeUnmount(() => store.$reset())
       <div v-else-if="error" class="state state-error">{{ error }}</div>
       <div v-else-if="!procurement" class="state state-empty">Нет данных</div>
       <div v-else class="cards-container">
+        <ProcurementCardFinancing
+          v-if="capitalSectionVisible"
+          :procurement="procurement"
+          @link-agreement="onLinkAgreement"
+          @save-allocations="onSaveAllocations"
+        />
         <ProcurementCardSupplier
           :procurement="procurement"
           @update-source="onUpdateSource"
@@ -177,12 +181,6 @@ onBeforeUnmount(() => store.$reset())
           :procurement="procurement"
           @update-expenses="onUpdateExpenses"
           @delete-expense="onDeleteExpense"
-        />
-        <ProcurementCardFinancing
-          v-if="capitalSectionVisible"
-          :procurement="procurement"
-          @link-agreement="onLinkAgreement"
-          @save-allocations="onSaveAllocations"
         />
         <ProcurementCardPayment
           v-if="procurement.documents.settlement?.type !== 'AT_RECEIPT'"
@@ -211,13 +209,6 @@ onBeforeUnmount(() => store.$reset())
       v-model:open="supplierPickerOpen"
       :selected-id="procurement?.documents.procurement.supplier_id ?? null"
       @select="onSupplierSelect"
-    />
-
-    <WorkspaceAgreementPickerSheet
-      v-model:open="partnershipPickerOpen"
-      :selected-agreement-id="procurement?.documents.source.investment_agreement_id ?? null"
-      @select="onPartnershipAgreementSelect"
-      @create-new="toast.info('Создание договора — откройте через карточку Финансирование')"
     />
 
     <AmendmentSheet
