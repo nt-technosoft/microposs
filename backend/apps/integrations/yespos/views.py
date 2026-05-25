@@ -2,21 +2,21 @@
 
 import re
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework import status
 
 from apps.integrations.auth import IntegrationKeyAuthentication
+from apps.integrations.permissions import IntegrationKeyRequired
 from apps.partnerships.models import InvestmentAgreement, AgreementPartner
 from .models import YesposRawEvent
 
 _SLUG_RE = re.compile(r'^[a-z0-9-]{1,64}$')
 
 _INTEGRATION_AUTH = [IntegrationKeyAuthentication]
-_NO_PERM = [AllowAny]
+_INTEGRATION_PERM = [IntegrationKeyRequired]
 
 
 def _get_client_ip(request: Request) -> str | None:
@@ -34,16 +34,17 @@ def _store_event(request: Request, slug: str) -> Response:
         if k.lower() not in ('x-integration-key',)  # strip credential header
     }
     try:
-        event = YesposRawEvent.objects.create(
-            slug=slug,
-            body=request.data if isinstance(request.data, dict) else {},
-            headers=headers_snapshot,
-            source_ip=_get_client_ip(request),
-            tenant_id=request.tenant_id,
-            source_request_id=source_request_id,
-        )
+        with transaction.atomic():
+            event = YesposRawEvent.objects.create(
+                slug=slug,
+                body=request.data if isinstance(request.data, dict) else {},
+                headers=headers_snapshot,
+                source_ip=_get_client_ip(request),
+                tenant_id=request.tenant_id,
+                source_request_id=source_request_id,
+            )
     except IntegrityError:
-        # Duplicate X-Request-Id — return 200 (idempotent)
+        # Duplicate X-Request-Id — idempotent 200
         return Response({'status': 'duplicate'}, status=status.HTTP_200_OK)
 
     return Response({'id': str(event.id), 'status': 'received'}, status=status.HTTP_201_CREATED)
@@ -51,28 +52,28 @@ def _store_event(request: Request, slug: str) -> Response:
 
 @api_view(['POST'])
 @authentication_classes(_INTEGRATION_AUTH)
-@permission_classes(_NO_PERM)
+@permission_classes(_INTEGRATION_PERM)
 def agreement_link(request: Request) -> Response:
     return _store_event(request, 'agreement-link')
 
 
 @api_view(['POST'])
 @authentication_classes(_INTEGRATION_AUTH)
-@permission_classes(_NO_PERM)
+@permission_classes(_INTEGRATION_PERM)
 def sale(request: Request) -> Response:
     return _store_event(request, 'sale')
 
 
 @api_view(['POST'])
 @authentication_classes(_INTEGRATION_AUTH)
-@permission_classes(_NO_PERM)
+@permission_classes(_INTEGRATION_PERM)
 def inventory(request: Request) -> Response:
     return _store_event(request, 'inventory')
 
 
 @api_view(['POST'])
 @authentication_classes(_INTEGRATION_AUTH)
-@permission_classes(_NO_PERM)
+@permission_classes(_INTEGRATION_PERM)
 def catchall(request: Request, slug: str) -> Response:
     if not _SLUG_RE.match(slug):
         return Response(
@@ -84,7 +85,7 @@ def catchall(request: Request, slug: str) -> Response:
 
 @api_view(['GET'])
 @authentication_classes(_INTEGRATION_AUTH)
-@permission_classes(_NO_PERM)
+@permission_classes(_INTEGRATION_PERM)
 def agreements(request: Request) -> Response:
     """List active investment agreements for the authenticated tenant."""
     qs = (

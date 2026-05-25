@@ -6,5 +6,5 @@ urlpatterns = [
     path('sale', views.sale),
     path('inventory', views.inventory),
     path('agreements', views.agreements),
-    re_path(r'^(?P<slug>[a-z0-9-]{1,64})$', views.catchall),
+    re_path(r'^(?P<slug>[^/]+)$', views.catchall),
 ]
