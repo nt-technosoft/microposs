@@ -28,6 +28,8 @@ urlpatterns = [
         path('risk/', include('apps.risk.urls')),
         path('analytics/', include('apps.analytics.urls')),
         path('attachments/', include('apps.attachments.urls')),
+        path('integrations/yespos/v1/', include('apps.integrations.yespos.urls')),
+        path('integrations/', include('apps.integrations.urls')),
     ])),
 
     # OpenAPI
