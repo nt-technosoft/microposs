@@ -118,16 +118,16 @@ function onDelete(): void {
         <ChevronRight :size="14" :stroke-width="2" />
       </button>
 
-      <div class="section-label">Количество</div>
-      <input class="input-field" type="number" min="1" step="1" :value="qty" @input="qty = ($event.target as HTMLInputElement).value" />
-
-      <div class="section-label">Цена закупки</div>
-      <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" />
-
-      <template v-if="currency !== 'UZS'">
-        <div class="section-label">Курс USD/UZS</div>
-        <input class="input-field" type="number" min="0" step="0.01" :value="fxRateLocal" @input="fxRateLocal = ($event.target as HTMLInputElement).value" />
-      </template>
+      <div class="qty-price-row">
+        <div class="field qty-field">
+          <div class="section-label">Количество</div>
+          <input class="input-field number-input" type="number" min="1" step="1" :value="qty" @input="qty = ($event.target as HTMLInputElement).value" />
+        </div>
+        <div class="field price-field">
+          <div class="section-label">Цена закупки</div>
+          <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" />
+        </div>
+      </div>
 
       <button class="primary-btn" type="button" :disabled="!variantId" @click="onSave">Сохранить</button>
       <button v-if="editingItemId" class="danger-btn" type="button" @click="onDelete">Удалить строку</button>
@@ -151,11 +151,16 @@ function onDelete(): void {
 
 <style scoped>
 .sheet-body { display: grid; gap: var(--space-3); }
+.qty-price-row { display: flex; gap: var(--space-3); }
+.qty-field { flex: 1; }
+.price-field { flex: 2; }
+.field { display: grid; gap: var(--space-1); }
+.number-input { font-variant-numeric: tabular-nums; }
 .section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
 .variant-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; text-align: left; }
 .variant-btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.danger-btn { min-height: 44px; border: 1px solid rgba(239,68,68,.35); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
+.danger-btn { min-height: 44px; border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
 </style>
