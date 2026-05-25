@@ -14,7 +14,9 @@ const emit = defineEmits<{
 const toast = useToast()
 const receiveSheetOpen = ref(false)
 
-const items = computed(() => props.procurement.documents.items)
+const items = computed(() =>
+  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
+)
 const batches = computed(() => props.procurement.documents.receive_batches)
 const settlement = computed(() => props.procurement.documents.settlement)
 

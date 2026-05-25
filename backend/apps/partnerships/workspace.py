@@ -1336,26 +1336,25 @@ def build_workspace_capital_allocation_preview(
     if procurement.agreement_id != agreement.id:
         raise ValueError('Procurement is not linked to this agreement.')
 
-    required_uzs = _draft_cost_total_uzs(
-        procurement.items.exclude(lifecycle_state__in=[
-            ProcurementItem.LifecycleState.RECEIVED,
-            ProcurementItem.LifecycleState.CANCELLED,
-        ]),
-        procurement.expenses.exclude(lifecycle_state__in=[
-            ProcurementExpense.LifecycleState.RECEIVED,
-            ProcurementExpense.LifecycleState.CANCELLED,
-        ]),
+    active_items = list(procurement.items.exclude(lifecycle_state__in=[
+        ProcurementItem.LifecycleState.RECEIVED,
+        ProcurementItem.LifecycleState.CANCELLED,
+    ]))
+    active_expenses = list(procurement.expenses.exclude(lifecycle_state__in=[
+        ProcurementExpense.LifecycleState.RECEIVED,
+        ProcurementExpense.LifecycleState.CANCELLED,
+    ]))
+    # Obligation amount stays in items' own currency — NO UZS round-trip.
+    # fx_rate is reporting-only; converting USD→UZS (×item.fx) then UZS→currency
+    # (÷latest fx, a different rate) produced garbage (e.g. "$862" for a real
+    # $100 obligation). Single source of truth: cost in obligation currency.
+    obligation_currency = (
+        _derive_items_currency(active_items) if active_items
+        else str(agreement.currency or 'UZS').upper()
     )
-    currency = str(agreement.currency or 'UZS').upper()
-    required = (
-        _amount_uzs_to_currency(
-            tenant_id=tenant_id,
-            amount_uzs=required_uzs,
-            currency=currency,
-            received_at=timezone.now(),
-        )
-        if required_uzs > 0 else Decimal('0.00')
-    )
+    required = _draft_cost_total_in_obligation_currency(active_items, active_expenses)
+    required_uzs = _draft_cost_total_uzs(active_items, active_expenses)  # reporting only
+    currency = obligation_currency
     members = list(agreement.partners.select_related('partner').all())
     available = _agreement_available_by_partner(agreement)
     suggestions = _auto_capital_amounts(required, members, {
@@ -2147,11 +2146,13 @@ def _expense_payload(expense) -> dict:
 
 def _payment_status_block(terms, payments: list, items=None) -> dict:
     """obligation vs paid delta — surfaced to UI after item/expense amendments (OPEN-S7.1).
-    Obligation is derived from current item costs (UZS) so amendments are immediately reflected."""
+    Obligation is derived from current item costs in the OBLIGATION CURRENCY
+    (no × fx — fx_rate is reporting-only). Mislabelling a UZS ×fx sum as USD
+    produced "1 210 000 USD" for a $100 obligation."""
     if items is not None:
         obligation = sum(
             (
-                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
+                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
                 for item in items
                 if item.lifecycle_state not in ('CANCELLED', 'RECEIVED')
             ),

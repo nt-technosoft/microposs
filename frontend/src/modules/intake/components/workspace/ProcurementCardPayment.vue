@@ -258,10 +258,10 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     <!-- PARTNERSHIP: allocate from capital pool by profit shares -->
     <template v-if="isPartnership && !isFilled">
       <button class="action-btn" type="button" @click="allocateFromCapitalPool">
-        Оплатить из capital pool
+        Оплатить из партнёрского капитала
       </button>
     </template>
-    <div v-else-if="isPartnership && isFilled" class="available-row">✓ Оплачено из capital pool</div>
+    <div v-else-if="isPartnership && isFilled" class="available-row">✓ Оплачено из партнёрского капитала</div>
 
     <!-- ON_SALE: consignment obligations -->
     <template v-else-if="isOnSale">
