@@ -177,6 +177,11 @@ function onSave(): void {
       <div class="section-label">Дата приёмки</div>
       <input class="input-field" type="date" v-model="receivedAt" />
 
+      <div v-if="isAtReceipt" class="step-header">
+        <span class="step-num">1</span>
+        <span class="step-label">Приём товаров</span>
+      </div>
+
       <div class="section-label">Товары</div>
       <div v-for="item in receivableItems" :key="item.id" class="item-block">
         <div class="item-name">{{ item.product_variant_name }}</div>
@@ -208,6 +213,11 @@ function onSave(): void {
       </div>
 
       <!-- AT_RECEIPT OWN_FUNDS: payment block -->
+      <div v-if="isAtReceipt" class="step-header">
+        <span class="step-num">2</span>
+        <span class="step-label">Оплата</span>
+      </div>
+
       <template v-if="isAtReceipt && isOwnFunds">
         <div class="section-label">Оплата при получении</div>
         <select
@@ -284,5 +294,8 @@ function onSave(): void {
 .cap-currency { font-size: var(--text-sm); color: var(--color-text-secondary); flex-shrink: 0; }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.hint-warn { margin: 0; font-size: var(--text-xs); color: #92400E; }
+.hint-warn { margin: 0; font-size: var(--text-xs); color: var(--color-warning); }
+.step-header { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-subtle); margin-top: var(--space-1); }
+.step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-full); background: var(--color-brand-500); color: white; font-size: var(--text-xs); font-weight: var(--font-semibold); flex-shrink: 0; }
+.step-label { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 </style>
