@@ -28,30 +28,23 @@ const hasAllocations = computed(() =>
   (investment.value?.allocations.length ?? 0) > 0,
 )
 
-const requiredUzs = computed(() => {
-  const items = props.procurement.documents.items
-  const expenses = props.procurement.documents.expenses
-  const i = items.reduce((s, it) =>
-    s + (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0) * (parseFloat(it.fx_rate) || 1), 0)
-  const e = expenses.reduce((s, ex) =>
-    s + (parseFloat(ex.amount) || 0) * (parseFloat(ex.fx_rate) || 1), 0)
-  return Math.round(i + e)
+const requiredByCurrency = computed((): Record<string, number> => {
+  const totals: Record<string, number> = {}
+  for (const it of props.procurement.documents.items) {
+    const qty = parseFloat(it.quantity) || 0
+    const price = parseFloat(it.unit_purchase_price) || 0
+    const cur = it.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + qty * price
+  }
+  for (const ex of props.procurement.documents.expenses) {
+    const amount = parseFloat(ex.amount) || 0
+    const cur = ex.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + amount
+  }
+  return totals
 })
 
-const totalAvailableUzs = computed(() => {
-  const inv = investment.value
-  if (!inv) return 0
-  return inv.partners.reduce((s, p) => {
-    const val = inv.available_by_partner[String(p.partner_id)]?.['UZS'] ?? '0'
-    return s + (parseFloat(val) || 0)
-  }, 0)
-})
-
-const hasShortage = computed(() =>
-  investment.value !== null && !hasAllocations.value && requiredUzs.value > totalAvailableUzs.value,
-)
-
-const shortage = computed(() => Math.max(0, requiredUzs.value - totalAvailableUzs.value))
+const hasShortage = computed(() => false)
 
 const isFilled = computed(() => hasAllocations.value)
 
@@ -112,25 +105,15 @@ function onRequestContribution(): void {
 
         <div class="coverage-row">
           <span class="coverage-label">К покрытию</span>
-          <span class="coverage-value">{{ requiredUzs.toLocaleString('ru-RU') }} UZS</span>
+          <span class="coverage-value">
+            <template v-for="(amount, cur) in requiredByCurrency" :key="cur">
+              <span style="font-variant-numeric: tabular-nums">{{ amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
+            </template>
+          </span>
         </div>
 
-        <template v-if="hasShortage">
-          <div class="shortage-notice">
-            ⚠ Не хватает {{ shortage.toLocaleString('ru-RU') }} UZS — нужен вклад инвестора
-          </div>
-          <button class="secondary-btn" type="button" @click="onRequestContribution">
-            Запросить вклад инвестора
-          </button>
-        </template>
-        <template v-else>
-          <div class="available-row">
-            Доступно: {{ totalAvailableUzs.toLocaleString('ru-RU') }} UZS ✓
-          </div>
-        </template>
-
-        <button class="action-btn" type="button" @click="allocationEditOpen = true">
-          Уточнить распределение
+        <button class="action-btn" type="button" @click="onRequestContribution">
+          Запросить вклад инвестора
         </button>
       </template>
 
@@ -146,7 +129,11 @@ function onRequestContribution(): void {
         </div>
         <div class="coverage-row">
           <span class="coverage-label">К списанию из договора</span>
-          <span class="coverage-value">{{ requiredUzs.toLocaleString('ru-RU') }} UZS</span>
+          <span class="coverage-value">
+            <template v-for="(amount, cur) in requiredByCurrency" :key="cur">
+              <span style="font-variant-numeric: tabular-nums">{{ amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
+            </template>
+          </span>
         </div>
       </template>
     </template>
