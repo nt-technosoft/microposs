@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import { useProcurementReadiness } from '@/modules/intake/composables/useProcurementReadiness'
 import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
-import ProcurementBottomActionBar from '@/modules/intake/components/workspace/ProcurementBottomActionBar.vue'
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
 import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
 import ProcurementCardExpenses from '@/modules/intake/components/workspace/ProcurementCardExpenses.vue'
@@ -39,7 +38,6 @@ const lastPaymentPayload = ref<Record<string, unknown> | null>(null)
 const PAYMENT_ACTIONS = new Set(['PAY_COSTS', 'PAY_SUPPLIER_PAYABLE'])
 
 const { capitalSectionVisible } = useProcurementReadiness(procurement)
-const isPartnership = computed(() => procurement.value?.policy.funding_source === 'PARTNERSHIP')
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -89,10 +87,6 @@ function handleMenuAction(actionKey: string): void {
   toast.info(`Будет реализовано: ${actionKey}`)
 }
 
-async function handlePrimaryAction(actionKey: string): Promise<void> {
-  await dispatch(actionKey)
-}
-
 async function onUpdateSource(payload: { supplier_id?: number | null; funding_source?: string }): Promise<void> {
   await dispatch('UPDATE_SOURCE', payload as Record<string, unknown>)
 }
@@ -113,10 +107,6 @@ async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
 
 async function onUpdateExpenses(expenses: Record<string, unknown>[]): Promise<void> {
   await dispatch('UPDATE_EXPENSES', { expenses })
-}
-
-async function onPartnershipAgreementSelect(agreementId: number): Promise<void> {
-  await dispatch('UPDATE_SOURCE', { funding_source: 'PARTNERSHIP', investment_agreement_id: agreementId })
 }
 
 async function onLinkAgreement(agreementId: number): Promise<void> {
@@ -198,13 +188,6 @@ onBeforeUnmount(() => store.$reset())
       </div>
     </main>
 
-    <ProcurementBottomActionBar
-      :action-key="procurement?.display.next_action.key ?? null"
-      :action-label="procurement?.display.next_action.label ?? null"
-      :reason="procurement?.display.next_action.reason ?? null"
-      @click="handlePrimaryAction"
-    />
-
     <WorkspaceSupplierPickerSheet
       v-model:open="supplierPickerOpen"
       :selected-id="procurement?.documents.procurement.supplier_id ?? null"
@@ -239,7 +222,7 @@ onBeforeUnmount(() => store.$reset())
 .workspace {
   min-height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   background: var(--color-bg-secondary);
 }
 
