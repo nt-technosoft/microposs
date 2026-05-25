@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ChevronRight, AlertCircle, CheckCircle } from 'lucide-vue-next'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -19,6 +19,11 @@ const procDoc = computed(() => props.procurement.documents.procurement)
 
 const currentTiming = computed(() => settlement.value?.type ?? null)
 const isPartnership = computed(() => (source.value.funding_source ?? 'OWN_FUNDS') === 'PARTNERSHIP')
+
+const userPickedTiming = ref(false)
+
+// For display only: show PREPAID as default when no timing is explicitly set
+const effectiveTiming = computed(() => currentTiming.value ?? 'PREPAID')
 
 const isFilled = computed(() => !!procDoc.value.supplier_id && !!currentTiming.value)
 
@@ -50,9 +55,19 @@ function timingDisabled(key: string): boolean {
 }
 
 function setTiming(type: string): void {
-  if (type === currentTiming.value || timingDisabled(type)) return
+  if (type === effectiveTiming.value || timingDisabled(type)) return
+  userPickedTiming.value = true
   emit('update-settlement', { type })
 }
+
+watch(
+  () => procDoc.value.supplier_id,
+  (newId, oldId) => {
+    if (newId && !oldId && !userPickedTiming.value) {
+      emit('update-settlement', { type: 'AT_RECEIPT' })
+    }
+  },
+)
 </script>
 
 <template>
@@ -93,7 +108,7 @@ function setTiming(type: string): void {
         v-for="t in visibleTimings"
         :key="t.key"
         class="timing-chip"
-        :class="{ active: currentTiming === t.key, disabled: timingDisabled(t.key) }"
+        :class="{ active: effectiveTiming === t.key, disabled: timingDisabled(t.key) }"
         :disabled="timingDisabled(t.key)"
         type="button"
         @click="setTiming(t.key)"
