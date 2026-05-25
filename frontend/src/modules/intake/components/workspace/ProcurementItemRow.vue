@@ -15,11 +15,10 @@ const unitDisplay = computed(() => {
   return `${price.toLocaleString('ru-RU')} ${props.item.currency}`
 })
 
-const totalUzs = computed(() => {
+const totalInCurrency = computed(() => {
   const qty = parseFloat(props.item.quantity) || 0
   const price = parseFloat(props.item.unit_purchase_price) || 0
-  const fx = parseFloat(props.item.fx_rate) || 1
-  return Math.round(qty * price * fx).toLocaleString('ru-RU')
+  return (qty * price).toLocaleString('ru-RU', { maximumFractionDigits: 2, minimumFractionDigits: 0 })
 })
 
 function tryDelete(): void {
@@ -39,7 +38,7 @@ function tryDelete(): void {
         </span>
       </div>
       <div class="item-calc">
-        {{ item.quantity }} шт × {{ unitDisplay }} = {{ totalUzs }} UZS
+        {{ item.quantity }} шт × {{ unitDisplay }} = <span style="font-variant-numeric: tabular-nums">{{ totalInCurrency }}</span> {{ item.currency }}
       </div>
     </div>
     <div class="item-actions" @click.stop @keydown.stop>

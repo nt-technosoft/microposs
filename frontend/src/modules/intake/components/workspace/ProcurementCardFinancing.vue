@@ -106,7 +106,7 @@ function onRequestContribution(): void {
         <div class="partners-list">
           <div v-for="p in investment.partners" :key="p.partner_id" class="partner-row">
             <span class="partner-name">{{ p.partner_name }}</span>
-            <span class="partner-share">{{ Math.round(parseFloat(p.planned_capital_share) * 100) }}%</span>
+            <span class="partner-share">{{ Math.round(parseFloat(p.profit_share) * 100) }}%</span>
           </div>
         </div>
 
