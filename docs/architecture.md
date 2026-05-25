@@ -183,6 +183,30 @@ Business (tenant)
 
 ---
 
+## Приёмка партии и Lot.contract_snapshot (Receive Batch Gate)
+
+**Инвариант:** `Lot.contract_snapshot` — immutable сразу после создания лота (`RECEIVE_BATCH`).
+Изменение `InvestmentAgreement` после приёмки не переписывает уже созданные лоты — только будущие.
+
+**Confirmation gate (frontend):** Для PARTNERSHIP закупок пользователь **обязан подтвердить
+доли партии** («Подтвердить доли») перед тем как нажать «Принять товар». Кнопка «Принять» заблокирована
+до `sharesConfirmed === true`. После подтверждения — доли переходят в readonly; «Изменить»
+возвращает в режим редактирования, сбрасывая `sharesConfirmed`.
+
+**Рекомендация долей:** `capital_allocations[i].amount = batchObligationTotal × partner.profit_share`,
+ограниченное `available_by_partner[partnerId][currency]`. Если кепируется — показывается
+флаг «↓ лимит» (`isCorrected`). Пользователь может изменить вручную до подтверждения.
+
+**PREPAID gate:** Приходуются только позиции с `lifecycle_state === 'READY_FOR_RECEIVE'`
+(т.е. только те, за которые уже прошла оплата). Позиции в других состояниях показываются
+в блоке «Ожидают оплаты» — не для приёмки.
+
+**Capital allocation currency:** Распределение всегда в валюте обязательства партии
+(`batchObligationCurrency` = валюта первого товара). Никогда не конвертировать в UZS
+автоматически — см. Валютная дисциплина выше.
+
+---
+
 ## Конфигурация
 
 | Среда | Settings | Особенности |

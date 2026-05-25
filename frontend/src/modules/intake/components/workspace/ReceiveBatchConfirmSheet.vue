@@ -41,6 +41,7 @@ const cashAccounts = ref<CashAccountRecord[]>([])
 const selectedCashAccountId = ref<number | null>(null)
 const paymentAmount = ref('')
 const errors = ref<Record<number, string>>({})
+const sharesConfirmed = ref(false)
 
 const investment = computed(() => props.procurement.documents.investment)
 const isPartnership = computed(() => props.procurement.documents.source.funding_source === 'PARTNERSHIP')
@@ -125,6 +126,7 @@ function initLines(items: Item[]): void {
 
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
+  sharesConfirmed.value = false
   receivedAt.value = new Date().toISOString().slice(0, 10)
   errors.value = {}
   initLines(receivableItems.value)
@@ -176,6 +178,7 @@ function validate(): boolean {
 
 function onSave(): void {
   if (!validate() || !warehouseId.value) return
+  if (isPartnership.value && !sharesConfirmed.value) return
   if (isAtReceipt.value && isOwnFunds.value && !selectedCashAccountId.value) return
   const itemDiscrepancies: Record<string, { qty_received: string; discrepancy_reason: string }> = {}
   for (const l of lines.value) {
@@ -296,28 +299,39 @@ function onSave(): void {
 
       <!-- PARTNERSHIP capital allocation -->
       <template v-if="isPartnership && investment">
-        <div class="section-label">Распределение капитала ({{ batchObligationCurrency }})</div>
+        <div class="shares-header">
+          <div class="section-label">Распределение по партнёрам ({{ batchObligationCurrency }})</div>
+          <button v-if="sharesConfirmed" class="edit-shares-btn" type="button" @click="sharesConfirmed = false">Изменить</button>
+        </div>
         <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="cap-row">
           <span class="cap-name" :class="{ 'cap-corrected': alloc.isCorrected }">
             {{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? `#${alloc.partnerId}` }}
             <span v-if="alloc.isCorrected" class="cap-correction-hint">↓ лимит</span>
           </span>
-          <input
-            class="cap-input"
-            type="number"
-            min="0"
-            step="0.01"
-            :value="alloc.amount"
-            @input="alloc.amount = ($event.target as HTMLInputElement).value"
-          />
+          <template v-if="sharesConfirmed">
+            <span class="cap-confirmed-amount">{{ parseFloat(alloc.amount).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</span>
+          </template>
+          <template v-else>
+            <input
+              class="cap-input"
+              type="number"
+              min="0"
+              step="0.01"
+              :value="alloc.amount"
+              @input="alloc.amount = ($event.target as HTMLInputElement).value"
+            />
+          </template>
           <span class="cap-currency">{{ alloc.currency }}</span>
         </div>
+        <button v-if="!sharesConfirmed" class="confirm-shares-btn" type="button" @click="sharesConfirmed = true">
+          Подтвердить доли
+        </button>
       </template>
 
       <button
         class="primary-btn"
         type="button"
-        :disabled="!warehouseId || !receivableItems.length || (isAtReceipt && isOwnFunds && !selectedCashAccountId)"
+        :disabled="!warehouseId || !receivableItems.length || (isAtReceipt && isOwnFunds && !selectedCashAccountId) || (isPartnership && !sharesConfirmed)"
         @click="onSave"
       >
         {{ isAtReceipt ? 'Принять и оплатить' : 'Принять' }}
@@ -356,4 +370,8 @@ function onSave(): void {
 .blocked-item-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: color-mix(in srgb, var(--color-warning) 8%, transparent); border-radius: var(--radius-md); }
 .blocked-item-name { font-size: var(--text-sm); color: var(--color-text-secondary); }
 .blocked-item-qty { font-size: var(--text-sm); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+.shares-header { display: flex; align-items: center; justify-content: space-between; }
+.edit-shares-btn { padding: var(--space-1) var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: transparent; color: var(--color-text-secondary); font-size: var(--text-xs); cursor: pointer; }
+.cap-confirmed-amount { width: 120px; text-align: right; font-size: var(--text-sm); font-weight: var(--font-semibold); font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+.confirm-shares-btn { display: flex; align-items: center; justify-content: center; min-height: 44px; border: 1px solid var(--color-brand-500); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
 </style>
