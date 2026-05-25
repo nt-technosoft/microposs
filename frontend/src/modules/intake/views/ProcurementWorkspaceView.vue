@@ -113,10 +113,6 @@ async function onLinkAgreement(agreementId: number): Promise<void> {
   await dispatch('LINK_INVESTMENT_AGREEMENT', { agreement_id: agreementId })
 }
 
-async function onSaveAllocations(allocations: Array<{ partner_id: number; amount: string }>): Promise<void> {
-  await dispatch('ALLOCATE_CAPITAL', { allocations })
-}
-
 async function onCancelConfirm(reason: string): Promise<void> {
   await dispatch('CANCEL_WORKSPACE', { reason })
 }
@@ -154,7 +150,6 @@ onBeforeUnmount(() => store.$reset())
           v-if="capitalSectionVisible"
           :procurement="procurement"
           @link-agreement="onLinkAgreement"
-          @save-allocations="onSaveAllocations"
         />
         <ProcurementCardSupplier
           :procurement="procurement"

@@ -3,7 +3,6 @@ import { ref, computed } from 'vue'
 import { CheckCircle, AlertCircle, ChevronRight } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import WorkspaceAgreementPickerSheet from './WorkspaceAgreementPickerSheet.vue'
-import CapitalAllocationEditSheet from './CapitalAllocationEditSheet.vue'
 import InvestmentAgreementDetailSheet from './InvestmentAgreementDetailSheet.vue'
 import InvestmentAgreementQuickForm from './InvestmentAgreementQuickForm.vue'
 import { useToast } from '@/composables/useToast'
@@ -12,7 +11,6 @@ import type { ProcurementWorkspacePayload, InvestmentAgreementDetail } from '@/a
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
   'link-agreement': [agreementId: number]
-  'save-allocations': [allocations: Array<{ partner_id: number; amount: string }>]
 }>()
 
 const toast = useToast()
@@ -20,7 +18,6 @@ const toast = useToast()
 const pickerOpen = ref(false)
 const createFormOpen = ref(false)
 const detailSheetOpen = ref(false)
-const allocationEditOpen = ref(false)
 
 const investment = computed(() => props.procurement.documents.investment)
 
@@ -60,10 +57,6 @@ function onCreateNew(): void {
 function onAgreementCreated(agreement: InvestmentAgreementDetail): void {
   createFormOpen.value = false
   emit('link-agreement', agreement.id)
-}
-
-function onSaveAllocations(allocations: Array<{ partner_id: number; amount: string }>): void {
-  emit('save-allocations', allocations)
 }
 
 function onRequestContribution(): void {
@@ -157,11 +150,6 @@ function onRequestContribution(): void {
     @close="detailSheetOpen = false"
   />
 
-  <CapitalAllocationEditSheet
-    v-model:open="allocationEditOpen"
-    :procurement="procurement"
-    @save="onSaveAllocations"
-  />
 </template>
 
 <style scoped>

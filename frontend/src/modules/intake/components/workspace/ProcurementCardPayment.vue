@@ -105,6 +105,19 @@ const selectionAmount = computed((): string => {
   return String(selectionTotal.value[cur] ?? 0)
 })
 
+function allocateFromCapitalPool(): void {
+  const inv = props.procurement.documents.investment
+  if (!inv || !paymentStatus.value) return
+  const remaining = Math.max(0, -(parseFloat(paymentStatus.value.delta) || 0))
+  const currency = paymentStatus.value.currency
+  const allocations = inv.partners.map((p) => ({
+    partner_id: p.partner_id,
+    amount: (remaining * (parseFloat(p.profit_share) || 0)).toFixed(2),
+    currency,
+  }))
+  emit('dispatch', 'ALLOCATE_CAPITAL', { allocations })
+}
+
 const daysUntilDeadline = computed(() => {
   const d = settlement.value?.deadline_date
   if (!d) return null
@@ -219,8 +232,16 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
       </button>
     </div>
 
+    <!-- PARTNERSHIP: allocate from capital pool by profit shares -->
+    <template v-if="isPartnership && !isFilled">
+      <button class="action-btn" type="button" @click="allocateFromCapitalPool">
+        Оплатить из capital pool
+      </button>
+    </template>
+    <div v-else-if="isPartnership && isFilled" class="available-row">✓ Оплачено из capital pool</div>
+
     <!-- ON_SALE: consignment obligations -->
-    <template v-if="isOnSale">
+    <template v-else-if="isOnSale">
       <ConsignmentObligationsBlock :procurement="procurement" @pay="openPayPayable" />
     </template>
 
@@ -385,6 +406,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 .ob-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
 .ob-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
 .ob-value.warn { color: var(--color-warning); }
+.available-row { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--color-success); font-weight: var(--font-semibold); }
 .info-text { font-size: var(--text-sm); color: var(--color-text-secondary); padding: var(--space-2) 0; }
 .warn-text { font-size: var(--text-sm); color: var(--color-warning); font-weight: var(--font-semibold); }
 .deadline-row { display: flex; align-items: center; justify-content: space-between; }
