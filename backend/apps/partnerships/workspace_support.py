@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.services import publish_event
 from apps.partnerships.formulas import profit_shares_from_capital
+from apps.partnerships.procurement_cost import procurement_cost_by_currency
 
 from .models import (
     AgreementContribution,
@@ -732,21 +733,18 @@ def _normalize_terms_values(terms_payload: dict, *, existing=None, procurement=N
         existing is None
         or existing.lifecycle_state != ProcurementTerms.LifecycleState.ACTIVE
     ):
-        active_items = list(procurement.items.exclude(lifecycle_state='CANCELLED'))
-        _item_currencies = {
-            str(item.currency or 'UZS').upper()
-            for item in active_items
-        }
-        if len(_item_currencies) > 1:
+        active_items = [
+            i for i in procurement.items.all()
+            if i.lifecycle_state not in ('CANCELLED', 'RECEIVED')
+        ]
+        cost_map = procurement_cost_by_currency(active_items, [])
+        if len(cost_map) > 1:
             raise ValueError(
                 'Все товары прихода должны быть в одной валюте. '
-                f'Найдено: {", ".join(sorted(_item_currencies))}.'
+                f'Найдено: {", ".join(sorted(cost_map))}.'
             )
-        _items_currency = _item_currencies.pop() if _item_currencies else None
-        total_amount_due = money(sum(
-            Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
-            for item in active_items
-        ))
+        _items_currency = next(iter(cost_map)) if cost_map else None
+        total_amount_due = money(next(iter(cost_map.values())) if cost_map else Decimal('0'))
     elif existing is not None:
         total_amount_due = money(existing.total_amount_due)
         _items_currency = None

@@ -35,6 +35,11 @@ from .models import (
     ProcurementReceiveBatchLine,
     ProcurementTerms,
 )
+from .procurement_cost import (
+    active_procurement_lines,
+    procurement_cost_by_currency,
+    procurement_cost_uzs_for_reporting,
+)
 from .policies import (
     ProcurementPolicyContext,
     SUPPLIER_REQUIRED_SETTLEMENTS,
@@ -368,20 +373,18 @@ def _resync_draft_terms_total(tenant_id: int, procurement: Procurement) -> None:
     ).first()
     if terms is None:
         return
-    active_items = list(
-        procurement.items.exclude(lifecycle_state=ProcurementItem.LifecycleState.CANCELLED)
-    )
-    item_currencies = {str(item.currency or 'UZS').upper() for item in active_items}
-    if len(item_currencies) > 1:
+    active_items, active_expenses = active_procurement_lines(procurement)
+    cost_map = procurement_cost_by_currency(active_items, active_expenses)
+    if len(cost_map) > 1:
         raise ValueError(
             'Все товары прихода должны быть в одной валюте. '
-            f'Найдено: {", ".join(sorted(item_currencies))}.'
+            f'Найдено: {", ".join(sorted(cost_map))}.'
         )
-    new_currency = item_currencies.pop() if item_currencies else str(terms.currency_of_obligation or 'UZS').upper()
-    new_total = sum(
-        Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
-        for item in active_items
-    ).quantize(Decimal('0.01'))
+    if cost_map:
+        new_currency, new_total = next(iter(cost_map.items()))
+    else:
+        new_currency = str(terms.currency_of_obligation or 'UZS').upper()
+        new_total = Decimal('0.00')
 
     update_fields = ['updated_at']
     if terms.total_amount_due != new_total:
@@ -1336,25 +1339,19 @@ def build_workspace_capital_allocation_preview(
     if procurement.agreement_id != agreement.id:
         raise ValueError('Procurement is not linked to this agreement.')
 
-    active_items = list(procurement.items.exclude(lifecycle_state__in=[
-        ProcurementItem.LifecycleState.RECEIVED,
-        ProcurementItem.LifecycleState.CANCELLED,
-    ]))
-    active_expenses = list(procurement.expenses.exclude(lifecycle_state__in=[
-        ProcurementExpense.LifecycleState.RECEIVED,
-        ProcurementExpense.LifecycleState.CANCELLED,
-    ]))
-    # Obligation amount stays in items' own currency — NO UZS round-trip.
-    # fx_rate is reporting-only; converting USD→UZS (×item.fx) then UZS→currency
-    # (÷latest fx, a different rate) produced garbage (e.g. "$862" for a real
-    # $100 obligation). Single source of truth: cost in obligation currency.
-    obligation_currency = (
-        _derive_items_currency(active_items) if active_items
-        else str(agreement.currency or 'UZS').upper()
-    )
-    required = _draft_cost_total_in_obligation_currency(active_items, active_expenses)
-    required_uzs = _draft_cost_total_uzs(active_items, active_expenses)  # reporting only
-    currency = obligation_currency
+    active_items, active_expenses = active_procurement_lines(procurement)
+    cost_map = procurement_cost_by_currency(active_items, active_expenses)
+    if len(cost_map) > 1:
+        raise ValueError(
+            'Mixed currencies in obligation cost. '
+            f'Found: {", ".join(sorted(cost_map))}.'
+        )
+    if cost_map:
+        currency, required = next(iter(cost_map.items()))
+    else:
+        currency = str(agreement.currency or 'UZS').upper()
+        required = Decimal('0.00')
+    required_uzs = procurement_cost_uzs_for_reporting(active_items, active_expenses)  # reporting only
     members = list(agreement.partners.select_related('partner').all())
     available = _agreement_available_by_partner(agreement)
     suggestions = _auto_capital_amounts(required, members, {
@@ -2146,18 +2143,17 @@ def _expense_payload(expense) -> dict:
 
 def _payment_status_block(terms, payments: list, items=None) -> dict:
     """obligation vs paid delta — surfaced to UI after item/expense amendments (OPEN-S7.1).
-    Obligation is derived from current item costs in the OBLIGATION CURRENCY
-    (no × fx — fx_rate is reporting-only). Mislabelling a UZS ×fx sum as USD
-    produced "1 210 000 USD" for a $100 obligation."""
+
+    Obligation = procurement_cost_by_currency(active items) — single source,
+    no × fx. See procurement_cost.py for the invariant.
+    """
     if items is not None:
-        obligation = sum(
-            (
-                Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
-                for item in items
-                if item.lifecycle_state not in ('CANCELLED', 'RECEIVED')
-            ),
-            Decimal('0'),
-        ).quantize(Decimal('0.01'))
+        active = [i for i in items if i.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
+        cost_map = procurement_cost_by_currency(active, [])
+        if cost_map:
+            obligation = next(iter(cost_map.values()))
+        else:
+            obligation = Decimal('0.00')
     else:
         obligation = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
     paid = (
@@ -2657,32 +2653,25 @@ def _landed_expense_allocations(items: list, expenses: list) -> list[Decimal]:
 
 
 def _draft_cost_total_uzs(items, expenses) -> Decimal:
-    item_total = sum(
-        Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate))
-        for item in items
-    )
-    expense_total = sum(
-        Decimal(str(expense.amount)) * Decimal(str(expense.fx_rate))
-        for expense in expenses
-    )
-    return (item_total + expense_total).quantize(Decimal('0.01'))
+    """Thin alias for reporting — use procurement_cost_uzs_for_reporting directly."""
+    return procurement_cost_uzs_for_reporting(items, expenses)
 
 
 def _draft_cost_total_in_obligation_currency(items, expenses) -> Decimal:
-    """Total cost in items' native currency (no fx conversion).
+    """Thin alias — delegates to procurement_cost_by_currency (single-currency path).
 
-    fx_rate is for UZS reporting only — obligation amounts stay in items' currency.
-    Expenses are treated as same-currency as items (they must be).
+    Returns the single obligation-currency total. Mixed currencies raise via
+    _derive_items_currency at save time; here we assume single-currency input.
     """
-    item_total = sum(
-        Decimal(str(item.quantity)) * Decimal(str(item.unit_purchase_price))
-        for item in items
-    )
-    expense_total = sum(
-        Decimal(str(expense.amount))
-        for expense in expenses
-    )
-    return (item_total + expense_total).quantize(Decimal('0.01'))
+    cost_map = procurement_cost_by_currency(items, expenses)
+    if not cost_map:
+        return Decimal('0.00')
+    if len(cost_map) > 1:
+        raise ValueError(
+            'Mixed currencies in obligation cost — only one currency allowed per procurement. '
+            f'Found: {", ".join(sorted(cost_map))}.'
+        )
+    return next(iter(cost_map.values()))
 
 
 def _derive_items_currency(items) -> str:
