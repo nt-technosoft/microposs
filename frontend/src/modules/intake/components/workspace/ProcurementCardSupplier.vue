@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronRight, AlertCircle, CheckCircle, Info } from 'lucide-vue-next'
+import { ChevronRight, AlertCircle, CheckCircle } from 'lucide-vue-next'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 const props = defineProps<{
@@ -11,16 +11,14 @@ const emit = defineEmits<{
   'update-source': [payload: { supplier_id?: number | null; funding_source?: string }]
   'update-settlement': [payload: { type: string }]
   'open-supplier-picker': []
-  'request-partnership': []
 }>()
 
 const source = computed(() => props.procurement.documents.source)
 const settlement = computed(() => props.procurement.documents.settlement)
 const procDoc = computed(() => props.procurement.documents.procurement)
 
-const currentFunding = computed(() => source.value.funding_source ?? 'OWN_FUNDS')
 const currentTiming = computed(() => settlement.value?.type ?? null)
-const isPartnership = computed(() => currentFunding.value === 'PARTNERSHIP')
+const isPartnership = computed(() => (source.value.funding_source ?? 'OWN_FUNDS') === 'PARTNERSHIP')
 
 const isFilled = computed(() => !!procDoc.value.supplier_id && !!currentTiming.value)
 
@@ -51,11 +49,6 @@ function timingDisabled(key: string): boolean {
   return SUPPLIER_REQUIRED.has(key) && !procDoc.value.supplier_id
 }
 
-function setFunding(funding: string): void {
-  if (funding === currentFunding.value) return
-  emit('update-source', { funding_source: funding })
-}
-
 function setTiming(type: string): void {
   if (type === currentTiming.value || timingDisabled(type)) return
   emit('update-settlement', { type })
@@ -68,22 +61,6 @@ function setTiming(type: string): void {
       <span class="card-title">Поставщик и оплата</span>
       <CheckCircle v-if="isFilled" class="status-icon status-ok" :size="18" :stroke-width="2" />
       <AlertCircle v-else class="status-icon status-warn" :size="18" :stroke-width="2" />
-    </div>
-
-    <!-- Funding toggle -->
-    <div class="funding-row">
-      <button
-        class="funding-chip"
-        :class="{ active: !isPartnership }"
-        type="button"
-        @click="setFunding('OWN_FUNDS')"
-      >Собственные средства</button>
-      <button
-        class="funding-chip"
-        :class="{ active: isPartnership }"
-        type="button"
-        @click="emit('request-partnership')"
-      >Партнёрский</button>
     </div>
 
     <!-- Supplier selection -->
@@ -126,11 +103,6 @@ function setTiming(type: string): void {
       Для отсрочки / рассрочки / частичной / на реализации нужно сначала выбрать поставщика.
     </p>
 
-    <!-- Agreement stub for PARTNERSHIP -->
-    <div v-if="isPartnership" class="agreement-stub">
-      <Info :size="14" :stroke-width="2" />
-      <span>Инвестдоговор — в карточке «Финансирование»</span>
-    </div>
   </div>
 </template>
 
@@ -159,30 +131,6 @@ function setTiming(type: string): void {
 .status-icon { flex-shrink: 0; }
 .status-ok { color: var(--color-success); }
 .status-warn { color: #F59E0B; }
-
-.funding-row {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.funding-chip {
-  flex: 1;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm, 0.875rem);
-  cursor: pointer;
-  text-align: center;
-}
-
-.funding-chip.active {
-  border-color: var(--color-brand-600);
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
-  font-weight: var(--font-semibold);
-}
 
 .section-label {
   font-size: var(--text-xs);
@@ -262,14 +210,4 @@ function setTiming(type: string): void {
   line-height: 1.5;
 }
 
-.agreement-stub {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-}
 </style>

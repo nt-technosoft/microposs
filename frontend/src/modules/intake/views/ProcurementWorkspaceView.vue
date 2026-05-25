@@ -47,7 +47,12 @@ async function ensureWorkspace(): Promise<void> {
   if (id) {
     await store.load(id)
   } else {
-    const draftId = await store.createDraft({})
+    const mode = route.query.mode as string | undefined
+    const agreementId = route.query.agreement ? Number(route.query.agreement) : undefined
+    const draftId = await store.createDraft({
+      funding_source: mode === 'partnership' ? 'PARTNERSHIP' : 'OWN_FUNDS',
+      ...(agreementId ? { agreement_id: agreementId } : {}),
+    })
     await router.replace({ name: 'procurement-detail', params: { id: draftId } })
   }
 }
@@ -162,7 +167,6 @@ onBeforeUnmount(() => store.$reset())
           @update-source="onUpdateSource"
           @update-settlement="onUpdateSettlement"
           @open-supplier-picker="supplierPickerOpen = true"
-          @request-partnership="partnershipPickerOpen = true"
         />
         <ProcurementCardItems
           :procurement="procurement"
