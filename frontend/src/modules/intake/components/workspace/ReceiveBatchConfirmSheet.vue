@@ -92,10 +92,14 @@ function prefillCapAllocs(): void {
   }))
 }
 
+function intQty(val: string | number): string {
+  return String(Math.round(parseFloat(String(val)) || 0))
+}
+
 function initLines(items: Item[]): void {
   lines.value = items.map((it) => ({
     itemId: it.id,
-    qtyReceived: it.remaining_quantity,
+    qtyReceived: intQty(it.remaining_quantity),
     reason: 'NONE',
   }))
 }
@@ -126,9 +130,9 @@ watch(() => props.open, async (isOpen) => {
 function onQtyChange(itemId: number, val: string): void {
   const l = lines.value.find((x) => x.itemId === itemId)
   if (!l) return
-  l.qtyReceived = val
+  l.qtyReceived = intQty(val)
   const item = receivableItems.value.find((it) => it.id === itemId)
-  if (item && parseFloat(val) < parseFloat(item.remaining_quantity) && l.reason === 'NONE') {
+  if (item && parseInt(l.qtyReceived) < Math.round(parseFloat(item.remaining_quantity)) && l.reason === 'NONE') {
     l.reason = 'MISSING_EXPECTED_LATER'
   }
   if (isPartnership.value) prefillCapAllocs()
@@ -142,8 +146,8 @@ function validate(): boolean {
   for (const l of lines.value) {
     const item = receivableItems.value.find((it) => it.id === l.itemId)
     if (!item) continue
-    const qty = parseFloat(l.qtyReceived) || 0
-    const rem = parseFloat(item.remaining_quantity) || 0
+    const qty = parseInt(l.qtyReceived) || 0
+    const rem = Math.round(parseFloat(item.remaining_quantity) || 0)
     if (qty > rem) { errs[l.itemId] = `Не более ${rem}`; continue }
     if (qty < rem && l.reason === 'NONE') errs[l.itemId] = 'Укажите причину расхождения'
   }
@@ -202,21 +206,21 @@ function onSave(): void {
       <div v-for="item in receivableItems" :key="item.id" class="item-block">
         <div class="item-name">{{ item.product_variant_name }}</div>
         <div class="item-qty-row">
-          <span class="qty-label">Заказано: {{ item.remaining_quantity }}</span>
+          <span class="qty-label">Заказано: {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
           <label class="qty-input-label">
             Принято:
             <input
               class="qty-input"
               type="number"
               min="0"
-              :max="item.remaining_quantity"
+              :max="Math.round(parseFloat(item.remaining_quantity))"
               step="1"
-              :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity"
+              :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
               @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
             />
           </label>
         </div>
-        <div v-if="(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < item.remaining_quantity" class="reason-row">
+        <div v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))" class="reason-row">
           <select
             class="select-field"
             :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"

@@ -35,8 +35,7 @@ function fmtDate(iso: string): string {
 }
 
 function fmtQty(val: string): string {
-  const n = parseFloat(val)
-  return Number.isInteger(n) ? String(n) : n.toFixed(1)
+  return String(Math.round(parseFloat(val) || 0))
 }
 </script>
 

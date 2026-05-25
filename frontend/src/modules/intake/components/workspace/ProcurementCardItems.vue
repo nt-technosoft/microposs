@@ -91,7 +91,7 @@ function openSplit(itemId: number): void {
 }
 
 function onSplitConfirm(): void {
-  const qty = parseFloat(splitQty.value)
+  const qty = Math.round(parseFloat(splitQty.value))
   if (!splittingItemId.value || !qty || qty <= 0) return
   emit('split-item', { item_id: splittingItemId.value, quantity: qty })
   splitSheetOpen.value = false
@@ -149,12 +149,12 @@ function onSplitConfirm(): void {
   <AppBottomSheet :open="splitSheetOpen" title="Разделить позицию" @close="splitSheetOpen = false">
     <div class="split-sheet-body">
       <div v-if="splittingItem" class="split-item-name">{{ splittingItem.product_variant_name }}</div>
-      <div class="split-hint">Введите количество для отделения в отдельную строку (не более {{ splittingItem ? parseFloat(splittingItem.quantity) - 1 : '' }} шт.).</div>
+      <div class="split-hint">Введите количество для отделения в отдельную строку (не более {{ splittingItem ? Math.round(parseFloat(splittingItem.quantity)) - 1 : '' }} шт.).</div>
       <input
         class="split-input"
         type="number"
         min="1"
-        :max="splittingItem ? parseFloat(splittingItem.quantity) - 1 : undefined"
+        :max="splittingItem ? Math.round(parseFloat(splittingItem.quantity)) - 1 : undefined"
         step="1"
         inputmode="numeric"
         placeholder="Количество"

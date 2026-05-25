@@ -8,7 +8,7 @@ type Item = ProcurementWorkspacePayload['documents']['items'][number]
 const props = defineProps<{ item: Item; isEditable: boolean }>()
 const emit = defineEmits<{ click: [id: number]; delete: [id: number]; split: [id: number] }>()
 
-const canSplit = computed(() => props.isEditable && (parseFloat(props.item.quantity) || 0) > 1)
+const canSplit = computed(() => props.isEditable && Math.round(parseFloat(props.item.quantity) || 0) > 1)
 
 const isConsigned = computed(() => props.item.goods_ownership === 'CONSIGNED')
 
@@ -40,7 +40,7 @@ function tryDelete(): void {
         </span>
       </div>
       <div class="item-calc">
-        {{ item.quantity }} шт × {{ unitDisplay }} = <span style="font-variant-numeric: tabular-nums">{{ totalInCurrency }}</span> {{ item.currency }}
+        {{ Math.round(parseFloat(item.quantity)) }} шт × {{ unitDisplay }} = <span style="font-variant-numeric: tabular-nums">{{ totalInCurrency }}</span> {{ item.currency }}
       </div>
     </div>
     <div class="item-actions" @click.stop @keydown.stop>

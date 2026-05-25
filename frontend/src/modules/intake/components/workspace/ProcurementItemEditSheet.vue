@@ -49,7 +49,7 @@ watch(() => props.open, (isOpen) => {
   const it = editItem.value
   if (it) {
     variantId.value = it.product_variant_id; variantName.value = it.product_variant_name
-    qty.value = it.quantity; price.value = it.unit_purchase_price
+    qty.value = String(Math.round(parseFloat(it.quantity) || 0)); price.value = it.unit_purchase_price
     currency.value = it.currency === 'USD' ? 'USD' : 'UZS'
     fxRateLocal.value = it.fx_rate
   } else {
