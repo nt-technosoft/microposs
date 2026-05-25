@@ -276,6 +276,12 @@ const routes: RouteRecordRaw[] = [
     path: '/investor/contracts/:id',
     redirect: (to) => `/investor/procurements/${to.params.id}`,
   },
+  {
+    path: '/settings/integrations',
+    name: 'integrations',
+    component: () => import('@/modules/integrations/views/IntegrationsListView.vue'),
+    meta: { requiresAuth: true },
+  },
 ]
 
 export default routes
