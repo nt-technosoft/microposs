@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, toRef } from 'vue'
 import { CheckCircle, AlertCircle, PlusCircle, Square, CheckSquare } from 'lucide-vue-next'
 import PaymentMakeSheet from './PaymentMakeSheet.vue'
 import PaymentScheduleEditor from './PaymentScheduleEditor.vue'
 import ConsignmentObligationsBlock from './ConsignmentObligationsBlock.vue'
 import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 const props = defineProps<{
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   dispatch: [actionKey: string, payload: Record<string, unknown>]
   'retry-payment': []
 }>()
+
+const { allTotalsByCurrency, obligationItems, obligationExpenses } = useActiveLines(toRef(props, 'procurement'))
 
 const paySheetOpen = ref(false)
 const paySheetType = ref<'cost' | 'payable' | 'schedule-entry'>('cost')
@@ -80,21 +83,6 @@ const remainingAmount = computed(() => {
 })
 
 const firstOpenPayable = computed(() => payables.value.find((p) => p.status !== 'PAID') ?? null)
-
-const allTotalsByCurrency = computed((): Record<string, number> => {
-  const totals: Record<string, number> = {}
-  for (const it of props.procurement.documents.items) {
-    if (it.lifecycle_state === 'CANCELLED' || it.lifecycle_state === 'RECEIVED') continue
-    const cur = it.currency || 'UZS'
-    totals[cur] = (totals[cur] ?? 0) + (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0)
-  }
-  for (const ex of props.procurement.documents.expenses) {
-    if (ex.lifecycle_state === 'CANCELLED') continue
-    const cur = ex.currency || 'UZS'
-    totals[cur] = (totals[cur] ?? 0) + (parseFloat(ex.amount) || 0)
-  }
-  return totals
-})
 
 const selectionTotal = computed((): Record<string, number> => {
   const totals: Record<string, number> = {}
@@ -160,16 +148,8 @@ function openPayFull(): void {
 
 function openPaySelective(): void {
   selectionMode.value = true
-  selectedItemIds.value = new Set(
-    props.procurement.documents.items
-      .filter((it) => it.lifecycle_state !== 'CANCELLED' && it.lifecycle_state !== 'RECEIVED')
-      .map((it) => it.id),
-  )
-  selectedExpenseIds.value = new Set(
-    props.procurement.documents.expenses
-      .filter((ex) => ex.lifecycle_state !== 'CANCELLED')
-      .map((ex) => ex.id),
-  )
+  selectedItemIds.value = new Set(obligationItems.value.map((it) => it.id))
+  selectedExpenseIds.value = new Set(obligationExpenses.value.map((ex) => ex.id))
 }
 
 function cancelSelection(): void {

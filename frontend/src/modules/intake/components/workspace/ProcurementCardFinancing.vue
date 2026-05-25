@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, toRef } from 'vue'
 import { CheckCircle, AlertCircle, ChevronRight } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import WorkspaceAgreementPickerSheet from './WorkspaceAgreementPickerSheet.vue'
 import InvestmentAgreementDetailSheet from './InvestmentAgreementDetailSheet.vue'
 import InvestmentAgreementQuickForm from './InvestmentAgreementQuickForm.vue'
 import { useToast } from '@/composables/useToast'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload, InvestmentAgreementDetail } from '@/api/partnerships'
 
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
@@ -14,6 +15,8 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
+
+const { allTotalsByCurrency: requiredByCurrency } = useActiveLines(toRef(props, 'procurement'))
 
 const pickerOpen = ref(false)
 const createFormOpen = ref(false)
@@ -24,22 +27,6 @@ const investment = computed(() => props.procurement.documents.investment)
 const hasAllocations = computed(() =>
   (investment.value?.allocations.length ?? 0) > 0,
 )
-
-const requiredByCurrency = computed((): Record<string, number> => {
-  const totals: Record<string, number> = {}
-  for (const it of props.procurement.documents.items) {
-    const qty = parseFloat(it.quantity) || 0
-    const price = parseFloat(it.unit_purchase_price) || 0
-    const cur = it.currency || 'UZS'
-    totals[cur] = (totals[cur] ?? 0) + qty * price
-  }
-  for (const ex of props.procurement.documents.expenses) {
-    const amount = parseFloat(ex.amount) || 0
-    const cur = ex.currency || 'UZS'
-    totals[cur] = (totals[cur] ?? 0) + amount
-  }
-  return totals
-})
 
 const hasShortage = computed(() => false)
 

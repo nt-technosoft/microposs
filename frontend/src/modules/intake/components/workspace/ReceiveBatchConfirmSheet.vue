@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, toRef } from 'vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { fetchLocations } from '@/api/inventory'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { Location } from '@/types/models'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -32,6 +33,8 @@ const emit = defineEmits<{
   dispatch: [actionKey: string, payload: Record<string, unknown>]
 }>()
 
+const { items: activeItems } = useActiveLines(toRef(props, 'procurement'))
+
 const warehouseId = ref<number | null>(null)
 const receivedAt = ref(new Date().toISOString().slice(0, 10))
 const lines = ref<LineState[]>([])
@@ -50,9 +53,9 @@ const isPrepaid = computed(() => props.procurement.documents.settlement?.type ==
 const isOwnFunds = computed(() => !isPartnership.value)
 
 const receivableItems = computed(() =>
-  props.procurement.documents.items.filter((it) => {
+  activeItems.value.filter((it) => {
     if (parseFloat(it.remaining_quantity) <= 0) return false
-    if (it.lifecycle_state === 'RECEIVED' || it.lifecycle_state === 'CANCELLED') return false
+    if (it.lifecycle_state === 'RECEIVED') return false
     if (isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
     return true
   }),
@@ -60,10 +63,8 @@ const receivableItems = computed(() =>
 
 const blockedPrepaidItems = computed(() =>
   isPrepaid.value
-    ? props.procurement.documents.items.filter(
-        (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' &&
-                 it.lifecycle_state !== 'RECEIVED' &&
-                 it.lifecycle_state !== 'CANCELLED',
+    ? activeItems.value.filter(
+        (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' && it.lifecycle_state !== 'RECEIVED',
       )
     : [],
 )

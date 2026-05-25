@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, toRef } from 'vue'
 import { CheckCircle } from 'lucide-vue-next'
 import ReceiveBatchHistoryRow from './ReceiveBatchHistoryRow.vue'
 import ReceiveBatchConfirmSheet from './ReceiveBatchConfirmSheet.vue'
 import { useToast } from '@/composables/useToast'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
@@ -14,9 +15,7 @@ const emit = defineEmits<{
 const toast = useToast()
 const receiveSheetOpen = ref(false)
 
-const items = computed(() =>
-  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
-)
+const { items } = useActiveLines(toRef(props, 'procurement'))
 const batches = computed(() => props.procurement.documents.receive_batches)
 const settlement = computed(() => props.procurement.documents.settlement)
 

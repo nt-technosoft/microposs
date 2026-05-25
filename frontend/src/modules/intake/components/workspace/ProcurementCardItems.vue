@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, toRef } from 'vue'
 import { CheckCircle, AlertCircle, Plus } from 'lucide-vue-next'
 import ProcurementItemRow from './ProcurementItemRow.vue'
 import ProcurementItemEditSheet from './ProcurementItemEditSheet.vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   'split-item': [payload: { item_id: number; quantity: number }]
 }>()
 
+const { items, itemTotalsByCurrency: totalsByCurrency } = useActiveLines(toRef(props, 'procurement'))
+
 const editSheetOpen = ref(false)
 const editingItemId = ref<number | null>(null)
 
@@ -27,21 +30,8 @@ const splittingItem = computed(() =>
   items.value.find((it) => it.id === splittingItemId.value) ?? null,
 )
 
-const items = computed(() =>
-  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
-)
 const canEdit = computed(() => props.procurement.status === 'OPEN')
 const isFilled = computed(() => props.procurement.readiness['items_ready']?.ok ?? items.value.length > 0)
-
-const totalsByCurrency = computed(() => {
-  const map: Record<string, number> = {}
-  for (const it of items.value) {
-    const cur = (it.currency || 'UZS').toUpperCase()
-    const amount = (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0)
-    map[cur] = (map[cur] ?? 0) + amount
-  }
-  return map
-})
 
 function formatTotal(amount: number, currency: string): string {
   const formatted = amount % 1 === 0
