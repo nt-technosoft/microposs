@@ -81,6 +81,21 @@ const remainingAmount = computed(() => {
 
 const firstOpenPayable = computed(() => payables.value.find((p) => p.status !== 'PAID') ?? null)
 
+const allTotalsByCurrency = computed((): Record<string, number> => {
+  const totals: Record<string, number> = {}
+  for (const it of props.procurement.documents.items) {
+    if (it.lifecycle_state === 'CANCELLED' || it.lifecycle_state === 'RECEIVED') continue
+    const cur = it.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + (parseFloat(it.quantity) || 0) * (parseFloat(it.unit_purchase_price) || 0)
+  }
+  for (const ex of props.procurement.documents.expenses) {
+    if (ex.lifecycle_state === 'CANCELLED') continue
+    const cur = ex.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + (parseFloat(ex.amount) || 0)
+  }
+  return totals
+})
+
 const selectionTotal = computed((): Record<string, number> => {
   const totals: Record<string, number> = {}
   for (const it of props.procurement.documents.items) {
@@ -143,10 +158,18 @@ function openPayFull(): void {
   paySheetOpen.value = true
 }
 
-function openPayPartial(): void {
+function openPaySelective(): void {
   selectionMode.value = true
-  selectedItemIds.value = new Set()
-  selectedExpenseIds.value = new Set()
+  selectedItemIds.value = new Set(
+    props.procurement.documents.items
+      .filter((it) => it.lifecycle_state !== 'CANCELLED' && it.lifecycle_state !== 'RECEIVED')
+      .map((it) => it.id),
+  )
+  selectedExpenseIds.value = new Set(
+    props.procurement.documents.expenses
+      .filter((ex) => ex.lifecycle_state !== 'CANCELLED')
+      .map((ex) => ex.id),
+  )
 }
 
 function cancelSelection(): void {
@@ -360,8 +383,15 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
           </div>
         </template>
         <template v-else>
-          <button class="action-btn" type="button" @click="openPayFull">Оплатить полностью</button>
-          <button class="action-btn secondary" type="button" @click="openPayPartial">Оплатить частично</button>
+          <!-- Per-currency totals -->
+          <div v-if="Object.keys(allTotalsByCurrency).length" class="currency-totals">
+            <div v-for="(amt, cur) in allTotalsByCurrency" :key="cur" class="currency-total-row">
+              <span class="cur-label">К оплате</span>
+              <span class="cur-amount">{{ amt.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
+            </div>
+          </div>
+          <button class="action-btn primary-action" type="button" @click="openPayFull">Оплатить всё</button>
+          <button class="text-link" type="button" @click="openPaySelective">Оплатить выборочно →</button>
         </template>
       </template>
     </template>
@@ -437,6 +467,12 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 .sel-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sel-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .selection-actions { display: grid; gap: var(--space-2); margin-top: var(--space-1); }
+.currency-totals { display: grid; gap: var(--space-1); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
+.currency-total-row { display: flex; align-items: center; justify-content: space-between; }
+.cur-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
+.cur-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+.action-btn.primary-action { border: none; background: var(--color-brand-600); color: white; }
+.text-link { background: none; border: none; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; padding: var(--space-1) 0; text-align: center; width: 100%; }
 .topup-hint { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-danger-50, rgba(239, 68, 68, 0.08)); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--color-danger-700, #b91c1c); flex-wrap: wrap; }
 .topup-icon { flex-shrink: 0; }
 .topup-btn { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; padding: var(--space-1) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); cursor: pointer; background: transparent; color: var(--color-brand-700); flex-shrink: 0; }
