@@ -31,7 +31,7 @@
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 | **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🔵 IN_REVIEW | ~95% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
-| **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~20% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
+| **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~35% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
 
 **🔥 Активный P0 (frontend, с 2026-05-29):** E10 — Frontend Design System &
 Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) поверх
