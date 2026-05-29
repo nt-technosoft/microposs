@@ -140,6 +140,7 @@ async function handleCreatedAgreement(agreement: InvestmentAgreementDetail): Pro
       partners_count: agreement.partners.length,
       investor_names: agreement.partners.filter((partner) => partner.role === 'INVESTOR').map((partner) => partner.partner_name),
       operator_names: agreement.partners.filter((partner) => partner.role === 'OPERATOR').map((partner) => partner.partner_name),
+      investor_shares: null,
       procurements_count: agreement.procurements.length,
       notes: agreement.notes,
     },

@@ -17,51 +17,84 @@ const emit = defineEmits<{
 const agreement = ref<InvestmentAgreementDetail | null>(null)
 const isLoading = ref(false)
 const error = ref('')
-const simulatedInvestorCapitalPercentDraft = ref('')
 
-const investorPartner = computed(() => agreement.value?.partners.find((partner) => partner.role === 'INVESTOR') ?? null)
-const operatorPartner = computed(() => agreement.value?.partners.find((partner) => partner.role === 'OPERATOR') ?? null)
-const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0))
-const investorCapitalPercent = computed(() => {
-  if (!investorPartner.value || plannedBudget.value <= 0) return 0
-  return (Number(investorPartner.value.planned_capital_share || 0) / plannedBudget.value) * 100
-})
-const operatorCapitalPercent = computed(() => Math.max(0, 100 - investorCapitalPercent.value))
-const investorProfitPercent = computed(() => Number(investorPartner.value?.profit_share ?? 0) * 100)
-const operatorProfitPercent = computed(() => Math.max(0, 100 - investorProfitPercent.value))
-const mudarabaRatio = computed(() => Number(agreement.value?.mudaraba_ratio ?? 0))
-const simulatedInvestorCapitalPercent = computed(() => {
-  if (simulatedInvestorCapitalPercentDraft.value !== '') return clampPercent(simulatedInvestorCapitalPercentDraft.value)
-  return investorCapitalPercent.value
-})
-const simulatedInvestorProfitPercent = computed(() => Math.min(100, Math.max(0, simulatedInvestorCapitalPercent.value * mudarabaRatio.value)))
-const simulatedOperatorProfitPercent = computed(() => Math.max(0, 100 - simulatedInvestorProfitPercent.value))
-const simulationRangeStyle = computed(() => ({ '--split': `${simulatedInvestorCapitalPercent.value}%` }))
-const otherProcurements = computed(() => (
-  agreement.value?.procurements.filter((procurement) => procurement.id !== props.currentProcurementId) ?? []
-))
+const currency = computed(() => agreement.value?.currency ?? 'UZS')
+const investorPartner = computed(() => agreement.value?.partners.find((p) => p.role === 'INVESTOR') ?? null)
+const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0) || 0)
 
-function clampPercent(value: string | number): number {
-  const parsed = typeof value === 'number' ? value : Number(value || 0)
-  return Math.min(100, Math.max(0, Number.isFinite(parsed) ? parsed : 0))
+// Three budget states: planned (target) vs contributed (actually deposited by
+// all parties) vs available (left to draw). Once contributed ≥ planned the
+// plan stops being a meaningful ceiling, so the track switches to contributed.
+const availableAmount = computed(() => Number(agreement.value?.balances?.[currency.value] ?? 0) || 0)
+const contributedAmount = computed(() => {
+  if (!agreement.value) return 0
+  return agreement.value.contributions
+    .filter((c) => c.currency === currency.value)
+    .reduce((sum, c) => sum + (Number(c.amount) || 0), 0)
+})
+const usedAmount = computed(() => Math.max(0, contributedAmount.value - availableAmount.value))
+const trackBase = computed(() => Math.max(plannedBudget.value, contributedAmount.value, 1))
+const availablePercent = computed(() => Math.min(100, (availableAmount.value / trackBase.value) * 100))
+const usedPercent = computed(() => Math.min(100, (usedAmount.value / trackBase.value) * 100))
+const isFunded = computed(() => plannedBudget.value > 0 && contributedAmount.value >= plannedBudget.value)
+const overAmount = computed(() => Math.max(0, contributedAmount.value - plannedBudget.value))
+const contributedPercentOfPlan = computed(() =>
+  plannedBudget.value > 0 ? Math.round((contributedAmount.value / plannedBudget.value) * 100) : 0,
+)
+
+const budgetCaption = computed(() => {
+  if (!isFunded.value) return `внесено ${contributedPercentOfPlan.value}% от плана`
+  if (overAmount.value > 0) return `сверх плана на ${formatPrice(overAmount.value, currency.value)}`
+  return 'профинансирован полностью'
+})
+
+const mudarabaRatio = computed(() => Number(agreement.value?.mudaraba_ratio ?? 0) || 0)
+const totalContributed = computed(() =>
+  (agreement.value?.participant_totals ?? []).reduce((sum, p) => sum + (Number(p.contributed_amount) || 0), 0),
+)
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0))
 }
 
-function formatPercent(value: number): string {
-  return `${(Number.isFinite(value) ? value : 0).toFixed(2)}%`
-}
+// Recalculated profit: actual capital shares → profit via the agreement's
+// mudaraba coefficient. A projection (final split is frozen per lot at
+// receipt), shown only when actual contributions diverge from the plan.
+const partyRows = computed(() => {
+  const cur = currency.value
+  const totals = agreement.value?.participant_totals ?? []
+  const total = totalContributed.value
+  const investor = totals.find((p) => p.role === 'INVESTOR')
+  const investorActualCapitalPercent =
+    investor && total > 0 ? (Number(investor.contributed_amount) / total) * 100 : null
+  const investorActualProfitPercent =
+    investorActualCapitalPercent != null ? clampPercent(investorActualCapitalPercent * mudarabaRatio.value) : null
+
+  return totals.map((p) => {
+    const plannedProfit = Math.round((Number(p.planned_profit_share) || 0) * 100)
+    let actualProfit: number | null = null
+    if (investorActualProfitPercent != null) {
+      actualProfit = p.role === 'INVESTOR'
+        ? Math.round(investorActualProfitPercent)
+        : Math.round(clampPercent(100 - investorActualProfitPercent))
+    }
+    return {
+      key: p.partner_id,
+      name: p.role === 'OPERATOR' ? 'Бизнес' : p.partner_name,
+      contributed: formatPrice(Number(p.contributed_amount) || 0, cur),
+      planned: formatPrice(Number(p.planned_capital_share) || 0, cur),
+      plannedProfit,
+      actualProfit,
+    }
+  })
+})
+
+const hasProfitDivergence = computed(() =>
+  partyRows.value.some((r) => r.actualProfit != null && r.actualProfit !== r.plannedProfit),
+)
 
 function dateLabel(value: string): string {
-  return new Date(value).toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
-}
-
-function balanceLabel(): string {
-  if (!agreement.value) return '—'
-  const amount = Number(agreement.value.balances?.[agreement.value.currency] ?? 0)
-  return formatPrice(Number.isFinite(amount) ? amount : 0, agreement.value.currency)
+  return new Date(value).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 async function loadAgreement(): Promise<void> {
@@ -70,7 +103,6 @@ async function loadAgreement(): Promise<void> {
   error.value = ''
   try {
     agreement.value = await fetchInvestmentAgreement(props.agreementId)
-    simulatedInvestorCapitalPercentDraft.value = ''
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : 'Не удалось загрузить инвестдоговор'
   } finally {
@@ -83,220 +115,83 @@ watch(() => [props.open, props.agreementId] as const, loadAgreement, { immediate
 
 <template>
   <AppBottomSheet :open="open" title="Инвестдоговор" @close="emit('close')">
-    <div class="detail-sheet">
-      <div v-if="isLoading" class="muted">Загрузка договора…</div>
-      <p v-else-if="error" class="error-note">{{ error }}</p>
+    <div class="flex flex-col gap-4">
+      <p v-if="isLoading" class="text-sm text-neutral-500">Загрузка договора…</p>
+      <p v-else-if="error" class="text-sm text-negative">{{ error }}</p>
 
       <template v-else-if="agreement">
-        <section class="hero-row">
-          <div>
-            <strong>#{{ agreement.id }} · {{ investorPartner?.partner_name ?? 'Инвестор' }}</strong>
-            <span>{{ dateLabel(agreement.opened_at) }}</span>
+        <!-- Identity -->
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-foreground">
+              #{{ agreement.id }} · {{ investorPartner?.partner_name ?? 'Инвестор' }}
+            </p>
+            <p class="mt-0.5 text-xs text-neutral-500">{{ dateLabel(agreement.opened_at) }}</p>
           </div>
-          <b>{{ agreement.status }}</b>
-        </section>
+          <span class="shrink-0 rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600">
+            {{ agreement.status }}
+          </span>
+        </div>
 
-        <section class="metric-grid">
-          <div>
-            <span>Бюджет</span>
-            <strong>{{ formatPrice(Number(agreement.planned_budget || 0), agreement.currency) }}</strong>
+        <!-- Budget: planned / contributed / available -->
+        <div class="flex flex-col gap-3 rounded-[10px] border border-neutral-200 p-3">
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-xs font-medium text-neutral-500">Бюджет договора</span>
+            <span class="text-xs text-neutral-400">{{ budgetCaption }}</span>
           </div>
-          <div>
-            <span>Доступно</span>
-            <strong>{{ balanceLabel() }}</strong>
+          <div class="flex h-2 overflow-hidden rounded-full bg-neutral-200">
+            <div class="bg-green-600" :style="{ width: `${availablePercent}%` }" />
+            <div class="bg-neutral-400" :style="{ width: `${usedPercent}%` }" />
           </div>
-        </section>
-
-        <section class="formula-grid">
-          <div>
-            <span>{{ investorPartner?.partner_name ?? 'Инвестор' }}</span>
-            <strong>{{ formatPrice(Number(investorPartner?.planned_capital_share || 0), agreement.currency) }}</strong>
-            <small>капитал {{ formatPercent(investorCapitalPercent) }} · прибыль {{ formatPercent(investorProfitPercent) }}</small>
-          </div>
-          <div>
-            <span>{{ operatorPartner?.partner_name ?? 'Бизнес' }}</span>
-            <strong>{{ formatPrice(Number(operatorPartner?.planned_capital_share || 0), agreement.currency) }}</strong>
-            <small>капитал {{ formatPercent(operatorCapitalPercent) }} · прибыль {{ formatPercent(operatorProfitPercent) }}</small>
-          </div>
-        </section>
-
-        <section class="recalculation-panel">
-          <div class="recalculation-copy">
-            <strong>Симуляция фактических долей</strong>
-            <span>Если фактический вклад партии отличается от плана, прибыль пересчитывается по коэффициенту договора.</span>
-          </div>
-          <div class="split-header">
-            <span>Фактическая доля инвестора</span>
-            <strong>{{ formatPercent(simulatedInvestorCapitalPercent) }}</strong>
-          </div>
-          <input
-            v-model="simulatedInvestorCapitalPercentDraft"
-            class="split-range"
-            type="range"
-            min="0"
-            max="100"
-            step="0.1"
-            :style="simulationRangeStyle"
-          />
-          <div class="simulation-result">
-            <div>
-              <span>Прибыль инвестора</span>
-              <strong>{{ formatPercent(simulatedInvestorProfitPercent) }}</strong>
+          <div class="flex flex-col gap-1.5 pt-0.5">
+            <div v-if="!isFunded" class="flex items-baseline justify-between gap-2">
+              <span class="text-sm text-neutral-600">Запланировано</span>
+              <span class="text-sm font-medium tabular-nums text-foreground">{{ formatPrice(plannedBudget, currency) }}</span>
             </div>
-            <div>
-              <span>Прибыль бизнеса</span>
-              <strong>{{ formatPercent(simulatedOperatorProfitPercent) }}</strong>
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="text-sm text-neutral-600">Внесено</span>
+              <span class="text-sm font-medium tabular-nums text-foreground">{{ formatPrice(contributedAmount, currency) }}</span>
+            </div>
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="flex items-center gap-1.5 text-sm text-neutral-600">
+                <span class="size-2 rounded-full bg-green-600" aria-hidden="true" /> Доступно
+              </span>
+              <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(availableAmount, currency) }}</span>
             </div>
           </div>
-        </section>
+        </div>
 
-        <section class="linked-procurements">
-          <h3>Другие приходы по договору</h3>
-          <p v-if="otherProcurements.length === 0" class="muted">Других приходов по этому договору пока нет.</p>
-          <div v-else class="procurement-list">
-            <article v-for="procurement in otherProcurements" :key="procurement.id" class="procurement-row">
-              <div>
-                <strong>#{{ procurement.id }}</strong>
-                <span>{{ dateLabel(procurement.opened_at) }} · {{ procurement.status }}</span>
-              </div>
-              <b>{{ formatPrice(Number(procurement.total_amount || 0), agreement.currency) }}</b>
-            </article>
+        <!-- Shares: contributed / planned + profit (planned → actual on divergence) -->
+        <div class="flex flex-col gap-2.5">
+          <div class="flex items-center justify-between text-xs text-neutral-500">
+            <span class="font-medium">Доли по договору</span>
+            <span>внёс / план · прибыль</span>
           </div>
-        </section>
+          <div
+            v-for="party in partyRows"
+            :key="party.key"
+            class="flex items-center justify-between gap-3"
+          >
+            <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ party.name }}</span>
+            <div class="flex shrink-0 items-baseline gap-3 text-sm tabular-nums">
+              <span class="text-foreground">
+                {{ party.contributed }}<span class="text-xs text-neutral-400"> / {{ party.planned }}</span>
+              </span>
+              <span class="text-right text-neutral-600">
+                <template v-if="hasProfitDivergence && party.actualProfit != null">
+                  <span class="text-neutral-400">{{ party.plannedProfit }}%</span>
+                  <span class="text-neutral-400"> → </span>
+                  <span class="font-medium text-foreground">{{ party.actualProfit }}%</span>
+                </template>
+                <template v-else>{{ party.plannedProfit }}%</template>
+              </span>
+            </div>
+          </div>
+          <p v-if="hasProfitDivergence" class="text-xs text-neutral-400">
+            → ожидаемая доля прибыли при текущих фактических вкладах
+          </p>
+        </div>
       </template>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.detail-sheet,
-.recalculation-panel,
-.linked-procurements,
-.procurement-list {
-  display: grid;
-  gap: 12px;
-}
-
-.hero-row,
-.metric-grid > div,
-.formula-grid > div,
-.simulation-result > div,
-.procurement-row {
-  padding: 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-}
-
-.hero-row,
-.procurement-row,
-.split-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.hero-row div,
-.procurement-row div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.hero-row strong,
-.procurement-row strong,
-.recalculation-copy strong,
-.linked-procurements h3 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.hero-row span,
-.procurement-row span,
-.metric-grid span,
-.formula-grid span,
-.formula-grid small,
-.simulation-result span,
-.recalculation-copy span,
-.muted,
-.error-note {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.hero-row b {
-  color: var(--color-brand-700);
-  font-size: var(--text-xs);
-}
-
-.metric-grid,
-.formula-grid,
-.simulation-result {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.metric-grid > div,
-.formula-grid > div,
-.simulation-result > div {
-  display: grid;
-  gap: 4px;
-}
-
-.metric-grid strong,
-.formula-grid strong,
-.simulation-result strong,
-.procurement-row b,
-.split-header strong {
-  color: var(--color-text-primary);
-  font-size: var(--text-base);
-  font-variant-numeric: tabular-nums;
-}
-
-.recalculation-panel {
-  padding: 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-primary);
-}
-
-.recalculation-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.split-range {
-  width: 100%;
-  height: 8px;
-  border-radius: var(--radius-full);
-  appearance: none;
-  background: linear-gradient(to right, var(--color-accent-400) 0 var(--split), var(--color-brand-500) var(--split) 100%);
-  outline: none;
-}
-
-.split-range::-webkit-slider-thumb {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--color-brand-600);
-  border-radius: var(--radius-full);
-  appearance: none;
-  background: var(--color-bg-elevated);
-  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.16);
-}
-
-.error-note {
-  color: var(--color-danger);
-}
-
-@media (max-width: 430px) {
-  .formula-grid,
-  .simulation-result {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

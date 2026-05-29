@@ -2,6 +2,10 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Plus, Check } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { formatPrice } from '@/utils/currency'
 import { fetchInvestmentAgreements, type InvestmentAgreementListItem } from '@/api/partnerships'
 
 const props = defineProps<{
@@ -55,61 +59,76 @@ function onSelect(a: InvestmentAgreementListItem): void {
   emit('select', a.id)
   emit('update:open', false)
 }
+
+function investorLabel(a: InvestmentAgreementListItem): string {
+  return a.investor_names.length ? a.investor_names.join(', ') : 'Без инвестора'
+}
+
+function dateLabel(value: string): string {
+  return new Date(value).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function budgetLabel(a: InvestmentAgreementListItem): string {
+  return formatPrice(Number.parseFloat(a.planned_budget) || 0, a.currency)
+}
+
+function availableLabel(a: InvestmentAgreementListItem): string {
+  const amount = Number.parseFloat(a.balances?.[a.currency] ?? '0') || 0
+  return formatPrice(amount, a.currency)
+}
 </script>
 
 <template>
   <AppBottomSheet :open="open" title="Инвестиционный договор" @close="emit('update:open', false)">
-    <div class="picker-body">
-      <input
+    <div class="flex flex-col gap-3">
+      <Input
         v-model="search"
-        class="search-input"
         type="search"
         placeholder="Поиск по инвестору или номеру…"
         autocomplete="off"
       />
 
-      <div v-if="isLoading" class="picker-state">Загрузка…</div>
-      <div v-else-if="!filtered.length" class="picker-state">Договоры не найдены</div>
+      <div v-if="isLoading" class="py-4 text-center text-sm text-neutral-500">Загрузка…</div>
+      <div v-else-if="!filtered.length" class="py-4 text-center text-sm text-neutral-500">Договоры не найдены</div>
 
-      <ul v-else class="list">
+      <ul v-else class="flex max-h-[50vh] flex-col gap-2 overflow-y-auto">
         <li
           v-for="a in filtered"
           :key="a.id"
-          class="agreement-row"
-          :class="{ selected: a.id === selectedAgreementId }"
+          :class="cn(
+            'flex cursor-pointer items-start gap-3 rounded-[12px] border px-3 py-3 transition-colors',
+            a.id === selectedAgreementId
+              ? 'border-primary bg-primary/5'
+              : 'border-neutral-200 hover:bg-neutral-50',
+          )"
           @click="onSelect(a)"
         >
-          <div class="agreement-info">
-            <span class="agreement-title">Договор #{{ a.id }}
-              <span v-if="a.investor_names.length"> · {{ a.investor_names.join(', ') }}</span>
+          <div class="flex min-w-0 flex-1 flex-col gap-1">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="truncate text-sm font-semibold text-foreground">
+                Договор #{{ a.id }} · {{ investorLabel(a) }}
+              </span>
+              <span class="shrink-0 text-xs text-neutral-500">{{ dateLabel(a.opened_at) }}</span>
+            </div>
+
+            <span v-if="a.investor_shares" class="text-xs text-neutral-600">
+              капитал {{ a.investor_shares.capital_percent }}% · прибыль {{ a.investor_shares.profit_percent }}%
             </span>
-            <span class="agreement-meta">
-              {{ parseFloat(a.planned_budget).toLocaleString('ru-RU') }} {{ a.currency }}
-              · {{ a.mudaraba_ratio }}
+
+            <span class="text-sm tabular-nums text-foreground">
+              <strong class="font-semibold">{{ budgetLabel(a) }}</strong>
+              <span class="text-xs text-neutral-500"> · доступно {{ availableLabel(a) }}</span>
             </span>
           </div>
-          <Check v-if="a.id === selectedAgreementId" class="check-icon" :size="16" :stroke-width="2.5" />
+
+          <Check v-if="a.id === selectedAgreementId" class="mt-0.5 size-4 shrink-0 text-primary" :stroke-width="2.5" />
         </li>
       </ul>
 
-      <button class="create-btn" type="button" @click="emit('create-new'); emit('update:open', false)">
-        <Plus :size="14" :stroke-width="2.5" />
+      <Button variant="outline" class="w-full" @click="emit('create-new'); emit('update:open', false)">
+        <Plus data-icon="inline-start" />
         Создать новый договор
-      </button>
+      </Button>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.picker-body { display: grid; gap: var(--space-3); }
-.search-input { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-primary); font-size: var(--text-sm); }
-.picker-state { padding: var(--space-4) 0; text-align: center; color: var(--color-text-secondary); font-size: var(--text-sm); }
-.list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); max-height: 50vh; overflow-y: auto; }
-.agreement-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); cursor: pointer; }
-.agreement-row.selected { border-color: var(--color-brand-600); background: var(--color-brand-50); }
-.agreement-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.agreement-title { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.agreement-meta { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.check-icon { flex-shrink: 0; color: var(--color-brand-600); }
-.create-btn { display: inline-flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-</style>

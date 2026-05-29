@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procurementWorkspace'
 import { storeToRefs } from 'pinia'
@@ -13,6 +13,8 @@ import ProcurementCardFinancing from '@/modules/intake/components/workspace/Proc
 import ProcurementCardPayment from '@/modules/intake/components/workspace/ProcurementCardPayment.vue'
 import ProcurementCardReceive from '@/modules/intake/components/workspace/ProcurementCardReceive.vue'
 import ProcurementCardHistory from '@/modules/intake/components/workspace/ProcurementCardHistory.vue'
+import WorkspaceFlowNav from '@/modules/intake/components/workspace/WorkspaceFlowNav.vue'
+import WorkspaceSummaryRail from '@/modules/intake/components/workspace/WorkspaceSummaryRail.vue'
 import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/WorkspaceSupplierPickerSheet.vue'
 import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet.vue'
 import ProcurementCancelDialog from '@/modules/intake/components/workspace/ProcurementCancelDialog.vue'
@@ -38,6 +40,42 @@ const lastPaymentPayload = ref<Record<string, unknown> | null>(null)
 const PAYMENT_ACTIONS = new Set(['PAY_COSTS', 'PAY_SUPPLIER_PAYABLE'])
 
 const { capitalSectionVisible } = useProcurementReadiness(procurement)
+
+const paymentSectionVisible = computed(
+  () => procurement.value?.documents.settlement?.type !== 'AT_RECEIPT',
+)
+
+// Which flow steps have a rendered section in this scenario. Backend policy
+// drives visibility; we only render the rail items the user can actually reach.
+const stepVisible = computed<Record<string, boolean>>(() => ({
+  purchase_intent: true,
+  supplier_settlement: true,
+  funding: capitalSectionVisible.value,
+  payment_obligation: paymentSectionVisible.value,
+  goods_receipt: true,
+  history: true,
+}))
+
+// Section order is the founder-controlled sequence (NOT the canonical doc
+// order): funding → supplier → goods → payment → receipt → history. The rail
+// mirrors the on-screen section order so they stay coherent.
+const SECTION_ORDER = ['funding', 'supplier_settlement', 'purchase_intent', 'payment_obligation', 'goods_receipt', 'history']
+
+const flowSteps = computed(() =>
+  (procurement.value?.flow.steps ?? [])
+    .filter((step) => stepVisible.value[step.key] ?? true)
+    .slice()
+    .sort((a, b) => SECTION_ORDER.indexOf(a.key) - SECTION_ORDER.indexOf(b.key)),
+)
+
+const currentStep = computed(() => procurement.value?.flow.current_step ?? null)
+
+function scrollToStep(key: string): void {
+  const el = document.getElementById(`step-${key}`)
+  if (!el) return
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+}
 
 async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
@@ -100,7 +138,6 @@ function onSupplierSelect(supplierId: number): void {
   onUpdateSource({ supplier_id: supplierId })
 }
 
-
 async function onUpdateItems(items: Record<string, unknown>[]): Promise<void> {
   await dispatch('UPDATE_ITEMS', { items })
 }
@@ -146,45 +183,95 @@ onBeforeUnmount(() => store.$reset())
     />
 
     <main class="workspace-body">
-      <div v-if="isLoading" class="state state-loading">Загрузка…</div>
+      <div v-if="isLoading" class="state">Загрузка…</div>
       <div v-else-if="error" class="state state-error">{{ error }}</div>
-      <div v-else-if="!procurement" class="state state-empty">Нет данных</div>
-      <div v-else class="cards-container">
-        <ProcurementCardFinancing
-          v-if="capitalSectionVisible"
-          :procurement="procurement"
-          @link-agreement="onLinkAgreement"
-        />
-        <ProcurementCardSupplier
-          :procurement="procurement"
-          @update-source="onUpdateSource"
-          @update-settlement="onUpdateSettlement"
-          @open-supplier-picker="supplierPickerOpen = true"
-        />
-        <ProcurementCardItems
-          :procurement="procurement"
-          @update-items="onUpdateItems"
-          @delete-item="onDeleteItem"
-          @split-item="onSplitItem"
-        />
-        <ProcurementCardExpenses
-          :procurement="procurement"
-          @update-expenses="onUpdateExpenses"
-          @delete-expense="onDeleteExpense"
-        />
-        <ProcurementCardPayment
-          v-if="procurement.documents.settlement?.type !== 'AT_RECEIPT'"
-          :procurement="procurement"
-          :payment-error="paymentError"
-          :last-payment-cash-account-id="lastPaymentCashAccountId"
-          @dispatch="(k, p) => dispatch(k, p)"
-          @retry-payment="retryLastPayment"
-        />
-        <ProcurementCardReceive
-          :procurement="procurement"
-          @dispatch="(k, p) => dispatch(k, p)"
-        />
-        <ProcurementCardHistory :procurement="procurement" />
+      <div v-else-if="!procurement" class="state">Нет данных</div>
+
+      <div v-else class="mx-auto w-full max-w-[1200px] px-4 py-4 pb-10 sm:px-6">
+        <!-- Mobile stepper -->
+        <div class="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-200 bg-background/90 px-4 py-2 backdrop-blur lg:hidden">
+          <WorkspaceFlowNav
+            variant="stepper"
+            :steps="flowSteps"
+            :current-step="currentStep"
+            @navigate="scrollToStep"
+          />
+        </div>
+
+        <div class="lg:grid lg:grid-cols-[200px_minmax(0,1fr)_300px] lg:gap-6">
+          <!-- Desktop rail -->
+          <aside class="hidden lg:block">
+            <div class="sticky top-4">
+              <WorkspaceFlowNav
+                variant="rail"
+                :steps="flowSteps"
+                :current-step="currentStep"
+                @navigate="scrollToStep"
+              />
+            </div>
+          </aside>
+
+          <!-- Sections in the founder-controlled order -->
+          <div class="flex min-w-0 flex-col gap-3">
+            <section v-if="capitalSectionVisible" id="step-funding" class="scroll-mt-16">
+              <ProcurementCardFinancing
+                :procurement="procurement"
+                @link-agreement="onLinkAgreement"
+              />
+            </section>
+
+            <section id="step-supplier_settlement" class="scroll-mt-16">
+              <ProcurementCardSupplier
+                :procurement="procurement"
+                @update-source="onUpdateSource"
+                @update-settlement="onUpdateSettlement"
+                @open-supplier-picker="supplierPickerOpen = true"
+              />
+            </section>
+
+            <section id="step-purchase_intent" class="flex scroll-mt-16 flex-col gap-3">
+              <ProcurementCardItems
+                :procurement="procurement"
+                @update-items="onUpdateItems"
+                @delete-item="onDeleteItem"
+                @split-item="onSplitItem"
+              />
+              <ProcurementCardExpenses
+                :procurement="procurement"
+                @update-expenses="onUpdateExpenses"
+                @delete-expense="onDeleteExpense"
+              />
+            </section>
+
+            <section v-if="paymentSectionVisible" id="step-payment_obligation" class="scroll-mt-16">
+              <ProcurementCardPayment
+                :procurement="procurement"
+                :payment-error="paymentError"
+                :last-payment-cash-account-id="lastPaymentCashAccountId"
+                @dispatch="(k, p) => dispatch(k, p)"
+                @retry-payment="retryLastPayment"
+              />
+            </section>
+
+            <section id="step-goods_receipt" class="scroll-mt-16">
+              <ProcurementCardReceive
+                :procurement="procurement"
+                @dispatch="(k, p) => dispatch(k, p)"
+              />
+            </section>
+
+            <section id="step-history" class="scroll-mt-16">
+              <ProcurementCardHistory :procurement="procurement" />
+            </section>
+          </div>
+
+          <!-- Desktop summary -->
+          <aside class="hidden lg:block">
+            <div class="sticky top-4">
+              <WorkspaceSummaryRail :procurement="procurement" @navigate="scrollToStep" />
+            </div>
+          </aside>
+        </div>
       </div>
     </main>
 
@@ -223,28 +310,21 @@ onBeforeUnmount(() => store.$reset())
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr;
-  background: var(--color-bg-secondary);
+  background: var(--bg);
 }
 
 .workspace-body {
   overflow-y: auto;
-  padding: var(--space-4);
-  padding-bottom: var(--space-8);
-}
-
-.cards-container {
-  display: grid;
-  gap: var(--space-3);
-  max-width: 640px;
-  margin: 0 auto;
 }
 
 .state {
   min-height: 200px;
   display: grid;
   place-items: center;
-  color: var(--color-text-secondary);
+  color: var(--neutral-500);
 }
 
-.state-error { color: var(--color-error); }
+.state-error {
+  color: var(--destructive);
+}
 </style>

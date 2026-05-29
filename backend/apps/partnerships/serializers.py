@@ -297,6 +297,7 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
     procurements_count = serializers.SerializerMethodField()
     investor_names = serializers.SerializerMethodField()
     operator_names = serializers.SerializerMethodField()
+    investor_shares = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentAgreement
@@ -304,7 +305,7 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'planned_budget', 'currency', 'mudaraba_ratio', 'balances',
             'partners_count', 'investor_names', 'operator_names',
-            'procurements_count', 'notes',
+            'investor_shares', 'procurements_count', 'notes',
         ]
         read_only_fields = ['id']
 
@@ -327,6 +328,20 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
 
     def get_procurements_count(self, obj):
         return obj.procurements.count()
+
+    def get_investor_shares(self, obj):
+        investor = next(
+            (row for row in obj.partners.all() if row.role == AgreementPartner.Role.INVESTOR),
+            None,
+        )
+        if investor is None:
+            return None
+        budget = float(obj.planned_budget or 0)
+        capital = float(investor.planned_capital_share or 0)
+        return {
+            'capital_percent': round(capital / budget * 100) if budget else 0,
+            'profit_percent': round(float(investor.profit_share or 0) * 100),
+        }
 
 
 class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):

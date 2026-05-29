@@ -19,10 +19,10 @@ const { generateRequestId } = useIdempotency()
 
 const partners = ref<Partner[]>([])
 const investorId = ref<number | null>(null)
-const investorPlannedAmount = ref('10000')
+const investorPlannedAmount = ref('')
 const currency = ref<'USD' | 'UZS'>('USD')
-const investorCapitalPercent = ref('70')
-const investorProfitPercentInput = ref('40')
+const investorCapitalPercent = ref('')
+const investorProfitPercentInput = ref('')
 const simulatedInvestorCapitalPercentDraft = ref('')
 const notes = ref('')
 const saving = ref(false)
@@ -235,11 +235,11 @@ onMounted(loadPartners)
       <div class="grid-2">
         <label class="field-group">
           <span>Капитал инвестора, %</span>
-          <input v-model="investorCapitalPercent" class="input-field" inputmode="decimal" />
+          <input v-model="investorCapitalPercent" class="input-field" inputmode="decimal" placeholder="напр. 70" />
         </label>
         <label class="field-group">
           <span>Прибыль инвестора, %</span>
-          <input v-model="investorProfitPercentInput" class="input-field" inputmode="decimal" />
+          <input v-model="investorProfitPercentInput" class="input-field" inputmode="decimal" placeholder="напр. 40" />
         </label>
       </div>
 

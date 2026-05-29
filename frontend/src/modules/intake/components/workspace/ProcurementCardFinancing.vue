@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, toRef } from 'vue'
-import { CheckCircle, AlertCircle, ChevronRight } from 'lucide-vue-next'
+import { ref, computed } from 'vue'
+import { CheckCircle2, AlertCircle, ChevronRight, Handshake, Plus } from 'lucide-vue-next'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import WorkspaceAgreementPickerSheet from './WorkspaceAgreementPickerSheet.vue'
 import InvestmentAgreementDetailSheet from './InvestmentAgreementDetailSheet.vue'
 import InvestmentAgreementQuickForm from './InvestmentAgreementQuickForm.vue'
 import { useToast } from '@/composables/useToast'
-import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
+import { formatPrice } from '@/utils/currency'
 import type { ProcurementWorkspacePayload, InvestmentAgreementDetail } from '@/api/partnerships'
 
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
@@ -16,21 +18,41 @@ const emit = defineEmits<{
 
 const toast = useToast()
 
-const { allTotalsByCurrency: requiredByCurrency } = useActiveLines(toRef(props, 'procurement'))
-
 const pickerOpen = ref(false)
 const createFormOpen = ref(false)
 const detailSheetOpen = ref(false)
 
 const investment = computed(() => props.procurement.documents.investment)
+const isFilled = computed(() => (investment.value?.allocations.length ?? 0) > 0)
 
-const hasAllocations = computed(() =>
-  (investment.value?.allocations.length ?? 0) > 0,
+const currency = computed(() => investment.value?.currency ?? 'UZS')
+const investor = computed(() => investment.value?.partners.find((p) => p.role === 'INVESTOR') ?? null)
+const budget = computed(() => Number.parseFloat(investment.value?.planned_budget ?? '0') || 0)
+const investorCapital = computed(() => Number.parseFloat(investor.value?.planned_capital_share ?? '0') || 0)
+const investorCapitalPercent = computed(() => (budget.value > 0 ? Math.round((investorCapital.value / budget.value) * 100) : 0))
+const investorProfitPercent = computed(() => Math.round((Number.parseFloat(investor.value?.profit_share ?? '0') || 0) * 100))
+
+const availableByCurrency = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  for (const perCurrency of Object.values(investment.value?.available_by_partner ?? {})) {
+    for (const [cur, amount] of Object.entries(perCurrency)) {
+      out[cur] = (out[cur] ?? 0) + (Number.parseFloat(amount) || 0)
+    }
+  }
+  return out
+})
+
+const availableAmount = computed(() => availableByCurrency.value[currency.value] ?? 0)
+const availablePercent = computed(() =>
+  budget.value > 0 ? Math.min(100, Math.max(0, (availableAmount.value / budget.value) * 100)) : 0,
 )
 
-const hasShortage = computed(() => false)
+const investorName = computed(() => investor.value?.partner_name ?? 'Инвестор')
 
-const isFilled = computed(() => hasAllocations.value)
+const dateLabel = computed(() => {
+  if (!investment.value) return ''
+  return new Date(investment.value.opened_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
+})
 
 function onAgreementSelect(id: number): void {
   emit('link-agreement', id)
@@ -46,78 +68,89 @@ function onAgreementCreated(agreement: InvestmentAgreementDetail): void {
   emit('link-agreement', agreement.id)
 }
 
-function onRequestContribution(): void {
-  toast.info('Запрос вклада инвестора — будет реализовано')
+function onTopUp(): void {
+  toast.info('Пополнение бюджета договора — будет реализовано')
 }
 </script>
 
 <template>
-  <div class="financing-card">
-    <div class="card-header">
-      <span class="card-title">Финансирование</span>
-      <CheckCircle v-if="isFilled" class="status-ok" :size="18" :stroke-width="2" />
-      <AlertCircle v-else class="status-warn" :size="18" :stroke-width="2" />
-    </div>
+  <Card class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <CardHeader class="flex flex-row items-center justify-between gap-3 px-4 py-3.5">
+      <CardTitle class="text-base">Финансирование</CardTitle>
+      <CheckCircle2 v-if="isFilled" class="size-[18px] text-positive" />
+      <AlertCircle v-else class="size-[18px] text-warning" />
+    </CardHeader>
 
-    <!-- No agreement linked -->
-    <template v-if="!investment">
-      <p class="hint-text">Партнёрский приход требует инвестиционный договор.</p>
-      <button class="action-btn" type="button" @click="pickerOpen = true">
-        Выбрать договор →
-      </button>
-    </template>
-
-    <!-- Agreement linked -->
-    <template v-else>
-      <button class="agreement-row" type="button" @click="detailSheetOpen = true">
-        <span class="agreement-label">{{ investment.agreement_label || `Договор #${investment.agreement_id}` }}</span>
-        <ChevronRight :size="16" :stroke-width="2" class="chevron" />
-      </button>
-
-      <!-- No allocations yet -->
-      <template v-if="!hasAllocations">
-        <div class="partners-list">
-          <div v-for="p in investment.partners" :key="p.partner_id" class="partner-row">
-            <span class="partner-name">{{ p.partner_name }}</span>
-            <span class="partner-share">{{ Math.round(parseFloat(p.profit_share) * 100) }}%</span>
-          </div>
-        </div>
-
-        <div class="coverage-row">
-          <span class="coverage-label">К покрытию</span>
-          <span class="coverage-value">
-            <template v-for="(amount, cur) in requiredByCurrency" :key="cur">
-              <span style="font-variant-numeric: tabular-nums">{{ amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
-            </template>
-          </span>
-        </div>
-
-        <button class="action-btn" type="button" @click="onRequestContribution">
-          Запросить вклад инвестора
-        </button>
+    <CardContent class="flex flex-col gap-3 px-4 pb-4">
+      <!-- No agreement linked -->
+      <template v-if="!investment">
+        <p class="text-sm text-neutral-500">Партнёрский приход требует инвестиционный договор.</p>
+        <Button class="w-full" @click="pickerOpen = true">
+          <Handshake data-icon="inline-start" />
+          Выбрать договор
+        </Button>
       </template>
 
-      <!-- Allocations set -->
+      <!-- Agreement linked: one card with all key data, tap → detail -->
       <template v-else>
-        <div class="allocations-list">
-          <div v-for="a in investment.allocations" :key="a.id" class="allocation-row">
-            <span class="alloc-partner">
-              {{ investment.partners.find(p => p.partner_id === a.partner_id)?.partner_name ?? `#${a.partner_id}` }}
+        <button
+          type="button"
+          class="flex w-full flex-col gap-3 rounded-[14px] border border-neutral-200 bg-surface p-4 text-left shadow-sm transition-colors hover:border-green-300 hover:bg-green-50/40"
+          @click="detailSheetOpen = true"
+        >
+          <div class="flex items-start gap-3">
+            <span class="grid size-9 shrink-0 place-items-center rounded-full bg-green-100 text-green-700">
+              <Handshake class="size-[18px]" />
             </span>
-            <span class="alloc-amount">{{ parseFloat(a.amount).toLocaleString('ru-RU') }} {{ a.currency }}</span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <p class="truncate text-sm font-semibold text-foreground">
+                  {{ investment.agreement_label }}
+                </p>
+                <span class="flex shrink-0 items-center gap-0.5 text-xs text-neutral-400">
+                  Детально <ChevronRight class="size-3.5" />
+                </span>
+              </div>
+              <p class="mt-0.5 truncate text-xs text-neutral-500">
+                {{ investorName }} · создан {{ dateLabel }}
+              </p>
+            </div>
           </div>
-        </div>
-        <div class="coverage-row">
-          <span class="coverage-label">К списанию из договора</span>
-          <span class="coverage-value">
-            <template v-for="(amount, cur) in requiredByCurrency" :key="cur">
-              <span style="font-variant-numeric: tabular-nums">{{ amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
-            </template>
-          </span>
+
+          <div class="flex flex-col gap-3 border-t border-neutral-200 pt-3">
+            <div>
+              <div class="flex items-baseline justify-between gap-2">
+                <span class="text-xs text-neutral-500">Доступно из бюджета</span>
+                <span>
+                  <strong class="text-base font-semibold tabular-nums text-foreground">{{ formatPrice(availableAmount, currency) }}</strong>
+                  <span class="text-xs tabular-nums text-neutral-400"> / {{ formatPrice(budget, currency) }}</span>
+                </span>
+              </div>
+              <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-200">
+                <div class="h-full rounded-full bg-green-600" :style="{ width: `${availablePercent}%` }" />
+              </div>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs text-neutral-500">Доли инвестора</span>
+              <span class="text-sm font-medium tabular-nums text-foreground">
+                капитал {{ investorCapitalPercent }}% · прибыль {{ investorProfitPercent }}%
+              </span>
+            </div>
+          </div>
+        </button>
+
+        <div class="flex flex-col gap-2">
+          <Button variant="outline" class="w-full" @click="pickerOpen = true">
+            Выбрать другой договор
+          </Button>
+          <Button variant="ghost" class="w-full text-neutral-600" @click="onTopUp">
+            <Plus data-icon="inline-start" />
+            Пополнить бюджет договора
+          </Button>
         </div>
       </template>
-    </template>
-  </div>
+    </CardContent>
+  </Card>
 
   <WorkspaceAgreementPickerSheet
     v-model:open="pickerOpen"
@@ -136,32 +169,4 @@ function onRequestContribution(): void {
     :current-procurement-id="procurement.id"
     @close="detailSheetOpen = false"
   />
-
 </template>
-
-<style scoped>
-.financing-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); }
-.card-header { display: flex; align-items: center; justify-content: space-between; }
-.card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.status-ok { color: var(--color-success); }
-.status-warn { color: var(--color-warning); }
-.hint-text { font-size: var(--text-sm); color: var(--color-text-secondary); margin: 0; }
-.agreement-row { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); cursor: pointer; text-align: left; }
-.agreement-label { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.chevron { color: var(--color-text-tertiary); flex-shrink: 0; }
-.partners-list { display: grid; gap: var(--space-2); }
-.partner-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.partner-name { font-size: var(--text-sm); color: var(--color-text-primary); }
-.partner-share { font-size: var(--text-xs); color: var(--color-text-secondary); font-weight: var(--font-semibold); }
-.coverage-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.coverage-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.coverage-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.shortage-notice { padding: var(--space-3); background: color-mix(in srgb, var(--color-warning) 10%, transparent); border-radius: var(--radius-md); font-size: var(--text-sm); color: var(--color-warning); font-weight: var(--font-semibold); }
-.available-row { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--color-success); font-weight: var(--font-semibold); }
-.allocations-list { display: grid; gap: var(--space-2); }
-.allocation-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.alloc-partner { font-size: var(--text-sm); color: var(--color-text-primary); }
-.alloc-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.action-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-.secondary-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-text-secondary); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-</style>

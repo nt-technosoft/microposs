@@ -2104,7 +2104,11 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
         'investment': _investment_payload(procurement),
         'receive_batches': [_receive_batch_payload(batch) for batch in receive_batches],
         'lots_preview': [],
-        'payment_status': _payment_status_block(terms, payments, items=list(procurement.items.all())),
+        'payment_status': _payment_status_block(
+            terms, payments,
+            items=list(procurement.items.all()),
+            expenses=list(procurement.expenses.all()),
+        ),
     }
 
 
@@ -2141,42 +2145,68 @@ def _expense_payload(expense) -> dict:
     }
 
 
-def _payment_status_block(terms, payments: list, items=None) -> dict:
-    """obligation vs paid delta — surfaced to UI after item/expense amendments (OPEN-S7.1).
+def _payment_status_block(terms, payments: list, items=None, expenses=None) -> dict:
+    """obligation vs paid, PER CURRENCY. Single source = procurement_cost_by_currency.
 
-    Obligation = procurement_cost_by_currency(active items) — single source,
-    no × fx. See procurement_cost.py for the invariant.
+    Supports mixed-currency procurement (e.g. USD goods + UZS local logistics):
+    obligation/paid/remaining are grouped by currency, never collapsed with × fx.
+    Backward-compat single fields are populated only when there's one currency.
     """
     if items is not None:
-        active = [i for i in items if i.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
-        cost_map = procurement_cost_by_currency(active, [])
-        if cost_map:
-            obligation = next(iter(cost_map.values()))
-        else:
-            obligation = Decimal('0.00')
+        active_items = [i for i in items if i.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
+        active_expenses = [e for e in (expenses or []) if e.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
+        obligation_by_currency = procurement_cost_by_currency(active_items, active_expenses)
     else:
-        obligation = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
-    paid = (
-        sum((Decimal(str(p.amount)) for p in payments), Decimal('0')).quantize(Decimal('0.01'))
-        if payments else Decimal('0')
-    )
-    delta = paid - obligation
-    if obligation == 0 and paid == 0:
+        cur = str(getattr(terms, 'currency_of_obligation', 'UZS') or 'UZS').upper()
+        amt = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
+        obligation_by_currency = {cur: amt} if amt else {}
+
+    paid_by_currency: dict[str, Decimal] = {}
+    for p in (payments or []):
+        cur = str(getattr(p, 'currency', 'UZS') or 'UZS').upper()
+        paid_by_currency[cur] = paid_by_currency.get(cur, Decimal('0')) + Decimal(str(p.amount))
+    paid_by_currency = {c: v.quantize(Decimal('0.01')) for c, v in paid_by_currency.items()}
+
+    currencies = set(obligation_by_currency) | set(paid_by_currency)
+    remaining_by_currency: dict[str, Decimal] = {}
+    any_remaining = False
+    for c in currencies:
+        rem = (obligation_by_currency.get(c, Decimal('0')) - paid_by_currency.get(c, Decimal('0'))).quantize(Decimal('0.01'))
+        remaining_by_currency[c] = rem
+        if rem > 0:
+            any_remaining = True
+
+    any_paid = bool(paid_by_currency)
+    total_obligation = sum(obligation_by_currency.values(), Decimal('0'))
+    if total_obligation == 0 and not any_paid:
         state = 'unpaid'
-    elif paid == 0:
+    elif not any_paid:
         state = 'unpaid'
-    elif delta < 0:
+    elif any_remaining:
         state = 'underpaid'
-    elif delta == 0:
-        state = 'paid_full'
     else:
-        state = 'overpaid'
+        state = 'paid_full'
+
+    # Backward-compat single fields — meaningful only for single-currency obligation.
+    if len(obligation_by_currency) == 1:
+        cur = next(iter(obligation_by_currency))
+        obligation_amount = str(obligation_by_currency[cur])
+        paid_amount = str(paid_by_currency.get(cur, Decimal('0')))
+        delta = str((paid_by_currency.get(cur, Decimal('0')) - obligation_by_currency[cur]).quantize(Decimal('0.01')))
+        single_currency = cur
+    else:
+        obligation_amount = paid_amount = delta = None
+        single_currency = None
+
     return {
-        'obligation_amount': str(obligation),
-        'paid_amount': str(paid),
-        'delta': str(delta),
+        'obligation_by_currency': {c: str(v) for c, v in obligation_by_currency.items()},
+        'paid_by_currency': {c: str(v) for c, v in paid_by_currency.items()},
+        'remaining_by_currency': {c: str(v) for c, v in remaining_by_currency.items()},
         'state': state,
-        'currency': str(getattr(terms, 'currency_of_obligation', 'UZS')) if terms else 'UZS',
+        'obligation_amount': obligation_amount,
+        'paid_amount': paid_amount,
+        'delta': delta,
+        'currency': single_currency,
     }
 
 
@@ -2248,6 +2278,7 @@ def _investment_payload(procurement: Procurement) -> dict | None:
     return {
         'agreement_id': agreement.id,
         'agreement_label': f'Investment agreement #{agreement.id}',
+        'opened_at': agreement.opened_at.isoformat(),
         'legal_mode': agreement.legal_mode,
         'currency': agreement.currency,
         'planned_budget': str(agreement.planned_budget),

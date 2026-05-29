@@ -175,15 +175,20 @@ export interface ProcurementWorkspacePayload {
       journal_entry_id: number | null
     }>
     payment_status: {
-      obligation_amount: string
-      paid_amount: string
-      delta: string
+      obligation_by_currency: Record<string, string>
+      paid_by_currency: Record<string, string>
+      remaining_by_currency: Record<string, string>
       state: 'unpaid' | 'underpaid' | 'paid_full' | 'overpaid'
-      currency: string
+      // backward-compat single-currency fields (null when mixed currency)
+      obligation_amount: string | null
+      paid_amount: string | null
+      delta: string | null
+      currency: string | null
     }
     investment: {
       agreement_id: number
       agreement_label: string
+      opened_at: string
       legal_mode: string | null
       currency: string
       planned_budget: string
@@ -655,6 +660,7 @@ export interface InvestmentAgreementListItem {
   partners_count: number
   investor_names: string[]
   operator_names: string[]
+  investor_shares: { capital_percent: number; profit_percent: number } | null
   procurements_count: number
   notes: string
 }
