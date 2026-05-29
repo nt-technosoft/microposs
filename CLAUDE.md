@@ -16,10 +16,14 @@ MicroPOS / **Sherik POS** — mobile-first POS platform for small retail busines
 
 ## Active P0
 
-**E07 — Procurement & Investment Workspace Re-architecture** is the current priority:
-[`docs/roadmap/E07-procurement-workspace.md`](./docs/roadmap/E07-procurement-workspace.md)
+**E10 — Frontend Design System & Screen Redesign** is the current priority:
+[`docs/roadmap/E10-frontend-redesign.md`](./docs/roadmap/E10-frontend-redesign.md)
 
-Treat E07 as the source of truth for new procurement/investment work. The old intake flow is historical context, not the target architecture.
+E07/E08 are **DONE** (procurement/investment/payment core shipped as target
+architecture) and E09 is **IN_REVIEW** — treat them as completed, not active
+work. The queued backend P0 behind E10 is **E03 — Real Value Reporting**.
+[`docs/ROADMAP.md`](./docs/ROADMAP.md) is the live status source; do not infer
+the current epic from this file alone.
 
 ## Collaboration principles
 
@@ -116,7 +120,12 @@ reference this section, not redefine the rules.
 - API layer in `src/api/` with typed clients
 - Components: `src/components/` (shared) + `src/modules/<domain>/components/`
 - Reuse shared controls before creating new UI controls: `MoneyCurrencyInput` for amount+currency, `BaseSelect` for mobile-friendly selects.
-- Design tokens in CSS custom properties
+- Design system foundation: MicroPOS CSS tokens + Tailwind CSS v4 + shadcn-vue
+  + Reka UI. See `docs/frontend-design-system.md`.
+- For any frontend design/redesign, apply the project frontend workflow in
+  `.agents/skills/microposs-frontend-design/SKILL.md`: mobile-first, not
+  mobile-only; workflow before components; shadcn-vue primitives through domain
+  wrappers.
 - Lucide icons (no emojis as structural icons)
 - All animations 150-300ms, respect prefers-reduced-motion
 - AbortController pattern for all data-loading functions; cancel in onBeforeUnmount
@@ -133,16 +142,22 @@ Cleanliness without over-engineering. Apply pragmatically — simple is better t
 - **Props down, events up.** Standard Vue 3 pattern. No mutation of props. No reaching into parent via injection unless intentionally provided.
 - **KISS over patterns.** Simple solutions beat abstract ones. Three similar lines is better than a premature `useThree` composable. Decompose when a real reason appears (size, reuse, complexity), not for aesthetic uniformity.
 
-## Vacuum Rework Note
-- E07 is the current P0 and follows **controlled radical reset**.
-- Do not treat old procurement/intake backend or UI as target architecture. Use old code only as reference for business rules and edge cases.
-- New procurement/investment/payment core should be designed as target architecture, not adapted around old compromises.
-- Frontend migration follows **reuse foundation / rebuild procurement feature-domain**.
-- Reuse foundation: app shell, shared/base components, design tokens, feedback primitives, auth/session backbone, route meta/access semantics.
-- Rebuild feature-domain: procurement workspace, investment agreement flow, funding/settlement/payment/receive sections, policy-driven UI state.
-- E07 Phase D frontend must follow `docs/roadmap/E07-canonical-workspace-flow.md`: goods/expenses → supplier/settlement → funding → payment/obligation → receipt → history. API section order is not UX order.
-- `Receipt` is legacy; new work should model procurement through the E07 document/event architecture.
-- PR-12 (Excel mapping/final cleanup) is a separate discovery/design track, but Excel replay must later validate E07.
+## Frontend Migration Note (E07 vacuum rework — DONE; principles still apply)
+- The procurement/investment/payment core was rebuilt as target architecture
+  via E07/E08 (**DONE**). Old intake/`Receipt` remain legacy reference only,
+  never the target.
+- Frontend migration follows **reuse foundation / rebuild feature-domain**:
+  - Reuse foundation: app shell, shared/base components, design tokens,
+    feedback primitives, auth/session backbone, route meta/access semantics.
+  - Rebuild feature-domain: workspace, agreement flow, funding/settlement/
+    payment/receive sections, policy-driven UI state.
+- Canonical procurement UX order: goods/expenses → supplier/settlement →
+  funding → payment/obligation → receipt → history
+  (`docs/roadmap/E07-canonical-workspace-flow.md`). API order ≠ UX order.
+- Active screen redesign now runs under **E10**; see its epic for the current
+  "preserve contract, rebuild presentation" method and the design-system
+  source-of-truth (`DESIGN.md` canon → `tokens.css` mechanism).
+- PR-12 (Excel mapping/final cleanup) stays a separate discovery/design track.
 
 ## Roadmap Protocol
 

@@ -31,10 +31,16 @@
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 | **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🔵 IN_REVIEW | ~95% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
+| **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~20% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
 
-**🔥 Активный P0:** E03 — Real Value Reporting (Net Asset View). Разблокирован
-завершением E09 Wave B. E09 остаётся в IN_REVIEW (golden-path верификация 8
-комбинаций матрицы, Phase 3 returnability намеренно deferred).
+**🔥 Активный P0 (frontend, с 2026-05-29):** E10 — Frontend Design System &
+Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) поверх
+Tailwind v4 + shadcn-vue; редизайн screen-by-screen, старт с детальной
+страницы прихода. Фаза 0 — выровнять источник правды (tokens.css → DESIGN.md).
+
+**Активный P0 (backend):** E03 — Real Value Reporting (Net Asset View).
+Разблокирован завершением E09 Wave B. E09 остаётся в IN_REVIEW (golden-path
+верификация 8 комбинаций матрицы, Phase 3 returnability намеренно deferred).
 
 **Предыдущий P0 (2026-05-19 — 2026-05-21):** E09 — Procurement Completeness.
 Wave A (backend, 8 slices) + Wave B (frontend rebuild, 14 slices) завершены.
@@ -58,7 +64,12 @@ E04 — связанный архитектурный контекст. E03/E05/
 
 ```
 E07 + E08 (DONE 2026-05-19) ──→ E09 (Procurement Completeness) ──→ E03 → E05 → E06
+                                         │
+                                         └──→ E10 (Frontend Redesign, parallel track)
 ```
+
+E10 идёт параллельным frontend-треком: не блокирует backend-последовательность,
+переводит экраны на единый визуальный язык начиная с приходов.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации
