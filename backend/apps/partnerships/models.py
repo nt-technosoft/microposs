@@ -75,6 +75,17 @@ class InvestmentAgreement(TenantModel):
     currency = models.CharField(max_length=3, default='UZS')
     notes = models.TextField(blank=True, default='')
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+    # E11: real cash pool backing this agreement's capital. Contributions move
+    # cash into it; partnership supplier payments draw from it. Nullable during
+    # rollout; populated by data migration + on agreement creation.
+    capital_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='backed_agreements',
+        help_text='E11 capital pool cash account for this agreement.',
+    )
 
     class Meta:
         db_table = 'partnerships_investment_agreement'

@@ -266,6 +266,7 @@ class CashAccount(TenantModel):
         CASH = 'cash', 'Касса наличных'
         CARD_TERMINAL = 'card_terminal', 'Карт-терминал'
         BANK = 'bank', 'Банковский счёт'
+        AGREEMENT_CAPITAL = 'agreement_capital', 'Капитал инвест-договора (пул)'
 
     name = models.CharField(max_length=120)
     currency = models.CharField(max_length=3, default='UZS')
