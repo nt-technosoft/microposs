@@ -78,8 +78,13 @@ class PartnershipCapitalPoolTests(TestCase):
                     'cash_account_id': ctx['cash_account'].id,
                 }},
             )
+        # E11: external contributions fund the agreement's capital pool, not the
+        # operating cash register. Operating cash is untouched; the pool holds 200.
         ctx['cash_account'].refresh_from_db()
-        self.assertEqual(ctx['cash_account'].balance, Decimal('200.00'))
+        self.assertEqual(ctx['cash_account'].balance, Decimal('0.00'))
+        agreement = procurement.agreement
+        agreement.capital_account.refresh_from_db()
+        self.assertEqual(agreement.capital_account.balance, Decimal('200.00'))
         self.assertEqual(
             Payment.objects.filter(target_type=Payment.TargetType.CAPITAL_CONTRIBUTION).count(),
             2,

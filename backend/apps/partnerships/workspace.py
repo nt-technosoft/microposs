@@ -11,7 +11,6 @@ from apps.finance.models import CashAccount, Payment
 from apps.finance.services import (
     create_journal_entry,
     record_generic_cash_payment,
-    record_partner_capital_contribution_payment,
 )
 from apps.partnerships.formulas import profit_shares_from_capital
 from apps.suppliers.models import SupplierPayable
@@ -1161,12 +1160,24 @@ def record_workspace_capital_contribution(
     client_request_id: str | None = None,
     user_id: int | None = None,
 ) -> AgreementContribution:
+    """E11: record a contribution that moves real cash into the capital pool.
+
+    Modes (the money always lands in the agreement pool):
+      - external (default): investor or business brings new money from outside;
+        no operating account is touched.
+      - turnover (mode=BUSINESS_FROM_TURNOVER): the business commits money it
+        already holds — `from_cash_account_id` (operating account) → pool.
+    """
     agreement = _require_workspace_agreement(procurement)
-    cash_account_id = payload.get('cash_account_id')
-    if not cash_account_id:
-        raise ValueError('cash_account_id is required for capital contribution.')
+    mode = str(payload.get('mode') or '').upper()
+    from_cash_account_id = payload.get('from_cash_account_id')
+    if mode in ('BUSINESS_FROM_TURNOVER', 'TURNOVER'):
+        from_cash_account_id = from_cash_account_id or payload.get('cash_account_id')
+        if not from_cash_account_id:
+            raise ValueError('from_cash_account_id is required for a turnover contribution.')
+    from_cash_account_id = int(from_cash_account_id) if from_cash_account_id else None
     notes = payload.get('notes', '')
-    contribution = add_agreement_contribution(
+    return add_agreement_contribution(
         tenant_id=tenant_id,
         agreement_id=agreement.id,
         partner_id=int(payload['partner_id']),
@@ -1177,22 +1188,10 @@ def record_workspace_capital_contribution(
         notes=notes,
         client_request_id=client_request_id,
         created_by_id=user_id,
+        from_cash_account_id=from_cash_account_id,
         source=AgreementActionSource.BUSINESS_RECORDED,
         confirmation_status=AgreementConfirmationStatus.CONFIRMED,
     )
-    record_partner_capital_contribution_payment(
-        tenant_id=tenant_id,
-        partner_id=contribution.partner_id,
-        contribution_id=contribution.id,
-        cash_account_id=int(cash_account_id),
-        amount=contribution.amount,
-        currency=contribution.currency,
-        fx_rate=contribution.fx_rate,
-        paid_at=contribution.date,
-        client_request_id=client_request_id,
-        notes=notes,
-    )
-    return contribution
 
 
 def allocate_workspace_capital(

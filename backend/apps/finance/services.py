@@ -591,24 +591,45 @@ def record_generic_cash_payment(
     return payment
 
 
-def record_partner_capital_contribution_payment(
+def record_capital_pool_contribution(
     *,
     tenant_id: int,
+    pool_account_id: int,
     partner_id: int,
     contribution_id: int,
-    cash_account_id: int,
     amount: Decimal,
+    equity_account_code: str,
     currency: str = 'UZS',
     fx_rate: Decimal | None = None,
     paid_at=None,
+    from_cash_account_id: int | None = None,
     client_request_id=None,
     notes: str = '',
 ) -> Payment:
-    """Record partner capital entering a business cash account."""
+    """E11: move real cash into an investment agreement's capital pool.
+
+    The pool is a CashAccount of kind AGREEMENT_CAPITAL (linked COA 1300).
+    Two physical shapes, both backing the AgreementContribution with cash:
+
+      - External (from_cash_account_id is None): new money enters from outside
+        the business. CashEntry IN to pool; journal DR 1300 / CR equity, where
+        equity is role-correct (`equity_account_code`: investor → 3100/3110,
+        operator → 3000). Payment.source_type = EXTERNAL_PARTNER.
+
+      - Turnover (from_cash_account_id set): the business commits money it
+        already holds. CashEntry OUT of the operating account + CashEntry IN to
+        the pool; journal DR 1300 / CR <operating linked>. No new equity is
+        recognised (asset ↔ asset). Payment.source_type = CASH_ACCOUNT.
+
+    Contribution currency must match the pool currency (no cross-currency
+    contribution into a pool in the MVP). One Payment fact per contribution.
+    """
     paid_at = paid_at or timezone.now()
     amount = _to_decimal(amount).quantize(Decimal('0.01'))
     if amount <= 0:
         raise ValueError('Contribution payment amount must be > 0')
+
+    payment_currency = str(currency or 'UZS').upper()
 
     with transaction.atomic():
         if client_request_id is not None:
@@ -620,13 +641,15 @@ def record_partner_capital_contribution_payment(
             if existing is not None:
                 return existing
 
-        account = CashAccount.objects.select_for_update().get(
-            pk=cash_account_id,
+        pool = CashAccount.objects.select_for_update().get(
+            pk=pool_account_id,
             tenant_id=tenant_id,
             is_active=True,
         )
-        payment_currency = str(currency or 'UZS').upper()
-        account_currency = str(account.currency or 'UZS').upper()
+        if str(pool.currency or '').upper() != payment_currency:
+            raise ValueError(
+                'Contribution currency must match the agreement capital pool currency.'
+            )
         resolved_fx_rate = (
             _to_decimal(fx_rate).quantize(Decimal('0.000001'))
             if fx_rate is not None
@@ -640,19 +663,18 @@ def record_partner_capital_contribution_payment(
                 )
             )
         )
-        if account_currency == payment_currency:
-            cash_amount = amount
-        elif account_currency == 'UZS':
-            cash_amount = (amount * resolved_fx_rate).quantize(Decimal('0.01'))
-        elif payment_currency == 'UZS':
-            cash_amount = (amount / resolved_fx_rate).quantize(Decimal('0.01'))
+
+        if from_cash_account_id is not None:
+            source_type = Payment.SourceType.CASH_ACCOUNT
+            source_id = from_cash_account_id
         else:
-            raise ValueError('Contribution can only convert through UZS cash accounts in MVP.')
+            source_type = Payment.SourceType.EXTERNAL_PARTNER
+            source_id = partner_id
 
         payment = Payment.objects.create(
             tenant_id=tenant_id,
-            source_type=Payment.SourceType.EXTERNAL_PARTNER,
-            source_id=partner_id,
+            source_type=source_type,
+            source_id=source_id,
             target_type=Payment.TargetType.CAPITAL_CONTRIBUTION,
             target_id=contribution_id,
             amount=amount,
@@ -670,24 +692,69 @@ def record_partner_capital_contribution_payment(
             amount=amount,
             currency=payment_currency,
         )
-        cash_entry = create_cash_entry(
+
+        pool_entry = create_cash_entry(
             tenant_id=tenant_id,
-            account=account,
+            account=pool,
             direction=CashEntry.Direction.IN,
-            amount=cash_amount,
+            amount=amount,
             date=paid_at,
             source_ref_type='finance_payment',
             source_ref_id=payment.pk,
         )
-        journal = record_journal_from_cash_entry(
-            tenant_id=tenant_id,
-            cash_entry=cash_entry,
-            operation_type='capital_contribution',
-            operation_id=payment.pk,
-            counterpart_account_code='3100',
-            description=f'Partner capital contribution #{contribution_id}',
-            date=paid_at,
-        )
+
+        if from_cash_account_id is not None:
+            operating = CashAccount.objects.select_for_update().get(
+                pk=from_cash_account_id,
+                tenant_id=tenant_id,
+                is_active=True,
+            )
+            if str(operating.currency or '').upper() != payment_currency:
+                raise ValueError(
+                    'Turnover contribution requires an operating account in the '
+                    'agreement currency. Use «Касса → Обменять валюту» first.'
+                )
+            if operating.balance < amount:
+                raise ValueError(
+                    f'Insufficient cash in {operating.name}: '
+                    f'have {operating.balance}, need {amount}.'
+                )
+            create_cash_entry(
+                tenant_id=tenant_id,
+                account=operating,
+                direction=CashEntry.Direction.OUT,
+                amount=amount,
+                date=paid_at,
+                source_ref_type='finance_payment',
+                source_ref_id=payment.pk,
+            )
+            # Pure relocation of an asset: DR pool / CR operating.
+            counterpart_code = (
+                operating.linked_account.code
+                if operating.linked_account_id
+                else '1000'
+            )
+            journal = record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=pool_entry,
+                operation_type='capital_contribution',
+                operation_id=payment.pk,
+                counterpart_account_code=counterpart_code,
+                description=f'Capital contribution #{contribution_id} (from turnover)',
+                date=paid_at,
+            )
+        else:
+            # New money from outside: DR pool / CR role-correct equity.
+            journal = record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=pool_entry,
+                operation_type='capital_contribution',
+                operation_id=payment.pk,
+                counterpart_account_code=equity_account_code,
+                description=f'Capital contribution #{contribution_id}',
+                date=paid_at,
+            )
+
         payment.journal_entry = journal
         payment.save(update_fields=['journal_entry', 'updated_at'])
 
@@ -699,7 +766,8 @@ def record_partner_capital_contribution_payment(
                 'contribution_id': contribution_id,
                 'amount': str(amount),
                 'currency': payment_currency,
-                'cash_account_id': account.pk,
+                'pool_account_id': pool.pk,
+                'from_cash_account_id': from_cash_account_id,
             },
             tenant_id=tenant_id,
         )

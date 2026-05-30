@@ -52,6 +52,48 @@ def functional_uzs(amount: Decimal, currency: str = 'UZS', fx_rate: Decimal = De
     return money(amount if currency == 'UZS' else amount * fx_rate)
 
 
+def get_or_create_agreement_capital_account(*, tenant_id: int, agreement: InvestmentAgreement):
+    """E11: return the agreement's capital pool CashAccount, creating it if absent.
+
+    The pool is a real CashAccount (kind=AGREEMENT_CAPITAL, linked to COA 1300,
+    in the agreement currency). It is the single source of truth for partnership
+    money: contributions move cash in, partnership supplier payments draw cash
+    out, and the balance is read straight off the account.
+    """
+    from apps.finance.models import Account, CashAccount
+
+    if agreement.capital_account_id:
+        return agreement.capital_account
+
+    coa = Account.objects.get(tenant_id=tenant_id, code='1300')
+    account = CashAccount.objects.create(
+        tenant_id=tenant_id,
+        name=f'Капитал договора #{agreement.pk}',
+        currency=str(agreement.currency or 'UZS').upper(),
+        kind=CashAccount.Kind.AGREEMENT_CAPITAL,
+        linked_account=coa,
+        balance=ZERO,
+        is_active=True,
+    )
+    agreement.capital_account = account
+    agreement.save(update_fields=['capital_account', 'updated_at'])
+    return account
+
+
+def _capital_equity_account_code(*, role: str, legal_mode: str | None) -> str:
+    """Role-correct equity COA for an external capital contribution.
+
+    Investor capital is partnership equity (3110 Musharaka, else 3100 Mudaraba).
+    Operator capital is the business owner's own equity (3000) — the operator is
+    the owner, so it must not be booked as investor capital.
+    """
+    if role == AgreementPartner.Role.INVESTOR:
+        if str(legal_mode) == InvestmentAgreement.LegalMode.MUSHARAKA:
+            return '3110'
+        return '3100'
+    return '3000'
+
+
 def create_investment_agreement(
     *,
     tenant_id: int,
@@ -100,6 +142,7 @@ def create_investment_agreement(
             notes=notes,
             client_request_id=client_request_id,
         )
+        get_or_create_agreement_capital_account(tenant_id=tenant_id, agreement=agreement)
         for partner in partners:
             member = AgreementPartner.objects.create(
                 tenant_id=tenant_id,
@@ -160,6 +203,7 @@ def add_agreement_contribution(
     client_request_id: str | None = None,
     created_by_id: int | None = None,
     actor_partner_id: int | None = None,
+    from_cash_account_id: int | None = None,
     source: str = AgreementActionSource.BUSINESS_RECORDED,
     confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
 ) -> AgreementContribution:
@@ -185,7 +229,12 @@ def add_agreement_contribution(
         )
         if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
             raise ValueError('Cannot contribute to closed agreement.')
-        if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
+        member = (
+            AgreementPartner.objects
+            .filter(agreement=agreement, partner_id=partner_id)
+            .first()
+        )
+        if member is None:
             raise ValueError('Selected partner is not part of this agreement.')
 
         contribution = AgreementContribution.objects.create(
@@ -203,6 +252,31 @@ def add_agreement_contribution(
             notes=notes,
             client_request_id=client_request_id,
         )
+
+        # E11: a contribution always moves real cash into the agreement's
+        # capital pool. There is no ledger-only contribution path.
+        from apps.finance.services import record_capital_pool_contribution
+
+        pool = get_or_create_agreement_capital_account(
+            tenant_id=tenant_id, agreement=agreement,
+        )
+        record_capital_pool_contribution(
+            tenant_id=tenant_id,
+            pool_account_id=pool.pk,
+            partner_id=partner_id,
+            contribution_id=contribution.pk,
+            amount=amount,
+            equity_account_code=_capital_equity_account_code(
+                role=member.role, legal_mode=agreement.legal_mode,
+            ),
+            currency=currency,
+            fx_rate=Decimal(str(fx_rate)),
+            paid_at=date,
+            from_cash_account_id=from_cash_account_id,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+
         if agreement.status == InvestmentAgreement.Status.OPEN:
             agreement.status = InvestmentAgreement.Status.ACTIVE
             agreement.save(update_fields=['status', 'updated_at'])
