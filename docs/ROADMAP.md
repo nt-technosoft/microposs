@@ -32,6 +32,7 @@
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 | **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🔵 IN_REVIEW | ~95% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
 | **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~35% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
+| **E11** | Partnership Capital as Real Agreement Account (money source-of-truth) | 🟡 IN_PROGRESS | ~0% | E07, E08 | [→](./roadmap/E11-partnership-capital-pool.md) |
 
 **🔥 Активный P0 (frontend, с 2026-05-29):** E10 — Frontend Design System &
 Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) поверх
