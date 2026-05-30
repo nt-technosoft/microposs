@@ -1178,13 +1178,15 @@ def record_workspace_capital_contribution(
             raise ValueError('from_cash_account_id is required for a turnover contribution.')
     from_cash_account_id = int(from_cash_account_id) if from_cash_account_id else None
     notes = payload.get('notes', '')
+    raw_fx = payload.get('fx_rate')
+    fx_rate = Decimal(str(raw_fx)) if raw_fx not in (None, '', '0', 0) else None
     return add_agreement_contribution(
         tenant_id=tenant_id,
         agreement_id=agreement.id,
         partner_id=int(payload['partner_id']),
         amount=Decimal(str(payload['amount'])),
         currency=payload.get('currency', agreement.currency),
-        fx_rate=Decimal(str(payload.get('fx_rate', '1'))),
+        fx_rate=fx_rate,
         date=payload.get('date') or payload.get('paid_at'),
         notes=notes,
         client_request_id=client_request_id,
@@ -2285,6 +2287,7 @@ def _investment_payload(procurement: Procurement) -> dict | None:
     if not agreement:
         return None
     available = _agreement_available_by_partner(agreement)
+    pool_account = agreement.capital_account
     return {
         'agreement_id': agreement.id,
         'agreement_label': f'Investment agreement #{agreement.id}',
@@ -2292,6 +2295,11 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         'legal_mode': agreement.legal_mode,
         'currency': agreement.currency,
         'planned_budget': str(agreement.planned_budget),
+        'pool': ({
+            'cash_account_id': pool_account.id,
+            'currency': pool_account.currency,
+            'balance': str(pool_account.balance),
+        } if pool_account else None),
         'partners': [
             {
                 'partner_id': member.partner_id,

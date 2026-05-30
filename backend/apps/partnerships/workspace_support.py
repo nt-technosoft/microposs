@@ -197,7 +197,7 @@ def add_agreement_contribution(
     partner_id: int,
     amount: Decimal,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
     date=None,
     notes: str = '',
     client_request_id: str | None = None,
@@ -213,6 +213,19 @@ def add_agreement_contribution(
         raise ValueError('Contribution amount must be > 0.')
     if date is None:
         date = timezone.now()
+
+    # fx_rate is the to-UZS rate for functional GL. When the caller does not
+    # supply one (the UI shouldn't have to know today's rate), resolve the
+    # official snapshot for non-UZS contributions so the GL is correct.
+    if fx_rate in (None, '', 0, '0'):
+        if currency == 'UZS':
+            fx_rate = Decimal('1')
+        else:
+            from apps.finance.fx_rates import resolve_fx_rate_snapshot
+            fx_rate = resolve_fx_rate_snapshot(
+                tenant_id=tenant_id, operation_currency=currency, operation_at=date,
+            )
+    fx_rate = Decimal(str(fx_rate))
 
     with transaction.atomic():
         if client_request_id:

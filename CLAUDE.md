@@ -95,7 +95,7 @@ reference this section, not redefine the rules.
 10. `JournalEntry` is created automatically for every financial operation; no money moves without a journal line.
 11. All significant domain operations write an `OutboxEvent`.
 12. Physical `delete()` is forbidden for `Sale`, `ReceiveBatch`, `JournalEntry`, `Lot`, `Payment`, `CapitalContribution`, `PartnerLedgerEntry`, `AgreementEvent`. Reversal is a new append-only record, not a deletion.
-13. Partnership money moves only through `InvestmentAgreement` (`CapitalCommitment` → `CapitalContribution` → `InvestmentAllocation` → `Payment`); there is no direct payment path "around" the agreement.
+13. Partnership money moves only through `InvestmentAgreement` (`CapitalCommitment` → `CapitalContribution` → `InvestmentAllocation` → `Payment`); there is no direct payment path "around" the agreement. **(E11)** This is physical, not ledger-only: each agreement owns a real capital-pool `CashAccount` (`kind=AGREEMENT_CAPITAL`, COA 1300). Contributions move real cash into the pool (external → `DR 1300 / CR` role-correct equity: investor 3100/3110, operator 3000; "from turnover" → operating cash → pool); a partnership receive is funded out of the pool (`Payment.source_type=CAPITAL_POOL`, `DR 1100 / CR 1300`), never by re-crediting equity at receive and never leaving a supplier payable. Pool cash is in the agreement currency; the GL is functional UZS. Invariant: `pool.balance == Σ contributions − Σ pool payments`.
 14. `Lot.contract_snapshot` is immutable at creation; changing an `InvestmentAgreement` later does not rewrite existing lots — only future receive batches use the new shares.
 
 > `Receipt`/`ReceiptLine` (legacy) and `InvestorContract` (legacy) still exist
