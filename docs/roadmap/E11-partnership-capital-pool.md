@@ -59,8 +59,8 @@
 ## Задачи (чек-лист)
 
 ### Фаза 1
-- [ ] T-1.1 `InvestmentAgreement.capital_account` + CashAccount kind=AGREEMENT_CAPITAL
-- [ ] T-1.2 Миграция: счета-пулы существующим договорам + opening balance = derived available
+- [x] T-1.1 `InvestmentAgreement.capital_account` + CashAccount kind=AGREEMENT_CAPITAL + COA 1300 (commit 9bb8e9f; миграции применены; 36 capital/finance тестов зелёные)
+- [ ] T-1.2 Миграция: счета-пулы существующим договорам + opening balance = derived available (превью: AG#1 USD=7940, AG#2 USD=0)
 - [ ] T-1.3 Скрипт-сверка после миграции (пул == леджер по каждому договору)
 
 ### Фаза 2–6 — детализируются при входе в фазу (см. план)
