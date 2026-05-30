@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.finance.fx_rates import upsert_exchange_rate
-from apps.finance.models import CashEntry, ExchangeRate, JournalEntry
+from apps.finance.models import CashEntry, ExchangeRate, JournalEntry, JournalLine, Payment
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.partnerships.models import PartnerLedgerEntry, Procurement
 
@@ -144,12 +144,21 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(len(receive_response.data['documents']['items']), 1)
         self.assertEqual(len(receive_response.data['documents']['receive_batches']), 1)
 
-        batch_id = receive_response.data['documents']['receive_batches'][0]['id']
-        receipt_journal = JournalEntry.objects.filter(
-            operation_type='receipt',
-            operation_id=batch_id,
+        # E11: partnership inventory is funded out of the capital pool, so the
+        # receive books a CAPITAL_POOL payment (DR 1100 / CR 1300), not a
+        # legacy 'receipt' journal that re-credited investor equity.
+        pool_payment = Payment.objects.get(
+            tenant_id=self.ctx['business'].id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement_id,
         )
-        self.assertEqual(receipt_journal.count(), 1)
+        inventory_debit = JournalLine.objects.filter(
+            journal_entry=pool_payment.journal_entry,
+            account__code='1100',
+        ).first()
+        self.assertIsNotNone(inventory_debit)
+        self.assertGreater(inventory_debit.debit, Decimal('0'))
 
     def test_owner_can_open_minimal_partnership_procurement_without_supplier_or_items(self):
         self.auth_owner()

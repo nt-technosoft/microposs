@@ -14,14 +14,23 @@ After Phase 2 there are no pool outflows yet, so pool.balance == Σ contribution
 from decimal import Decimal
 
 from django.test import TestCase
+from django.utils import timezone
 
-from apps.finance.models import CashAccount, JournalEntry, JournalLine
+from apps.finance.fx_rates import upsert_exchange_rate
+from apps.finance.models import (
+    CashAccount,
+    ExchangeRate,
+    JournalEntry,
+    JournalLine,
+    Payment,
+)
 from apps.finance.services import get_account_balance, record_owner_contribution
 from apps.partnerships.models import (
     AgreementContribution,
     InvestmentAgreement,
     Procurement,
 )
+from apps.suppliers.models import SupplierPayable
 from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
 
 from ._helpers import build_tenant
@@ -158,6 +167,41 @@ class CapitalContributionReconciliationTests(TestCase):
         # Pure relocation: no new equity recognised (asset ↔ asset).
         self.assertEqual(get_account_balance(ctx['business'].id, '3100'), Decimal('0.00'))
 
+    def test_usd_contribution_keeps_pool_in_usd_but_books_gl_in_functional_uzs(self):
+        ctx = build_tenant()
+        upsert_exchange_rate(
+            tenant_id=ctx['business'].id,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            rate=Decimal('12000'),
+            source=ExchangeRate.Source.MANUAL,
+            is_manual=True,
+            notes='test fixture',
+        )
+        procurement = _build_partnership_agreement(ctx, currency='USD')
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RECORD_CAPITAL_CONTRIBUTION',
+            payload={'payload': {
+                'partner_id': ctx['investor'].id,
+                'amount': Decimal('595'),
+                'currency': 'USD',
+                'fx_rate': Decimal('12000'),
+            }},
+        )
+
+        pool = _pool(procurement)
+        # Cash subledger stays in the agreement (transaction) currency.
+        self.assertEqual(pool.currency, 'USD')
+        self.assertEqual(pool.balance, Decimal('595.00'))
+        # GL is functional UZS everywhere: 595 USD × 12000 = 7 140 000 UZS.
+        functional = Decimal('595') * Decimal('12000')
+        self.assertEqual(get_account_balance(ctx['business'].id, '1300'), functional)
+        self.assertEqual(get_account_balance(ctx['business'].id, '3100'), functional)
+
     def test_pool_balance_reconciles_with_sum_of_contributions(self):
         ctx = build_tenant()
         procurement = _build_partnership_agreement(ctx)
@@ -186,6 +230,133 @@ class CapitalContributionReconciliationTests(TestCase):
         self.assertEqual(pool.balance, contributed)
         self.assertEqual(pool.balance, Decimal('200.00'))
         # Every journal entry is balanced.
+        for entry in JournalEntry.objects.filter(tenant_id=ctx['business'].id):
+            lines = JournalLine.objects.filter(journal_entry=entry)
+            self.assertEqual(
+                sum((l.debit for l in lines), Decimal('0')),
+                sum((l.credit for l in lines), Decimal('0')),
+            )
+
+
+class CapitalPoolPaymentReconciliationTests(TestCase):
+    """Phase 3: partnership supplier cost is settled from the pool, not from
+    operating cash and not by re-crediting investor equity at receive."""
+
+    def _build_funded_partnership(self, ctx):
+        procurement = _build_partnership_agreement(ctx, currency='UZS')
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('20'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }]}},
+        )
+        for partner_id, amount in (
+            (ctx['investor'].id, Decimal('140')),
+            (ctx['operator'].id, Decimal('60')),
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': Decimal('1'),
+                }},
+            )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('140'), 'currency': 'UZS'},
+                {'partner_id': ctx['operator'].id, 'amount': Decimal('60'), 'currency': 'UZS'},
+            ]}},
+        )
+        return procurement
+
+    def test_receive_draws_inventory_cost_from_pool(self):
+        ctx = build_tenant()
+        procurement = self._build_funded_partnership(ctx)
+        item = procurement.items.get()
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': ctx['storage'].id,
+                'item_ids': [item.id],
+                'capital_allocations': [
+                    {'partner_id': ctx['investor'].id, 'amount': Decimal('140')},
+                    {'partner_id': ctx['operator'].id, 'amount': Decimal('60')},
+                ],
+            }},
+        )
+
+        pool = _pool(procurement)
+        # Inventory cost (20 × 10 = 200) is drawn out of the pool.
+        self.assertEqual(pool.balance, Decimal('0.00'))
+        # The draw is a CAPITAL_POOL payment, not operating cash.
+        pool_payment = Payment.objects.get(
+            tenant_id=ctx['business'].id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+        )
+        self.assertEqual(pool_payment.amount, Decimal('200.00'))
+        self.assertEqual(pool_payment.source_id, pool.pk)
+        # Partnership procurements never leave a supplier payable — the pool settles it.
+        self.assertFalse(
+            SupplierPayable.objects.filter(tenant_id=ctx['business'].id, procurement=procurement).exists()
+        )
+
+    def test_pool_reconciles_and_equity_not_double_counted_after_receive(self):
+        ctx = build_tenant()
+        procurement = self._build_funded_partnership(ctx)
+        item = procurement.items.get()
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': ctx['storage'].id,
+                'item_ids': [item.id],
+                'capital_allocations': [
+                    {'partner_id': ctx['investor'].id, 'amount': Decimal('140')},
+                    {'partner_id': ctx['operator'].id, 'amount': Decimal('60')},
+                ],
+            }},
+        )
+
+        pool = _pool(procurement)
+        contributed = sum(
+            (c.amount for c in InvestmentAgreement.objects.get(pk=procurement.agreement_id).contributions.all()),
+            Decimal('0'),
+        )
+        pool_out = sum(
+            (p.amount for p in Payment.objects.filter(
+                tenant_id=ctx['business'].id,
+                source_type=Payment.SourceType.CAPITAL_POOL,
+            )),
+            Decimal('0'),
+        )
+        # Reconciliation invariant: pool == Σ contributions − Σ pool payments.
+        self.assertEqual(pool.balance, contributed - pool_out)
+
+        # Equity is recognised once (at contribution), not re-credited at receive.
+        self.assertEqual(get_account_balance(ctx['business'].id, '3100'), Decimal('140.00'))
+        self.assertEqual(get_account_balance(ctx['business'].id, '3000'), Decimal('60.00'))
+        # Inventory landed on the books; pool GL nets to zero.
+        self.assertEqual(get_account_balance(ctx['business'].id, '1100'), Decimal('200.00'))
+        self.assertEqual(get_account_balance(ctx['business'].id, '1300'), Decimal('0.00'))
+        # All journals balanced.
         for entry in JournalEntry.objects.filter(tenant_id=ctx['business'].id):
             lines = JournalLine.objects.filter(journal_entry=entry)
             self.assertEqual(

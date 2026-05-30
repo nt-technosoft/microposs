@@ -10,6 +10,7 @@ from apps.core.services import publish_event
 from apps.finance.models import CashAccount, Payment
 from apps.finance.services import (
     create_journal_entry,
+    record_capital_pool_payment,
     record_generic_cash_payment,
 )
 from apps.partnerships.formulas import profit_shares_from_capital
@@ -1748,14 +1749,24 @@ def receive_workspace_batch(
 
         _sync_procurement_status_after_receive(locked, received_at)
         payable = _ensure_supplier_payable_after_receive(tenant_id, locked, terms)
-        _record_receive_journal(
-            tenant_id=tenant_id,
-            procurement=locked,
-            batch=batch,
-            amount=total_inventory_uzs,
-            payable=payable,
-            received_at=received_at,
-        )
+        if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            # E11: partnership inventory is funded out of the capital pool, not by
+            # re-crediting investor equity. The pool payment books DR 1100 / CR 1300.
+            _draw_partnership_inventory_from_pool(
+                tenant_id=tenant_id,
+                procurement=locked,
+                amount_uzs=total_inventory_uzs,
+                received_at=received_at,
+            )
+        else:
+            _record_receive_journal(
+                tenant_id=tenant_id,
+                procurement=locked,
+                batch=batch,
+                amount=total_inventory_uzs,
+                payable=payable,
+                received_at=received_at,
+            )
         upsert_supplier_links_for_items(tenant_id, locked, items, received_at)
 
         at_receipt_payment = None
@@ -2991,7 +3002,44 @@ def _sync_procurement_status_after_receive(procurement: Procurement, received_at
         procurement.save(update_fields=['status', 'received_at', 'updated_at'])
 
 
+def _draw_partnership_inventory_from_pool(*, tenant_id: int, procurement: Procurement, amount_uzs: Decimal, received_at) -> None:
+    """E11: fund a partnership receive batch out of the agreement capital pool.
+
+    Pool cash drops by the inventory cost (in agreement currency); the GL books
+    DR 1100 / CR 1300 in functional UZS. Equity was already recognised when the
+    capital was contributed, so receive must not credit 3100/3000 again.
+    CONSIGNED goods are off-balance, so nothing is drawn.
+    """
+    if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
+        return
+    amount_uzs = Decimal(str(amount_uzs)).quantize(Decimal('0.01'))
+    if amount_uzs <= 0:
+        return
+    agreement = _require_workspace_agreement(procurement)
+    if not agreement.capital_account_id:
+        raise ValueError('Partnership agreement has no capital pool.')
+    currency = str(agreement.currency or 'UZS').upper()
+    amount_pool = _amount_uzs_to_currency(
+        tenant_id=tenant_id, amount_uzs=amount_uzs, currency=currency, received_at=received_at,
+    )
+    record_capital_pool_payment(
+        tenant_id=tenant_id,
+        pool_account_id=agreement.capital_account_id,
+        target_type=Payment.TargetType.PROCUREMENT_COST,
+        target_id=procurement.pk,
+        amount=amount_pool,
+        functional_amount_uzs=amount_uzs,
+        counterpart_account_code='1100',
+        currency=currency,
+        paid_at=received_at,
+        operation_type='procurement_payment',
+        description=f'Procurement #{procurement.pk} funded from capital pool',
+    )
+
+
 def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurement, terms):
+    if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+        return None  # E11: partnership cost is settled from the capital pool, no supplier A/P
     if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
         return None  # CONSIGNED → payable создаётся per-sale, не at-receive
     if not terms or terms.type == ProcurementTerms.Type.PREPAID:
@@ -3015,6 +3063,8 @@ def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurem
 
 
 def _record_receive_journal(*, tenant_id: int, procurement: Procurement, batch, amount: Decimal, payable, received_at) -> None:
+    # PARTNERSHIP receives are funded from the capital pool
+    # (_draw_partnership_inventory_from_pool); this path is OWN_FUNDS only.
     if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
         return  # CONSIGNED inventory не на нашем балансе — никакого journal
     if amount <= 0:
@@ -3025,9 +3075,9 @@ def _record_receive_journal(*, tenant_id: int, procurement: Procurement, batch, 
         target_id=procurement.id,
         status=Payment.Status.POSTED,
     ).exists()
-    if procurement.funding_source == Procurement.FundingSource.OWN_FUNDS and already_paid:
+    if already_paid:
         return
-    credit_code = '2000' if payable else ('3100' if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP else '1000')
+    credit_code = '2000' if payable else '1000'
     create_journal_entry(
         tenant_id=tenant_id,
         operation_type='receipt',

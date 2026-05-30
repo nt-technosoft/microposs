@@ -693,6 +693,9 @@ def record_capital_pool_contribution(
             currency=payment_currency,
         )
 
+        # GL is functional UZS; the pool cash subledger is the agreement currency.
+        functional_uzs = (amount * resolved_fx_rate).quantize(Decimal('0.01'))
+
         pool_entry = create_cash_entry(
             tenant_id=tenant_id,
             account=pool,
@@ -734,9 +737,10 @@ def record_capital_pool_contribution(
                 if operating.linked_account_id
                 else '1000'
             )
-            journal = record_journal_from_cash_entry(
+            journal = record_pool_journal_functional(
                 tenant_id=tenant_id,
                 cash_entry=pool_entry,
+                functional_amount_uzs=functional_uzs,
                 operation_type='capital_contribution',
                 operation_id=payment.pk,
                 counterpart_account_code=counterpart_code,
@@ -745,9 +749,10 @@ def record_capital_pool_contribution(
             )
         else:
             # New money from outside: DR pool / CR role-correct equity.
-            journal = record_journal_from_cash_entry(
+            journal = record_pool_journal_functional(
                 tenant_id=tenant_id,
                 cash_entry=pool_entry,
+                functional_amount_uzs=functional_uzs,
                 operation_type='capital_contribution',
                 operation_id=payment.pk,
                 counterpart_account_code=equity_account_code,
@@ -768,6 +773,129 @@ def record_capital_pool_contribution(
                 'currency': payment_currency,
                 'pool_account_id': pool.pk,
                 'from_cash_account_id': from_cash_account_id,
+            },
+            tenant_id=tenant_id,
+        )
+    return payment
+
+
+def record_capital_pool_payment(
+    *,
+    tenant_id: int,
+    pool_account_id: int,
+    target_type: str,
+    target_id: int,
+    amount: Decimal,
+    functional_amount_uzs: Decimal,
+    counterpart_account_code: str,
+    currency: str = 'UZS',
+    fx_rate: Decimal | None = None,
+    paid_at=None,
+    operation_type: str = 'procurement_payment',
+    description: str = '',
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """E11: settle a cost out of an agreement capital pool.
+
+    The pool cash drops by `amount` (agreement currency); the GL books
+    `functional_amount_uzs`: DR counterpart / CR 1300. Used so a partnership
+    procurement's inventory is funded by the pool (counterpart 1100) rather
+    than by re-crediting investor equity at receive. One Payment fact with
+    source_type = CAPITAL_POOL.
+    """
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    functional_amount_uzs = _to_decimal(functional_amount_uzs).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Capital pool payment amount must be > 0')
+
+    payment_currency = str(currency or 'UZS').upper()
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        pool = CashAccount.objects.select_for_update().get(
+            pk=pool_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if str(pool.currency or '').upper() != payment_currency:
+            raise ValueError('Payment currency must match the agreement capital pool currency.')
+        if pool.balance < amount:
+            raise ValueError(
+                f'Insufficient capital pool funds in {pool.name}: '
+                f'have {pool.balance}, need {amount}.'
+            )
+        resolved_fx_rate = (
+            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
+            if fx_rate is not None
+            else (
+                Decimal('1') if payment_currency == 'UZS'
+                else (functional_amount_uzs / amount).quantize(Decimal('0.000001'))
+            )
+        )
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            source_id=pool.pk,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=resolved_fx_rate,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+        pool_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=pool,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = record_pool_journal_functional(
+            tenant_id=tenant_id,
+            cash_entry=pool_entry,
+            functional_amount_uzs=functional_amount_uzs,
+            operation_type=operation_type,
+            operation_id=payment.pk,
+            counterpart_account_code=counterpart_account_code,
+            description=description or f'Capital pool payment #{payment.pk}',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'target_type': target_type,
+                'target_id': target_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'source_type': payment.source_type,
+                'source_id': payment.source_id,
             },
             tenant_id=tenant_id,
         )
@@ -1004,6 +1132,50 @@ def record_journal_from_cash_entry(
                 'credit': amount,
                 'description': description,
             },
+        ],
+        description=description,
+        date=date or cash_entry.date,
+    )
+
+
+def record_pool_journal_functional(
+    *,
+    tenant_id: int,
+    cash_entry: CashEntry,
+    functional_amount_uzs: Decimal,
+    operation_type: str,
+    operation_id: int,
+    counterpart_account_code: str,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    """Journal for a capital-pool CashEntry, booked in functional UZS.
+
+    The pool CashAccount tracks the agreement (transaction) currency, but the
+    GL is functional UZS everywhere. So the CashEntry amount (agreement
+    currency) and the journal amount (`functional_amount_uzs`) differ for
+    non-UZS agreements. Direction IN → DR 1300 / CR counterpart; OUT → reverse.
+    """
+    cash_account = cash_entry.account
+    if not cash_account.linked_account_id:
+        raise ValueError(f'CashAccount {cash_account.pk} has no linked COA account.')
+    cash_code = cash_account.linked_account.code
+    amount = _to_decimal(functional_amount_uzs).quantize(Decimal('0.01'))
+
+    if cash_entry.direction == CashEntry.Direction.IN:
+        dr_code, cr_code = cash_code, counterpart_account_code
+    else:
+        dr_code, cr_code = counterpart_account_code, cash_code
+
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type=operation_type,
+        operation_id=operation_id,
+        lines=[
+            {'account_code': dr_code, 'debit': amount, 'credit': Decimal('0'),
+             'description': description},
+            {'account_code': cr_code, 'debit': Decimal('0'), 'credit': amount,
+             'description': description},
         ],
         description=description,
         date=date or cash_entry.date,

@@ -1,7 +1,7 @@
 # E11 — Партнёрский капитал как реальный счёт договора (единый источник правды денег)
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~40% (Фаза 1 + Фаза 2 DONE 2026-05-30)
+**Прогресс:** ~60% (Фазы 1–3 DONE 2026-05-30; осталось 4 консолидация, 5 доки, 6 frontend)
 **Зависит от:** E07, E08 (DONE)
 **Блокирует:** корректный partnership-money flow; косвенно E03 (Net Value), E10 (UI пополнения/оплаты)
 
@@ -70,10 +70,12 @@
 - [x] T-2.3 Убран ledger-only путь: `add_agreement_contribution` теперь всегда двигает кэш в пул; удалён `record_partner_capital_contribution_payment`
 - [x] T-2.4 Reconciliation-тесты (`test_e11_capital_pool_reconciliation.py`): пул == Σ contributions; operating cash корректна по режиму; журналы сбалансированы
 
-### Фаза 3 — Оплата поставщика из пула (следующий шаг)
-- [ ] T-3.1 Партнёрская оплата списывает из пула, `Payment.source_type=CAPITAL_POOL`
-- [ ] T-3.2 `_record_receive_journal` для PARTNERSHIP больше не кредитует 3100 (капитал признан при взносе) — кредит из пула 1300
-- [ ] T-3.3 Reconciliation: пул == Σ contributions − Σ pool payments
+### Фаза 3 — Оплата поставщика из пула ✅
+- [x] T-3.1 `finance.record_capital_pool_payment` — партнёрский расход списывает из пула, `Payment.source_type=CAPITAL_POOL`; журнал в functional UZS (пул-кэш в валюте договора)
+- [x] T-3.2 PARTNERSHIP receive фондируется из пула (`_draw_partnership_inventory_from_pool`, DR 1100 / CR 1300); `_record_receive_journal` больше не кредитует 3100 — он только OWN_FUNDS. Капитал признан один раз при взносе.
+- [x] T-3.3 Партнёрские приходы больше не оставляют SupplierPayable — расход закрывается пулом (`_ensure_supplier_payable_after_receive` → None для PARTNERSHIP)
+- [x] T-3.4 Multi-currency: пул-кэш в валюте договора, GL в functional UZS (`record_pool_journal_functional`); тест USD-взноса
+- [x] T-3.5 Reconciliation: пул == Σ contributions − Σ pool payments; equity не двоится; журналы сбалансированы
 
 ### Фаза 4–6 — детализируются при входе в фазу (см. план)
 
