@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
-import { CheckCircle, AlertCircle, PlusCircle, Square, CheckSquare } from 'lucide-vue-next'
+import { CheckCircle2, AlertCircle, PlusCircle, Square, CheckSquare } from 'lucide-vue-next'
 import PaymentMakeSheet from './PaymentMakeSheet.vue'
 import PaymentScheduleEditor from './PaymentScheduleEditor.vue'
 import ConsignmentObligationsBlock from './ConsignmentObligationsBlock.vue'
+import PartnershipCapitalPaymentSheet from './PartnershipCapitalPaymentSheet.vue'
 import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
@@ -28,7 +32,9 @@ const paySheetPayableId = ref<number | undefined>(undefined)
 const paySheetScheduleEntryId = ref<number | undefined>(undefined)
 const paySheetItemIds = ref<number[] | undefined>(undefined)
 const paySheetExpenseIds = ref<number[] | undefined>(undefined)
+const paySheetCurrency = ref<string | undefined>(undefined)
 const scheduleEditorOpen = ref(false)
+const capitalPaymentSheetOpen = ref(false)
 
 const selectionMode = ref(false)
 const selectedItemIds = ref<Set<number>>(new Set())
@@ -73,14 +79,63 @@ const isInstallment = computed(() => settlementType.value === 'INSTALLMENT')
 const isPartial = computed(() => settlementType.value === 'PARTIAL')
 const isOnSale = computed(() => settlementType.value === 'ON_SALE')
 
-const isFilled = computed(() => paymentStatus.value?.state === 'paid_full')
+// Multi-currency obligation/paid/remaining (mixed-currency procurement support).
+const obligationByCurrency = computed<Record<string, string>>(() => paymentStatus.value?.obligation_by_currency ?? {})
+const paidByCurrency = computed<Record<string, string>>(() => paymentStatus.value?.paid_by_currency ?? {})
+const remainingByCurrency = computed<Record<string, string>>(() => paymentStatus.value?.remaining_by_currency ?? {})
+
+const partnershipAllocatedByCurrency = computed<Record<string, number>>(() => {
+  const inv = props.procurement.documents.investment
+  const totals: Record<string, number> = {}
+  if (!inv) return totals
+  for (const allocation of inv.allocations) {
+    const currency = (allocation.currency || 'UZS').toUpperCase()
+    const amount = parseFloat(allocation.amount) || 0
+    totals[currency] = (totals[currency] ?? 0) + (allocation.direction === 'TO_PROCUREMENT' ? amount : -amount)
+  }
+  return totals
+})
+const partnershipRemainingByCurrency = computed<Record<string, string>>(() => {
+  const result: Record<string, string> = {}
+  for (const [currency, amount] of Object.entries(obligationByCurrency.value)) {
+    const remaining = Math.max(0, (parseFloat(amount) || 0) - (partnershipAllocatedByCurrency.value[currency] ?? 0))
+    result[currency] = remaining.toFixed(2)
+  }
+  return result
+})
+const displayPaidByCurrency = computed<Record<string, string>>(() =>
+  isPartnership.value
+    ? Object.fromEntries(Object.entries(partnershipAllocatedByCurrency.value).map(([currency, amount]) => [currency, amount.toFixed(2)]))
+    : paidByCurrency.value,
+)
+const displayRemainingByCurrency = computed<Record<string, string>>(() =>
+  isPartnership.value ? partnershipRemainingByCurrency.value : remainingByCurrency.value,
+)
+
+const isPartnershipCovered = computed(() => {
+  if (!isPartnership.value) return false
+  const entries = Object.entries(obligationByCurrency.value).filter(([, amount]) => (parseFloat(amount) || 0) > 0)
+  if (!entries.length) return false
+  return entries.every(([currency, amount]) =>
+    (partnershipAllocatedByCurrency.value[currency] ?? 0) + 0.01 >= (parseFloat(amount) || 0),
+  )
+})
+
+const isFilled = computed(() => paymentStatus.value?.state === 'paid_full' || isPartnershipCovered.value)
 
 const remainingAmount = computed(() => {
   const ps = paymentStatus.value
-  if (!ps) return '0'
+  if (!ps || !ps.delta) return '0'
   const delta = parseFloat(ps.delta)
   return String(Math.max(0, -(delta)))
 })
+
+function fmtMoneyMap(map: Record<string, string>): string {
+  const parts = Object.entries(map)
+    .filter(([, v]) => (parseFloat(v) || 0) !== 0)
+    .map(([c, v]) => `${Math.round(parseFloat(v) || 0).toLocaleString('ru-RU')} ${c}`)
+  return parts.length ? parts.join(' · ') : '0'
+}
 
 const firstOpenPayable = computed(() => payables.value.find((p) => p.status !== 'PAID') ?? null)
 
@@ -102,24 +157,29 @@ const selectionTotal = computed((): Record<string, number> => {
 
 const selectionCurrencies = computed(() => Object.keys(selectionTotal.value))
 const selectionMixed = computed(() => selectionCurrencies.value.length > 1)
+const allTotalsMixed = computed(() => Object.keys(allTotalsByCurrency.value).length > 1)
 const selectionAmount = computed((): string => {
   if (selectionMixed.value || !selectionCurrencies.value.length) return ''
   const cur = selectionCurrencies.value[0]
   return String(selectionTotal.value[cur] ?? 0)
 })
-
-function allocateFromCapitalPool(): void {
-  const inv = props.procurement.documents.investment
-  if (!inv || !paymentStatus.value) return
-  const remaining = Math.max(0, -(parseFloat(paymentStatus.value.delta) || 0))
-  const currency = paymentStatus.value.currency
-  const allocations = inv.partners.map((p) => ({
-    partner_id: p.partner_id,
-    amount: (remaining * (parseFloat(p.profit_share) || 0)).toFixed(2),
-    currency,
-  }))
-  emit('dispatch', 'ALLOCATE_CAPITAL', { allocations })
-}
+const singleRemainingCurrency = computed(() => {
+  const currencies = Object.entries(remainingByCurrency.value)
+    .filter(([, value]) => (parseFloat(value) || 0) > 0)
+    .map(([currency]) => currency)
+  if (!currencies.length) {
+    const totalCurrencies = Object.keys(allTotalsByCurrency.value)
+    return totalCurrencies.length === 1 ? totalCurrencies[0] : undefined
+  }
+  return currencies.length === 1 ? currencies[0] : undefined
+})
+const singleRemainingAmount = computed(() => {
+  const currency = singleRemainingCurrency.value
+  if (!currency) return remainingAmount.value
+  const remaining = parseFloat(remainingByCurrency.value[currency] ?? '')
+  if (Number.isFinite(remaining) && remaining > 0) return String(remaining)
+  return String(allTotalsByCurrency.value[currency] ?? 0)
+})
 
 const daysUntilDeadline = computed(() => {
   const d = settlement.value?.deadline_date
@@ -138,11 +198,12 @@ function fmtDate(iso: string): string {
 
 function openPayFull(): void {
   paySheetType.value = 'cost'
-  paySheetDefaultAmount.value = remainingAmount.value
+  paySheetDefaultAmount.value = singleRemainingAmount.value
   paySheetPayableId.value = undefined
   paySheetScheduleEntryId.value = undefined
   paySheetItemIds.value = undefined
   paySheetExpenseIds.value = undefined
+  paySheetCurrency.value = singleRemainingCurrency.value
   paySheetOpen.value = true
 }
 
@@ -163,6 +224,7 @@ function openPaySelected(): void {
   paySheetScheduleEntryId.value = undefined
   paySheetItemIds.value = selectedItemIds.value.size ? [...selectedItemIds.value] : undefined
   paySheetExpenseIds.value = selectedExpenseIds.value.size ? [...selectedExpenseIds.value] : undefined
+  paySheetCurrency.value = selectionCurrencies.value[0]
   selectionMode.value = false
   paySheetOpen.value = true
 }
@@ -185,6 +247,7 @@ function openPayPayable(): void {
   paySheetDefaultAmount.value = p?.remaining_amount
   paySheetPayableId.value = p?.id
   paySheetScheduleEntryId.value = undefined
+  paySheetCurrency.value = p?.currency
   paySheetOpen.value = true
 }
 
@@ -194,6 +257,7 @@ function openPayScheduleEntry(entryId: number, amount: string): void {
   paySheetDefaultAmount.value = amount
   paySheetPayableId.value = p?.id
   paySheetScheduleEntryId.value = entryId
+  paySheetCurrency.value = p?.currency
   paySheetOpen.value = true
 }
 
@@ -203,179 +267,199 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 </script>
 
 <template>
-  <div class="payment-card">
-    <div class="card-header">
-      <span class="card-title">Оплата</span>
-      <CheckCircle v-if="isFilled" class="status-ok" :size="18" :stroke-width="2" />
-      <AlertCircle v-else class="status-warn" :size="18" :stroke-width="2" />
-    </div>
+  <Card class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <CardHeader class="flex flex-row items-center justify-between gap-3 px-4 py-3.5">
+      <CardTitle class="text-base">Оплата</CardTitle>
+      <CheckCircle2 v-if="isFilled" class="size-[18px] text-positive" />
+      <AlertCircle v-else class="size-[18px] text-warning" />
+    </CardHeader>
 
-    <div v-if="paymentStatus" class="obligation-block">
-      <div class="ob-row">
-        <span class="ob-label">Обязательство</span>
-        <span class="ob-value">{{ fmt(paymentStatus.obligation_amount) }} {{ paymentStatus.currency }}</span>
+    <CardContent class="flex flex-col gap-3 px-4 pb-4">
+      <!-- Obligation summary -->
+      <div v-if="paymentStatus" class="flex flex-col gap-1.5 rounded-[10px] bg-neutral-50 px-3.5 py-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Обязательство</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmtMoneyMap(obligationByCurrency) }}</span>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">{{ isPartnership ? 'Выделено' : 'Оплачено' }}</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmtMoneyMap(displayPaidByCurrency) }}</span>
+        </div>
+        <div v-if="!isFilled" class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Остаток</span>
+          <span class="text-sm font-semibold tabular-nums text-warning">{{ fmtMoneyMap(displayRemainingByCurrency) }}</span>
+        </div>
       </div>
-      <div class="ob-row">
-        <span class="ob-label">Оплачено</span>
-        <span class="ob-value">{{ fmt(paymentStatus.paid_amount) }} {{ paymentStatus.currency }}</span>
+
+      <!-- Insufficient balance inline hint -->
+      <div v-if="showTopUpHint" class="flex flex-wrap items-center gap-2 rounded-[10px] bg-neutral-50 px-3.5 py-2.5 text-xs text-foreground">
+        <AlertCircle class="size-3.5 shrink-0 text-warning" />
+        <span class="min-w-0 flex-1">{{ paymentError }}</span>
+        <Button variant="outline" size="sm" class="ml-auto h-8 gap-1 text-xs" @click="openTopUp">
+          <PlusCircle class="size-3.5" />
+          Пополнить кассу
+        </Button>
       </div>
-      <div v-if="paymentStatus.state !== 'paid_full'" class="ob-row">
-        <span class="ob-label">Остаток</span>
-        <span class="ob-value warn">{{ fmt(remainingAmount) }} {{ paymentStatus.currency }}</span>
-      </div>
-    </div>
 
-    <!-- Insufficient balance inline hint -->
-    <div v-if="showTopUpHint" class="topup-hint">
-      <AlertCircle :size="14" :stroke-width="2" class="topup-icon" />
-      <span>{{ paymentError }}</span>
-      <button class="topup-btn" type="button" @click="openTopUp">
-        <PlusCircle :size="14" :stroke-width="2" />
-        Пополнить кассу
-      </button>
-    </div>
-
-    <!-- PARTNERSHIP: allocate from capital pool by profit shares -->
-    <template v-if="isPartnership && !isFilled">
-      <button class="action-btn" type="button" @click="allocateFromCapitalPool">
-        Оплатить из партнёрского капитала
-      </button>
-    </template>
-    <div v-else-if="isPartnership && isFilled" class="available-row">✓ Оплачено из партнёрского капитала</div>
-
-    <!-- ON_SALE: consignment obligations -->
-    <template v-else-if="isOnSale">
-      <ConsignmentObligationsBlock :procurement="procurement" @pay="openPayPayable" />
-    </template>
-
-    <!-- INSTALLMENT -->
-    <template v-else-if="isInstallment">
-      <template v-if="!settlement?.schedule?.length">
-        <div class="warn-text">⚠ Нет графика рассрочки</div>
-        <button class="action-btn" type="button" @click="scheduleEditorOpen = true">Сгенерировать график</button>
+      <!-- PARTNERSHIP: pay selected costs from the agreement capital pool -->
+      <template v-if="isPartnership && !isFilled">
+        <Button class="w-full" @click="capitalPaymentSheetOpen = true">
+          Оплатить из партнёрского капитала
+        </Button>
       </template>
-      <template v-else>
-        <div class="schedule-list">
-          <div v-for="entry in settlement.schedule" :key="entry.id" class="schedule-row">
-            <div class="schedule-meta">
-              <span class="seq">{{ entry.sequence_number }}.</span>
-              <span class="entry-date">{{ fmtDate(entry.due_date) }}</span>
-              <span class="entry-amount">{{ fmt(entry.amount) }} {{ entry.currency }}</span>
-            </div>
-            <button
-              v-if="entry.status !== 'PAID'"
-              class="entry-pay-btn"
-              type="button"
-              @click="openPayScheduleEntry(entry.id, entry.amount)"
-            >Оплатить</button>
-            <span v-else class="entry-paid">✓</span>
-          </div>
-        </div>
+      <div v-else-if="isPartnership && isFilled" class="text-sm font-medium text-positive">
+        Оплачено из партнёрского капитала
+      </div>
+
+      <!-- ON_SALE: consignment obligations -->
+      <template v-else-if="isOnSale">
+        <ConsignmentObligationsBlock :procurement="procurement" @pay="openPayPayable" />
       </template>
-    </template>
 
-    <!-- DEFERRED -->
-    <template v-else-if="isDeferred">
-      <div v-if="settlement?.deadline_date" class="deadline-row">
-        <span class="deadline-label">Дедлайн</span>
-        <span class="deadline-value">
-          {{ fmtDate(settlement.deadline_date) }}
-          <span v-if="daysUntilDeadline !== null" class="days-hint">(через {{ daysUntilDeadline }} дн.)</span>
-        </span>
-      </div>
-      <div v-if="payments.length" class="history-list">
-        <div v-for="p in payments" :key="p.id" class="history-row">
-          <span class="hist-date">{{ fmtDate(p.paid_at) }}</span>
-          <span class="hist-amount">{{ fmt(p.amount) }} {{ p.currency }}</span>
-        </div>
-      </div>
-      <button class="action-btn" type="button" @click="openPayPayable">Совершить платёж</button>
-    </template>
-
-    <!-- PARTIAL -->
-    <template v-else-if="isPartial">
-      <div v-if="settlement" class="partial-info">
-        <div class="ob-row">
-          <span class="ob-label">Предоплата</span>
-          <span class="ob-value">{{ fmt(settlement.paid_amount) }} {{ settlement.currency_of_obligation }}</span>
-        </div>
-        <div v-if="settlement.deadline_date" class="ob-row">
-          <span class="ob-label">Срок долга</span>
-          <span class="ob-value">{{ fmtDate(settlement.deadline_date) }}</span>
-        </div>
-      </div>
-      <div v-if="payments.length" class="history-list">
-        <div v-for="p in payments" :key="p.id" class="history-row">
-          <span class="hist-date">{{ fmtDate(p.paid_at) }}</span>
-          <span class="hist-amount">{{ fmt(p.amount) }} {{ p.currency }}</span>
-        </div>
-      </div>
-      <button class="action-btn" type="button" @click="openPayFull">
-        Оплатить предоплату {{ settlement ? fmt(settlement.total_amount_due) : '' }}
-      </button>
-    </template>
-
-    <!-- PREPAID (default) -->
-    <template v-else-if="isPrepaid || !settlementType">
-      <div v-if="payments.length" class="history-list">
-        <div v-for="p in payments" :key="p.id" class="history-row">
-          <span class="hist-date">{{ fmtDate(p.paid_at) }}</span>
-          <span class="hist-amount">{{ fmt(p.amount) }} {{ p.currency }}</span>
-        </div>
-      </div>
-      <template v-if="!isFilled">
-        <!-- Selection mode -->
-        <template v-if="selectionMode">
-          <div class="selection-section">
-            <div class="selection-header">Выберите товары для оплаты</div>
-            <div
-              v-for="it in procurement.documents.items"
-              :key="it.id"
-              class="selection-row"
-              role="button"
-              @click="toggleItem(it.id)"
-            >
-              <component :is="selectedItemIds.has(it.id) ? CheckSquare : Square" :size="18" :stroke-width="2" class="sel-icon" :class="{ checked: selectedItemIds.has(it.id) }" />
-              <span class="sel-name">{{ it.product_variant_name }}</span>
-              <span class="sel-amount">{{ ((parseFloat(it.quantity)||0)*(parseFloat(it.unit_purchase_price)||0)).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ it.currency }}</span>
-            </div>
-            <template v-if="procurement.documents.expenses.length">
-              <div class="selection-header">Расходы</div>
-              <div
-                v-for="ex in procurement.documents.expenses"
-                :key="ex.id"
-                class="selection-row"
-                role="button"
-                @click="toggleExpense(ex.id)"
-              >
-                <component :is="selectedExpenseIds.has(ex.id) ? CheckSquare : Square" :size="18" :stroke-width="2" class="sel-icon" :class="{ checked: selectedExpenseIds.has(ex.id) }" />
-                <span class="sel-name">{{ ex.expense_type }}</span>
-                <span class="sel-amount">{{ (parseFloat(ex.amount)||0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ ex.currency }}</span>
-              </div>
-            </template>
-            <div v-if="selectionMixed" class="warn-text">Выбранные позиции в разных валютах — платите раздельно</div>
-            <div class="selection-actions">
-              <button class="action-btn" type="button" :disabled="!selectedItemIds.size && !selectedExpenseIds.size || selectionMixed" @click="openPaySelected">
-                Оплатить выбранное
-              </button>
-              <button class="action-btn secondary" type="button" @click="cancelSelection">Отмена</button>
-            </div>
-          </div>
+      <!-- INSTALLMENT -->
+      <template v-else-if="isInstallment">
+        <template v-if="!settlement?.schedule?.length">
+          <p class="text-sm font-medium text-warning">Нет графика рассрочки.</p>
+          <Button variant="outline" class="w-full" @click="scheduleEditorOpen = true">Сгенерировать график</Button>
         </template>
         <template v-else>
-          <!-- Per-currency totals -->
-          <div v-if="Object.keys(allTotalsByCurrency).length" class="currency-totals">
-            <div v-for="(amt, cur) in allTotalsByCurrency" :key="cur" class="currency-total-row">
-              <span class="cur-label">К оплате</span>
-              <span class="cur-amount">{{ amt.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
+          <div class="flex flex-col gap-2">
+            <div
+              v-for="entry in settlement.schedule"
+              :key="entry.id"
+              class="flex items-center justify-between gap-2 rounded-[10px] border border-neutral-200 px-3.5 py-2.5"
+            >
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="text-xs font-semibold text-neutral-400">{{ entry.sequence_number }}.</span>
+                <span class="text-sm text-neutral-500">{{ fmtDate(entry.due_date) }}</span>
+                <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(entry.amount) }} {{ entry.currency }}</span>
+              </div>
+              <Button
+                v-if="entry.status !== 'PAID'"
+                variant="outline"
+                size="sm"
+                class="h-8 shrink-0 rounded-full text-xs"
+                @click="openPayScheduleEntry(entry.id, entry.amount)"
+              >Оплатить</Button>
+              <CheckCircle2 v-else class="size-4 shrink-0 text-positive" />
             </div>
           </div>
-          <button class="action-btn primary-action" type="button" @click="openPayFull">Оплатить всё</button>
-          <button class="text-link" type="button" @click="openPaySelective">Оплатить выборочно →</button>
         </template>
       </template>
-    </template>
-  </div>
+
+      <!-- DEFERRED -->
+      <template v-else-if="isDeferred">
+        <div v-if="settlement?.deadline_date" class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Дедлайн</span>
+          <span class="text-sm font-medium text-foreground">
+            {{ fmtDate(settlement.deadline_date) }}
+            <span v-if="daysUntilDeadline !== null" class="text-xs font-normal text-neutral-500">(через {{ daysUntilDeadline }} дн.)</span>
+          </span>
+        </div>
+        <div v-if="payments.length" class="flex flex-col gap-1">
+          <div
+            v-for="p in payments"
+            :key="p.id"
+            class="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-3 py-2"
+          >
+            <span class="text-xs text-neutral-500">{{ fmtDate(p.paid_at) }}</span>
+            <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(p.amount) }} {{ p.currency }}</span>
+          </div>
+        </div>
+        <Button variant="outline" class="w-full" @click="openPayPayable">Совершить платёж</Button>
+      </template>
+
+      <!-- PARTIAL -->
+      <template v-else-if="isPartial">
+        <div v-if="settlement" class="flex flex-col gap-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-sm text-neutral-500">Предоплата</span>
+            <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(settlement.paid_amount) }} {{ settlement.currency_of_obligation }}</span>
+          </div>
+          <div v-if="settlement.deadline_date" class="flex items-center justify-between gap-2">
+            <span class="text-sm text-neutral-500">Срок долга</span>
+            <span class="text-sm font-medium text-foreground">{{ fmtDate(settlement.deadline_date) }}</span>
+          </div>
+        </div>
+        <div v-if="payments.length" class="flex flex-col gap-1">
+          <div
+            v-for="p in payments"
+            :key="p.id"
+            class="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-3 py-2"
+          >
+            <span class="text-xs text-neutral-500">{{ fmtDate(p.paid_at) }}</span>
+            <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(p.amount) }} {{ p.currency }}</span>
+          </div>
+        </div>
+        <Button variant="outline" class="w-full" @click="openPayFull">
+          Оплатить предоплату {{ settlement ? fmt(settlement.total_amount_due) : '' }}
+        </Button>
+      </template>
+
+      <!-- PREPAID (default) -->
+      <template v-else-if="isPrepaid || !settlementType">
+        <div v-if="payments.length" class="flex flex-col gap-1">
+          <div
+            v-for="p in payments"
+            :key="p.id"
+            class="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-3 py-2"
+          >
+            <span class="text-xs text-neutral-500">{{ fmtDate(p.paid_at) }}</span>
+            <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(p.amount) }} {{ p.currency }}</span>
+          </div>
+        </div>
+        <template v-if="!isFilled">
+          <!-- Selection mode -->
+          <template v-if="selectionMode">
+            <div class="flex flex-col gap-2">
+              <p class="text-xs font-medium uppercase tracking-wide text-neutral-400">Выберите товары для оплаты</p>
+              <button
+                v-for="it in procurement.documents.items"
+                :key="it.id"
+                type="button"
+                class="flex items-center gap-2 rounded-[10px] border border-neutral-200 px-3 py-2.5 text-left transition-colors hover:bg-neutral-50"
+                @click="toggleItem(it.id)"
+              >
+                <component :is="selectedItemIds.has(it.id) ? CheckSquare : Square" :class="cn('size-[18px] shrink-0', selectedItemIds.has(it.id) ? 'text-primary' : 'text-neutral-400')" />
+                <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ it.product_variant_name }}</span>
+                <span class="shrink-0 text-sm font-semibold tabular-nums text-neutral-500">{{ ((parseFloat(it.quantity)||0)*(parseFloat(it.unit_purchase_price)||0)).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ it.currency }}</span>
+              </button>
+              <template v-if="procurement.documents.expenses.length">
+                <p class="text-xs font-medium uppercase tracking-wide text-neutral-400">Расходы</p>
+                <button
+                  v-for="ex in procurement.documents.expenses"
+                  :key="ex.id"
+                  type="button"
+                  class="flex items-center gap-2 rounded-[10px] border border-neutral-200 px-3 py-2.5 text-left transition-colors hover:bg-neutral-50"
+                  @click="toggleExpense(ex.id)"
+                >
+                  <component :is="selectedExpenseIds.has(ex.id) ? CheckSquare : Square" :class="cn('size-[18px] shrink-0', selectedExpenseIds.has(ex.id) ? 'text-primary' : 'text-neutral-400')" />
+                  <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ ex.expense_type }}</span>
+                  <span class="shrink-0 text-sm font-semibold tabular-nums text-neutral-500">{{ (parseFloat(ex.amount)||0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ ex.currency }}</span>
+                </button>
+              </template>
+              <p v-if="selectionMixed" class="text-sm font-medium text-warning">Выбранные позиции в разных валютах — платите раздельно.</p>
+              <Button class="w-full" :disabled="(!selectedItemIds.size && !selectedExpenseIds.size) || selectionMixed" @click="openPaySelected">
+                Оплатить выбранное
+              </Button>
+              <Button variant="ghost" class="w-full text-neutral-500" @click="cancelSelection">Отмена</Button>
+            </div>
+          </template>
+          <template v-else>
+            <div v-if="Object.keys(allTotalsByCurrency).length" class="flex flex-col gap-1.5 rounded-[10px] bg-neutral-50 px-3.5 py-3">
+              <div v-for="(amt, cur) in allTotalsByCurrency" :key="cur" class="flex items-center justify-between gap-2">
+                <span class="text-sm text-neutral-500">К оплате</span>
+                <span class="text-sm font-semibold tabular-nums text-foreground">{{ amt.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ cur }}</span>
+              </div>
+            </div>
+            <p v-if="allTotalsMixed" class="text-sm font-medium text-warning">В приходе разные валюты — платите отдельными траншами.</p>
+            <Button class="w-full" :disabled="allTotalsMixed" @click="openPayFull">Оплатить всё</Button>
+            <Button variant="ghost" class="w-full text-green-700" @click="openPaySelective">Оплатить выборочно →</Button>
+          </template>
+        </template>
+      </template>
+    </CardContent>
+  </Card>
 
   <PaymentMakeSheet
     v-model:open="paySheetOpen"
@@ -386,6 +470,13 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     :schedule-entry-id="paySheetScheduleEntryId"
     :item-ids="paySheetItemIds"
     :expense-ids="paySheetExpenseIds"
+    :currency="paySheetCurrency"
+    @dispatch="onPaymentDispatch"
+  />
+
+  <PartnershipCapitalPaymentSheet
+    v-model:open="capitalPaymentSheetOpen"
+    :procurement="procurement"
     @dispatch="onPaymentDispatch"
   />
 
@@ -404,56 +495,3 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     @dispatch="onPaymentDispatch"
   />
 </template>
-
-<style scoped>
-.payment-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); }
-.card-header { display: flex; align-items: center; justify-content: space-between; }
-.card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.status-ok { color: var(--color-success); }
-.status-warn { color: var(--color-warning); }
-.obligation-block { display: grid; gap: var(--space-1); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.ob-row { display: flex; align-items: center; justify-content: space-between; }
-.ob-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.ob-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.ob-value.warn { color: var(--color-warning); }
-.available-row { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--color-success); font-weight: var(--font-semibold); }
-.info-text { font-size: var(--text-sm); color: var(--color-text-secondary); padding: var(--space-2) 0; }
-.warn-text { font-size: var(--text-sm); color: var(--color-warning); font-weight: var(--font-semibold); }
-.deadline-row { display: flex; align-items: center; justify-content: space-between; }
-.deadline-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.deadline-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.days-hint { font-size: var(--text-xs); color: var(--color-text-secondary); font-weight: var(--font-normal); margin-left: var(--space-1); }
-.partial-info { display: grid; gap: var(--space-1); }
-.history-list { display: grid; gap: var(--space-1); }
-.history-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-sm); }
-.hist-date { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.hist-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.schedule-list { display: grid; gap: var(--space-2); }
-.schedule-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.schedule-meta { display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0; }
-.seq { font-size: var(--text-xs); color: var(--color-text-tertiary); font-weight: var(--font-semibold); }
-.entry-date { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.entry-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.entry-pay-btn { flex-shrink: 0; padding: var(--space-1) var(--space-3); border: 1px solid var(--color-brand-600); border-radius: var(--radius-full); background: transparent; color: var(--color-brand-700); font-size: var(--text-xs); font-weight: var(--font-semibold); cursor: pointer; }
-.entry-paid { flex-shrink: 0; font-size: var(--text-sm); color: var(--color-success); }
-.action-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-.action-btn.secondary { color: var(--color-text-secondary); }
-.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.selection-section { display: grid; gap: var(--space-2); }
-.selection-header { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; padding: var(--space-1) 0; }
-.selection-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); cursor: pointer; }
-.sel-icon { flex-shrink: 0; color: var(--color-text-tertiary); }
-.sel-icon.checked { color: var(--color-brand-600); }
-.sel-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sel-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
-.selection-actions { display: grid; gap: var(--space-2); margin-top: var(--space-1); }
-.currency-totals { display: grid; gap: var(--space-1); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.currency-total-row { display: flex; align-items: center; justify-content: space-between; }
-.cur-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.cur-amount { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.action-btn.primary-action { border: none; background: var(--color-brand-600); color: white; }
-.text-link { background: none; border: none; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; padding: var(--space-1) 0; text-align: center; width: 100%; }
-.topup-hint { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--color-danger-50, rgba(239, 68, 68, 0.08)); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--color-danger-700, #b91c1c); flex-wrap: wrap; }
-.topup-icon { flex-shrink: 0; }
-.topup-btn { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; padding: var(--space-1) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); cursor: pointer; background: transparent; color: var(--color-brand-700); flex-shrink: 0; }
-</style>

@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import AttachmentList from './AttachmentList.vue'
 import AttachmentUploader from './AttachmentUploader.vue'
+import { Card } from '@/components/ui/card'
 import { fetchAttachments, deleteAttachment, type Attachment } from '@/api/attachments'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -52,23 +53,27 @@ function fmtDate(iso: string): string {
 </script>
 
 <template>
-  <div class="history-card">
-    <button class="card-header" type="button" @click="isExpanded = !isExpanded">
-      <span class="card-title">История и документы</span>
-      <div class="header-right">
-        <span v-if="attachments.length" class="att-count">{{ attachments.length }}</span>
-        <span v-if="history.length" class="hist-count">{{ history.length }} событий</span>
-        <ChevronUp v-if="isExpanded" :size="18" :stroke-width="2" class="chevron" />
-        <ChevronDown v-else :size="18" :stroke-width="2" class="chevron" />
+  <Card class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <button
+      type="button"
+      class="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
+      @click="isExpanded = !isExpanded"
+    >
+      <span class="text-base font-semibold text-foreground">История и документы</span>
+      <div class="flex items-center gap-2">
+        <span v-if="attachments.length" class="rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">{{ attachments.length }}</span>
+        <span v-if="history.length" class="text-xs text-neutral-500">{{ history.length }} событий</span>
+        <ChevronUp v-if="isExpanded" class="size-[18px] text-neutral-400" />
+        <ChevronDown v-else class="size-[18px] text-neutral-400" />
       </div>
     </button>
 
     <Transition name="expand">
-      <div v-if="isExpanded" class="expanded-body">
-        <!-- Attachments section -->
-        <div class="section">
-          <div class="section-label">Документы</div>
-          <div v-if="isLoadingAttachments" class="loading-text">Загрузка…</div>
+      <div v-if="isExpanded" class="flex flex-col gap-3 px-4 pb-4">
+        <!-- Attachments -->
+        <div class="flex flex-col gap-2 border-t border-neutral-200 pt-3">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Документы</span>
+          <p v-if="isLoadingAttachments" class="text-sm text-neutral-500">Загрузка…</p>
           <AttachmentList
             v-else
             :attachments="attachments"
@@ -78,8 +83,8 @@ function fmtDate(iso: string): string {
           />
         </div>
 
-        <div v-if="canEdit" class="section">
-          <div class="section-label">Прикрепить файл</div>
+        <div v-if="canEdit" class="flex flex-col gap-2 border-t border-neutral-200 pt-3">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Прикрепить файл</span>
           <AttachmentUploader
             attachable-type="procurement"
             :attachable-id="procurementId"
@@ -89,21 +94,21 @@ function fmtDate(iso: string): string {
         </div>
 
         <!-- Events timeline -->
-        <div v-if="history.length" class="section">
-          <div class="section-label">События</div>
-          <div class="timeline">
-            <div v-for="(event, idx) in visibleHistory" :key="idx" class="timeline-row">
-              <div class="tl-dot" />
-              <div class="tl-content">
-                <span class="tl-title">{{ event.title }}</span>
-                <span class="tl-date">{{ fmtDate(event.date) }}</span>
+        <div v-if="history.length" class="flex flex-col gap-2 border-t border-neutral-200 pt-3">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">События</span>
+          <div class="flex flex-col gap-2">
+            <div v-for="(event, idx) in visibleHistory" :key="idx" class="flex items-start gap-3">
+              <span class="mt-1.5 size-2 shrink-0 rounded-full bg-green-400" />
+              <div class="flex flex-col gap-0.5">
+                <span class="text-sm text-foreground">{{ event.title }}</span>
+                <span class="text-xs text-neutral-500">{{ fmtDate(event.date) }}</span>
               </div>
             </div>
           </div>
           <button
             v-if="history.length > 10 && !showAllHistory"
-            class="show-all-btn"
             type="button"
+            class="self-start text-sm font-medium text-green-700"
             @click="showAllHistory = true"
           >
             Показать все ({{ history.length }})
@@ -111,29 +116,10 @@ function fmtDate(iso: string): string {
         </div>
       </div>
     </Transition>
-  </div>
+  </Card>
 </template>
 
 <style scoped>
-.history-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); }
-.card-header { display: flex; align-items: center; justify-content: space-between; background: transparent; border: 0; padding: 0; cursor: pointer; text-align: left; width: 100%; min-height: 44px; }
-.card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.header-right { display: flex; align-items: center; gap: var(--space-2); }
-.att-count { font-size: var(--text-xs); font-weight: var(--font-semibold); padding: 2px 6px; background: var(--color-brand-100); color: var(--color-brand-700); border-radius: var(--radius-full); }
-.hist-count { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.chevron { color: var(--color-text-tertiary); }
-.expanded-body { display: grid; gap: var(--space-3); }
-.section { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--color-border-subtle); }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.loading-text { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.timeline { display: grid; gap: var(--space-2); }
-.timeline-row { display: flex; align-items: flex-start; gap: var(--space-3); }
-.tl-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--color-brand-400); margin-top: 4px; }
-.tl-content { display: flex; flex-direction: column; gap: 2px; }
-.tl-title { font-size: var(--text-sm); color: var(--color-text-primary); }
-.tl-date { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.show-all-btn { background: transparent; border: 0; color: var(--color-brand-600); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; padding: 0; text-align: left; }
-
 .expand-enter-active { animation: expand-in 150ms var(--ease-out); }
 .expand-leave-active { animation: expand-in 100ms var(--ease-in) reverse; }
 

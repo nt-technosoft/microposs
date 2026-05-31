@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
-import { CheckCircle } from 'lucide-vue-next'
+import { CheckCircle2 } from 'lucide-vue-next'
 import ReceiveBatchHistoryRow from './ReceiveBatchHistoryRow.vue'
 import ReceiveBatchConfirmSheet from './ReceiveBatchConfirmSheet.vue'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
 import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
@@ -50,52 +52,52 @@ function onReverseBatch(batchId: number): void {
 </script>
 
 <template>
-  <div v-if="!isCancelled && items.length" class="receive-card">
-    <div class="card-header">
-      <span class="card-title">{{ isAtReceipt ? 'Приёмка и оплата' : 'Приёмка' }}</span>
-      <CheckCircle v-if="isFull" class="status-ok" :size="18" :stroke-width="2" />
-    </div>
+  <Card v-if="!isCancelled && items.length" class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <CardHeader class="flex flex-row items-center justify-between gap-3 px-4 py-3.5">
+      <CardTitle class="text-base">{{ isAtReceipt ? 'Приёмка и оплата' : 'Приёмка' }}</CardTitle>
+      <CheckCircle2 v-if="isFull" class="size-[18px] text-positive" />
+    </CardHeader>
 
-    <div class="stats-block">
-      <div class="stat-row">
-        <span class="stat-label">Запланировано</span>
-        <span class="stat-value">{{ Math.round(totalPlanned).toLocaleString('ru-RU') }} шт.</span>
+    <CardContent class="flex flex-col gap-3 px-4 pb-4">
+      <div class="flex flex-col gap-1.5 rounded-[10px] bg-neutral-50 px-3.5 py-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Запланировано</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ Math.round(totalPlanned).toLocaleString('ru-RU') }} шт.</span>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Принято</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">
+            {{ Math.round(totalReceived).toLocaleString('ru-RU') }} шт.
+            <span v-if="batches.length" class="text-xs font-normal text-neutral-500">({{ receivedPercent }}%)</span>
+          </span>
+        </div>
+        <div v-if="!isFull && batches.length" class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Осталось</span>
+          <span class="text-sm font-semibold tabular-nums text-warning">{{ Math.round(remainingQty).toLocaleString('ru-RU') }} шт.</span>
+        </div>
+        <p v-if="isAtReceipt" class="pt-0.5 text-xs text-neutral-500">Оплата: при приёмке (по получению).</p>
       </div>
-      <div class="stat-row">
-        <span class="stat-label">Принято</span>
-        <span class="stat-value">{{ Math.round(totalReceived).toLocaleString('ru-RU') }} шт.
-          <span v-if="batches.length" class="pct-hint">({{ receivedPercent }}%)</span>
-        </span>
-      </div>
-      <div v-if="!isFull && batches.length" class="stat-row">
-        <span class="stat-label">Осталось</span>
-        <span class="stat-value warn">{{ Math.round(remainingQty).toLocaleString('ru-RU') }} шт.</span>
-      </div>
-      <div v-if="isAtReceipt" class="at-receipt-hint">Оплата: при приёмке (по получению)</div>
-    </div>
 
-    <template v-if="batches.length">
-      <div class="history-label">Приёмки ({{ batches.length }})</div>
-      <div class="history-list">
-        <ReceiveBatchHistoryRow
-          v-for="batch in batches"
-          :key="batch.id"
-          :batch="batch"
-          :items="items"
-          @click="() => {}"
-          @reverse="onReverseBatch"
-        />
-      </div>
-    </template>
+      <template v-if="batches.length">
+        <p class="text-xs font-medium uppercase tracking-wide text-neutral-500">Приёмки ({{ batches.length }})</p>
+        <div class="flex flex-col gap-2">
+          <ReceiveBatchHistoryRow
+            v-for="batch in batches"
+            :key="batch.id"
+            :batch="batch"
+            :items="items"
+            @click="() => {}"
+            @reverse="onReverseBatch"
+          />
+        </div>
+      </template>
 
-    <template v-if="!isFull && !isReceived">
-      <button class="action-btn" type="button" @click="receiveSheetOpen = true">
+      <Button v-if="!isFull && !isReceived" variant="outline" class="w-full" @click="receiveSheetOpen = true">
         {{ btnLabel }}
-      </button>
-    </template>
-
-    <div v-else-if="isFull" class="full-notice">Принято полностью.</div>
-  </div>
+      </Button>
+      <p v-else-if="isFull" class="text-sm font-medium text-positive">Принято полностью.</p>
+    </CardContent>
+  </Card>
 
   <ReceiveBatchConfirmSheet
     v-model:open="receiveSheetOpen"
@@ -103,21 +105,3 @@ function onReverseBatch(batchId: number): void {
     @dispatch="onBatchDispatch"
   />
 </template>
-
-<style scoped>
-.receive-card { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); }
-.card-header { display: flex; align-items: center; justify-content: space-between; }
-.card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.status-ok { color: var(--color-success); }
-.stats-block { display: grid; gap: var(--space-1); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-.stat-row { display: flex; align-items: center; justify-content: space-between; }
-.stat-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.stat-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-.stat-value.warn { color: var(--color-warning); }
-.pct-hint { font-size: var(--text-xs); color: var(--color-text-secondary); font-weight: var(--font-normal); margin-left: var(--space-1); }
-.at-receipt-hint { font-size: var(--text-xs); color: var(--color-text-secondary); padding-top: var(--space-1); }
-.history-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.history-list { display: grid; gap: var(--space-2); }
-.full-notice { font-size: var(--text-sm); color: var(--color-success); font-weight: var(--font-semibold); }
-.action-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: 1px dashed var(--color-border-subtle); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-</style>
