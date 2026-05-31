@@ -38,6 +38,7 @@ const emit = defineEmits<{
         <Input
           type="text"
           placeholder="Например, Кока-Кола 1.5л"
+          class="h-11"
           :model-value="name"
           @update:model-value="emit('updateName', String($event))"
         />
@@ -61,7 +62,7 @@ const emit = defineEmits<{
           min="0"
           inputmode="decimal"
           placeholder="0"
-          class="tabular-nums"
+          class="h-11 tabular-nums"
           :model-value="basePrice"
           @update:model-value="emit('updateBasePrice', String($event))"
         />

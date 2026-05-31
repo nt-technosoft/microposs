@@ -80,6 +80,7 @@ function toggleCurrency(): void {
 </template>
 
 <style scoped>
+/* E10: aligned to the OKLCH design system (matches shadcn Input height/bg/border). */
 .money-currency-input {
   position: relative;
   min-width: 0;
@@ -87,24 +88,35 @@ function toggleCurrency(): void {
 
 .money-currency-input__control {
   width: 100%;
-  min-height: 44px;
-  padding: 0 92px 0 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
+  height: 44px;
+  padding: 0 88px 0 14px;
+  border: 1px solid var(--neutral-200);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--neutral-900);
   font: inherit;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  transition: border-color 120ms ease-out;
+}
+
+.money-currency-input__control:focus {
+  border-color: var(--green-400);
+}
+
+.money-currency-input__control::placeholder {
+  color: var(--neutral-400);
 }
 
 .money-currency-input--lg .money-currency-input__control {
-  min-height: 48px;
-  padding-left: 14px;
+  height: 48px;
   font-size: var(--text-base);
 }
 
 .money-currency-input__control:disabled {
-  opacity: 0.72;
-  background: var(--color-bg-sunken);
+  opacity: 0.6;
+  background: var(--neutral-50);
 }
 
 .money-currency-input__toggle {
@@ -112,29 +124,31 @@ function toggleCurrency(): void {
   top: 50%;
   right: 6px;
   transform: translateY(-50%);
-  min-width: 70px;
-  height: 30px;
+  min-width: 72px;
+  height: 32px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 0 9px;
-  border: 1px solid var(--color-border-default);
-  border-radius: calc(var(--radius-md) - 2px);
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
+  padding: 0 10px;
+  border: 1px solid var(--neutral-200);
+  border-radius: 8px;
+  background: var(--neutral-50);
+  color: var(--neutral-700);
   font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
+  font-weight: 600;
   line-height: 1;
+  cursor: pointer;
 }
 
 .money-currency-input--lg .money-currency-input__toggle {
-  height: 34px;
+  height: 36px;
 }
 
 .money-currency-input__toggle:disabled {
   opacity: 0.62;
+  cursor: default;
 }
 
 .money-currency-input.disabled {

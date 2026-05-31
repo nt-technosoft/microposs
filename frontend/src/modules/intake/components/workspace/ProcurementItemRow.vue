@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronRight, Package } from 'lucide-vue-next'
+import { ChevronRight, Package, Trash2 } from 'lucide-vue-next'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
 
 const props = defineProps<{ item: Item; isEditable?: boolean }>()
-const emit = defineEmits<{ click: [id: number] }>()
+const emit = defineEmits<{ click: [id: number]; delete: [id: number] }>()
 
 const isConsigned = computed(() => props.item.goods_ownership === 'CONSIGNED')
 
@@ -21,10 +21,12 @@ const totalDisplay = computed(() => {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="flex w-full items-center gap-3 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40"
+  <div
+    role="button"
+    tabindex="0"
+    class="flex w-full items-center gap-2 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40"
     @click="emit('click', item.id)"
+    @keydown.enter="emit('click', item.id)"
   >
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-1.5">
@@ -43,6 +45,15 @@ const totalDisplay = computed(() => {
     <span class="shrink-0 text-sm font-semibold tabular-nums text-foreground">
       {{ totalDisplay }} {{ item.currency }}
     </span>
-    <ChevronRight class="size-4 shrink-0 text-neutral-400" />
-  </button>
+    <button
+      v-if="isEditable"
+      type="button"
+      class="grid size-8 shrink-0 place-items-center rounded-lg text-neutral-400 transition-colors hover:bg-negative/10 hover:text-negative"
+      aria-label="Удалить позицию"
+      @click.stop="emit('delete', item.id)"
+    >
+      <Trash2 class="size-4" />
+    </button>
+    <ChevronRight v-else class="size-4 shrink-0 text-neutral-400" />
+  </div>
 </template>

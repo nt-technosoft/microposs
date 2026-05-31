@@ -115,6 +115,7 @@ function onSplitConfirm(): void {
           :item="item"
           :is-editable="canEdit && !item.locked_reason"
           @click="openEdit(item.id)"
+          @delete="onSheetDelete"
         />
       </div>
 

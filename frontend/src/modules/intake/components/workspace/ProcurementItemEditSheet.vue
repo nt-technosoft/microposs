@@ -159,7 +159,7 @@ function onSplit(): void {
       <div class="flex gap-3">
         <div class="flex w-28 shrink-0 flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Количество</span>
-          <Input v-model="qty" type="number" min="1" step="1" inputmode="numeric" class="tabular-nums" />
+          <Input v-model="qty" type="number" min="1" step="1" inputmode="numeric" class="h-11 tabular-nums" />
         </div>
         <div class="flex flex-1 flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Цена закупки</span>
