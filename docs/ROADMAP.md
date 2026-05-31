@@ -34,6 +34,17 @@
 | **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~35% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
 | **E11** | Partnership Capital as Real Agreement Account (money source-of-truth) | 🟢 DONE | 100% | E07, E08 | [→](./roadmap/E11-partnership-capital-pool.md) |
 | **E12** | Multi-currency Capital (FIFO cost-basis) + Calc Precision | 🟢 DONE | 100% | E11 | [→](./roadmap/E12-multicurrency-capital-and-precision.md) |
+| **E13** | ⚠️ Mixed-currency procurement (затраты в разных валютах в одном приходе) | ⏸️ BLOCKED | 0% | E11, E12 + verified приход | [→](./roadmap/E13-multicurrency-procurement.md) |
+
+**⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
+мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
+импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке
+(одновалютный `ProcurementTerms`), что частично обесценивает E11+E12. **Funding-
+слой уже готов в E11/E12** (пул, конвертация, FIFO cost-basis,
+`_receive_funding_breakdown` по валютам) — недостаёт obligation-слоя.
+**Возвращаемся ТОЛЬКО после** того, как приход доведён и проверен end-to-end
+(снапшоты долей, движение денег, отчёты, аналитика). См.
+[E13](./roadmap/E13-multicurrency-procurement.md).
 
 **🔥 Активный P0 (frontend, с 2026-05-29):** E10 — Frontend Design System &
 Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) поверх
