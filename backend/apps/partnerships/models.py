@@ -1423,3 +1423,84 @@ class ProcurementAmendment(TenantModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError('ProcurementAmendment is append-only.')
+
+
+# =========================================================================
+# E12 — Multi-currency capital pool (FIFO cost-basis)
+# =========================================================================
+
+
+class AgreementCurrencyPool(TenantModel):
+    """E12: physical cash sub-pool of an agreement in one currency.
+
+    The base (accounting) currency pool is `InvestmentAgreement.capital_account`.
+    Non-base currencies obtained via real conversion get their own
+    `AGREEMENT_CAPITAL` CashAccount, registered here so the agreement can hold
+    and spend several currencies while shares stay in the base currency.
+    """
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='currency_pools',
+    )
+    currency = models.CharField(max_length=3)
+    cash_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        related_name='+',
+    )
+
+    class Meta:
+        db_table = 'partnerships_agreement_currency_pool'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['agreement', 'currency'],
+                name='uq_agreement_currency_pool',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['agreement', 'currency']),
+        ]
+
+
+class CurrencyConversionLot(TenantModel):
+    """E12: FIFO cost-basis lot created by converting agreement-pool money into
+    another currency (a real spot sarf).
+
+    The conversion fact is append-only; `amount_remaining` / `base_cost_remaining`
+    are mutable running state (like `CashAccount.balance` / `LotStock`). Spending
+    the held currency consumes lots oldest-first; the base-currency cost of a
+    spend is the sum of consumed `base_cost`. High precision (no premature
+    rounding) — money math must not lose value on large sums.
+    """
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='conversion_lots',
+    )
+    base_currency = models.CharField(max_length=3, help_text='Agreement accounting currency.')
+    currency = models.CharField(max_length=3, help_text='Currency held by this lot (conversion target).')
+    rate = models.DecimalField(
+        max_digits=20,
+        decimal_places=8,
+        help_text='Held currency per 1 base currency at conversion.',
+    )
+    amount_initial = models.DecimalField(max_digits=20, decimal_places=6)
+    amount_remaining = models.DecimalField(max_digits=20, decimal_places=6)
+    base_cost_initial = models.DecimalField(
+        max_digits=20, decimal_places=6,
+        help_text='Base-currency amount given up to acquire this lot (cost basis).',
+    )
+    base_cost_remaining = models.DecimalField(max_digits=20, decimal_places=6)
+    converted_at = models.DateTimeField()
+    source_ref = models.CharField(max_length=100, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_currency_conversion_lot'
+        ordering = ['converted_at', 'id']  # FIFO
+        indexes = [
+            models.Index(fields=['agreement', 'currency', 'converted_at']),
+            models.Index(fields=['tenant', 'currency']),
+        ]
