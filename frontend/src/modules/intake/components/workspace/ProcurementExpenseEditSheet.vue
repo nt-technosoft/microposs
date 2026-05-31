@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { CheckCircle2, Circle } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
 import { Button } from '@/components/ui/button'
@@ -84,6 +85,12 @@ function toggleTarget(itemId: number): void {
   selectedTargets.value = selectedTargets.value.includes(itemId)
     ? selectedTargets.value.filter((id) => id !== itemId)
     : [...selectedTargets.value, itemId]
+}
+
+function toggleAllTargets(): void {
+  selectedTargets.value = selectedTargets.value.length === items.value.length
+    ? []
+    : items.value.map((it) => it.id)
 }
 
 function onSave(): void {
@@ -175,21 +182,35 @@ function onDelete(): void {
         </div>
       </div>
 
-      <div v-if="targetScope === 'selected' && items.length" class="flex max-h-[30vh] flex-col gap-1 overflow-y-auto rounded-[10px] border border-neutral-200 p-2">
-        <label
-          v-for="item in items"
-          :key="item.id"
-          class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-neutral-50"
-        >
-          <input
-            type="checkbox"
-            class="size-4 accent-green-600"
-            :checked="selectedTargets.includes(item.id)"
-            @change="toggleTarget(item.id)"
-          />
-          <span class="min-w-0 truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
-        </label>
-      </div>
+      <template v-if="targetScope === 'selected' && items.length">
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-neutral-500">Выбрано {{ selectedTargets.length }} из {{ items.length }}</span>
+          <button type="button" class="text-xs font-medium text-green-700" @click="toggleAllTargets">
+            {{ selectedTargets.length === items.length ? 'Снять все' : 'Выбрать все' }}
+          </button>
+        </div>
+        <div class="flex max-h-[34vh] flex-col gap-2 overflow-y-auto">
+          <button
+            v-for="item in items"
+            :key="item.id"
+            type="button"
+            :class="cn(
+              'flex w-full items-center gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors',
+              selectedTargets.includes(item.id) ? 'border-primary bg-primary/5' : 'border-neutral-200 hover:bg-neutral-50',
+            )"
+            @click="toggleTarget(item.id)"
+          >
+            <component
+              :is="selectedTargets.includes(item.id) ? CheckCircle2 : Circle"
+              :class="cn('size-5 shrink-0', selectedTargets.includes(item.id) ? 'text-primary' : 'text-neutral-300')"
+            />
+            <div class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-foreground">{{ item.product_variant_name }}</span>
+              <span class="text-xs tabular-nums text-neutral-500">{{ Math.round(parseFloat(item.quantity) || 0) }} шт</span>
+            </div>
+          </button>
+        </div>
+      </template>
 
       <div class="flex flex-col gap-2 pt-1">
         <Button class="h-12 w-full text-base" :disabled="!amount" @click="onSave">Сохранить</Button>
