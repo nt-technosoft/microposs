@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { AlertCircle, ArrowRight } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+import { formatPrice } from '@/utils/currency'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -35,8 +40,13 @@ const cashAccountId = ref<number | null>(null)
 const cashAccounts = ref<CashAccountRecord[]>([])
 const isLoadingAccounts = ref(false)
 
+// Operating cash only — agreement capital pools are restricted partnership
+// funds and must never be a source for paying a procurement cost here.
+const operatingAccounts = computed(() =>
+  cashAccounts.value.filter((a) => a.kind !== 'agreement_capital'),
+)
 const selectedAccount = computed(() =>
-  cashAccounts.value.find((a) => a.id === cashAccountId.value) ?? null
+  operatingAccounts.value.find((a) => a.id === cashAccountId.value) ?? null
 )
 const currencyMismatch = computed(() =>
   !!selectedAccount.value &&
@@ -54,7 +64,7 @@ watch(() => props.open, (isOpen) => {
   if (!isOpen) return
   amount.value = props.defaultAmount ?? ''
   notes.value = ''
-  cashAccountId.value = cashAccounts.value[0]?.id ?? null
+  cashAccountId.value = operatingAccounts.value[0]?.id ?? null
   if (!cashAccounts.value.length) loadAccounts()
 })
 
@@ -100,61 +110,67 @@ const canSave = () =>
 
 <template>
   <AppBottomSheet :open="open" title="Платёж" @close="emit('update:open', false)">
-    <div class="sheet-body">
-      <div class="section-label">Сумма</div>
-      <div class="amount-row">
-        <input class="input-field amount-input" type="number" min="0" step="0.01" v-model="amount" placeholder="0.00" inputmode="decimal" />
-        <span class="currency-badge">{{ obligationCurrency }}</span>
+    <div class="flex flex-col gap-4">
+      <!-- Сумма -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма</span>
+        <div class="flex items-center gap-2 rounded-[12px] border border-neutral-200 px-4 py-3 focus-within:border-green-400">
+          <input
+            v-model="amount"
+            type="number"
+            min="0"
+            step="0.01"
+            inputmode="decimal"
+            placeholder="0"
+            class="min-w-0 flex-1 bg-transparent text-2xl font-semibold tabular-nums text-foreground outline-none placeholder:text-neutral-300"
+          />
+          <span class="shrink-0 text-sm font-medium text-neutral-500">{{ obligationCurrency }}</span>
+        </div>
       </div>
 
-      <div class="section-label">Касса</div>
-      <div v-if="isLoadingAccounts" class="loading-text">Загрузка…</div>
-      <div v-else-if="!cashAccounts.length" class="empty-text">Нет активных касс</div>
-      <div v-else class="accounts-list">
-        <button
-          v-for="acc in cashAccounts"
-          :key="acc.id"
-          class="account-btn"
-          :class="{ active: acc.id === cashAccountId }"
-          type="button"
-          @click="cashAccountId = acc.id"
-        >
-          <span class="acc-name">{{ acc.name }}</span>
-          <span class="acc-balance">{{ parseFloat(acc.balance).toLocaleString('ru-RU') }} {{ acc.currency }}</span>
-        </button>
+      <!-- Касса -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Откуда платим</span>
+        <p v-if="isLoadingAccounts" class="text-sm text-neutral-500">Загрузка…</p>
+        <p v-else-if="!operatingAccounts.length" class="text-sm text-neutral-500">Нет активных касс</p>
+        <div v-else class="flex flex-col gap-2">
+          <button
+            v-for="acc in operatingAccounts"
+            :key="acc.id"
+            type="button"
+            :class="cn(
+              'flex w-full items-center justify-between gap-3 rounded-[10px] border px-3.5 py-3 transition-colors',
+              acc.id === cashAccountId ? 'border-primary bg-primary/5' : 'border-neutral-200 hover:bg-neutral-50',
+            )"
+            @click="cashAccountId = acc.id"
+          >
+            <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ acc.name }}</span>
+            <span class="shrink-0 text-xs tabular-nums text-neutral-500">{{ formatPrice(parseFloat(acc.balance) || 0, acc.currency) }}</span>
+          </button>
+        </div>
       </div>
 
-      <div v-if="currencyMismatch" class="mismatch-warning">
-        <span>Касса в {{ selectedAccount?.currency }} — обязательство в {{ obligationCurrency }}. Сначала конвертируйте валюту.</span>
-        <button class="convert-btn" type="button" @click="openExchange">Конвертировать →</button>
+      <!-- Currency mismatch -->
+      <div v-if="currencyMismatch" class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
+        <div class="flex items-start gap-2">
+          <AlertCircle class="mt-0.5 size-4 shrink-0 text-warning" />
+          <span>Касса в {{ selectedAccount?.currency }}, обязательство в {{ obligationCurrency }}. Сначала конвертируйте валюту.</span>
+        </div>
+        <Button variant="outline" size="sm" class="h-9 self-start gap-1" @click="openExchange">
+          Конвертировать
+          <ArrowRight class="size-4" />
+        </Button>
       </div>
 
-      <div class="section-label">Примечание (необязательно)</div>
-      <input class="input-field" type="text" v-model="notes" placeholder="Комментарий к платежу" />
+      <!-- Примечание -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Примечание (необязательно)</span>
+        <Input v-model="notes" type="text" class="h-11" placeholder="Комментарий к платежу" />
+      </div>
 
-      <button class="primary-btn" type="button" :disabled="!canSave()" @click="onSave">
+      <Button class="h-12 w-full text-base" :disabled="!canSave()" @click="onSave">
         Сохранить платёж
-      </button>
+      </Button>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body { display: grid; gap: var(--space-3); }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
-.loading-text { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.empty-text { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.accounts-list { display: grid; gap: var(--space-2); }
-.account-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); cursor: pointer; }
-.account-btn.active { border-color: var(--color-brand-600); background: var(--color-brand-50); }
-.acc-name { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.acc-balance { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
-.primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
-.primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.amount-row { display: flex; align-items: center; gap: var(--space-2); }
-.amount-input { flex: 1; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
-.currency-badge { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-secondary); min-width: 3ch; flex-shrink: 0; }
-.mismatch-warning { display: grid; gap: var(--space-2); padding: var(--space-3); background: color-mix(in srgb, var(--color-warning) 10%, transparent); border-radius: var(--radius-md); border: 1px solid color-mix(in srgb, var(--color-warning) 25%, transparent); font-size: var(--text-sm); color: var(--color-text-primary); }
-.convert-btn { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-warning); border-radius: var(--radius-md); background: transparent; color: var(--color-warning); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-</style>
