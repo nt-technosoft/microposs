@@ -79,6 +79,9 @@ watch(() => props.open, (isOpen) => {
   } else {
     variantId.value = null; variantName.value = ''; qty.value = '1'
     price.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS'); fxRateLocal.value = currency.value === 'USD' ? fxRateLocal.value : '1'
+    // Adding a new item: jump straight to picking the product (saves one tap).
+    // The form (qty/price) reveals underneath once a variant is chosen.
+    vpOpen.value = true
   }
   if (!catOptions.value.length) loadCategories()
 })
