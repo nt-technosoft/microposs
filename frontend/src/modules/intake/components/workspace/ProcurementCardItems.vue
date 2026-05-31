@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, toRef } from 'vue'
-import { CheckCircle, AlertCircle, Plus } from 'lucide-vue-next'
+import { CheckCircle2, AlertCircle, Plus } from 'lucide-vue-next'
 import ProcurementItemRow from './ProcurementItemRow.vue'
 import ProcurementItemEditSheet from './ProcurementItemEditSheet.vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -26,8 +29,9 @@ const splitSheetOpen = ref(false)
 const splittingItemId = ref<number | null>(null)
 const splitQty = ref('')
 
-const splittingItem = computed(() =>
-  items.value.find((it) => it.id === splittingItemId.value) ?? null,
+const splittingItem = computed(() => items.value.find((it) => it.id === splittingItemId.value) ?? null)
+const splitMax = computed(() =>
+  splittingItem.value ? Math.round(parseFloat(splittingItem.value.quantity)) - 1 : undefined,
 )
 
 const canEdit = computed(() => props.procurement.status === 'OPEN')
@@ -36,7 +40,7 @@ const isFilled = computed(() => props.procurement.readiness['items_ready']?.ok ?
 function formatTotal(amount: number, currency: string): string {
   const formatted = amount % 1 === 0
     ? Math.round(amount).toLocaleString('ru-RU')
-    : amount.toFixed(2)
+    : amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 })
   return `${formatted} ${currency}`
 }
 
@@ -89,44 +93,50 @@ function onSplitConfirm(): void {
 </script>
 
 <template>
-  <div class="items-card">
-    <div class="card-header">
-      <span class="card-title">Товары</span>
-      <div class="header-right">
-        <span class="item-count">{{ items.length }}</span>
-        <CheckCircle v-if="isFilled" class="status-ok" :size="18" :stroke-width="2" />
-        <AlertCircle v-else class="status-warn" :size="18" :stroke-width="2" />
+  <Card class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <CardHeader class="flex flex-row items-center justify-between gap-3 px-4 py-3.5">
+      <CardTitle class="text-base">Товары</CardTitle>
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-medium tabular-nums text-neutral-500">{{ items.length }}</span>
+        <CheckCircle2 v-if="isFilled" class="size-[18px] text-positive" />
+        <AlertCircle v-else class="size-[18px] text-warning" />
       </div>
-    </div>
+    </CardHeader>
 
-    <div v-if="!items.length" class="empty-state">
-      Нет товаров. Добавь первый.
-    </div>
+    <CardContent class="flex flex-col gap-3 px-4 pb-4">
+      <p v-if="!items.length" class="py-4 text-center text-sm text-neutral-500">
+        Нет товаров. Добавьте первый.
+      </p>
 
-    <div v-else class="items-list">
-      <ProcurementItemRow
-        v-for="item in items"
-        :key="item.id"
-        :item="item"
-        :is-editable="canEdit && !item.locked_reason"
-        @click="openEdit(item.id)"
-        @delete="onSheetDelete"
-        @split="openSplit"
-      />
-    </div>
-
-    <template v-if="Object.keys(totalsByCurrency).length">
-      <div v-for="(amount, currency) in totalsByCurrency" :key="currency" class="totals-row">
-        <span class="totals-label">Итого</span>
-        <span class="totals-value">{{ formatTotal(amount, currency) }}</span>
+      <div v-else class="flex flex-col gap-2">
+        <ProcurementItemRow
+          v-for="item in items"
+          :key="item.id"
+          :item="item"
+          :is-editable="canEdit && !item.locked_reason"
+          @click="openEdit(item.id)"
+        />
       </div>
-    </template>
 
-    <button class="add-btn" type="button" @click="openAdd">
-      <Plus :size="14" :stroke-width="2.5" />
-      Добавить товар
-    </button>
-  </div>
+      <div
+        v-for="(amount, currency) in totalsByCurrency"
+        :key="currency"
+        class="flex items-center justify-between border-t border-neutral-200 pt-3"
+      >
+        <span class="text-sm text-neutral-500">Итого</span>
+        <span class="text-base font-semibold tabular-nums text-foreground">{{ formatTotal(amount, currency) }}</span>
+      </div>
+
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-neutral-300 px-3.5 py-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-50/40"
+        @click="openAdd"
+      >
+        <Plus class="size-4" />
+        Добавить товар
+      </button>
+    </CardContent>
+  </Card>
 
   <ProcurementItemEditSheet
     v-model:open="editSheetOpen"
@@ -134,119 +144,27 @@ function onSplitConfirm(): void {
     :editing-item-id="editingItemId"
     @save="onSheetSave"
     @delete="onSheetDelete"
+    @split="openSplit"
   />
 
   <AppBottomSheet :open="splitSheetOpen" title="Разделить позицию" @close="splitSheetOpen = false">
-    <div class="split-sheet-body">
-      <div v-if="splittingItem" class="split-item-name">{{ splittingItem.product_variant_name }}</div>
-      <div class="split-hint">Введите количество для отделения в отдельную строку (не более {{ splittingItem ? Math.round(parseFloat(splittingItem.quantity)) - 1 : '' }} шт.).</div>
-      <input
-        class="split-input"
+    <div class="flex flex-col gap-3">
+      <p v-if="splittingItem" class="text-sm font-medium text-foreground">{{ splittingItem.product_variant_name }}</p>
+      <p class="text-xs text-neutral-500">
+        Сколько единиц отделить в отдельную строку (не более {{ splitMax }} шт.).
+      </p>
+      <Input
+        v-model="splitQty"
         type="number"
         min="1"
-        :max="splittingItem ? Math.round(parseFloat(splittingItem.quantity)) - 1 : undefined"
+        :max="splitMax"
         step="1"
         inputmode="numeric"
         placeholder="Количество"
-        v-model="splitQty"
       />
-      <button class="split-confirm-btn" type="button" :disabled="!splitQty || parseFloat(splitQty) <= 0" @click="onSplitConfirm">
+      <Button class="w-full" :disabled="!splitQty || parseFloat(splitQty) <= 0" @click="onSplitConfirm">
         Разделить
-      </button>
+      </Button>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.items-card {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.card-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.item-count {
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-secondary);
-}
-
-.status-ok { color: var(--color-success); }
-.status-warn { color: #F59E0B; }
-
-.empty-state {
-  padding: var(--space-4) 0;
-  text-align: center;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.items-list {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.totals-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-}
-
-.totals-label {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
-.totals-value {
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.add-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-3);
-  border: 1px dashed var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-brand-700);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
-}
-
-.split-sheet-body { display: grid; gap: var(--space-3); padding: var(--space-4); }
-.split-item-name { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.split-hint { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.split-input { width: 100%; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); font-size: var(--text-base); background: var(--color-bg-secondary); color: var(--color-text-primary); }
-.split-confirm-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: var(--space-3); border: none; border-radius: var(--radius-md); background: var(--color-brand-600); color: white; font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-.split-confirm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-</style>

@@ -16,7 +16,7 @@ type Item = ProcurementWorkspacePayload['documents']['items'][number]
 type SavePayload = { id?: number; product_variant_id: number; quantity: number; unit_purchase_price: number; currency: string; fx_rate: string }
 
 const props = defineProps<{ open: boolean; procurement: ProcurementWorkspacePayload; editingItemId: number | null }>()
-const emit = defineEmits<{ 'update:open': [value: boolean]; save: [payload: SavePayload]; delete: [itemId: number] }>()
+const emit = defineEmits<{ 'update:open': [value: boolean]; save: [payload: SavePayload]; delete: [itemId: number]; split: [itemId: number] }>()
 
 const variantId = ref<number | null>(null)
 const variantName = ref('')
@@ -36,6 +36,28 @@ const { rate: fetchedFx, load: loadFx } = useFxRate()
 const editItem = computed<Item | null>(() =>
   props.editingItemId ? (props.procurement.documents.items.find((i) => i.id === props.editingItemId) ?? null) : null,
 )
+const canSplit = computed(
+  () => !!editItem.value
+    && props.procurement.status === 'OPEN'
+    && !editItem.value.locked_reason
+    && Math.round(parseFloat(editItem.value.quantity) || 0) > 1,
+)
+const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
+  const currencies = new Set(
+    [
+      ...props.procurement.documents.items
+        .filter((item) => item.lifecycle_state !== 'CANCELLED' && item.id !== props.editingItemId)
+        .map((item) => item.currency === 'USD' ? 'USD' : 'UZS'),
+      ...props.procurement.documents.expenses
+        .filter((expense) => expense.lifecycle_state !== 'CANCELLED')
+        .map((expense) => expense.currency === 'USD' ? 'USD' : 'UZS'),
+    ],
+  )
+  return currencies.size === 1 ? ([...currencies][0] as 'UZS' | 'USD') : null
+})
+const allowedCurrencies = computed<Array<'UZS' | 'USD'>>(() =>
+  lockedCurrency.value ? [lockedCurrency.value] : ['USD', 'UZS'],
+)
 const variantDisplay = (v: ProductVariant) => v.product_name ?? v.display_sku ?? v.sku ?? String(v.id)
 
 watch(fetchedFx, (r) => { if (r) fxRateLocal.value = r })
@@ -54,7 +76,7 @@ watch(() => props.open, (isOpen) => {
     fxRateLocal.value = it.fx_rate
   } else {
     variantId.value = null; variantName.value = ''; qty.value = '1'
-    price.value = ''; currency.value = 'UZS'; fxRateLocal.value = '1'
+    price.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS'); fxRateLocal.value = currency.value === 'USD' ? fxRateLocal.value : '1'
   }
   if (!catOptions.value.length) loadCategories()
 })
@@ -107,6 +129,12 @@ function onDelete(): void {
   emit('delete', props.editingItemId)
   emit('update:open', false)
 }
+
+function onSplit(): void {
+  if (!props.editingItemId) return
+  emit('split', props.editingItemId)
+  emit('update:open', false)
+}
 </script>
 
 <template>
@@ -125,11 +153,15 @@ function onDelete(): void {
         </div>
         <div class="field price-field">
           <div class="section-label">Цена закупки</div>
-          <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" />
+          <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" :currencies="allowedCurrencies" />
         </div>
+      </div>
+      <div v-if="lockedCurrency" class="currency-lock-hint">
+        Валюта прихода уже зафиксирована: {{ lockedCurrency }}.
       </div>
 
       <button class="primary-btn" type="button" :disabled="!variantId" @click="onSave">Сохранить</button>
+      <button v-if="canSplit" class="secondary-btn" type="button" @click="onSplit">Разделить позицию</button>
       <button v-if="editingItemId" class="danger-btn" type="button" @click="onDelete">Удалить строку</button>
     </div>
   </AppBottomSheet>
@@ -160,7 +192,9 @@ function onDelete(): void {
 .variant-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; text-align: left; }
 .variant-btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
+.currency-lock-hint { font-size: var(--text-xs); color: var(--color-text-secondary); }
 .primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
 .primary-btn:disabled { opacity: .55; cursor: not-allowed; }
+.secondary-btn { min-height: 44px; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: transparent; color: var(--color-text-primary); font-weight: var(--font-semibold); cursor: pointer; }
 .danger-btn { min-height: 44px; border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
 </style>
