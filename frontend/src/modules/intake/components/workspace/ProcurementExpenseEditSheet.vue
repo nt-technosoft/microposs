@@ -41,7 +41,11 @@ const editExpense = computed<Expense | null>(() =>
     ? (props.procurement.documents.expenses.find((e) => e.id === props.editingExpenseId) ?? null)
     : null,
 )
-const items = computed(() => props.procurement.documents.items)
+// Defensive: never offer soft-deleted (CANCELLED) goods as expense targets
+// (the payload already excludes them at the source).
+const items = computed(() =>
+  props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
+)
 const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
   const currencies = new Set(
     [

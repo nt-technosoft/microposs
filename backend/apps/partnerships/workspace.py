@@ -2156,8 +2156,17 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
             'investment_agreement_required': procurement.funding_source == Procurement.FundingSource.PARTNERSHIP,
             'investment_agreement_id': procurement.agreement_id,
         },
-        'items': [_item_payload(item) for item in procurement.items.all()],
-        'expenses': [_expense_payload(expense) for expense in procurement.expenses.all()],
+        # Display lists exclude soft-deleted (CANCELLED) lines at the source, so no
+        # frontend consumer (items / expenses / payment selection) can leak them.
+        # Cancelled lines remain available via amendments/history, not here.
+        'items': [
+            _item_payload(item) for item in procurement.items.all()
+            if item.lifecycle_state != ProcurementItem.LifecycleState.CANCELLED
+        ],
+        'expenses': [
+            _expense_payload(expense) for expense in procurement.expenses.all()
+            if expense.lifecycle_state != ProcurementExpense.LifecycleState.CANCELLED
+        ],
         'settlement': _settlement_payload(terms),
         'payables': [_payable_payload(payable) for payable in payables],
         'payments': [_payment_payload(payment) for payment in payments],
