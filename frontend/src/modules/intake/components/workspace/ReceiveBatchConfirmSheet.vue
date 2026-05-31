@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRef } from 'vue'
-import { CheckSquare, Square } from 'lucide-vue-next'
+import { CheckCircle2, Circle, ChevronLeft } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import { fetchLocations } from '@/api/inventory'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
@@ -54,6 +57,25 @@ const isPartnership = computed(() => props.procurement.documents.source.funding_
 const isAtReceipt = computed(() => props.procurement.documents.settlement?.type === 'AT_RECEIPT')
 const isPrepaid = computed(() => props.procurement.documents.settlement?.type === 'PREPAID')
 const isOwnFunds = computed(() => !isPartnership.value)
+
+// ─── Wizard steps (dynamic by funding/settlement) ───
+type StepKey = 'where' | 'items' | 'shares' | 'payment'
+const STEP_TITLES: Record<StepKey, string> = {
+  where: 'Куда и когда',
+  items: 'Что приняли',
+  shares: 'Доли капитала',
+  payment: 'Оплата',
+}
+const currentStepIndex = ref(0)
+const steps = computed<StepKey[]>(() => {
+  const s: StepKey[] = ['where', 'items']
+  if (isPartnership.value) s.push('shares')
+  if (isAtReceipt.value && isOwnFunds.value) s.push('payment')
+  return s
+})
+const currentStep = computed<StepKey>(() => steps.value[currentStepIndex.value] ?? 'where')
+const isLastStep = computed(() => currentStepIndex.value >= steps.value.length - 1)
+const stepTitle = computed(() => STEP_TITLES[currentStep.value])
 
 const allReceivableItems = computed(() =>
   activeItems.value.filter((it) => {
@@ -204,6 +226,7 @@ function initLines(items: Item[]): void {
 
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
+  currentStepIndex.value = 0
   sharesConfirmed.value = false
   receivedAt.value = new Date().toISOString().slice(0, 10)
   errors.value = {}
@@ -295,189 +318,196 @@ function onSave(): void {
   emit('dispatch', 'RECEIVE_BATCH', payload)
   emit('update:open', false)
 }
+
+// ─── Wizard navigation ───
+const canProceed = computed(() => {
+  switch (currentStep.value) {
+    case 'where': return !!warehouseId.value
+    case 'items': return receivableItems.value.length > 0 && !receiveMixedCurrency.value
+    case 'shares': return !receiveMixedCurrency.value && capitalShortfall.value <= 0
+    case 'payment': return !!selectedCashAccountId.value && parseFloat(paymentAmount.value) > 0
+    default: return true
+  }
+})
+
+function goNext(): void {
+  if (!canProceed.value) return
+  if (currentStep.value === 'items' && !validate()) return
+  if (currentStep.value === 'shares') sharesConfirmed.value = true
+  if (isLastStep.value) { onSave(); return }
+  currentStepIndex.value += 1
+}
+
+function goBack(): void {
+  if (currentStepIndex.value <= 0) { emit('update:open', false); return }
+  currentStepIndex.value -= 1
+  if (currentStep.value === 'shares') sharesConfirmed.value = false
+}
 </script>
 
 <template>
   <AppBottomSheet :open="open" :title="isAtReceipt ? 'Принять и оплатить' : 'Приёмка товара'" @close="emit('update:open', false)">
-    <div class="sheet-body">
-      <div class="section-label">Склад</div>
-      <select class="select-field" :value="warehouseId" @change="warehouseId = Number(($event.target as HTMLSelectElement).value)">
-        <option v-for="w in warehouses" :key="w.id" :value="w.id">{{ w.name }}</option>
-      </select>
-
-      <div class="section-label">Дата приёмки</div>
-      <input class="input-field" type="date" v-model="receivedAt" />
-
-      <div v-if="isAtReceipt" class="step-header">
-        <span class="step-num">1</span>
-        <span class="step-label">Приём товаров</span>
-      </div>
-
-      <div class="section-label">Товары к приёмке</div>
-      <div v-if="allReceivableItems.length === 0" class="no-items-hint">
-        Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
-      </div>
-      <div v-for="item in allReceivableItems" :key="item.id" class="item-block" :class="{ muted: !selectedItemIds.has(item.id) }">
-        <button class="item-select-row" type="button" @click="toggleItemSelection(item.id)">
-          <component :is="selectedItemIds.has(item.id) ? CheckSquare : Square" :size="18" :stroke-width="2" />
-          <span class="item-name">{{ item.product_variant_name }}</span>
-          <span class="qty-label">{{ Math.round(parseFloat(item.remaining_quantity)) }} шт.</span>
-        </button>
-        <template v-if="selectedItemIds.has(item.id)">
-          <div class="item-qty-row">
-            <span class="qty-label">Заказано: {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
-            <label class="qty-input-label">
-              Принято:
-              <input
-                class="qty-input"
-                type="number"
-                min="0"
-                :max="Math.round(parseFloat(item.remaining_quantity))"
-                step="1"
-                :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
-                @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
-              />
-            </label>
+    <div class="flex flex-col gap-4">
+      <!-- Progress -->
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm font-semibold text-foreground">{{ stepTitle }}</span>
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1">
+            <span
+              v-for="(s, i) in steps"
+              :key="s"
+              :class="cn('h-1.5 rounded-full transition-all', i === currentStepIndex ? 'w-5 bg-green-600' : i < currentStepIndex ? 'w-1.5 bg-green-400' : 'w-1.5 bg-neutral-200')"
+            />
           </div>
-          <div v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))" class="reason-row">
-            <select
-              class="select-field"
-              :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
-              @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
-            >
-              <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
-            </select>
-          </div>
-        </template>
-        <div v-if="errors[item.id]" class="error-text">{{ errors[item.id] }}</div>
+          <span class="text-xs tabular-nums text-neutral-400">{{ currentStepIndex + 1 }}/{{ steps.length }}</span>
+        </div>
       </div>
 
-      <!-- PREPAID: blocked items notice -->
-      <template v-if="blockedPrepaidItems.length">
-        <div class="section-label">Ожидают оплаты</div>
-        <div v-for="item in blockedPrepaidItems" :key="item.id" class="blocked-item-row">
-          <span class="blocked-item-name">{{ item.product_variant_name }}</span>
-          <span class="blocked-item-qty">{{ item.quantity }} шт.</span>
+      <!-- STEP: where -->
+      <template v-if="currentStep === 'where'">
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Склад</span>
+          <select
+            class="h-11 w-full rounded-[10px] border border-neutral-200 bg-surface px-3 text-sm text-foreground outline-none focus:border-green-500"
+            :value="warehouseId"
+            @change="warehouseId = Number(($event.target as HTMLSelectElement).value)"
+          >
+            <option :value="null" disabled>Выберите склад</option>
+            <option v-for="w in warehouses" :key="w.id" :value="w.id">{{ w.name }}</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Дата приёмки</span>
+          <Input v-model="receivedAt" type="date" class="h-11" />
         </div>
       </template>
 
-      <!-- AT_RECEIPT OWN_FUNDS: payment block -->
-      <div v-if="isAtReceipt" class="step-header">
-        <span class="step-num">2</span>
-        <span class="step-label">Оплата</span>
-      </div>
+      <!-- STEP: items -->
+      <template v-else-if="currentStep === 'items'">
+        <p v-if="allReceivableItems.length === 0" class="text-sm text-neutral-500">
+          Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
+        </p>
+        <div v-else class="flex flex-col gap-2">
+          <div
+            v-for="item in allReceivableItems"
+            :key="item.id"
+            :class="cn('rounded-[12px] border px-3.5 py-3 transition-colors', selectedItemIds.has(item.id) ? 'border-primary bg-primary/5' : 'border-neutral-200')"
+          >
+            <button type="button" class="flex w-full items-center gap-2.5 text-left" @click="toggleItemSelection(item.id)">
+              <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5 shrink-0', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
+              <span class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{{ item.product_variant_name }}</span>
+              <span class="shrink-0 text-xs tabular-nums text-neutral-500">{{ Math.round(parseFloat(item.remaining_quantity)) }} шт</span>
+            </button>
+            <template v-if="selectedItemIds.has(item.id)">
+              <div class="mt-3 flex items-center justify-between gap-3">
+                <span class="text-xs text-neutral-500">Заказано {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-neutral-500">Принято</span>
+                  <input
+                    class="h-9 w-20 rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
+                    type="number"
+                    min="0"
+                    :max="Math.round(parseFloat(item.remaining_quantity))"
+                    step="1"
+                    :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
+                    @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
+                  />
+                </div>
+              </div>
+              <div
+                v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))"
+                class="mt-2.5"
+              >
+                <select
+                  class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2.5 text-sm text-foreground outline-none focus:border-green-500"
+                  :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
+                  @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
+                >
+                  <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
+                </select>
+              </div>
+            </template>
+            <p v-if="errors[item.id]" class="mt-1.5 text-xs text-negative">{{ errors[item.id] }}</p>
+          </div>
+        </div>
 
-      <template v-if="isAtReceipt && isOwnFunds">
-        <div class="section-label">Оплата при получении</div>
-        <select
-          class="select-field"
-          :value="selectedCashAccountId"
-          @change="selectedCashAccountId = Number(($event.target as HTMLSelectElement).value)"
-        >
-          <option v-if="!cashAccounts.length" :value="null">Загрузка…</option>
-          <option v-for="a in cashAccounts" :key="a.id" :value="a.id">
-            {{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}
-          </option>
-        </select>
-        <label class="qty-input-label">
-          Сумма ({{ batchObligationCurrency }}):
-          <input
-            class="input-field"
-            type="number"
-            min="0"
-            step="0.01"
-            :value="paymentAmount"
-            @input="paymentAmount = ($event.target as HTMLInputElement).value"
-          />
-        </label>
-        <p v-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="hint-warn">
-          Сумма меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
+        <template v-if="blockedPrepaidItems.length">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Ожидают оплаты</span>
+          <div class="flex flex-col gap-1.5">
+            <div v-for="item in blockedPrepaidItems" :key="item.id" class="flex items-center justify-between rounded-[10px] bg-warning/10 px-3.5 py-2.5">
+              <span class="text-sm text-neutral-600">{{ item.product_variant_name }}</span>
+              <span class="text-sm tabular-nums text-neutral-500">{{ item.quantity }} шт</span>
+            </div>
+          </div>
+        </template>
+
+        <p v-if="receiveMixedCurrency" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          В выбранной приёмке разные валюты. Разделите приёмку на отдельные партии.
         </p>
       </template>
 
-      <!-- PARTNERSHIP capital allocation -->
-      <template v-if="isPartnership && investment">
-        <div v-if="receiveMixedCurrency" class="hint-warn">
-          В выбранной приёмке разные валюты. Разделите приёмку на отдельные партии.
+      <!-- STEP: shares (partnership) -->
+      <template v-else-if="currentStep === 'shares' && investment">
+        <p class="text-xs leading-relaxed text-neutral-500">
+          Доли участников в этой партии. Предзаполнено из плановых долей; можно скорректировать в пределах доступного капитала. Фиксируется при приёмке.
+        </p>
+        <div class="flex items-center justify-between rounded-[10px] bg-neutral-50 px-3.5 py-3">
+          <span class="text-sm text-neutral-500">Стоимость приёмки</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}</span>
         </div>
-        <div v-else-if="capitalShortfall > 0" class="hint-warn">
-          Не хватает распределённого капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}.
-        </div>
-        <div class="shares-header">
-          <div class="section-label">Распределение по партнёрам ({{ batchObligationCurrency }})</div>
-          <button v-if="sharesConfirmed" class="edit-shares-btn" type="button" @click="sharesConfirmed = false">Изменить</button>
-        </div>
-        <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="cap-row">
-          <span class="cap-name" :class="{ 'cap-corrected': alloc.isCorrected }">
-            {{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? `#${alloc.partnerId}` }}
-            <span v-if="alloc.isCorrected" class="cap-correction-hint">↓ лимит</span>
-          </span>
-          <template v-if="sharesConfirmed">
-            <span class="cap-confirmed-amount">{{ parseFloat(alloc.amount).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</span>
-          </template>
-          <template v-else>
+        <div class="flex flex-col gap-2.5">
+          <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
+            <div class="min-w-0">
+              <span class="block truncate text-sm text-foreground">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? ('#' + alloc.partnerId) }}</span>
+              <small v-if="alloc.isCorrected" class="text-xs text-warning">↓ по доступному</small>
+            </div>
             <input
-              class="cap-input"
+              class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
               type="number"
               min="0"
               step="0.01"
               :value="alloc.amount"
               @input="redistributeCapital(alloc.partnerId, ($event.target as HTMLInputElement).value)"
             />
-          </template>
-          <span class="cap-currency">{{ alloc.currency }}</span>
+            <span class="text-sm text-neutral-500">{{ alloc.currency }}</span>
+          </div>
         </div>
-        <button v-if="!sharesConfirmed" class="confirm-shares-btn" type="button" @click="sharesConfirmed = true">
-          Подтвердить доли
-        </button>
+        <div v-if="capitalShortfall > 0" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          Не хватает капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}. Пополните капитал договора.
+        </div>
       </template>
 
-      <button
-        class="primary-btn"
-        type="button"
-        :disabled="!warehouseId || !receivableItems.length || receiveMixedCurrency || (isAtReceipt && isOwnFunds && !selectedCashAccountId) || (isPartnership && (!sharesConfirmed || capitalShortfall > 0))"
-        @click="onSave"
-      >
-        {{ isAtReceipt ? 'Принять и оплатить' : 'Принять' }}
-        ({{ Math.round(totalReceived) }} из {{ Math.round(totalPlanned) }})
-      </button>
+      <!-- STEP: payment (own funds AT_RECEIPT) -->
+      <template v-else-if="currentStep === 'payment'">
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса</span>
+          <select
+            class="h-11 w-full rounded-[10px] border border-neutral-200 bg-surface px-3 text-sm text-foreground outline-none focus:border-green-500"
+            :value="selectedCashAccountId"
+            @change="selectedCashAccountId = Number(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-if="!cashAccounts.length" :value="null">Загрузка…</option>
+            <option v-for="a in cashAccounts" :key="a.id" :value="a.id">{{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
+          <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums" />
+          <p v-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="text-xs text-warning">
+            Меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
+          </p>
+        </div>
+      </template>
+
+      <!-- Footer nav -->
+      <div class="flex items-center gap-2 pt-2">
+        <Button variant="outline" class="h-12 flex-1" @click="goBack">
+          <ChevronLeft class="mr-1 size-4" />{{ currentStepIndex === 0 ? 'Отмена' : 'Назад' }}
+        </Button>
+        <Button class="h-12 flex-[2] text-base" :disabled="!canProceed" @click="goNext">
+          {{ isLastStep ? (isAtReceipt && isOwnFunds ? 'Принять и оплатить' : 'Принять — ' + Math.round(totalReceived) + '/' + Math.round(totalPlanned)) : 'Далее' }}
+        </Button>
+      </div>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body { display: grid; gap: var(--space-3); }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.select-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); appearance: auto; }
-.input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
-.item-block { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); }
-.item-block.muted { opacity: .72; }
-.item-select-row { display: flex; align-items: center; gap: var(--space-2); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
-.item-name { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.item-qty-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
-.qty-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.qty-input-label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--color-text-secondary); }
-.qty-input { width: 80px; min-height: 36px; padding: 0 var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); text-align: right; }
-.reason-row { margin-top: 2px; }
-.error-text { font-size: var(--text-xs); color: var(--color-error); }
-.cap-row { display: flex; align-items: center; gap: var(--space-2); }
-.cap-name { flex: 1; font-size: var(--text-sm); color: var(--color-text-primary); min-width: 0; display: flex; align-items: center; gap: var(--space-1); }
-.cap-corrected { color: var(--color-warning); }
-.cap-correction-hint { font-size: var(--text-xs); color: var(--color-warning); }
-.cap-input { width: 120px; min-height: 40px; padding: 0 var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); text-align: right; }
-.cap-currency { font-size: var(--text-sm); color: var(--color-text-secondary); flex-shrink: 0; }
-.primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
-.primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.hint-warn { margin: 0; font-size: var(--text-xs); color: var(--color-warning); }
-.step-header { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-subtle); margin-top: var(--space-1); }
-.step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-full); background: var(--color-brand-500); color: white; font-size: var(--text-xs); font-weight: var(--font-semibold); flex-shrink: 0; }
-.step-label { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.no-items-hint { font-size: var(--text-sm); color: var(--color-text-secondary); padding: var(--space-2) 0; }
-.blocked-item-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: color-mix(in srgb, var(--color-warning) 8%, transparent); border-radius: var(--radius-md); }
-.blocked-item-name { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.blocked-item-qty { font-size: var(--text-sm); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
-.shares-header { display: flex; align-items: center; justify-content: space-between; }
-.edit-shares-btn { padding: var(--space-1) var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: transparent; color: var(--color-text-secondary); font-size: var(--text-xs); cursor: pointer; }
-.cap-confirmed-amount { width: 120px; text-align: right; font-size: var(--text-sm); font-weight: var(--font-semibold); font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
-.confirm-shares-btn { display: flex; align-items: center; justify-content: center; min-height: 44px; border: 1px solid var(--color-brand-500); border-radius: var(--radius-md); background: transparent; color: var(--color-brand-700); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-</style>
