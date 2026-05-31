@@ -189,25 +189,23 @@ function onDelete(): void {
             {{ selectedTargets.length === items.length ? 'Снять все' : 'Выбрать все' }}
           </button>
         </div>
-        <div class="flex max-h-[34vh] flex-col gap-2 overflow-y-auto">
+        <div class="flex max-h-[40vh] flex-col gap-1 overflow-y-auto">
           <button
             v-for="item in items"
             :key="item.id"
             type="button"
             :class="cn(
-              'flex w-full items-center gap-3 rounded-[10px] border px-3.5 py-2.5 text-left transition-colors',
+              'flex w-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition-colors',
               selectedTargets.includes(item.id) ? 'border-primary bg-primary/5' : 'border-neutral-200 hover:bg-neutral-50',
             )"
             @click="toggleTarget(item.id)"
           >
             <component
               :is="selectedTargets.includes(item.id) ? CheckCircle2 : Circle"
-              :class="cn('size-5 shrink-0', selectedTargets.includes(item.id) ? 'text-primary' : 'text-neutral-300')"
+              :class="cn('size-4 shrink-0', selectedTargets.includes(item.id) ? 'text-primary' : 'text-neutral-300')"
             />
-            <div class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium text-foreground">{{ item.product_variant_name }}</span>
-              <span class="text-xs tabular-nums text-neutral-500">{{ Math.round(parseFloat(item.quantity) || 0) }} шт</span>
-            </div>
+            <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
+            <span class="shrink-0 text-xs tabular-nums text-neutral-500">{{ Math.round(parseFloat(item.quantity) || 0) }} шт</span>
           </button>
         </div>
       </template>
