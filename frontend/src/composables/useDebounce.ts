@@ -6,13 +6,13 @@
  * Returns a debounced version of `fn` that delays invocation by `delay` ms.
  * The returned function has the same signature as `fn`.
  */
-export function debounce<T extends (...args: unknown[]) => unknown>(
-  fn: T,
+export function debounce<Args extends unknown[], Return>(
+  fn: (...args: Args) => Return,
   delay: number,
-): T {
+): (...args: Args) => void {
   let timer: ReturnType<typeof setTimeout> | null = null
 
-  const debounced = (...args: Parameters<T>): void => {
+  return (...args: Args): void => {
     if (timer !== null) {
       clearTimeout(timer)
     }
@@ -21,8 +21,6 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
       timer = null
     }, delay)
   }
-
-  return debounced as unknown as T
 }
 
 /**
@@ -32,9 +30,9 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
  * @example
  * const debouncedSearch = useDebounce((query: string) => search(query), 300)
  */
-export function useDebounce<T extends (...args: unknown[]) => unknown>(
-  fn: T,
+export function useDebounce<Args extends unknown[], Return>(
+  fn: (...args: Args) => Return,
   delay: number,
-): T {
+): (...args: Args) => void {
   return debounce(fn, delay)
 }

@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Copy, Send, UserPlus } from 'lucide-vue-next'
+import { Calculator, Copy, HandCoins, RefreshCcw, Send, UserPlus } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
 import WorkspaceQuickPartnerSheet from './WorkspaceQuickPartnerSheet.vue'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import { Textarea } from '@/components/ui/textarea'
 import { createInvestorInvite, fetchPartners, type InvestorInvite, type Partner } from '@/api/core'
 import { createInvestmentAgreement, type InvestmentAgreementDetail } from '@/api/partnerships'
 import { useIdempotency } from '@/composables/useIdempotency'
@@ -99,7 +106,9 @@ async function loadPartners(): Promise<void> {
   isLoading.value = true
   try {
     partners.value = await fetchPartners({ is_active: true })
-    investorId.value = investorOptions.value[0]?.id ?? null
+    if (investorId.value && !investorOptions.value.some((partner) => partner.id === investorId.value)) {
+      investorId.value = null
+    }
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : 'Не удалось загрузить инвесторов'
   } finally {
@@ -176,53 +185,78 @@ onMounted(loadPartners)
 </script>
 
 <template>
-  <div class="agreement-form">
-    <section class="form-panel">
-      <div class="panel-head">
-        <div>
-          <h2>Инвестор</h2>
-          <p>Бизнес участвует в договоре автоматически. Выберите только внешнего инвестора.</p>
+  <div class="flex flex-col gap-4">
+    <Card class="rounded-2xl bg-background">
+      <CardHeader class="gap-3">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <CardTitle class="text-base">Инвестор</CardTitle>
+            <CardDescription class="mt-1 leading-relaxed">
+              Бизнес участвует автоматически. Для договора нужен внешний инвестор и понятная формула долей.
+            </CardDescription>
+          </div>
+          <Badge variant="secondary" class="shrink-0">1 шаг</Badge>
         </div>
-        <div class="panel-head-actions">
-          <button class="ghost-action" type="button" @click="quickPartnerOpen = true">
-            <UserPlus :size="15" :stroke-width="2" />
+        <div class="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" type="button" @click="quickPartnerOpen = true">
+            <UserPlus data-icon="inline-start" />
             Создать
-          </button>
-          <button class="ghost-action" type="button" @click="inviteOpen = true">
-            <Send :size="15" :stroke-width="2" />
+          </Button>
+          <Button variant="outline" size="sm" type="button" @click="inviteOpen = true">
+            <Send data-icon="inline-start" />
             Пригласить
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent class="flex flex-col gap-3">
+        <p v-if="isLoading" class="text-sm text-muted-foreground">Загрузка инвесторов…</p>
+        <div v-else-if="investorOptions.length === 0" class="rounded-xl bg-muted/60 p-3">
+          <p class="text-sm font-medium text-foreground">Нет активных инвесторов</p>
+          <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
+            Создайте инвестора или отправьте приглашение. После принятия он появится в списке.
+          </p>
+        </div>
+        <div v-else class="grid gap-2 sm:grid-cols-2">
+          <button
+            v-for="partner in investorOptions"
+            :key="partner.id"
+            :aria-pressed="investorId === partner.id"
+            class="flex min-h-16 items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-left transition hover:bg-muted/50 aria-pressed:border-primary aria-pressed:bg-primary/5"
+            type="button"
+            @click="investorId = partner.id"
+          >
+            <span class="min-w-0">
+              <span class="block truncate text-sm font-medium text-foreground">{{ partner.display_name }}</span>
+              <span class="mt-0.5 block text-xs text-muted-foreground">
+                {{ investorId === partner.id ? 'Выбран для договора' : 'Активный инвестор' }}
+              </span>
+            </span>
+            <span
+              class="grid size-3.5 shrink-0 place-items-center rounded-full border"
+              :class="investorId === partner.id ? 'border-primary bg-primary' : 'border-muted-foreground/30'"
+              aria-hidden="true"
+            />
           </button>
         </div>
-      </div>
+      </CardContent>
+    </Card>
 
-      <div v-if="isLoading" class="muted">Загрузка инвесторов…</div>
-      <div v-else-if="investorOptions.length === 0" class="empty-box">
-        <strong>Нет активных инвесторов</strong>
-        <span>Создайте приглашение. После принятия инвестор появится в списке.</span>
-      </div>
-      <div v-else class="investor-list">
-        <button
-          v-for="partner in investorOptions"
-          :key="partner.id"
-          class="investor-card"
-          :class="{ active: investorId === partner.id }"
-          type="button"
-          @click="investorId = partner.id"
-        >
-          <span>{{ partner.display_name }}</span>
-          <small>{{ investorId === partner.id ? 'Выбран для договора' : 'Активный инвестор' }}</small>
-        </button>
-      </div>
-    </section>
-
-    <section class="form-panel">
-      <h2>Формула</h2>
-      <p class="panel-note">
-        Договор строится от реального намерения инвестора. Общий объём и вклад бизнеса система считает сама.
-      </p>
-      <div class="money-row">
-        <label class="field-group">
-          <span>Инвестор планирует вложить</span>
+    <Card class="rounded-2xl bg-background">
+      <CardHeader>
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle class="text-base">Формула договора</CardTitle>
+            <CardDescription class="mt-1 leading-relaxed">
+              Введите вклад инвестора и договорённые проценты. Общий бюджет и вклад бизнеса считаются автоматически.
+            </CardDescription>
+          </div>
+          <Calculator class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </div>
+      </CardHeader>
+      <CardContent class="flex flex-col gap-4">
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-medium text-muted-foreground">Инвестор планирует вложить</span>
           <MoneyCurrencyInput
             v-model="investorPlannedAmount"
             v-model:currency="currency"
@@ -230,54 +264,64 @@ onMounted(loadPartners)
             aria-label="Сумма, которую инвестор планирует вложить"
           />
         </label>
-      </div>
 
-      <div class="grid-2">
-        <label class="field-group">
-          <span>Капитал инвестора, %</span>
-          <input v-model="investorCapitalPercent" class="input-field" inputmode="decimal" placeholder="напр. 70" />
-        </label>
-        <label class="field-group">
-          <span>Прибыль инвестора, %</span>
-          <input v-model="investorProfitPercentInput" class="input-field" inputmode="decimal" placeholder="напр. 40" />
-        </label>
-      </div>
-
-      <div class="summary-grid">
-        <div class="summary-card">
-          <span>{{ selectedInvestor?.display_name ?? 'Инвестор' }}</span>
-          <strong>{{ formatPrice(investorCapital, currency) }}</strong>
-          <small>плановый вклад инвестора</small>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="flex flex-col gap-2">
+            <span class="text-sm font-medium text-muted-foreground">Капитал инвестора, %</span>
+            <Input v-model="investorCapitalPercent" inputmode="decimal" placeholder="напр. 70" class="h-10" />
+          </label>
+          <label class="flex flex-col gap-2">
+            <span class="text-sm font-medium text-muted-foreground">Прибыль инвестора, %</span>
+            <Input v-model="investorProfitPercentInput" inputmode="decimal" placeholder="напр. 40" class="h-10" />
+          </label>
         </div>
-        <div class="summary-card">
-          <span>Бизнесу внести</span>
-          <strong>{{ formatPrice(operatorCapital, currency) }}</strong>
-          <small>чтобы сохранить долю {{ formatPercent(operatorCapitalPercentValue) }}</small>
+
+        <div class="grid overflow-hidden rounded-xl border border-border sm:grid-cols-3">
+          <div class="bg-primary p-3 text-primary-foreground">
+            <p class="text-xs opacity-75">{{ selectedInvestor?.display_name ?? 'Инвестор' }}</p>
+            <p class="mt-1 text-lg font-semibold tabular-nums">{{ formatPrice(investorCapital, currency) }}</p>
+            <p class="mt-1 text-xs opacity-75">плановый вклад</p>
+          </div>
+          <div class="border-t border-border p-3 sm:border-l sm:border-t-0">
+            <p class="text-xs text-muted-foreground">Бизнесу внести</p>
+            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(operatorCapital, currency) }}</p>
+            <p class="mt-1 text-xs text-muted-foreground">доля {{ formatPercent(operatorCapitalPercentValue) }}</p>
+          </div>
+          <div class="border-t border-border p-3 sm:border-l sm:border-t-0">
+            <p class="text-xs text-muted-foreground">Общий объём</p>
+            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudgetValue, currency) }}</p>
+            <p class="mt-1 text-xs text-muted-foreground">план договора</p>
+          </div>
         </div>
-      </div>
 
-      <div class="formula-strip formula-strip--stacked">
-        <span>Ориентировочный общий объём договора</span>
-        <strong>{{ formatPrice(plannedBudgetValue, currency) }}</strong>
-      </div>
-      <div class="formula-strip">
-        <span>Коэффициент Mudaraba для будущего пересчёта</span>
-        <strong>{{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(6) : '—' }}</strong>
-      </div>
-    </section>
+        <div class="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2">
+          <span class="text-sm text-muted-foreground">Коэффициент Mudaraba для будущего пересчёта</span>
+          <span class="font-mono text-sm font-semibold text-foreground">
+            {{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(6) : '—' }}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
 
-    <section class="recalculation-panel">
-      <div class="recalculation-copy">
-        <strong>Если фактическая доля отличается от плана</strong>
-        <span>При приёмке система фиксирует фактическую долю капитала партии и пересчитывает прибыль по коэффициенту договора.</span>
-      </div>
-      <div class="split-control">
-        <div class="split-header">
-          <span>Фактическая доля капитала инвестора</span>
-          <strong>{{ formatPercent(simulatedInvestorCapitalPercent) }}</strong>
+    <Card class="rounded-2xl bg-background">
+      <CardHeader>
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle class="text-base">План и факт</CardTitle>
+            <CardDescription class="mt-1 leading-relaxed">
+              Если фактический вклад отличается от плана, прибыль пересчитывается по коэффициенту договора.
+            </CardDescription>
+          </div>
+          <HandCoins class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </div>
+      </CardHeader>
+      <CardContent class="flex flex-col gap-4">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm font-medium text-muted-foreground">Фактическая доля капитала инвестора</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedInvestorCapitalPercent) }}</span>
         </div>
         <input
-          class="split-range"
+          class="h-2 w-full cursor-pointer accent-primary"
           type="range"
           min="0"
           max="100"
@@ -286,41 +330,55 @@ onMounted(loadPartners)
           :style="simulationRangeStyle"
           @input="(event) => setSimulationCapitalPercent((event.target as HTMLInputElement).value)"
         />
-        <div class="range-labels">
+        <div class="flex justify-between gap-3 text-xs text-muted-foreground">
           <span>Бизнес {{ formatPercent(100 - simulatedInvestorCapitalPercent) }}</span>
           <span>Инвестор {{ formatPercent(simulatedInvestorCapitalPercent) }}</span>
         </div>
-      </div>
-      <div class="simulation-result">
-        <div>
-          <span>Прибыль инвестора</span>
-          <strong>{{ formatPercent(simulatedInvestorProfitPercent) }}</strong>
-        </div>
-        <div>
-          <span>Прибыль бизнеса</span>
-          <strong>{{ formatPercent(simulatedOperatorProfitPercent) }}</strong>
-        </div>
-      </div>
-      <div class="recalculation-note" :class="{ active: hasSimulationDelta }">
-        <span v-if="hasSimulationDelta">
-          {{ simulationExplanation }}
-        </span>
-        <span v-else>Сейчас симуляция совпадает с планом договора.</span>
-        <button type="button" @click="resetSimulation">Сбросить</button>
-      </div>
-    </section>
 
-    <section class="form-panel">
-      <label class="field-group">
-        <span>Заметка</span>
-        <textarea v-model="notes" class="input-field textarea-field" rows="3" placeholder="Например, первая партия товара по договору" />
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="rounded-xl border border-border bg-muted/40 p-3">
+            <p class="text-xs text-muted-foreground">Прибыль инвестора</p>
+            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedInvestorProfitPercent) }}</p>
+          </div>
+          <div class="rounded-xl border border-border bg-muted/40 p-3">
+            <p class="text-xs text-muted-foreground">Прибыль бизнеса</p>
+            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedOperatorProfitPercent) }}</p>
+          </div>
+        </div>
+
+        <div class="flex items-start justify-between gap-3 rounded-xl bg-muted/60 p-3">
+          <p class="text-sm leading-relaxed" :class="hasSimulationDelta ? 'text-foreground' : 'text-muted-foreground'">
+            <span v-if="hasSimulationDelta">{{ simulationExplanation }}</span>
+            <span v-else>Сейчас симуляция совпадает с планом договора.</span>
+          </p>
+          <Button variant="ghost" size="sm" type="button" class="shrink-0" @click="resetSimulation">
+            <RefreshCcw data-icon="inline-start" />
+            Сбросить
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+
+    <Card class="rounded-2xl bg-background">
+      <CardContent class="flex flex-col gap-2 pt-4">
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-medium text-muted-foreground">Заметка</span>
+          <Textarea
+            v-model="notes"
+            rows="3"
+            placeholder="Например, первая партия товара по договору"
+            class="min-h-24"
+          />
       </label>
-    </section>
+      </CardContent>
+    </Card>
 
-    <p v-if="error" class="error-note">{{ error }}</p>
-    <button class="primary-action" type="button" :disabled="saving" @click="submit">
+    <Alert v-if="error" variant="destructive">
+      <AlertDescription>{{ error }}</AlertDescription>
+    </Alert>
+    <Button size="lg" type="button" :disabled="saving" class="h-11 rounded-xl" @click="submit">
       {{ saving ? 'Создание…' : 'Создать договор' }}
-    </button>
+    </Button>
 
     <WorkspaceQuickPartnerSheet
       v-model:open="quickPartnerOpen"
@@ -328,338 +386,22 @@ onMounted(loadPartners)
     />
 
     <AppBottomSheet :open="inviteOpen" title="Пригласить инвестора" @close="inviteOpen = false">
-      <div class="invite-sheet">
-        <input v-model="inviteName" class="input-field" placeholder="Имя инвестора" />
-        <input v-model="inviteEmail" class="input-field" type="email" placeholder="Email, если есть" />
-        <button class="primary-action" type="button" :disabled="isInviting" @click="createInvite">
-          <Send :size="16" :stroke-width="2" />
+      <div class="flex flex-col gap-3">
+        <Input v-model="inviteName" placeholder="Имя инвестора" class="h-10" />
+        <Input v-model="inviteEmail" type="email" placeholder="Email, если есть" class="h-10" />
+        <Button type="button" :disabled="isInviting" class="h-10" @click="createInvite">
+          <Send data-icon="inline-start" />
           {{ isInviting ? 'Создание…' : 'Создать ссылку приглашения' }}
-        </button>
-        <div v-if="createdInvite" class="invite-result">
-          <span>{{ inviteUrl(createdInvite) }}</span>
-          <button type="button" @click="copyInvite(createdInvite)">
-            <Copy :size="14" :stroke-width="2" />
+        </Button>
+        <Separator />
+        <div v-if="createdInvite" class="rounded-xl bg-muted/60 p-3">
+          <p class="break-all text-xs text-muted-foreground">{{ inviteUrl(createdInvite) }}</p>
+          <Button variant="ghost" size="sm" type="button" class="mt-2" @click="copyInvite(createdInvite)">
+            <Copy data-icon="inline-start" />
             Скопировать
-          </button>
+          </Button>
         </div>
       </div>
     </AppBottomSheet>
   </div>
 </template>
-
-<style scoped>
-.agreement-form,
-.form-panel,
-.recalculation-panel,
-.invite-sheet {
-  display: grid;
-  gap: 12px;
-}
-
-.form-panel,
-.recalculation-panel {
-  padding: 14px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-primary);
-}
-
-.panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-h2,
-.panel-head h2 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--text-base);
-  font-weight: var(--font-semibold);
-}
-
-.panel-head p,
-.panel-note,
-.muted,
-.empty-box span,
-.recalculation-copy span,
-.error-note {
-  margin: 4px 0 0;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.45;
-}
-
-.panel-note {
-  margin: -4px 0 2px;
-}
-
-.panel-head-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.ghost-action {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-primary);
-  color: var(--color-brand-700);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.investor-list {
-  display: grid;
-  gap: 8px;
-}
-
-.investor-card {
-  display: grid;
-  gap: 3px;
-  padding: 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-  text-align: left;
-}
-
-.investor-card.active {
-  border-color: var(--color-brand-500);
-  background: var(--color-brand-50);
-}
-
-.investor-card span,
-.empty-box strong,
-.recalculation-copy strong {
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.investor-card small {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-}
-
-.empty-box {
-  display: grid;
-  gap: 4px;
-  padding: 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-}
-
-.grid-2,
-.money-row,
-.summary-grid,
-.simulation-result {
-  display: grid;
-  gap: 8px;
-}
-
-.grid-2,
-.summary-grid,
-.simulation-result {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.money-row {
-  grid-template-columns: 1fr;
-}
-
-.field-group {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.field-group span {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.input-field {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font: inherit;
-}
-
-.textarea-field {
-  min-height: 88px;
-  padding-top: 10px;
-  resize: vertical;
-}
-
-.summary-card,
-.formula-strip,
-.simulation-result > div,
-.recalculation-note {
-  display: grid;
-  gap: 4px;
-  padding: 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-}
-
-.summary-card span,
-.formula-strip span,
-.simulation-result span {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-}
-
-.summary-card strong,
-.formula-strip strong,
-.simulation-result strong {
-  color: var(--color-text-primary);
-  font-size: var(--text-base);
-}
-
-.summary-card small {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  line-height: 1.35;
-}
-
-.formula-strip,
-.split-header,
-.recalculation-note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.formula-strip--stacked {
-  align-items: flex-start;
-}
-
-.recalculation-copy {
-  display: grid;
-  gap: 5px;
-}
-
-.split-control {
-  display: grid;
-  gap: 8px;
-}
-
-.split-header {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.split-header strong {
-  color: var(--color-text-primary);
-}
-
-.split-range {
-  width: 100%;
-  height: 8px;
-  border-radius: var(--radius-full);
-  appearance: none;
-  background: linear-gradient(to right, var(--color-accent-400) 0 var(--split), var(--color-brand-500) var(--split) 100%);
-  outline: none;
-}
-
-.split-range::-webkit-slider-thumb {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--color-brand-600);
-  border-radius: var(--radius-full);
-  appearance: none;
-  background: var(--color-bg-elevated);
-  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.16);
-}
-
-.range-labels {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
-}
-
-.recalculation-note {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.recalculation-note.active {
-  background: var(--color-accent-50);
-  color: var(--color-accent-700);
-}
-
-.recalculation-note button {
-  color: var(--color-brand-700);
-  font-weight: var(--font-semibold);
-}
-
-.primary-action {
-  min-height: 46px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: var(--color-brand-500);
-  color: var(--color-text-inverse);
-  font-weight: var(--font-semibold);
-}
-
-.primary-action:disabled {
-  opacity: 0.58;
-}
-
-.error-note {
-  color: var(--color-danger);
-}
-
-.invite-result {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-elevated);
-}
-
-.invite-result span {
-  overflow-wrap: anywhere;
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-}
-
-.invite-result button {
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-brand-700);
-  font-weight: var(--font-semibold);
-}
-
-@media (max-width: 340px) {
-  .grid-2,
-  .summary-grid,
-  .simulation-result {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

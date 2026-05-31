@@ -2,14 +2,12 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import AppBottomNav from '@/components/layout/AppBottomNav.vue'
 import AppFloatingCart from '@/components/layout/AppFloatingCart.vue'
 import AppToastContainer from '@/components/feedback/AppToastContainer.vue'
 
 const route = useRoute()
 const auth = useAuthStore()
-const { isDesktop } = useBreakpoint()
 
 const showNav = computed(() => {
   return auth.isAuthenticated && route.meta.layout !== 'blank' && route.meta.layout !== 'investor'
@@ -22,16 +20,24 @@ const showCart = computed(() => {
 
   return route.name === 'product-detail'
 })
+
+const isFullBleedWhitePage = computed(() => route.name === 'procurement-list')
 </script>
 
 <template>
   <div class="app-root">
-    <main class="app-main" :class="{ 'has-bottom-nav': showNav && !isDesktop }">
+    <main
+      class="app-main"
+      :class="{
+        'has-bottom-nav': showNav,
+        'app-main--full-white': isFullBleedWhitePage,
+      }"
+    >
       <RouterView />
     </main>
 
     <AppFloatingCart v-if="showCart" />
-    <AppBottomNav v-if="showNav && !isDesktop" />
+    <AppBottomNav v-if="showNav" />
     <AppToastContainer />
   </div>
 </template>
@@ -48,6 +54,11 @@ const showCart = computed(() => {
   width: 100%;
   max-width: var(--max-content-width);
   margin: 0 auto;
+}
+
+.app-main--full-white {
+  max-width: none;
+  background: #fff;
 }
 
 .app-main.has-bottom-nav {

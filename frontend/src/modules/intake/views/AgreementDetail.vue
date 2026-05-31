@@ -2,9 +2,27 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, BarChart3, Plus, RotateCcw, Send, Wallet } from 'lucide-vue-next'
+import {
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
+  CalendarDays,
+  HandCoins,
+  Plus,
+  ReceiptText,
+  RotateCcw,
+  Send,
+  Users,
+  Wallet,
+} from 'lucide-vue-next'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   addAgreementContribution,
   addAgreementWithdrawal,
@@ -55,12 +73,45 @@ const balanceLabel = computed(() => {
     .map(([currency, amount]) => formatPrice(amount, currency))
   return parts.length ? parts.join(' · ') : '0'
 })
+const primaryCurrency = computed(() => agreement.value?.currency ?? 'UZS')
+const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0) || 0)
+const availablePrimaryAmount = computed(() => Number(agreement.value?.balances?.[primaryCurrency.value] ?? 0) || 0)
 const contributedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.contributed_amount || 0), 0) ?? 0)
 const allocatedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) ?? 0)
+const usedTotal = computed(() => Math.max(0, contributedTotal.value - availablePrimaryAmount.value))
+const budgetBase = computed(() => Math.max(plannedBudget.value, contributedTotal.value, 1))
+const contributedProgress = computed(() => Math.min(100, (contributedTotal.value / budgetBase.value) * 100))
+const availableProgress = computed(() => Math.min(100, (availablePrimaryAmount.value / budgetBase.value) * 100))
+const usedProgress = computed(() => Math.min(100, (usedTotal.value / budgetBase.value) * 100))
+const isFunded = computed(() => plannedBudget.value > 0 && contributedTotal.value >= plannedBudget.value)
+const investorName = computed(() => agreement.value?.partners.find((partner) => partner.role === 'INVESTOR')?.partner_name ?? 'Инвестор')
 const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
   value: partner.partner,
   label: agreementSideLabel(partner.role),
 })))
+const partyRows = computed(() => {
+  const rows = agreement.value?.participant_totals ?? []
+  const total = contributedTotal.value
+  const planBase = plannedBudget.value
+  return rows.map((row) => {
+    const plannedAmount = Number(row.planned_capital_share || 0)
+    const contributedAmount = Number(row.contributed_amount || 0)
+    const plannedCapitalPercent = planBase > 0 ? Math.round((plannedAmount / planBase) * 100) : null
+    const actualCapitalPercent = total > 0 ? Math.round((contributedAmount / total) * 100) : null
+    return {
+      ...row,
+      displayName: row.role === 'OPERATOR' ? 'Бизнес' : row.partner_name,
+      plannedAmount,
+      contributedAmount,
+      plannedCapitalPercent,
+      actualCapitalPercent,
+      plannedProfitPercent: Math.round((Number(row.planned_profit_share || 0) || 0) * 100),
+      availableAmount: Number(row.available_amount || 0) || 0,
+      allocatedAmount: Number(row.allocated_amount || 0) || 0,
+      withdrawnAmount: Number(row.withdrawn_amount || 0) || 0,
+    }
+  })
+})
 const availableByPartnerCurrency = computed<Record<number, Record<string, number>>>(() => {
   const rows: Record<number, Record<string, number>> = {}
   const add = (partnerId: number, currency: string, amount: number) => {
@@ -103,6 +154,17 @@ function agreementSideLabel(role: string): string {
   if (role === 'INVESTOR') return 'Инвестор'
   if (role === 'OPERATOR') return 'Бизнес'
   return partnerRoleLabel(role)
+}
+
+function agreementStatusLabel(status: string): string {
+  if (status === 'ACTIVE') return 'Активен'
+  if (status === 'CLOSED') return 'Закрыт'
+  if (status === 'DRAFT') return 'Черновик'
+  return status
+}
+
+function dateOnly(value: string): string {
+  return new Date(value).toLocaleDateString(intlLocale(locale.value), { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function setContributionPartner(value: string | number | boolean | null): void {
@@ -227,195 +289,313 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page">
-    <header class="topbar">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" />
-      </button>
-      <h1>{{ t('procurements.agreementTitle', { id: route.params.id }) }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('procurements.report')" @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })">
-        <BarChart3 :size="18" />
-      </button>
+  <main class="min-h-dvh bg-background pb-[calc(var(--bottom-nav-height)+1rem)]">
+    <header class="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
+      <div class="mx-auto flex min-h-14 w-full max-w-6xl items-center gap-3 px-4">
+        <Button variant="ghost" size="icon" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft />
+        </Button>
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-lg font-semibold text-foreground">
+            {{ t('procurements.agreementTitle', { id: route.params.id }) }}
+          </p>
+          <p v-if="agreement" class="truncate text-xs text-muted-foreground">
+            {{ investorName }} · {{ dateOnly(agreement.opened_at) }}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          type="button"
+          :aria-label="t('procurements.report')"
+          @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })"
+        >
+          <BarChart3 />
+        </Button>
+      </div>
     </header>
 
-    <main class="content">
-      <div v-if="loading" class="state">{{ t('procurements.loading') }}</div>
-      <div v-else-if="error" class="state state-error">{{ error }}</div>
+    <section class="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4">
+      <div v-if="loading" class="grid gap-3">
+        <Skeleton class="h-40 rounded-2xl" />
+        <Skeleton class="h-32 rounded-2xl" />
+        <Skeleton class="h-40 rounded-2xl" />
+      </div>
+      <Alert v-else-if="error" variant="destructive">
+        <AlertDescription>{{ error }}</AlertDescription>
+      </Alert>
 
       <template v-else-if="agreement">
-        <section class="hero">
-          <div>
-            <span>{{ t('procurements.freeBalance') }}</span>
-            <strong>{{ balanceLabel }}</strong>
-          </div>
-          <div class="hero-grid">
-            <div><span>{{ t('procurements.contributed') }}</span><strong>{{ formatPrice(contributedTotal, agreement.currency) }}</strong></div>
-            <div><span>{{ t('procurements.allocatedToProcurements') }}</span><strong>{{ formatPrice(allocatedTotal, agreement.currency) }}</strong></div>
-            <div><span>{{ t('procurements.procurementsTotal') }}</span><strong>{{ agreement.procurements.length }}</strong></div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.participants') }}</h2>
-          </div>
-          <div v-for="row in agreement.participant_totals" :key="row.partner_id" class="partner-row">
-            <div>
-              <strong>{{ row.partner_name }}</strong>
-              <span>{{ partnerRoleLabel(row.role) }} · {{ t('procurements.profitShareShort', { share: (Number(row.planned_profit_share) * 100).toFixed(2) }) }}</span>
+        <Card class="overflow-hidden rounded-2xl bg-background">
+          <CardHeader class="gap-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <CardTitle class="text-xl">Инвестдоговор #{{ agreement.id }}</CardTitle>
+                  <Badge variant="secondary">{{ agreementStatusLabel(agreement.status) }}</Badge>
+                </div>
+                <CardDescription class="mt-1">
+                  {{ investorName }} · {{ dateOnly(agreement.opened_at) }}
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
+                <Plus data-icon="inline-start" />
+                Новый приход
+              </Button>
             </div>
-            <div>
-              <strong>{{ formatPrice(row.available_amount, agreement.currency) }}</strong>
-              <span>{{ t('procurements.available') }}</span>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-4">
+            <div class="grid overflow-hidden rounded-xl border border-border md:grid-cols-4">
+              <div class="bg-primary p-4 text-primary-foreground md:col-span-1">
+                <p class="text-xs opacity-75">{{ t('procurements.freeBalance') }}</p>
+                <p class="mt-1 text-2xl font-semibold tabular-nums">{{ balanceLabel }}</p>
+                <p class="mt-2 text-xs opacity-75">деньги, доступные в пуле договора</p>
+              </div>
+              <div class="border-t border-border p-4 md:border-l md:border-t-0">
+                <p class="text-xs text-muted-foreground">План договора</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudget, primaryCurrency) }}</p>
+              </div>
+              <div class="border-t border-border p-4 md:border-l md:border-t-0">
+                <p class="text-xs text-muted-foreground">{{ t('procurements.contributed') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(contributedTotal, primaryCurrency) }}</p>
+              </div>
+              <div class="border-t border-border p-4 md:border-l md:border-t-0">
+                <p class="text-xs text-muted-foreground">{{ t('procurements.allocatedToProcurements') }}</p>
+                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(allocatedTotal, primaryCurrency) }}</p>
+              </div>
             </div>
-          </div>
-        </section>
 
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.contribution') }}</h2>
-            <Wallet :size="17" />
-          </div>
-          <div class="money-move-form">
-            <BaseSelect
-              :model-value="contributionPartnerId"
-              :options="agreementSideOptions"
-              title="Кто пополняет договор"
-              @update:model-value="setContributionPartner"
-            />
-            <MoneyCurrencyInput
-              v-model="contributionAmount"
-              v-model:currency="contributionCurrency"
-              :placeholder="t('common.amount')"
-              aria-label="Сумма пополнения договора"
-            />
-          </div>
-          <button class="action" type="button" :disabled="savingContribution" @click="saveContribution">
-            <Plus :size="17" /> {{ t('procurements.addContribution') }}
-          </button>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.withdrawalFromAgreement') }}</h2>
-            <RotateCcw :size="17" />
-          </div>
-          <div class="money-move-form">
-            <BaseSelect
-              :model-value="withdrawalPartnerId"
-              :options="agreementSideOptions"
-              title="Кому вернуть деньги"
-              @update:model-value="setWithdrawalPartner"
-            />
-            <MoneyCurrencyInput
-              v-model="withdrawalAmount"
-              v-model:currency="withdrawalCurrency"
-              :placeholder="t('common.amount')"
-              aria-label="Сумма возврата из договора"
-            />
-          </div>
-          <p v-if="withdrawalAvailabilityError || withdrawalError" class="form-error">
-            {{ withdrawalAvailabilityError || withdrawalError }}
-          </p>
-          <button class="action secondary" type="button" :disabled="savingWithdrawal || Boolean(withdrawalAvailabilityError)" @click="saveWithdrawal">
-            <RotateCcw :size="17" /> {{ t('procurements.recordWithdrawal') }}
-          </button>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.linkedProcurements') }}</h2>
-            <button type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">{{ t('procurements.new') }}</button>
-          </div>
-          <button
-            v-for="procurement in agreement.procurements"
-            :key="procurement.id"
-            class="proc-row"
-            type="button"
-            @click="router.push({ name: 'procurement-detail', params: { id: procurement.id } })"
-          >
-            <span>#{{ procurement.id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</span>
-            <strong>{{ procurementStatusLabel(procurement.status) }}</strong>
-          </button>
-          <p v-if="agreement.procurements.length === 0" class="muted">{{ t('procurements.noLinkedProcurements') }}</p>
-        </section>
-
-        <section v-if="activeProcurements.length" class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.allocateCapital') }}</h2>
-            <Send :size="17" />
-          </div>
-          <div class="inline-form two">
-            <select v-model.number="allocationProcurementId">
-              <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">{{ t('procurements.procurementNumber', { id: procurement.id }) }}</option>
-            </select>
-            <button type="button" @click="loadAllocationPreview">{{ t('procurements.calculate') }}</button>
-          </div>
-          <div v-if="allocationPreview" class="allocation-box">
-            <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="allocation-row">
-              <span>{{ row.partner_name }}</span>
-              <strong>{{ formatPrice(row.amount, row.currency) }}</strong>
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{{ isFunded ? 'Профинансировано' : 'Профинансировано от плана' }}</span>
+                <span>{{ Math.round(contributedProgress) }}%</span>
+              </div>
+              <div class="flex h-2 overflow-hidden rounded-full bg-muted">
+                <div class="bg-primary" :style="{ width: `${availableProgress}%` }" />
+                <div class="bg-muted-foreground/40" :style="{ width: `${usedProgress}%` }" />
+              </div>
+              <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="size-2 rounded-full bg-primary" aria-hidden="true" /> Доступно {{ formatPrice(availablePrimaryAmount, primaryCurrency) }}
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="size-2 rounded-full bg-muted-foreground/40" aria-hidden="true" /> Использовано {{ formatPrice(usedTotal, primaryCurrency) }}
+                </span>
+              </div>
             </div>
-            <button class="action" type="button" :disabled="allocating" @click="allocateSuggested">{{ t('procurements.confirmAllocation') }}</button>
-          </div>
-        </section>
+          </CardContent>
+        </Card>
 
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.history') }}</h2>
-            <span>{{ agreement.history.length }}</span>
+        <div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <Card class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.participants') }}</CardTitle>
+                  <CardDescription class="mt-1">План договора и текущий факт по капиталу.</CardDescription>
+                </div>
+                <Users class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-4">
+              <div class="grid grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+                <span />
+                <span class="text-right text-xs text-muted-foreground">план</span>
+                <span class="text-right text-xs text-muted-foreground">капитал</span>
+                <span class="text-right text-xs text-muted-foreground">прибыль</span>
+                <template v-for="row in partyRows" :key="`plan-${row.partner_id}`">
+                  <span class="min-w-0 truncate font-medium text-foreground">{{ row.displayName }}</span>
+                  <span class="whitespace-nowrap text-right tabular-nums text-foreground">{{ formatPrice(row.plannedAmount, primaryCurrency) }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.plannedCapitalPercent != null ? `${row.plannedCapitalPercent}%` : '—' }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.plannedProfitPercent }}%</span>
+                </template>
+              </div>
+
+              <Separator />
+
+              <div class="grid grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+                <span />
+                <span class="text-right text-xs text-muted-foreground">внёс</span>
+                <span class="text-right text-xs text-muted-foreground">капитал</span>
+                <span class="text-right text-xs text-muted-foreground">доступно</span>
+                <template v-for="row in partyRows" :key="`fact-${row.partner_id}`">
+                  <span class="min-w-0 truncate font-medium text-foreground">{{ row.displayName }}</span>
+                  <span class="whitespace-nowrap text-right tabular-nums text-foreground">{{ formatPrice(row.contributedAmount, primaryCurrency) }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.actualCapitalPercent != null ? `${row.actualCapitalPercent}%` : '—' }}</span>
+                  <span class="whitespace-nowrap text-right font-semibold tabular-nums text-foreground">{{ formatPrice(row.availableAmount, primaryCurrency) }}</span>
+                </template>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div class="grid gap-4">
+            <Card class="rounded-2xl bg-background">
+              <CardHeader>
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle class="text-base">{{ t('procurements.contribution') }}</CardTitle>
+                    <CardDescription class="mt-1">Пополнение реального денежного пула договора.</CardDescription>
+                  </div>
+                  <Wallet class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </div>
+              </CardHeader>
+              <CardContent class="flex flex-col gap-3">
+                <div class="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
+                  <BaseSelect
+                    :model-value="contributionPartnerId"
+                    :options="agreementSideOptions"
+                    title="Кто пополняет договор"
+                    @update:model-value="setContributionPartner"
+                  />
+                  <MoneyCurrencyInput
+                    v-model="contributionAmount"
+                    v-model:currency="contributionCurrency"
+                    :placeholder="t('common.amount')"
+                    aria-label="Сумма пополнения договора"
+                  />
+                </div>
+                <Button type="button" :disabled="savingContribution" @click="saveContribution">
+                  <Plus data-icon="inline-start" />
+                  {{ t('procurements.addContribution') }}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card class="rounded-2xl bg-background">
+              <CardHeader>
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle class="text-base">{{ t('procurements.withdrawalFromAgreement') }}</CardTitle>
+                    <CardDescription class="mt-1">Возврат доступных денег участнику без перерасчёта старых приходов.</CardDescription>
+                  </div>
+                  <RotateCcw class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </div>
+              </CardHeader>
+              <CardContent class="flex flex-col gap-3">
+                <div class="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
+                  <BaseSelect
+                    :model-value="withdrawalPartnerId"
+                    :options="agreementSideOptions"
+                    title="Кому вернуть деньги"
+                    @update:model-value="setWithdrawalPartner"
+                  />
+                  <MoneyCurrencyInput
+                    v-model="withdrawalAmount"
+                    v-model:currency="withdrawalCurrency"
+                    :placeholder="t('common.amount')"
+                    aria-label="Сумма возврата из договора"
+                  />
+                </div>
+                <p v-if="withdrawalAvailabilityError || withdrawalError" class="text-sm text-destructive">
+                  {{ withdrawalAvailabilityError || withdrawalError }}
+                </p>
+                <Button
+                  variant="outline"
+                  type="button"
+                  :disabled="savingWithdrawal || Boolean(withdrawalAvailabilityError)"
+                  @click="saveWithdrawal"
+                >
+                  <RotateCcw data-icon="inline-start" />
+                  {{ t('procurements.recordWithdrawal') }}
+                </Button>
+              </CardContent>
+            </Card>
           </div>
-          <article v-for="entry in agreement.history.slice(0, 8)" :key="entry.id" class="history-row">
-            <div>
-              <strong>{{ entry.title }}</strong>
-              <span>{{ formatDate(entry.date) }} · {{ entry.partner_name || t('procurements.system') }}</span>
-            </div>
-            <strong>{{ formatPrice(entry.amount, entry.currency) }}</strong>
-          </article>
-        </section>
+        </div>
+
+        <div class="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+          <Card class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
+                  <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
+                </div>
+                <ReceiptText class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-2">
+              <button
+                v-for="procurement in agreement.procurements"
+                :key="procurement.id"
+                class="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-left transition hover:bg-muted/50"
+                type="button"
+                @click="router.push({ name: 'procurement-detail', params: { id: procurement.id } })"
+              >
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-medium text-foreground">#{{ procurement.id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</span>
+                  <span class="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <CalendarDays class="size-3.5" aria-hidden="true" />
+                    {{ procurement.opened_at ? dateOnly(procurement.opened_at) : '—' }}
+                  </span>
+                </span>
+                <span class="flex shrink-0 items-center gap-2">
+                  <Badge variant="secondary">{{ procurementStatusLabel(procurement.status) }}</Badge>
+                  <ArrowRight class="size-4 text-muted-foreground" aria-hidden="true" />
+                </span>
+              </button>
+              <p v-if="agreement.procurements.length === 0" class="rounded-xl bg-muted/60 p-3 text-sm text-muted-foreground">
+                {{ t('procurements.noLinkedProcurements') }}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card v-if="activeProcurements.length" class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.allocateCapital') }}</CardTitle>
+                  <CardDescription class="mt-1">Предложение распределения денег в выбранный приход.</CardDescription>
+                </div>
+                <Send class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-3">
+              <div class="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <select
+                  v-model.number="allocationProcurementId"
+                  class="h-9 min-w-0 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">
+                    {{ t('procurements.procurementNumber', { id: procurement.id }) }}
+                  </option>
+                </select>
+                <Button variant="outline" type="button" @click="loadAllocationPreview">{{ t('procurements.calculate') }}</Button>
+              </div>
+
+              <div v-if="allocationPreview" class="flex flex-col gap-2 rounded-xl bg-muted/60 p-3">
+                <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="flex items-baseline justify-between gap-3 text-sm">
+                  <span class="min-w-0 truncate text-muted-foreground">{{ row.partner_name }}</span>
+                  <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(row.amount, row.currency) }}</span>
+                </div>
+                <Button type="button" :disabled="allocating" @click="allocateSuggested">
+                  <Send data-icon="inline-start" />
+                  {{ t('procurements.confirmAllocation') }}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card class="rounded-2xl bg-background">
+          <CardHeader>
+            <CardTitle class="text-base">{{ t('procurements.history') }}</CardTitle>
+            <CardDescription>{{ agreement.history.length }} операций по договору</CardDescription>
+          </CardHeader>
+          <CardContent class="flex flex-col">
+            <article v-for="entry in agreement.history.slice(0, 8)" :key="entry.id" class="flex items-start justify-between gap-3 border-t border-border py-3 first:border-t-0 first:pt-0 last:pb-0">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-foreground">{{ entry.title }}</p>
+                <p class="mt-0.5 text-xs text-muted-foreground">{{ formatDate(entry.date) }} · {{ entry.partner_name || t('procurements.system') }}</p>
+              </div>
+              <p class="shrink-0 text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(entry.amount, entry.currency) }}</p>
+            </article>
+            <p v-if="agreement.history.length === 0" class="rounded-xl bg-muted/60 p-3 text-sm text-muted-foreground">
+              Истории по договору пока нет.
+            </p>
+          </CardContent>
+        </Card>
       </template>
-    </main>
-  </div>
+    </section>
+  </main>
 </template>
-
-<style scoped>
-.page { min-height: 100%; background: var(--color-bg-primary); }
-.topbar { position: sticky; top: 0; z-index: var(--z-sticky); display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: var(--space-2); min-height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-h1 { margin: 0; text-align: center; font-size: var(--text-lg); font-weight: var(--font-semibold); }
-.icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; background: transparent; color: var(--color-text-primary); }
-.content { display: grid; gap: var(--space-3); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-4)); }
-.hero { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--color-brand-800); color: white; }
-.hero span { color: color-mix(in srgb, white 72%, transparent); font-size: var(--text-xs); }
-.hero strong { display: block; margin-top: 3px; font-size: var(--text-xl); }
-.hero-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
-.hero-grid strong { font-size: var(--text-sm); }
-.panel { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-bg-primary); }
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-h2 { margin: 0; font-size: var(--text-base); font-weight: var(--font-semibold); }
-.section-head button { border: 0; background: transparent; color: var(--color-brand-600); font-weight: var(--font-semibold); }
-.partner-row, .proc-row, .history-row, .allocation-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--color-border-subtle); }
-.partner-row:first-of-type, .history-row:first-of-type { border-top: 0; }
-.partner-row div, .history-row div { display: grid; gap: 3px; min-width: 0; }
-.partner-row strong, .proc-row strong, .history-row strong, .allocation-row strong { color: var(--color-text-primary); font-size: var(--text-sm); }
-.partner-row span, .history-row span, .muted { color: var(--color-text-secondary); font-size: var(--text-xs); }
-.proc-row { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: transparent; text-align: left; }
-.proc-row span { color: var(--color-text-primary); }
-.inline-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 82px; gap: var(--space-2); }
-.money-move-form { display: grid; grid-template-columns: minmax(112px, .75fr) minmax(0, 1.25fr); gap: var(--space-2); }
-.inline-form.two { grid-template-columns: minmax(0, 1fr) auto; }
-input, select { min-height: 42px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); padding: 0 var(--space-3); background: var(--color-bg-primary); color: var(--color-text-primary); font: inherit; }
-.action { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 0; border-radius: var(--radius-md); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
-.action.secondary { background: var(--color-bg-elevated); color: var(--color-text-primary); border: 1px solid var(--color-border-default); }
-.action:disabled { opacity: .55; }
-.allocation-box { display: grid; gap: var(--space-2); padding-top: var(--space-2); }
-.form-error { margin: 0; color: var(--color-danger); font-size: var(--text-sm); line-height: 1.4; }
-.state { min-height: 180px; display: grid; place-items: center; color: var(--color-text-secondary); }
-.state-error { color: var(--color-error); }
-@media (max-width: 420px) {
-  .inline-form { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 340px) {
-  .money-move-form { grid-template-columns: 1fr; }
-}
-</style>

@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import {
   ShoppingBag,
   Package,
@@ -50,76 +52,54 @@ function isActive(tab: NavItem): boolean {
   return route.path.startsWith(tab.path)
 }
 
+function tabClass(tab: NavItem): string {
+  return cn(
+    'nav-tab relative h-14 min-w-0 flex-1 flex-col gap-1 rounded-lg px-1 pt-2.5 pb-1.5 text-muted-foreground',
+    'hover:bg-muted/70 hover:text-foreground',
+    'sm:h-14 sm:max-w-28 sm:px-3',
+    isActive(tab) && 'bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary',
+  )
+}
+
 function navigate(tab: NavItem) {
   router.push(tab.path)
 }
 </script>
 
 <template>
-  <nav class="bottom-nav safe-area-bottom" :aria-label="t('nav.main')">
-    <button
-      v-for="tab in visibleTabs"
-      :key="tab.name"
-      class="nav-item"
-      :class="{ active: isActive(tab) }"
-      :aria-label="t(tab.labelKey)"
-      :aria-current="isActive(tab) ? 'page' : undefined"
-      @click="navigate(tab)"
-    >
-      <component :is="tab.icon" :size="22" :stroke-width="1.75" class="nav-icon" />
-      <span class="nav-label">{{ t(tab.labelKey) }}</span>
-    </button>
+  <nav
+    class="safe-area-bottom fixed inset-x-0 bottom-0 z-[var(--z-sticky)] border-t border-border bg-background/95 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
+    :aria-label="t('nav.main')"
+  >
+    <div class="flex h-[var(--bottom-nav-height)] w-full items-center justify-center gap-1 px-1 sm:gap-2 sm:px-4">
+      <Button
+        v-for="tab in visibleTabs"
+        :key="tab.name"
+        variant="ghost"
+        size="sm"
+        :class="tabClass(tab)"
+        :aria-label="t(tab.labelKey)"
+        :aria-current="isActive(tab) ? 'page' : undefined"
+        :data-active="isActive(tab) ? 'true' : undefined"
+        @click="navigate(tab)"
+      >
+        <span
+          v-if="isActive(tab)"
+          class="absolute top-1 h-0.5 w-5 rounded-full bg-primary"
+          aria-hidden="true"
+        />
+        <component :is="tab.icon" :stroke-width="1.9" data-icon="inline-start" />
+        <span class="max-w-full truncate text-xs font-medium leading-none">
+          {{ t(tab.labelKey) }}
+        </span>
+      </Button>
+    </div>
   </nav>
 </template>
 
 <style scoped>
-.bottom-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: var(--bottom-nav-height);
-  background: var(--color-bg-elevated);
-  border-top: 1px solid var(--color-border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  z-index: var(--z-sticky);
-  box-shadow: 0 -2px 8px rgba(26, 23, 20, 0.04);
-}
-
-.nav-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: var(--space-1) var(--space-3);
-  min-width: 64px;
-  min-height: 44px;
-  border-radius: var(--radius-md);
-  transition: color var(--duration-fast) var(--ease-out);
-  color: var(--color-text-tertiary);
-}
-
-.nav-item:active {
-  transform: scale(0.95);
-}
-
-.nav-item.active {
-  color: var(--color-brand-500);
-}
-
-.nav-item.active .nav-label {
-  font-weight: var(--font-semibold);
-}
-
-.nav-icon {
-  flex-shrink: 0;
-}
-
-.nav-label {
-  font-size: var(--text-xs);
-  line-height: 1;
-  font-weight: var(--font-medium);
+.nav-tab :deep(svg) {
+  width: 22px;
+  height: 22px;
 }
 </style>

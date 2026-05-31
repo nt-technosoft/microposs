@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRef } from 'vue'
+import { CheckSquare, Square } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { fetchLocations } from '@/api/inventory'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
@@ -26,6 +27,7 @@ interface LineState {
 }
 
 interface CapAlloc { partnerId: number; amount: string; currency: string; isCorrected?: boolean }
+type Partner = NonNullable<ProcurementWorkspacePayload['documents']['investment']>['partners'][number]
 
 const props = defineProps<{ open: boolean; procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
@@ -38,6 +40,7 @@ const { items: activeItems } = useActiveLines(toRef(props, 'procurement'))
 const warehouseId = ref<number | null>(null)
 const receivedAt = ref(new Date().toISOString().slice(0, 10))
 const lines = ref<LineState[]>([])
+const selectedItemIds = ref<Set<number>>(new Set())
 const capAllocs = ref<CapAlloc[]>([])
 const warehouses = ref<Location[]>([])
 const cashAccounts = ref<CashAccountRecord[]>([])
@@ -52,24 +55,29 @@ const isAtReceipt = computed(() => props.procurement.documents.settlement?.type 
 const isPrepaid = computed(() => props.procurement.documents.settlement?.type === 'PREPAID')
 const isOwnFunds = computed(() => !isPartnership.value)
 
-const receivableItems = computed(() =>
+const allReceivableItems = computed(() =>
   activeItems.value.filter((it) => {
     if (parseFloat(it.remaining_quantity) <= 0) return false
     if (it.lifecycle_state === 'RECEIVED') return false
-    if (isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    if (!isPartnership.value && isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
     return true
   }),
 )
+const receivableItems = computed(() =>
+  allReceivableItems.value.filter((it) => selectedItemIds.value.has(it.id)),
+)
 
 const blockedPrepaidItems = computed(() =>
-  isPrepaid.value
+  !isPartnership.value && isPrepaid.value
     ? activeItems.value.filter(
         (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' && it.lifecycle_state !== 'RECEIVED',
       )
     : [],
 )
 
-const totalReceived = computed(() => lines.value.reduce((s, l) => s + (parseFloat(l.qtyReceived) || 0), 0))
+const totalReceived = computed(() =>
+  lines.value.reduce((s, l) => selectedItemIds.value.has(l.itemId) ? s + (parseFloat(l.qtyReceived) || 0) : s, 0),
+)
 const totalPlanned = computed(() => receivableItems.value.reduce((s, it) => s + (parseFloat(it.remaining_quantity) || 0), 0))
 
 const receiveBatchCostByCurrency = computed((): Record<string, number> => {
@@ -93,16 +101,54 @@ const batchObligationCurrency = computed((): string => {
 const batchObligationTotal = computed((): number =>
   receiveBatchCostByCurrency.value[batchObligationCurrency.value] ?? 0,
 )
+const capitalAllocatedTotal = computed(() =>
+  capAllocs.value.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0),
+)
+const capitalShortfall = computed(() =>
+  Math.max(0, Number((batchObligationTotal.value - capitalAllocatedTotal.value).toFixed(2))),
+)
+const receiveMixedCurrency = computed(() =>
+  Object.keys(receiveBatchCostByCurrency.value).filter((currency) => receiveBatchCostByCurrency.value[currency] > 0).length > 1,
+)
 
 function prefillCapAllocs(): void {
   const inv = investment.value
   if (!inv) return
   const total = batchObligationTotal.value
   const currency = batchObligationCurrency.value
-  capAllocs.value = inv.partners.map((p) => {
-    const contractedAmount = total * (parseFloat(p.profit_share) || 0)
-    const availableStr = inv.available_by_partner[String(p.partner_id)]?.[currency] ?? '0'
-    const available = parseFloat(availableStr) || 0
+  capAllocs.value = distributeCapital(total, inv.partners, currency)
+}
+
+function partnerWeight(partner: Partner): number {
+  const planned = parseFloat(partner.planned_capital_share)
+  if (planned > 0) return planned
+  const profit = parseFloat(partner.profit_share)
+  return profit > 0 ? profit : 1
+}
+
+function receiveAvailable(partnerId: number, currency: string): number {
+  const inv = investment.value
+  if (!inv) return 0
+  let available = 0
+  for (const allocation of inv.allocations) {
+    if (allocation.partner_id !== partnerId || allocation.currency !== currency) continue
+    const amount = parseFloat(allocation.amount) || 0
+    available += allocation.direction === 'TO_PROCUREMENT' ? amount : -amount
+  }
+  for (const batch of props.procurement.documents.receive_batches) {
+    const snapshot = batch.capital_snapshot as { partners?: Array<{ partner_id: number; capital_amount_contract_currency?: string }> } | null
+    for (const partner of snapshot?.partners ?? []) {
+      if (partner.partner_id === partnerId) available -= parseFloat(partner.capital_amount_contract_currency ?? '0') || 0
+    }
+  }
+  return Math.max(0, available)
+}
+
+function distributeCapital(total: number, partners: Partner[], currency: string): CapAlloc[] {
+  const weightTotal = partners.reduce((sum, p) => sum + partnerWeight(p), 0) || partners.length || 1
+  const rows = partners.map((p) => {
+    const contractedAmount = total * partnerWeight(p) / weightTotal
+    const available = receiveAvailable(p.partner_id, currency)
     const amount = Math.min(contractedAmount, available)
     return {
       partnerId: p.partner_id,
@@ -110,6 +156,37 @@ function prefillCapAllocs(): void {
       currency,
       isCorrected: amount < contractedAmount - 0.001,
     }
+  })
+  let remaining = Number((total - rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0)).toFixed(2))
+  for (const row of rows) {
+    if (remaining <= 0) break
+    const headroom = Math.max(0, receiveAvailable(row.partnerId, currency) - (parseFloat(row.amount) || 0))
+    const topUp = Math.min(headroom, remaining)
+    row.amount = ((parseFloat(row.amount) || 0) + topUp).toFixed(2)
+    remaining = Number((remaining - topUp).toFixed(2))
+  }
+  return rows
+}
+
+function redistributeCapital(changedPartnerId: number, rawValue: string): void {
+  const inv = investment.value
+  if (!inv) return
+  const currency = batchObligationCurrency.value
+  const changed = Math.min(Math.max(parseFloat(rawValue) || 0, 0), receiveAvailable(changedPartnerId, currency))
+  const otherPartners = inv.partners.filter((p) => p.partner_id !== changedPartnerId)
+  const remainder = Math.max(0, batchObligationTotal.value - changed)
+  capAllocs.value = [
+    {
+      partnerId: changedPartnerId,
+      amount: changed.toFixed(2),
+      currency,
+      isCorrected: changed + 0.001 >= receiveAvailable(changedPartnerId, currency),
+    },
+    ...distributeCapital(remainder, otherPartners, currency),
+  ].sort((a, b) => {
+    const aIndex = inv.partners.findIndex((p) => p.partner_id === a.partnerId)
+    const bIndex = inv.partners.findIndex((p) => p.partner_id === b.partnerId)
+    return aIndex - bIndex
   })
 }
 
@@ -130,7 +207,8 @@ watch(() => props.open, async (isOpen) => {
   sharesConfirmed.value = false
   receivedAt.value = new Date().toISOString().slice(0, 10)
   errors.value = {}
-  initLines(receivableItems.value)
+  selectedItemIds.value = new Set(allReceivableItems.value.map((it) => it.id))
+  initLines(allReceivableItems.value)
   if (isPartnership.value) prefillCapAllocs()
   if (!warehouses.value.length) {
     try { warehouses.value = await fetchLocations() } catch { warehouses.value = [] }
@@ -166,6 +244,7 @@ function onQtyChange(itemId: number, val: string): void {
 function validate(): boolean {
   const errs: Record<number, string> = {}
   for (const l of lines.value) {
+    if (!selectedItemIds.value.has(l.itemId)) continue
     const item = receivableItems.value.find((it) => it.id === l.itemId)
     if (!item) continue
     const qty = parseInt(l.qtyReceived) || 0
@@ -177,17 +256,29 @@ function validate(): boolean {
   return Object.keys(errs).length === 0
 }
 
+function toggleItemSelection(itemId: number): void {
+  const next = new Set(selectedItemIds.value)
+  next.has(itemId) ? next.delete(itemId) : next.add(itemId)
+  selectedItemIds.value = next
+  if (isPartnership.value) prefillCapAllocs()
+  if (isAtReceipt.value && isOwnFunds.value) {
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
+  }
+}
+
 function onSave(): void {
   if (!validate() || !warehouseId.value) return
   if (isPartnership.value && !sharesConfirmed.value) return
   if (isAtReceipt.value && isOwnFunds.value && !selectedCashAccountId.value) return
   const itemDiscrepancies: Record<string, { qty_received: string; discrepancy_reason: string }> = {}
   for (const l of lines.value) {
+    if (!selectedItemIds.value.has(l.itemId)) continue
     itemDiscrepancies[String(l.itemId)] = { qty_received: l.qtyReceived, discrepancy_reason: l.reason }
   }
   const payload: Record<string, unknown> = {
     warehouse_id: warehouseId.value,
     received_at: receivedAt.value,
+    item_ids: [...selectedItemIds.value],
     item_discrepancies: itemDiscrepancies,
   }
   if (isPartnership.value && capAllocs.value.length) {
@@ -223,35 +314,41 @@ function onSave(): void {
       </div>
 
       <div class="section-label">Товары к приёмке</div>
-      <div v-if="receivableItems.length === 0" class="no-items-hint">
+      <div v-if="allReceivableItems.length === 0" class="no-items-hint">
         Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
       </div>
-      <div v-for="item in receivableItems" :key="item.id" class="item-block">
-        <div class="item-name">{{ item.product_variant_name }}</div>
-        <div class="item-qty-row">
-          <span class="qty-label">Заказано: {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
-          <label class="qty-input-label">
-            Принято:
-            <input
-              class="qty-input"
-              type="number"
-              min="0"
-              :max="Math.round(parseFloat(item.remaining_quantity))"
-              step="1"
-              :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
-              @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
-            />
-          </label>
-        </div>
-        <div v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))" class="reason-row">
-          <select
-            class="select-field"
-            :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
-            @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
-          >
-            <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
-          </select>
-        </div>
+      <div v-for="item in allReceivableItems" :key="item.id" class="item-block" :class="{ muted: !selectedItemIds.has(item.id) }">
+        <button class="item-select-row" type="button" @click="toggleItemSelection(item.id)">
+          <component :is="selectedItemIds.has(item.id) ? CheckSquare : Square" :size="18" :stroke-width="2" />
+          <span class="item-name">{{ item.product_variant_name }}</span>
+          <span class="qty-label">{{ Math.round(parseFloat(item.remaining_quantity)) }} шт.</span>
+        </button>
+        <template v-if="selectedItemIds.has(item.id)">
+          <div class="item-qty-row">
+            <span class="qty-label">Заказано: {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
+            <label class="qty-input-label">
+              Принято:
+              <input
+                class="qty-input"
+                type="number"
+                min="0"
+                :max="Math.round(parseFloat(item.remaining_quantity))"
+                step="1"
+                :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
+                @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+          </div>
+          <div v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))" class="reason-row">
+            <select
+              class="select-field"
+              :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
+              @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
+            >
+              <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
+            </select>
+          </div>
+        </template>
         <div v-if="errors[item.id]" class="error-text">{{ errors[item.id] }}</div>
       </div>
 
@@ -300,6 +397,12 @@ function onSave(): void {
 
       <!-- PARTNERSHIP capital allocation -->
       <template v-if="isPartnership && investment">
+        <div v-if="receiveMixedCurrency" class="hint-warn">
+          В выбранной приёмке разные валюты. Разделите приёмку на отдельные партии.
+        </div>
+        <div v-else-if="capitalShortfall > 0" class="hint-warn">
+          Не хватает распределённого капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}.
+        </div>
         <div class="shares-header">
           <div class="section-label">Распределение по партнёрам ({{ batchObligationCurrency }})</div>
           <button v-if="sharesConfirmed" class="edit-shares-btn" type="button" @click="sharesConfirmed = false">Изменить</button>
@@ -319,7 +422,7 @@ function onSave(): void {
               min="0"
               step="0.01"
               :value="alloc.amount"
-              @input="alloc.amount = ($event.target as HTMLInputElement).value"
+              @input="redistributeCapital(alloc.partnerId, ($event.target as HTMLInputElement).value)"
             />
           </template>
           <span class="cap-currency">{{ alloc.currency }}</span>
@@ -332,7 +435,7 @@ function onSave(): void {
       <button
         class="primary-btn"
         type="button"
-        :disabled="!warehouseId || !receivableItems.length || (isAtReceipt && isOwnFunds && !selectedCashAccountId) || (isPartnership && !sharesConfirmed)"
+        :disabled="!warehouseId || !receivableItems.length || receiveMixedCurrency || (isAtReceipt && isOwnFunds && !selectedCashAccountId) || (isPartnership && (!sharesConfirmed || capitalShortfall > 0))"
         @click="onSave"
       >
         {{ isAtReceipt ? 'Принять и оплатить' : 'Принять' }}
@@ -348,6 +451,8 @@ function onSave(): void {
 .select-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); appearance: auto; }
 .input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
 .item-block { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); }
+.item-block.muted { opacity: .72; }
+.item-select-row { display: flex; align-items: center; gap: var(--space-2); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .item-name { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .item-qty-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
 .qty-label { font-size: var(--text-sm); color: var(--color-text-secondary); }

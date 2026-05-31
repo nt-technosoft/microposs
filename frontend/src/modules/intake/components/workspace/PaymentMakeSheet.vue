@@ -14,6 +14,7 @@ const props = defineProps<{
   scheduleEntryId?: number
   itemIds?: number[]
   expenseIds?: number[]
+  currency?: string
 }>()
 
 const emit = defineEmits<{
@@ -25,7 +26,7 @@ const router = useRouter()
 
 const settlement = computed(() => props.procurement.documents.settlement)
 const obligationCurrency = computed(() =>
-  (settlement.value?.currency_of_obligation ?? 'UZS').toUpperCase()
+  (props.currency ?? settlement.value?.currency_of_obligation ?? props.procurement.documents.payment_status?.currency ?? 'UZS').toUpperCase()
 )
 
 const amount = ref('')

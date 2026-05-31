@@ -217,6 +217,7 @@ onBeforeUnmount(() => store.$reset())
               <ProcurementCardFinancing
                 :procurement="procurement"
                 @link-agreement="onLinkAgreement"
+                @dispatch="(k, p) => dispatch(k, p)"
               />
             </section>
 
