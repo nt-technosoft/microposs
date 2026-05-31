@@ -774,7 +774,13 @@ def _validate_terms_payload_supplier(procurement, terms_payload) -> None:
     allowed_settlements = allowed_settlements_for_funding(procurement.funding_source)
     if settlement_type and settlement_type not in allowed_settlements:
         raise ValueError(f'{procurement.funding_source} does not allow {settlement_type} terms in MVP.')
-    if settlement_type and settlement_type != ProcurementTerms.Type.PREPAID and procurement.supplier_id is None:
+    # Supplier-requirement rule (canonical): a supplier is needed only for terms
+    # that create a standing obligation to that supplier — PARTIAL / DEFERRED /
+    # INSTALLMENT / ON_SALE. PREPAID and AT_RECEIPT can be set without a supplier
+    # (frontend's SUPPLIER_REQUIRED set matches this). A supplier is still
+    # required later at receive for types that open a payable.
+    SUPPLIER_OPTIONAL_TYPES = {ProcurementTerms.Type.PREPAID, ProcurementTerms.Type.AT_RECEIPT}
+    if settlement_type and settlement_type not in SUPPLIER_OPTIONAL_TYPES and procurement.supplier_id is None:
         raise ValueError(
             f'Supplier is required for {settlement_type} terms; supplier_id is None on procurement #{procurement.pk}.'
         )
