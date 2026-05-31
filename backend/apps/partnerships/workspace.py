@@ -1627,6 +1627,21 @@ def receive_workspace_batch(
         contract_snapshot: dict = {}
         capital_rows: list[dict] = []
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            # E12: fund the receive out of the capital pools, per obligation
+            # currency (base direct; non-base via FIFO cost-basis). The returned
+            # base cost drives shares — honest acquisition cost, not market rate.
+            required_base = None
+            if locked.goods_ownership != Procurement.GoodsOwnership.CONSIGNED and total_inventory_uzs > 0:
+                native_by_ccy, func_by_ccy = _receive_funding_breakdown(
+                    items, item_values_uzs, expenses, expense_allocations_uzs,
+                )
+                required_base = _fund_partnership_receive_from_pools(
+                    tenant_id=tenant_id,
+                    procurement=locked,
+                    native_by_ccy=native_by_ccy,
+                    func_by_ccy=func_by_ccy,
+                    received_at=received_at,
+                )
             if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
                 _pre_allocate_at_receipt_partnership_capital(
                     tenant_id=tenant_id,
@@ -1634,6 +1649,7 @@ def receive_workspace_batch(
                     required_uzs=total_inventory_uzs,
                     raw_allocations=payload.get('capital_allocations'),
                     received_at=received_at,
+                    required_base=required_base,
                 )
             contract_snapshot, capital_rows = _resolve_workspace_capital_snapshot(
                 tenant_id=tenant_id,
@@ -1641,6 +1657,7 @@ def receive_workspace_batch(
                 required_uzs=total_inventory_uzs,
                 raw_allocations=payload.get('capital_allocations') or payload.get('allocations'),
                 received_at=received_at,
+                required_base=required_base,
             )
 
         batch = ProcurementReceiveBatch.objects.create(
@@ -1751,16 +1768,7 @@ def receive_workspace_batch(
 
         _sync_procurement_status_after_receive(locked, received_at)
         payable = _ensure_supplier_payable_after_receive(tenant_id, locked, terms)
-        if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
-            # E11: partnership inventory is funded out of the capital pool, not by
-            # re-crediting investor equity. The pool payment books DR 1100 / CR 1300.
-            _draw_partnership_inventory_from_pool(
-                tenant_id=tenant_id,
-                procurement=locked,
-                amount_uzs=total_inventory_uzs,
-                received_at=received_at,
-            )
-        else:
+        if locked.funding_source != Procurement.FundingSource.PARTNERSHIP:
             _record_receive_journal(
                 tenant_id=tenant_id,
                 procurement=locked,
@@ -1769,6 +1777,8 @@ def receive_workspace_batch(
                 payable=payable,
                 received_at=received_at,
             )
+        # PARTNERSHIP receives were already funded from the capital pools above
+        # (E12 _fund_partnership_receive_from_pools), per obligation currency.
         upsert_supplier_links_for_items(tenant_id, locked, items, received_at)
 
         at_receipt_payment = None
@@ -2758,6 +2768,7 @@ def _pre_allocate_at_receipt_partnership_capital(
     required_uzs: Decimal,
     raw_allocations: list[dict] | None,
     received_at,
+    required_base: Decimal | None = None,
 ) -> None:
     """
     PARTNERSHIP × AT_RECEIPT: atomically draw from the agreement's capital pool
@@ -2767,9 +2778,12 @@ def _pre_allocate_at_receipt_partnership_capital(
     """
     agreement = _require_workspace_agreement(procurement)
     currency = str(agreement.currency or 'UZS').upper()
-    required = _amount_uzs_to_currency(
-        tenant_id=tenant_id, amount_uzs=required_uzs, currency=currency, received_at=received_at,
-    )
+    if required_base is not None:
+        required = Decimal(str(required_base)).quantize(Decimal('0.01'))
+    else:
+        required = _amount_uzs_to_currency(
+            tenant_id=tenant_id, amount_uzs=required_uzs, currency=currency, received_at=received_at,
+        )
     if required <= 0:
         raise ValueError('AT_RECEIPT receive batch capital requirement must be positive.')
 
@@ -2829,15 +2843,23 @@ def _resolve_workspace_capital_snapshot(
     required_uzs: Decimal,
     raw_allocations: list[dict] | None,
     received_at,
+    required_base: Decimal | None = None,
 ) -> tuple[dict, list[dict]]:
     agreement = _require_workspace_agreement(procurement)
     currency = str(agreement.currency or 'UZS').upper()
-    required = _amount_uzs_to_currency(
-        tenant_id=tenant_id,
-        amount_uzs=required_uzs,
-        currency=currency,
-        received_at=received_at,
-    )
+    # E12: when the receive was funded from currency sub-pools, the base-currency
+    # cost comes from FIFO cost-basis (real conversion rate), not the receive-day
+    # market rate. Fall back to market conversion only when no funded base cost
+    # is provided (e.g. CONSIGNED).
+    if required_base is not None:
+        required = Decimal(str(required_base)).quantize(Decimal('0.01'))
+    else:
+        required = _amount_uzs_to_currency(
+            tenant_id=tenant_id,
+            amount_uzs=required_uzs,
+            currency=currency,
+            received_at=received_at,
+        )
     if required <= 0:
         raise ValueError('Receive batch capital requirement must be positive.')
 
@@ -3010,39 +3032,93 @@ def _sync_procurement_status_after_receive(procurement: Procurement, received_at
         procurement.save(update_fields=['status', 'received_at', 'updated_at'])
 
 
-def _draw_partnership_inventory_from_pool(*, tenant_id: int, procurement: Procurement, amount_uzs: Decimal, received_at) -> None:
-    """E11: fund a partnership receive batch out of the agreement capital pool.
+def _receive_funding_breakdown(items, item_values_uzs, expenses, expense_allocations_uzs):
+    """E12: per-currency obligation of this receive batch.
 
-    Pool cash drops by the inventory cost (in agreement currency); the GL books
-    DR 1100 / CR 1300 in functional UZS. Equity was already recognised when the
-    capital was contributed, so receive must not credit 3100/3000 again.
-    CONSIGNED goods are off-balance, so nothing is drawn.
+    Returns (native_by_ccy, func_by_ccy):
+      - func_by_ccy[ccy]   — functional UZS (Σ must equal total_inventory_uzs)
+      - native_by_ccy[ccy] — transaction-currency amount (func / line fx_rate)
+    Built line-by-line so partial receives and mixed currencies stay exact.
     """
-    if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
-        return
-    amount_uzs = Decimal(str(amount_uzs)).quantize(Decimal('0.01'))
-    if amount_uzs <= 0:
-        return
+    native: dict[str, Decimal] = {}
+    func: dict[str, Decimal] = {}
+
+    def _add(ccy: str, fx_rate, func_uzs: Decimal) -> None:
+        ccy = str(ccy or 'UZS').upper()
+        fx = Decimal(str(fx_rate or '1'))
+        func_uzs = Decimal(str(func_uzs))
+        native_amt = (func_uzs / fx) if fx else func_uzs
+        native[ccy] = native.get(ccy, Decimal('0')) + native_amt
+        func[ccy] = func.get(ccy, Decimal('0')) + func_uzs
+
+    for item, value_uzs in zip(items, item_values_uzs):
+        _add(item.currency, item.fx_rate, value_uzs)
+    for expense, value_uzs in zip(expenses, expense_allocations_uzs):
+        _add(expense.currency, expense.fx_rate, value_uzs)
+
+    return native, func
+
+
+def _fund_partnership_receive_from_pools(
+    *, tenant_id: int, procurement: Procurement, native_by_ccy, func_by_ccy, received_at,
+) -> Decimal:
+    """E12: fund a partnership receive batch out of the agreement's capital pools,
+    per obligation currency. Returns the total base-currency cost (cost-basis).
+
+    - Base-currency costs are paid straight from the base pool; base cost = native.
+    - Non-base costs are paid from that currency's sub-pool, and their base cost
+      is the FIFO cost-basis (real conversion rate), NOT the receive-day market
+      rate — so shares/snapshot use the honest acquisition cost.
+
+    GL books DR 1100 / CR 1300 in functional UZS per currency; equity was already
+    recognised at contribution, so receive never re-credits 3100/3000.
+    """
+    from apps.partnerships.multicurrency import (
+        get_or_create_currency_pool,
+        spend_pool_cost_basis,
+    )
+
     agreement = _require_workspace_agreement(procurement)
     if not agreement.capital_account_id:
         raise ValueError('Partnership agreement has no capital pool.')
-    currency = str(agreement.currency or 'UZS').upper()
-    amount_pool = _amount_uzs_to_currency(
-        tenant_id=tenant_id, amount_uzs=amount_uzs, currency=currency, received_at=received_at,
-    )
-    record_capital_pool_payment(
-        tenant_id=tenant_id,
-        pool_account_id=agreement.capital_account_id,
-        target_type=Payment.TargetType.PROCUREMENT_COST,
-        target_id=procurement.pk,
-        amount=amount_pool,
-        functional_amount_uzs=amount_uzs,
-        counterpart_account_code='1100',
-        currency=currency,
-        paid_at=received_at,
-        operation_type='procurement_payment',
-        description=f'Procurement #{procurement.pk} funded from capital pool',
-    )
+    base_ccy = str(agreement.currency or 'UZS').upper()
+
+    total_base_cost = Decimal('0')
+    for ccy in sorted(func_by_ccy.keys()):
+        func_uzs = Decimal(str(func_by_ccy[ccy])).quantize(Decimal('0.01'))
+        native_amt = Decimal(str(native_by_ccy[ccy])).quantize(Decimal('0.01'))
+        if func_uzs <= 0 or native_amt <= 0:
+            continue
+
+        pool = get_or_create_currency_pool(
+            tenant_id=tenant_id, agreement=agreement, currency=ccy,
+        )
+        if ccy == base_ccy:
+            base_cost_ccy = native_amt
+        else:
+            # FIFO cost-basis of the spent foreign currency (full precision).
+            base_cost_ccy = spend_pool_cost_basis(
+                tenant_id=tenant_id, agreement_id=agreement.id,
+                currency=ccy, amount=native_amt,
+                source_ref=f'procurement:{procurement.pk}',
+            )
+
+        record_capital_pool_payment(
+            tenant_id=tenant_id,
+            pool_account_id=pool.pk,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.pk,
+            amount=native_amt,
+            functional_amount_uzs=func_uzs,
+            counterpart_account_code='1100',
+            currency=ccy,
+            paid_at=received_at,
+            operation_type='procurement_payment',
+            description=f'Procurement #{procurement.pk} funded from capital pool ({ccy})',
+        )
+        total_base_cost += Decimal(str(base_cost_ccy))
+
+    return total_base_cost.quantize(Decimal('0.01'))
 
 
 def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurement, terms):

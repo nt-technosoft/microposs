@@ -162,3 +162,94 @@ class FifoCostBasisTests(TestCase):
         expected = Decimal('1000') + (Decimal('345678') * Decimal('1000') / Decimal('12500000'))
         self.assertEqual(base_cost, expected)
         self.assertNotEqual(base_cost, base_cost.quantize(Decimal('0.01')))
+
+
+class MultiCurrencyReceiveTests(TestCase):
+    """A USD agreement whose receive has USD goods + a UZS tax expense: the UZS
+    leg is funded from a converted sub-pool, and the snapshot total is the
+    base-currency cost-basis sum — not a market re-conversion."""
+
+    def test_receive_funds_each_currency_from_its_pool_and_snapshots_base_cost(self):
+        from apps.finance.models import CashAccount, JournalEntry, JournalLine, Payment
+        from apps.finance.services import get_account_balance
+        from apps.partnerships.models import ProcurementReceiveBatchCapitalAllocation
+        from apps.partnerships.multicurrency import convert_agreement_pool
+
+        ctx = build_tenant()
+        b = ctx['business'].id
+        procurement = create_workspace(
+            tenant_id=b, funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=b, procurement=procurement, action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': '0.5', 'planned_budget': '120', 'currency': 'USD',
+                'partners': [
+                    {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
+                     'planned_capital_share': '120', 'profit_share': '0.5'},
+                    {'partner_id': ctx['operator'].id, 'role': 'OPERATOR',
+                     'planned_capital_share': '0', 'profit_share': '0.5'},
+                ],
+            }},
+        )
+        # Goods $100 (USD, fx 12000) + tax 240,000 UZS.
+        procurement = dispatch_workspace_action(
+            tenant_id=b, procurement=procurement, action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{'product_variant_id': ctx['variant'].id, 'quantity': '10',
+                           'unit_purchase_price': '10', 'currency': 'USD', 'fx_rate': '12000'}],
+                'expenses': [{'expense_type': 'CUSTOMS', 'amount': '240000',
+                              'currency': 'UZS', 'fx_rate': '1'}],
+            }},
+        )
+        # Investor funds $120 into the base (USD) pool, all allocated to this procurement.
+        dispatch_workspace_action(
+            tenant_id=b, procurement=procurement, action='RECORD_CAPITAL_CONTRIBUTION',
+            payload={'payload': {'partner_id': ctx['investor'].id, 'amount': '120',
+                                 'currency': 'USD', 'fx_rate': '12000'}},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=b, procurement=procurement, action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': '120', 'currency': 'USD', 'fx_rate': '12000'},
+            ]}},
+        )
+        # Real conversion: $20 -> 240,000 UZS @12000 to cover the UZS tax.
+        convert_agreement_pool(tenant_id=b, agreement_id=procurement.agreement_id,
+                               to_currency='UZS', from_amount=Decimal('20'), rate=Decimal('12000'))
+
+        dispatch_workspace_action(
+            tenant_id=b, procurement=procurement, action='RECEIVE_BATCH',
+            payload={'payload': {'warehouse_id': ctx['storage'].id}},
+        )
+
+        ag = InvestmentAgreement.objects.get(pk=procurement.agreement_id)
+        base_pool = CashAccount.objects.get(pk=ag.capital_account_id)
+        uzs_pool = CashAccount.objects.get(tenant_id=b, kind=CashAccount.Kind.AGREEMENT_CAPITAL, currency='UZS')
+
+        # Both pools fully drawn: USD $100 goods + UZS 240k tax.
+        self.assertEqual(base_pool.balance, Decimal('0.00'))
+        self.assertEqual(uzs_pool.balance, Decimal('0.00'))
+
+        # Two CAPITAL_POOL payments for the cost (one per currency).
+        pool_pays = Payment.objects.filter(
+            tenant_id=b, source_type=Payment.SourceType.CAPITAL_POOL,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+        )
+        self.assertEqual({p.currency for p in pool_pays}, {'USD', 'UZS'})
+
+        # Snapshot total cost = base cost basis = $100 (goods) + $20 (tax) = $120.
+        snap_total = sum(
+            (r.amount_contract_currency for r in
+             ProcurementReceiveBatchCapitalAllocation.objects.filter(batch__procurement=procurement)),
+            Decimal('0'),
+        )
+        self.assertEqual(snap_total, Decimal('120.00'))
+
+        # Inventory booked at functional UZS; all journals balanced.
+        self.assertEqual(get_account_balance(b, '1100'), Decimal('1440000.00'))
+        for entry in JournalEntry.objects.filter(tenant_id=b):
+            lines = JournalLine.objects.filter(journal_entry=entry)
+            self.assertEqual(sum((l.debit for l in lines), Decimal('0')),
+                             sum((l.credit for l in lines), Decimal('0')))
