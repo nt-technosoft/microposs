@@ -303,7 +303,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
 
       <!-- PARTNERSHIP: pay selected costs from the agreement capital pool -->
       <template v-if="isPartnership && !isFilled">
-        <Button class="w-full" @click="capitalPaymentSheetOpen = true">
+        <Button class="h-12 w-full text-base" @click="capitalPaymentSheetOpen = true">
           Оплатить из партнёрского капитала
         </Button>
       </template>
@@ -320,7 +320,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
       <template v-else-if="isInstallment">
         <template v-if="!settlement?.schedule?.length">
           <p class="text-sm font-medium text-warning">Нет графика рассрочки.</p>
-          <Button variant="outline" class="w-full" @click="scheduleEditorOpen = true">Сгенерировать график</Button>
+          <Button variant="outline" class="h-12 w-full text-base" @click="scheduleEditorOpen = true">Сгенерировать график</Button>
         </template>
         <template v-else>
           <div class="flex flex-col gap-2">
@@ -366,7 +366,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
             <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(p.amount) }} {{ p.currency }}</span>
           </div>
         </div>
-        <Button variant="outline" class="w-full" @click="openPayPayable">Совершить платёж</Button>
+        <Button variant="outline" class="h-12 w-full text-base" @click="openPayPayable">Совершить платёж</Button>
       </template>
 
       <!-- PARTIAL -->
@@ -391,7 +391,7 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
             <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmt(p.amount) }} {{ p.currency }}</span>
           </div>
         </div>
-        <Button variant="outline" class="w-full" @click="openPayFull">
+        <Button variant="outline" class="h-12 w-full text-base" @click="openPayFull">
           Оплатить предоплату {{ settlement ? fmt(settlement.total_amount_due) : '' }}
         </Button>
       </template>
@@ -439,10 +439,10 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
                 </button>
               </template>
               <p v-if="selectionMixed" class="text-sm font-medium text-warning">Выбранные позиции в разных валютах — платите раздельно.</p>
-              <Button class="w-full" :disabled="(!selectedItemIds.size && !selectedExpenseIds.size) || selectionMixed" @click="openPaySelected">
+              <Button class="h-12 w-full text-base" :disabled="(!selectedItemIds.size && !selectedExpenseIds.size) || selectionMixed" @click="openPaySelected">
                 Оплатить выбранное
               </Button>
-              <Button variant="ghost" class="w-full text-neutral-500" @click="cancelSelection">Отмена</Button>
+              <Button variant="ghost" class="h-10 w-full text-neutral-500" @click="cancelSelection">Отмена</Button>
             </div>
           </template>
           <template v-else>
@@ -453,8 +453,8 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
               </div>
             </div>
             <p v-if="allTotalsMixed" class="text-sm font-medium text-warning">В приходе разные валюты — платите отдельными траншами.</p>
-            <Button class="w-full" :disabled="allTotalsMixed" @click="openPayFull">Оплатить всё</Button>
-            <Button variant="ghost" class="w-full text-green-700" @click="openPaySelective">Оплатить выборочно →</Button>
+            <Button class="h-12 w-full text-base" :disabled="allTotalsMixed" @click="openPayFull">Оплатить всё</Button>
+            <Button variant="ghost" class="h-10 w-full text-green-700" @click="openPaySelective">Оплатить выборочно →</Button>
           </template>
         </template>
       </template>
