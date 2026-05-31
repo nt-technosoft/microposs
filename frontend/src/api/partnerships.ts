@@ -21,6 +21,7 @@ export type WorkspaceActionKey =
   | 'LINK_INVESTMENT_AGREEMENT'
   | 'RECORD_CAPITAL_CONTRIBUTION'
   | 'ALLOCATE_CAPITAL'
+  | 'CONVERT_CAPITAL_POOL'
   | 'PAY_COSTS'
   | 'PAY_SUPPLIER_PAYABLE'
   | 'GENERATE_INSTALLMENT_SCHEDULE'
@@ -192,6 +193,17 @@ export interface ProcurementWorkspacePayload {
       legal_mode: string | null
       currency: string
       planned_budget: string
+      pool: {
+        cash_account_id: number
+        currency: string
+        balance: string
+      } | null
+      currency_pools: Array<{
+        currency: string
+        cash_account_id: number
+        balance: string
+        is_base: boolean
+      }>
       partners: Array<{
         partner_id: number
         partner_name: string

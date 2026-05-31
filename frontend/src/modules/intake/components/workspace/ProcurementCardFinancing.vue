@@ -7,20 +7,23 @@ import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import WorkspaceAgreementPickerSheet from './WorkspaceAgreementPickerSheet.vue'
 import InvestmentAgreementDetailSheet from './InvestmentAgreementDetailSheet.vue'
 import InvestmentAgreementQuickForm from './InvestmentAgreementQuickForm.vue'
-import { useToast } from '@/composables/useToast'
+import PartnershipBudgetTopUpSheet from './PartnershipBudgetTopUpSheet.vue'
+import PartnershipPoolConvertSheet from './PartnershipPoolConvertSheet.vue'
+import { ArrowLeftRight } from 'lucide-vue-next'
 import { formatPrice } from '@/utils/currency'
 import type { ProcurementWorkspacePayload, InvestmentAgreementDetail } from '@/api/partnerships'
 
 const props = defineProps<{ procurement: ProcurementWorkspacePayload }>()
 const emit = defineEmits<{
   'link-agreement': [agreementId: number]
+  dispatch: [actionKey: string, payload: Record<string, unknown>]
 }>()
-
-const toast = useToast()
 
 const pickerOpen = ref(false)
 const createFormOpen = ref(false)
 const detailSheetOpen = ref(false)
+const topUpOpen = ref(false)
+const convertOpen = ref(false)
 
 const investment = computed(() => props.procurement.documents.investment)
 const isFilled = computed(() => (investment.value?.allocations.length ?? 0) > 0)
@@ -49,6 +52,14 @@ const availablePercent = computed(() =>
 
 const investorName = computed(() => investor.value?.partner_name ?? 'Инвестор')
 
+// E12: physical currency sub-pools (base + converted). Show when the pool
+// actually holds more than just the base currency, so the user sees what's
+// available to pay costs in each currency.
+const currencyPools = computed(() => investment.value?.currency_pools ?? [])
+const showCurrencyPools = computed(
+  () => currencyPools.value.some((p) => !p.is_base && (Number.parseFloat(p.balance) || 0) > 0),
+)
+
 const dateLabel = computed(() => {
   if (!investment.value) return ''
   return new Date(investment.value.opened_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -69,7 +80,7 @@ function onAgreementCreated(agreement: InvestmentAgreementDetail): void {
 }
 
 function onTopUp(): void {
-  toast.info('Пополнение бюджета договора — будет реализовано')
+  topUpOpen.value = true
 }
 </script>
 
@@ -139,6 +150,21 @@ function onTopUp(): void {
           </div>
         </button>
 
+        <!-- E12: physical pool balances per currency (when converted money is held) -->
+        <div v-if="showCurrencyPools" class="flex flex-col gap-1.5 rounded-[10px] border border-neutral-200 px-3 py-2.5">
+          <span class="text-xs font-medium text-neutral-500">В пуле по валютам</span>
+          <div
+            v-for="p in currencyPools"
+            :key="p.currency"
+            class="flex items-center justify-between gap-2"
+          >
+            <span class="text-xs text-neutral-500">{{ p.currency }}{{ p.is_base ? ' (договор)' : '' }}</span>
+            <span class="text-sm font-medium tabular-nums text-foreground">
+              {{ formatPrice(Number.parseFloat(p.balance) || 0, p.currency) }}
+            </span>
+          </div>
+        </div>
+
         <div class="flex flex-col gap-2">
           <Button variant="outline" class="w-full" @click="pickerOpen = true">
             Выбрать другой договор
@@ -146,6 +172,10 @@ function onTopUp(): void {
           <Button variant="ghost" class="w-full text-neutral-600" @click="onTopUp">
             <Plus data-icon="inline-start" />
             Пополнить бюджет договора
+          </Button>
+          <Button variant="ghost" class="w-full text-neutral-600" @click="convertOpen = true">
+            <ArrowLeftRight data-icon="inline-start" />
+            Конвертировать валюту пула
           </Button>
         </div>
       </template>
@@ -168,5 +198,17 @@ function onTopUp(): void {
     :agreement-id="investment?.agreement_id ?? null"
     :current-procurement-id="procurement.id"
     @close="detailSheetOpen = false"
+  />
+
+  <PartnershipBudgetTopUpSheet
+    v-model:open="topUpOpen"
+    :procurement="procurement"
+    @dispatch="(k, p) => emit('dispatch', k, p)"
+  />
+
+  <PartnershipPoolConvertSheet
+    v-model:open="convertOpen"
+    :procurement="procurement"
+    @dispatch="(k, p) => emit('dispatch', k, p)"
   />
 </template>
