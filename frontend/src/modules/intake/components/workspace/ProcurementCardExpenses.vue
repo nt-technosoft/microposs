@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { CheckCircle, Plus, Info } from 'lucide-vue-next'
+import { CheckCircle2, Plus, Info } from 'lucide-vue-next'
 import ProcurementExpenseRow from './ProcurementExpenseRow.vue'
 import ProcurementExpenseEditSheet from './ProcurementExpenseEditSheet.vue'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Expense = ProcurementWorkspacePayload['documents']['expenses'][number]
@@ -39,7 +40,7 @@ const totalsByCurrency = computed(() => {
 function formatTotal(amount: number, currency: string): string {
   const formatted = amount % 1 === 0
     ? Math.round(amount).toLocaleString('ru-RU')
-    : amount.toFixed(2)
+    : amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 })
   return `${formatted} ${currency}`
 }
 
@@ -73,53 +74,66 @@ function onSheetDelete(expenseId: number): void {
 </script>
 
 <template>
-  <div class="expenses-card">
-    <div class="card-header">
-      <span class="card-title">Расходы</span>
-      <div class="header-right">
-        <template v-if="isConsigned">
-          <span class="disabled-badge">disabled</span>
-        </template>
+  <Card class="gap-0 rounded-[14px] border-neutral-200 bg-surface py-0 shadow-none">
+    <CardHeader class="flex flex-row items-center justify-between gap-3 px-4 py-3.5">
+      <CardTitle class="text-base">Расходы</CardTitle>
+      <div class="flex items-center gap-2">
+        <span v-if="isConsigned" class="text-xs font-medium uppercase tracking-wide text-neutral-400">недоступно</span>
         <template v-else>
-          <span class="item-count">{{ expenses.length }}</span>
-          <CheckCircle v-if="isFilled" class="status-ok" :size="18" :stroke-width="2" />
+          <span class="text-sm font-medium tabular-nums text-neutral-500">{{ expenses.length }}</span>
+          <CheckCircle2 v-if="isFilled" class="size-[18px] text-positive" />
         </template>
       </div>
-    </div>
+    </CardHeader>
 
-    <div v-if="isConsigned" class="consigned-notice">
-      <Info :size="15" :stroke-width="2" class="notice-icon" />
-      <span>Расходы недоступны для прихода на реализации.</span>
-    </div>
-
-    <template v-else>
-      <div v-if="!expenses.length" class="empty-state">Нет дополнительных расходов.</div>
-
-      <div v-else class="expenses-list">
-        <ProcurementExpenseRow
-          v-for="expense in expenses"
-          :key="expense.id"
-          :expense="expense"
-          :items="items"
-          :is-editable="canEdit && !expense.locked_reason"
-          @click="openEdit(expense.id)"
-          @delete="onSheetDelete"
-        />
+    <CardContent class="flex flex-col gap-3 px-4 pb-4">
+      <div
+        v-if="isConsigned"
+        class="flex items-start gap-2 rounded-[10px] bg-neutral-50 px-3.5 py-3 text-sm text-neutral-500"
+      >
+        <Info class="mt-0.5 size-4 shrink-0" />
+        <span>Расходы недоступны для прихода на реализации.</span>
       </div>
 
-      <template v-if="Object.keys(totalsByCurrency).length">
-        <div v-for="(amount, currency) in totalsByCurrency" :key="currency" class="totals-row">
-          <span class="totals-label">Итого расходов</span>
-          <span class="totals-value">{{ formatTotal(amount, currency) }}</span>
-        </div>
-      </template>
+      <template v-else>
+        <p v-if="!expenses.length" class="py-4 text-center text-sm text-neutral-500">
+          Нет дополнительных расходов.
+        </p>
 
-      <button class="add-btn" type="button" @click="openAdd">
-        <Plus :size="14" :stroke-width="2.5" />
-        Добавить расход
-      </button>
-    </template>
-  </div>
+        <div v-else class="flex flex-col gap-2">
+          <ProcurementExpenseRow
+            v-for="expense in expenses"
+            :key="expense.id"
+            :expense="expense"
+            :items="items"
+            :is-editable="canEdit && !expense.locked_reason"
+            @click="openEdit(expense.id)"
+          />
+        </div>
+
+        <div
+          v-if="Object.keys(totalsByCurrency).length"
+          class="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3"
+        >
+          <span class="text-sm text-neutral-500">Итого расходов</span>
+          <span class="text-right text-base font-semibold tabular-nums text-foreground">
+            <template v-for="(amount, currency, idx) in totalsByCurrency" :key="currency">
+              <span v-if="idx > 0" class="text-neutral-300"> · </span>{{ formatTotal(amount, currency) }}
+            </template>
+          </span>
+        </div>
+
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-neutral-300 px-3.5 py-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-50/40"
+          @click="openAdd"
+        >
+          <Plus class="size-4" />
+          Добавить расход
+        </button>
+      </template>
+    </CardContent>
+  </Card>
 
   <ProcurementExpenseEditSheet
     v-model:open="editSheetOpen"
@@ -129,66 +143,3 @@ function onSheetDelete(expenseId: number): void {
     @delete="onSheetDelete"
   />
 </template>
-
-<style scoped>
-.expenses-card {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-}
-
-.card-header { display: flex; align-items: center; justify-content: space-between; }
-
-.card-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-
-.header-right { display: flex; align-items: center; gap: var(--space-2); }
-
-.item-count { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-secondary); }
-
-.disabled-badge { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-tertiary); text-transform: uppercase; letter-spacing: .04em; }
-
-.status-ok { color: var(--color-success); }
-
-.consigned-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.notice-icon { flex-shrink: 0; margin-top: 1px; }
-
-.empty-state { padding: var(--space-4) 0; text-align: center; color: var(--color-text-secondary); font-size: var(--text-sm); }
-
-.expenses-list { display: grid; gap: var(--space-2); }
-
-.totals-row { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); }
-
-.totals-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
-
-.totals-value { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
-
-.add-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-3);
-  border: 1px dashed var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-brand-700);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
-}
-</style>
