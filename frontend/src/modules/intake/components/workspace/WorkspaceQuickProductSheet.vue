@@ -2,6 +2,8 @@
 import { AlertCircle } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import type { SelectOption } from './types'
 
 defineProps<{
@@ -24,26 +26,25 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <AppBottomSheet :open="open" title="Быстрое создание товара" @close="emit('close')">
-    <form class="sheet-body" @submit.prevent="emit('submit')">
-      <div v-if="error" class="error-box">
-        <AlertCircle :size="18" :stroke-width="1.75" />
+  <AppBottomSheet :open="open" title="Новый товар" @close="emit('close')">
+    <form class="flex flex-col gap-4" @submit.prevent="emit('submit')">
+      <div v-if="error" class="flex items-start gap-2 rounded-[10px] border border-negative/20 bg-negative/5 px-3.5 py-3 text-sm text-negative">
+        <AlertCircle class="mt-0.5 size-4 shrink-0" />
         <span>{{ error }}</span>
       </div>
 
-      <label class="field-group">
-        <span class="field-label">Название *</span>
-        <input
-          class="input-field"
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Название</span>
+        <Input
           type="text"
-          placeholder="Например, iPhone 15 Pro"
-          :value="name"
-          @input="emit('updateName', ($event.target as HTMLInputElement).value)"
+          placeholder="Например, Кока-Кола 1.5л"
+          :model-value="name"
+          @update:model-value="emit('updateName', String($event))"
         />
       </label>
 
-      <label class="field-group">
-        <span class="field-label">Категория</span>
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Категория</span>
         <BaseSelect
           :model-value="categoryId"
           :options="categoryOptions"
@@ -51,77 +52,24 @@ const emit = defineEmits<{
           placeholder="Без категории"
           @update:model-value="(value) => emit('updateCategoryId', value === null ? null : Number(value))"
         />
-      </label>
+      </div>
 
-      <label class="field-group">
-        <span class="field-label">Базовая цена</span>
-        <input
-          class="input-field"
+      <label class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Базовая цена продажи</span>
+        <Input
           type="number"
           min="0"
+          inputmode="decimal"
           placeholder="0"
-          :value="basePrice"
-          @input="emit('updateBasePrice', ($event.target as HTMLInputElement).value)"
+          class="tabular-nums"
+          :model-value="basePrice"
+          @update:model-value="emit('updateBasePrice', String($event))"
         />
       </label>
 
-      <button class="primary-action" type="submit" :disabled="saving">
+      <Button type="submit" class="h-12 w-full text-base" :disabled="saving">
         {{ saving ? 'Создание…' : 'Создать и добавить' }}
-      </button>
+      </Button>
     </form>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body,
-.field-group {
-  display: grid;
-  gap: 10px;
-}
-
-.field-group {
-  gap: 6px;
-}
-
-.field-label {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.input-field {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-}
-
-.error-box {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
-  font-size: var(--text-sm);
-  line-height: 1.4;
-}
-
-.primary-action {
-  min-height: 48px;
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: var(--color-brand-500);
-  color: var(--color-text-inverse);
-  font-weight: var(--font-semibold);
-}
-
-.primary-action:disabled {
-  opacity: 0.62;
-}
-</style>

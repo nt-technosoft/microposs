@@ -2,6 +2,8 @@
 import { ref, computed, watch } from 'vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useFxRate } from '@/composables/useFxRate'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -39,6 +41,22 @@ const editExpense = computed<Expense | null>(() =>
     : null,
 )
 const items = computed(() => props.procurement.documents.items)
+const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
+  const currencies = new Set(
+    [
+      ...props.procurement.documents.items
+        .filter((item) => item.lifecycle_state !== 'CANCELLED')
+        .map((item) => item.currency === 'USD' ? 'USD' : 'UZS'),
+      ...props.procurement.documents.expenses
+        .filter((expense) => expense.lifecycle_state !== 'CANCELLED' && expense.id !== props.editingExpenseId)
+        .map((expense) => expense.currency === 'USD' ? 'USD' : 'UZS'),
+    ],
+  )
+  return currencies.size === 1 ? ([...currencies][0] as 'UZS' | 'USD') : null
+})
+const allowedCurrencies = computed<Array<'UZS' | 'USD'>>(() =>
+  lockedCurrency.value ? [lockedCurrency.value] : ['USD', 'UZS'],
+)
 
 watch(fetchedFx, (r) => { if (r) fxRateLocal.value = r })
 watch(currency, async (cur) => {
@@ -56,7 +74,7 @@ watch(() => props.open, (isOpen) => {
     if (ex.target_item_ids.length) { targetScope.value = 'selected'; selectedTargets.value = [...ex.target_item_ids] }
     else { targetScope.value = 'all'; selectedTargets.value = [] }
   } else {
-    expenseType.value = 'LOGISTICS'; amount.value = ''; currency.value = 'UZS'
+    expenseType.value = 'LOGISTICS'; amount.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS')
     fxRateLocal.value = '1'; allocMethod.value = 'BY_VALUE'
     targetScope.value = 'all'; selectedTargets.value = []
   }
@@ -90,50 +108,100 @@ function onDelete(): void {
 
 <template>
   <AppBottomSheet :open="open" title="Расход" @close="emit('update:open', false)">
-    <div class="sheet-body">
-      <div class="section-label">Тип расхода</div>
-      <div class="chips-row">
-        <button v-for="t in EXPENSE_TYPES" :key="t.key" class="chip" :class="{ active: expenseType === t.key }" type="button" @click="expenseType = t.key">{{ t.label }}</button>
+    <div class="flex flex-col gap-4">
+      <!-- Тип расхода -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Тип расхода</span>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="t in EXPENSE_TYPES"
+            :key="t.key"
+            type="button"
+            :class="cn(
+              'rounded-full border px-3 py-1.5 text-sm transition-colors',
+              expenseType === t.key ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+            )"
+            @click="expenseType = t.key"
+          >{{ t.label }}</button>
+        </div>
       </div>
 
-      <div class="section-label">Сумма</div>
-      <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" />
-
-      <div class="section-label">Метод распределения</div>
-      <div class="chips-row">
-        <button v-for="m in ALLOC_METHODS" :key="m.key" class="chip" :class="{ active: allocMethod === m.key }" type="button" @click="allocMethod = m.key">{{ m.label }}</button>
+      <!-- Сумма -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма</span>
+        <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" :currencies="allowedCurrencies" />
+        <p v-if="lockedCurrency" class="text-xs text-neutral-400">Валюта прихода зафиксирована: {{ lockedCurrency }}.</p>
       </div>
 
-      <div class="section-label">Распределить на</div>
-      <div class="chips-row">
-        <button class="chip" :class="{ active: targetScope === 'all' }" type="button" @click="targetScope = 'all'">Все товары</button>
-        <button class="chip" :class="{ active: targetScope === 'selected' }" :disabled="!items.length" type="button" @click="targetScope = 'selected'">Выбранные</button>
+      <!-- Метод распределения -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Распределить по товарам</span>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="m in ALLOC_METHODS"
+            :key="m.key"
+            type="button"
+            :class="cn(
+              'rounded-full border px-3 py-1.5 text-sm transition-colors',
+              allocMethod === m.key ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+            )"
+            @click="allocMethod = m.key"
+          >{{ m.label }}</button>
+        </div>
       </div>
 
-      <div v-if="targetScope === 'selected' && items.length" class="items-checklist">
-        <label v-for="item in items" :key="item.id" class="check-row">
-          <input type="checkbox" :checked="selectedTargets.includes(item.id)" @change="toggleTarget(item.id)" />
-          <span class="check-label">{{ item.product_variant_name }}</span>
+      <!-- Распределить на -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">На какие товары</span>
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            :class="cn(
+              'rounded-full border px-3 py-1.5 text-sm transition-colors',
+              targetScope === 'all' ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+            )"
+            @click="targetScope = 'all'"
+          >Все товары</button>
+          <button
+            type="button"
+            :disabled="!items.length"
+            :class="cn(
+              'rounded-full border px-3 py-1.5 text-sm transition-colors',
+              targetScope === 'selected' ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+              !items.length && 'cursor-not-allowed opacity-40 hover:bg-transparent',
+            )"
+            @click="targetScope = 'selected'"
+          >Выбранные</button>
+        </div>
+      </div>
+
+      <div v-if="targetScope === 'selected' && items.length" class="flex max-h-[30vh] flex-col gap-1 overflow-y-auto rounded-[10px] border border-neutral-200 p-2">
+        <label
+          v-for="item in items"
+          :key="item.id"
+          class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-neutral-50"
+        >
+          <input
+            type="checkbox"
+            class="size-4 accent-green-600"
+            :checked="selectedTargets.includes(item.id)"
+            @change="toggleTarget(item.id)"
+          />
+          <span class="min-w-0 truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
         </label>
       </div>
 
-      <button class="primary-btn" type="button" :disabled="!amount" @click="onSave">Сохранить</button>
-      <button v-if="editingExpenseId" class="danger-btn" type="button" @click="onDelete">Удалить расход</button>
+      <div class="flex flex-col gap-2 pt-1">
+        <Button class="h-12 w-full text-base" :disabled="!amount" @click="onSave">Сохранить</Button>
+        <button
+          v-if="editingExpenseId"
+          type="button"
+          class="h-11 rounded-[10px] border border-negative/30 text-sm font-medium text-negative transition-colors hover:bg-negative/5"
+          @click="onDelete"
+        >
+          Удалить расход
+        </button>
+      </div>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body { display: grid; gap: var(--space-3); }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.chips-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.chip { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-full); background: transparent; color: var(--color-text-secondary); font-size: var(--text-sm); cursor: pointer; }
-.chip.active { border-color: var(--color-brand-600); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
-.chip:disabled { opacity: .55; cursor: not-allowed; }
-.items-checklist { display: grid; gap: var(--space-2); padding: var(--space-3); background: var(--color-bg-secondary); border-radius: var(--radius-md); max-height: 30vh; overflow-y: auto; }
-.check-row { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; }
-.check-label { font-size: var(--text-sm); color: var(--color-text-primary); }
-.primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
-.primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.danger-btn { min-height: 44px; border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
-</style>

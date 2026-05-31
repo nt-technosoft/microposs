@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { Plus } from 'lucide-vue-next'
+import { Plus, Search } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { Button } from '@/components/ui/button'
+import { formatPrice } from '@/utils/currency'
 import type { ProductVariant } from '@/types/models'
 import type { SelectOption } from './types'
 
@@ -21,24 +23,32 @@ const emit = defineEmits<{
   newProduct: []
   select: [variant: ProductVariant]
 }>()
+
+function priceOf(v: ProductVariant): number {
+  return Number.parseFloat(String(v.price ?? v.effective_price ?? '0')) || 0
+}
 </script>
 
 <template>
   <AppBottomSheet :open="open" title="Выбор товара" @close="emit('close')">
-    <div class="sheet-body">
-      <div class="sheet-actions">
-        <input
-          class="input-field"
-          type="text"
-          placeholder="Поиск товара"
-          :value="search"
-          @input="emit('updateSearch', ($event.target as HTMLInputElement).value)"
-        />
-        <button class="soft-action" type="button" @click="emit('newProduct')">
-          <Plus :size="14" :stroke-width="2.4" />
+    <div class="flex flex-col gap-3">
+      <div class="flex items-center gap-2">
+        <div class="relative flex-1">
+          <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
+          <input
+            type="text"
+            placeholder="Поиск товара"
+            :value="search"
+            class="h-11 w-full rounded-[10px] border border-neutral-200 bg-transparent pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-neutral-400 focus:border-green-400"
+            @input="emit('updateSearch', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <Button variant="outline" class="h-11 shrink-0 gap-1.5" @click="emit('newProduct')">
+          <Plus class="size-4" />
           Новый
-        </button>
+        </Button>
       </div>
+
       <BaseSelect
         :model-value="category"
         :options="categoryOptions"
@@ -46,86 +56,20 @@ const emit = defineEmits<{
         placeholder="Все категории"
         @update:model-value="(value) => emit('updateCategory', value === null ? null : Number(value))"
       />
-      <div class="variant-list">
-        <button v-for="variant in variants" :key="variant.id" class="variant-row" type="button" @click="emit('select', variant)">
-          <span>{{ variantDisplay(variant) }}</span>
-          <strong>{{ variant.price ?? variant.effective_price ?? '0' }}</strong>
+
+      <div class="flex max-h-[52vh] flex-col gap-2 overflow-auto">
+        <button
+          v-for="variant in variants"
+          :key="variant.id"
+          type="button"
+          class="flex w-full items-center justify-between gap-3 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40"
+          @click="emit('select', variant)"
+        >
+          <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ variantDisplay(variant) }}</span>
+          <span class="shrink-0 text-sm font-semibold tabular-nums text-neutral-500">{{ formatPrice(priceOf(variant), 'UZS') }}</span>
         </button>
+        <p v-if="!variants.length" class="py-6 text-center text-sm text-neutral-500">Ничего не найдено.</p>
       </div>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body {
-  display: grid;
-  gap: 10px;
-}
-
-.sheet-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.input-field {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-}
-
-.soft-action {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 999px;
-  background: var(--color-bg-primary);
-  color: var(--color-brand-700);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-}
-
-.variant-list {
-  display: grid;
-  gap: 8px;
-  max-height: 52vh;
-  overflow: auto;
-}
-
-.variant-row {
-  width: 100%;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  text-align: left;
-}
-
-.variant-row span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.variant-row strong {
-  flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
-}
-</style>

@@ -3,6 +3,8 @@ import { ref, computed, watch } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import WorkspaceVariantPickerSheet from './WorkspaceVariantPickerSheet.vue'
 import WorkspaceQuickProductSheet from './WorkspaceQuickProductSheet.vue'
 import { useFxRate } from '@/composables/useFxRate'
@@ -139,30 +141,47 @@ function onSplit(): void {
 
 <template>
   <AppBottomSheet :open="open" title="Товар" @close="emit('update:open', false)">
-    <div class="sheet-body">
-      <div class="section-label">Товар</div>
-      <button class="variant-btn" type="button" @click="vpOpen = true">
-        <span class="variant-btn-text">{{ variantName || 'Выбрать товар' }}</span>
-        <ChevronRight :size="14" :stroke-width="2" />
-      </button>
+    <div class="flex flex-col gap-4">
+      <!-- Товар -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Товар</span>
+        <button
+          type="button"
+          class="flex w-full items-center justify-between gap-2 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40"
+          @click="vpOpen = true"
+        >
+          <span class="min-w-0 truncate text-sm font-medium" :class="variantName ? 'text-foreground' : 'text-neutral-400'">{{ variantName || 'Выбрать товар' }}</span>
+          <ChevronRight class="size-4 shrink-0 text-neutral-400" />
+        </button>
+      </div>
 
-      <div class="qty-price-row">
-        <div class="field qty-field">
-          <div class="section-label">Количество</div>
-          <input class="input-field number-input" type="number" min="1" step="1" :value="qty" @input="qty = ($event.target as HTMLInputElement).value" />
+      <!-- Количество + Цена -->
+      <div class="flex gap-3">
+        <div class="flex w-28 shrink-0 flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Количество</span>
+          <Input v-model="qty" type="number" min="1" step="1" inputmode="numeric" class="tabular-nums" />
         </div>
-        <div class="field price-field">
-          <div class="section-label">Цена закупки</div>
+        <div class="flex flex-1 flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Цена закупки</span>
           <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" :currencies="allowedCurrencies" />
         </div>
       </div>
-      <div v-if="lockedCurrency" class="currency-lock-hint">
-        Валюта прихода уже зафиксирована: {{ lockedCurrency }}.
-      </div>
+      <p v-if="lockedCurrency" class="-mt-1.5 text-xs text-neutral-400">
+        Валюта прихода зафиксирована: {{ lockedCurrency }}.
+      </p>
 
-      <button class="primary-btn" type="button" :disabled="!variantId" @click="onSave">Сохранить</button>
-      <button v-if="canSplit" class="secondary-btn" type="button" @click="onSplit">Разделить позицию</button>
-      <button v-if="editingItemId" class="danger-btn" type="button" @click="onDelete">Удалить строку</button>
+      <div class="flex flex-col gap-2 pt-1">
+        <Button class="h-12 w-full text-base" :disabled="!variantId" @click="onSave">Сохранить</Button>
+        <Button v-if="canSplit" variant="outline" class="w-full" @click="onSplit">Разделить позицию</Button>
+        <button
+          v-if="editingItemId"
+          type="button"
+          class="h-11 rounded-[10px] border border-negative/30 text-sm font-medium text-negative transition-colors hover:bg-negative/5"
+          @click="onDelete"
+        >
+          Удалить позицию
+        </button>
+      </div>
     </div>
   </AppBottomSheet>
 
@@ -180,21 +199,3 @@ function onSplit(): void {
     @update-base-price="qpBasePrice = $event" @submit="onQpSubmit"
   />
 </template>
-
-<style scoped>
-.sheet-body { display: grid; gap: var(--space-3); }
-.qty-price-row { display: flex; gap: var(--space-3); }
-.qty-field { flex: 1; }
-.price-field { flex: 2; }
-.field { display: grid; gap: var(--space-1); }
-.number-input { font-variant-numeric: tabular-nums; }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.variant-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; text-align: left; }
-.variant-btn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.input-field { width: 100%; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-primary); font-size: var(--text-sm); }
-.currency-lock-hint { font-size: var(--text-xs); color: var(--color-text-secondary); }
-.primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
-.primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-.secondary-btn { min-height: 44px; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: transparent; color: var(--color-text-primary); font-weight: var(--font-semibold); cursor: pointer; }
-.danger-btn { min-height: 44px; border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent); border-radius: var(--radius-lg); background: transparent; color: var(--color-error); font-weight: var(--font-semibold); cursor: pointer; }
-</style>
