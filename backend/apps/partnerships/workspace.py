@@ -83,6 +83,7 @@ ACTION_LABELS = {
     'LINK_INVESTMENT_AGREEMENT': 'Привязать договор',
     'RECORD_CAPITAL_CONTRIBUTION': 'Внести капитал',
     'ALLOCATE_CAPITAL': 'Распределить капитал',
+    'CONVERT_CAPITAL_POOL': 'Конвертировать валюту пула',
     'PAY_COSTS': 'Оплатить',
     'PAY_SUPPLIER_PAYABLE': 'Оплатить поставщика',
     'GENERATE_INSTALLMENT_SCHEDULE': 'Сгенерировать график',
@@ -491,6 +492,13 @@ def dispatch_workspace_action(
             payload=mutation_payload,
             client_request_id=client_request_id,
             user_id=user_id,
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'CONVERT_CAPITAL_POOL':
+        convert_workspace_capital_pool(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            payload=mutation_payload,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'RECEIVE_BATCH':
@@ -1194,6 +1202,36 @@ def record_workspace_capital_contribution(
         from_cash_account_id=from_cash_account_id,
         source=AgreementActionSource.BUSINESS_RECORDED,
         confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+    )
+
+
+def convert_workspace_capital_pool(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    payload: dict,
+):
+    """E12: real spot conversion of agreement base-currency pool into another
+    currency, so the pool can pay costs in that currency. Records a FIFO
+    cost-basis lot. `rate` is held-currency per 1 base currency.
+    """
+    from apps.partnerships.multicurrency import convert_agreement_pool
+
+    agreement = _require_workspace_agreement(procurement)
+    to_currency = payload.get('to_currency') or payload.get('currency')
+    if not to_currency:
+        raise ValueError('to_currency is required for capital pool conversion.')
+    if payload.get('from_amount') is None:
+        raise ValueError('from_amount is required for capital pool conversion.')
+    if payload.get('rate') is None:
+        raise ValueError('rate is required for capital pool conversion.')
+    return convert_agreement_pool(
+        tenant_id=tenant_id,
+        agreement_id=agreement.id,
+        to_currency=str(to_currency),
+        from_amount=Decimal(str(payload['from_amount'])),
+        rate=Decimal(str(payload['rate'])),
+        converted_at=payload.get('date') or payload.get('converted_at'),
     )
 
 
@@ -2310,6 +2348,16 @@ def _investment_payload(procurement: Procurement) -> dict | None:
             'currency': pool_account.currency,
             'balance': str(pool_account.balance),
         } if pool_account else None),
+        # E12: all physical currency sub-pools of the agreement (base + converted).
+        'currency_pools': [
+            {
+                'currency': sub.cash_account.currency,
+                'cash_account_id': sub.cash_account_id,
+                'balance': str(sub.cash_account.balance),
+                'is_base': sub.cash_account.currency.upper() == str(agreement.currency or 'UZS').upper(),
+            }
+            for sub in agreement.currency_pools.select_related('cash_account').all()
+        ],
         'partners': [
             {
                 'partner_id': member.partner_id,
