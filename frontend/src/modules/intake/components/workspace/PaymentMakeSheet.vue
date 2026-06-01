@@ -40,17 +40,21 @@ const cashAccountId = ref<number | null>(null)
 const cashAccounts = ref<CashAccountRecord[]>([])
 const isLoadingAccounts = ref(false)
 
-// Operating cash only — agreement capital pools are restricted partnership
-// funds and must never be a source for paying a procurement cost here.
+// Money discipline: an obligation is paid only from an operating cash register
+// in the SAME currency. Agreement capital pools are restricted; mismatched
+// currencies are never a source (no implicit conversion) — convert/top up first.
 const operatingAccounts = computed(() =>
-  cashAccounts.value.filter((a) => a.kind !== 'agreement_capital'),
+  cashAccounts.value.filter(
+    (a) => a.kind !== 'agreement_capital' &&
+      (a.currency || 'UZS').toUpperCase() === obligationCurrency.value,
+  ),
 )
 const selectedAccount = computed(() =>
   operatingAccounts.value.find((a) => a.id === cashAccountId.value) ?? null
 )
-const currencyMismatch = computed(() =>
+const insufficient = computed(() =>
   !!selectedAccount.value &&
-  selectedAccount.value.currency.toUpperCase() !== obligationCurrency.value
+  parseFloat(amount.value || '0') > parseFloat(selectedAccount.value.balance || '0')
 )
 
 async function loadAccounts(): Promise<void> {
@@ -60,12 +64,13 @@ async function loadAccounts(): Promise<void> {
   finally { isLoadingAccounts.value = false }
 }
 
-watch(() => props.open, (isOpen) => {
+watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
   amount.value = props.defaultAmount ?? ''
   notes.value = ''
-  cashAccountId.value = operatingAccounts.value[0]?.id ?? null
-  if (!cashAccounts.value.length) loadAccounts()
+  if (!cashAccounts.value.length) await loadAccounts()
+  const stillValid = operatingAccounts.value.some((a) => a.id === cashAccountId.value)
+  if (!stillValid) cashAccountId.value = operatingAccounts.value[0]?.id ?? null
 })
 
 function openExchange(): void {
@@ -73,7 +78,7 @@ function openExchange(): void {
   router.push({
     path: '/finance/currency-exchange',
     query: {
-      from_currency: selectedAccount.value?.currency ?? 'UZS',
+      from_currency: obligationCurrency.value === 'UZS' ? 'USD' : 'UZS',
       to_currency: obligationCurrency.value,
       amount: String(remaining),
     },
@@ -105,7 +110,7 @@ function onSave(): void {
 }
 
 const canSave = () =>
-  !!(amount.value && parseFloat(amount.value) > 0 && cashAccountId.value && !currencyMismatch.value)
+  !!(amount.value && parseFloat(amount.value) > 0 && cashAccountId.value && !insufficient.value)
 </script>
 
 <template>
@@ -128,11 +133,21 @@ const canSave = () =>
         </div>
       </div>
 
-      <!-- Касса -->
+      <!-- Касса (только в валюте обязательства) -->
       <div class="flex flex-col gap-1.5">
-        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Откуда платим</span>
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Откуда платим ({{ obligationCurrency }})</span>
         <p v-if="isLoadingAccounts" class="text-sm text-neutral-500">Загрузка…</p>
-        <p v-else-if="!operatingAccounts.length" class="text-sm text-neutral-500">Нет активных касс</p>
+        <!-- No register in the obligation currency: offer convert / top up -->
+        <div v-else-if="!operatingAccounts.length" class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
+          <div class="flex items-start gap-2">
+            <AlertCircle class="mt-0.5 size-4 shrink-0 text-warning" />
+            <span>Нет кассы в валюте {{ obligationCurrency }}. Пополните её или сделайте обмен — платёж из кассы другой валюты невозможен.</span>
+          </div>
+          <Button variant="outline" size="sm" class="h-9 self-start gap-1" @click="openExchange">
+            Обменять валюту
+            <ArrowRight class="size-4" />
+          </Button>
+        </div>
         <div v-else class="flex flex-col gap-2">
           <button
             v-for="acc in operatingAccounts"
@@ -150,14 +165,14 @@ const canSave = () =>
         </div>
       </div>
 
-      <!-- Currency mismatch -->
-      <div v-if="currencyMismatch" class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
+      <!-- Insufficient funds in the matching register -->
+      <div v-if="insufficient" class="flex flex-col gap-2 rounded-[10px] border border-negative/30 bg-negative/5 px-3.5 py-3 text-sm text-foreground">
         <div class="flex items-start gap-2">
-          <AlertCircle class="mt-0.5 size-4 shrink-0 text-warning" />
-          <span>Касса в {{ selectedAccount?.currency }}, обязательство в {{ obligationCurrency }}. Сначала конвертируйте валюту.</span>
+          <AlertCircle class="mt-0.5 size-4 shrink-0 text-negative" />
+          <span>Недостаточно средств в кассе. Пополните её или сделайте обмен валют.</span>
         </div>
         <Button variant="outline" size="sm" class="h-9 self-start gap-1" @click="openExchange">
-          Конвертировать
+          Обменять валюту
           <ArrowRight class="size-4" />
         </Button>
       </div>

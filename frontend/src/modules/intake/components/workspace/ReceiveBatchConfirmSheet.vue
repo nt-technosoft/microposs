@@ -91,12 +91,27 @@ function acceptedQty(item: Item): number {
 
 const reasonOptions = REASONS.map((r) => ({ value: r.key as string, label: r.label }))
 const warehouseOptions = computed(() => warehouses.value.map((w) => ({ value: w.id, label: w.name })))
+// Money discipline: only cash registers in the obligation's currency can pay it.
+// No paying a USD obligation from a UZS register (and vice versa) — convert/top up first.
+const sameCurrencyAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) => (a.currency || 'UZS').toUpperCase() === batchObligationCurrency.value,
+  ),
+)
 const cashOptions = computed(() =>
-  cashAccounts.value.map((a) => ({
+  sameCurrencyAccounts.value.map((a) => ({
     value: a.id,
     label: `${a.name} · ${parseFloat(a.balance).toLocaleString('ru-RU')} ${a.currency}`,
   })),
 )
+const selectedCashAccount = computed(() =>
+  cashAccounts.value.find((a) => a.id === selectedCashAccountId.value) ?? null,
+)
+const paymentExceedsBalance = computed(() => {
+  const acc = selectedCashAccount.value
+  if (!acc) return false
+  return parseFloat(paymentAmount.value || '0') > parseFloat(acc.balance || '0')
+})
 const currentStep = computed<StepKey>(() => steps.value[currentStepIndex.value] ?? 'where')
 const isLastStep = computed(() => currentStepIndex.value >= steps.value.length - 1)
 const stepTitle = computed(() => STEP_TITLES[currentStep.value])
@@ -269,8 +284,12 @@ watch(() => props.open, async (isOpen) => {
     if (!cashAccounts.value.length) {
       try { cashAccounts.value = await fetchCashAccounts() } catch { cashAccounts.value = [] }
     }
-    if (!selectedCashAccountId.value && cashAccounts.value.length) {
-      selectedCashAccountId.value = cashAccounts.value[0].id
+    // Prefill with a register in the obligation's currency (never a mismatch).
+    if (sameCurrencyAccounts.value.length) {
+      const stillValid = sameCurrencyAccounts.value.some((a) => a.id === selectedCashAccountId.value)
+      if (!stillValid) selectedCashAccountId.value = sameCurrencyAccounts.value[0].id
+    } else {
+      selectedCashAccountId.value = null
     }
     paymentAmount.value = batchObligationTotal.value.toFixed(2)
   }
@@ -351,7 +370,7 @@ const canProceed = computed(() => {
     case 'where': return !!warehouseId.value
     case 'items': return receivableItems.value.length > 0 && !receiveMixedCurrency.value
     case 'shares': return !receiveMixedCurrency.value && capitalShortfall.value <= 0
-    case 'payment': return !!selectedCashAccountId.value && parseFloat(paymentAmount.value) > 0
+    case 'payment': return !!selectedCashAccountId.value && parseFloat(paymentAmount.value) > 0 && !paymentExceedsBalance.value
     default: return true
   }
 })
@@ -558,23 +577,35 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
 
       <!-- STEP: payment (own funds AT_RECEIPT) -->
       <template v-else-if="currentStep === 'payment'">
-        <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса</span>
-          <BaseSelect
-            :model-value="selectedCashAccountId"
-            :options="cashOptions"
-            title="Касса"
-            :placeholder="cashAccounts.length ? 'Выберите кассу' : 'Загрузка…'"
-            @update:model-value="(v) => (selectedCashAccountId = v as number | null)"
-          />
+        <p class="text-xs leading-relaxed text-neutral-500">
+          Оплата только с кассы в валюте обязательства ({{ batchObligationCurrency }}). Для другой валюты — обмен или пополнение в разделе «Касса».
+        </p>
+        <!-- No register in the obligation currency -->
+        <div v-if="!cashOptions.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          Нет кассы в валюте {{ batchObligationCurrency }}. Пополните её или сделайте обмен через «Касса → Обменять валюту», затем вернитесь к приёмке.
         </div>
-        <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
-          <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
-          <p v-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="text-xs text-warning">
-            Меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
-          </p>
-        </div>
+        <template v-else>
+          <div class="flex flex-col gap-1.5">
+            <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса ({{ batchObligationCurrency }})</span>
+            <BaseSelect
+              :model-value="selectedCashAccountId"
+              :options="cashOptions"
+              title="Касса"
+              placeholder="Выберите кассу"
+              @update:model-value="(v) => (selectedCashAccountId = v as number | null)"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
+            <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+            <p v-if="paymentExceedsBalance" class="text-sm text-negative">
+              Недостаточно средств в кассе. Пополните её или сделайте обмен валют — оплата из кассы другой валюты невозможна.
+            </p>
+            <p v-else-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="text-xs text-warning">
+              Меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
+            </p>
+          </div>
+        </template>
       </template>
 
       <!-- Footer nav -->

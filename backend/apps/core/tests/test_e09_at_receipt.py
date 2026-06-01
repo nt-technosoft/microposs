@@ -118,6 +118,43 @@ class AtReceiptCombinedActionTests(TestCase):
         payment = payment_qs.first()
         self.assertEqual(payment.amount, Decimal('1000000'))
 
+    def test_at_receipt_usd_obligation_rejects_uzs_cash_account(self):
+        """Money discipline: a USD obligation must NOT be payable from a UZS cash
+        account. Previously the at-receipt path defaulted the payment currency to
+        the account's, booking e.g. $440 as 440 UZS out of the sum register."""
+        biz = self.ctx['business'].id
+        proc = create_workspace(
+            tenant_id=biz, funding_source=OWN_FUNDS, supplier_id=self.ctx['supplier'].id,
+        )
+        dispatch_workspace_action(
+            tenant_id=biz, procurement=proc, action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'AT_RECEIPT', 'total_amount_due': '440',
+                'currency_of_obligation': 'USD', 'fx_rate_at_obligation': '12000',
+            }},
+        )
+        proc = dispatch_workspace_action(
+            tenant_id=biz, procurement=proc, action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': self.ctx['variant'].id,
+                'quantity': 44, 'unit_purchase_price': '10',
+                'currency': 'USD', 'fx_rate': '12000',
+            }]}},
+        )
+        uzs_account = self.ctx['cash_account']  # UZS register
+        _fund_cash_account(uzs_account, '5000000')
+        with self.assertRaises(ValueError):
+            receive_workspace_batch(
+                tenant_id=biz, procurement=proc,
+                payload={
+                    'warehouse_id': self.ctx['store'].id,
+                    'payment_payload': {
+                        'cash_account_id': uzs_account.id,
+                        'amount': '440', 'currency': 'UZS',
+                    },
+                },
+            )
+
     def test_at_receipt_receive_without_payment_payload_rejected(self):
         """receive_workspace_batch on AT_RECEIPT without payment_payload raises ValueError."""
         proc = _build_at_receipt_procurement(self.ctx)

@@ -1826,13 +1826,28 @@ def receive_workspace_batch(
                 cash_account = CashAccount.objects.get(
                     pk=pp['cash_account_id'], tenant_id=tenant_id, is_active=True,
                 )
+                # Money discipline: an AT_RECEIPT obligation is paid only from a
+                # cash account in the obligation's currency. No implicit
+                # conversion and no paying a foreign-currency obligation from a
+                # mismatched account (that booked e.g. $440 as 440 UZS).
+                obligation_currency = (
+                    str(terms.currency_of_obligation).upper()
+                    if terms.currency_of_obligation
+                    else _derive_items_currency(list(items))
+                )
+                if str(cash_account.currency).upper() != obligation_currency:
+                    raise ValueError(
+                        f'Касса в {cash_account.currency}, обязательство в {obligation_currency}. '
+                        f'Оплатить можно только с кассы в валюте обязательства — '
+                        f'пополните её или сделайте обмен через «Касса → Обменять валюту».'
+                    )
                 at_receipt_payment = record_generic_cash_payment(
                     tenant_id=tenant_id,
                     cash_account_id=cash_account.pk,
                     target_type=Payment.TargetType.PROCUREMENT_COST,
                     target_id=locked.pk,
                     amount=Decimal(str(pp['amount'])),
-                    currency=pp.get('currency') or cash_account.currency,
+                    currency=obligation_currency,
                     fx_rate=pp.get('fx_rate'),
                     counterpart_account_code='1100',
                     operation_type='procurement_payment',
