@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, toRef } from 'vue'
-import { CheckCircle2, Circle, ChevronLeft } from 'lucide-vue-next'
+import { CheckCircle2, Circle, ChevronLeft, Pencil } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import DatePickerField from '@/components/forms/DatePickerField.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -67,12 +68,25 @@ const STEP_TITLES: Record<StepKey, string> = {
   payment: 'Оплата',
 }
 const currentStepIndex = ref(0)
+// Order: goods first → money snapshot (shares / payment) → where & when last.
 const steps = computed<StepKey[]>(() => {
-  const s: StepKey[] = ['where', 'items']
+  const s: StepKey[] = ['items']
   if (isPartnership.value) s.push('shares')
   if (isAtReceipt.value && isOwnFunds.value) s.push('payment')
+  s.push('where')
   return s
 })
+
+// ─── Items step: receipt mode + per-row expand ───
+const receiptMode = ref<'full' | 'partial'>('full')
+const expandedItemId = ref<number | null>(null)
+function orderedQty(item: Item): number {
+  return Math.round(parseFloat(item.remaining_quantity) || 0)
+}
+function acceptedQty(item: Item): number {
+  const line = lines.value.find((l) => l.itemId === item.id)
+  return parseInt(line?.qtyReceived ?? item.remaining_quantity) || 0
+}
 const currentStep = computed<StepKey>(() => steps.value[currentStepIndex.value] ?? 'where')
 const isLastStep = computed(() => currentStepIndex.value >= steps.value.length - 1)
 const stepTitle = computed(() => STEP_TITLES[currentStep.value])
@@ -227,6 +241,8 @@ function initLines(items: Item[]): void {
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
   currentStepIndex.value = 0
+  receiptMode.value = 'full'
+  expandedItemId.value = null
   sharesConfirmed.value = false
   receivedAt.value = new Date().toISOString().slice(0, 10)
   errors.value = {}
@@ -343,6 +359,17 @@ function goBack(): void {
   currentStepIndex.value -= 1
   if (currentStep.value === 'shares') sharesConfirmed.value = false
 }
+
+function setReceiptMode(mode: 'full' | 'partial'): void {
+  receiptMode.value = mode
+  expandedItemId.value = null
+  errors.value = {}
+  if (mode === 'full') {
+    // Full receipt: every item in, full ordered quantity, no discrepancy.
+    selectedItemIds.value = new Set(allReceivableItems.value.map((it) => it.id))
+    initLines(allReceivableItems.value)
+  }
+}
 </script>
 
 <template>
@@ -378,7 +405,7 @@ function goBack(): void {
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Дата приёмки</span>
-          <Input v-model="receivedAt" type="date" class="h-11" />
+          <DatePickerField v-model="receivedAt" />
         </div>
       </template>
 
@@ -387,38 +414,84 @@ function goBack(): void {
         <p v-if="allReceivableItems.length === 0" class="text-sm text-neutral-500">
           Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
         </p>
-        <div v-else class="flex flex-col gap-2">
-          <div
-            v-for="item in allReceivableItems"
-            :key="item.id"
-            :class="cn('rounded-[12px] border px-3.5 py-3 transition-colors', selectedItemIds.has(item.id) ? 'border-primary bg-primary/5' : 'border-neutral-200')"
-          >
-            <button type="button" class="flex w-full items-center gap-2.5 text-left" @click="toggleItemSelection(item.id)">
-              <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5 shrink-0', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
-              <span class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{{ item.product_variant_name }}</span>
-              <span class="shrink-0 text-xs tabular-nums text-neutral-500">{{ Math.round(parseFloat(item.remaining_quantity)) }} шт</span>
-            </button>
-            <template v-if="selectedItemIds.has(item.id)">
-              <div class="mt-3 flex items-center justify-between gap-3">
-                <span class="text-xs text-neutral-500">Заказано {{ Math.round(parseFloat(item.remaining_quantity)) }}</span>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-neutral-500">Принято</span>
-                  <input
-                    class="h-9 w-20 rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
-                    type="number"
-                    min="0"
-                    :max="Math.round(parseFloat(item.remaining_quantity))"
-                    step="1"
-                    :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
-                    @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
-                  />
-                </div>
-              </div>
+
+        <template v-else>
+          <!-- Mode: full (one-tap) vs partial (per-item) -->
+          <div class="flex rounded-[10px] bg-neutral-100 p-1">
+            <button
+              type="button"
+              :class="cn('flex-1 rounded-[8px] py-1.5 text-sm transition-colors', receiptMode === 'full' ? 'bg-surface font-medium text-foreground shadow-sm' : 'text-neutral-500')"
+              @click="setReceiptMode('full')"
+            >Полная приёмка</button>
+            <button
+              type="button"
+              :class="cn('flex-1 rounded-[8px] py-1.5 text-sm transition-colors', receiptMode === 'partial' ? 'bg-surface font-medium text-foreground shadow-sm' : 'text-neutral-500')"
+              @click="setReceiptMode('partial')"
+            >Частичная</button>
+          </div>
+
+          <!-- FULL: compact read-only confirmation -->
+          <template v-if="receiptMode === 'full'">
+            <p class="text-xs leading-relaxed text-neutral-500">
+              Все {{ allReceivableItems.length }} {{ allReceivableItems.length === 1 ? 'позиция принимается' : 'позиции принимаются' }} полностью. Для недовоза или брака переключите на «Частичная».
+            </p>
+            <div class="flex flex-col">
               <div
-                v-if="parseInt(lines.find(l => l.itemId === item.id)?.qtyReceived ?? item.remaining_quantity) < Math.round(parseFloat(item.remaining_quantity))"
-                class="mt-2.5"
+                v-for="item in allReceivableItems"
+                :key="item.id"
+                class="flex items-center gap-2.5 border-b border-neutral-100 py-2 last:border-0"
               >
+                <CheckCircle2 class="size-4 shrink-0 text-primary" />
+                <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
+                <span class="shrink-0 text-sm font-medium tabular-nums text-foreground">{{ orderedQty(item) }} шт</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- PARTIAL: per-item, compact by default, fields on explicit edit -->
+          <div v-else class="flex flex-col gap-1.5">
+            <div
+              v-for="item in allReceivableItems"
+              :key="item.id"
+              :class="cn('rounded-[10px] border transition-colors', selectedItemIds.has(item.id) ? 'border-neutral-200' : 'border-neutral-100 bg-neutral-50')"
+            >
+              <div class="flex items-center gap-2 px-2.5 py-2">
+                <button type="button" class="shrink-0" :aria-label="selectedItemIds.has(item.id) ? 'Исключить' : 'Принять'" @click="toggleItemSelection(item.id)">
+                  <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
+                </button>
+                <span :class="cn('min-w-0 flex-1 truncate text-sm', selectedItemIds.has(item.id) ? 'text-foreground' : 'text-neutral-400 line-through')">{{ item.product_variant_name }}</span>
+                <template v-if="selectedItemIds.has(item.id)">
+                  <span :class="cn('shrink-0 text-sm tabular-nums', acceptedQty(item) < orderedQty(item) ? 'font-medium text-warning' : 'text-neutral-600')">
+                    {{ acceptedQty(item) }}<span v-if="acceptedQty(item) < orderedQty(item)" class="text-neutral-400">/{{ orderedQty(item) }}</span> шт
+                  </span>
+                  <button
+                    type="button"
+                    :class="cn('flex size-7 shrink-0 items-center justify-center rounded-md transition-colors', expandedItemId === item.id ? 'bg-primary/10 text-primary' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600')"
+                    aria-label="Изменить количество"
+                    @click="expandedItemId = expandedItemId === item.id ? null : item.id"
+                  >
+                    <Pencil class="size-3.5" />
+                  </button>
+                </template>
+              </div>
+              <div v-if="selectedItemIds.has(item.id) && expandedItemId === item.id" class="flex flex-col gap-2 border-t border-neutral-100 px-2.5 py-2.5">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs text-neutral-500">Заказано {{ orderedQty(item) }}</span>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-neutral-500">Принято</span>
+                    <input
+                      class="h-9 w-20 rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      type="number"
+                      min="0"
+                      :max="orderedQty(item)"
+                      step="1"
+                      :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
+                      @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
+                    />
+                  </div>
+                </div>
                 <select
+                  v-if="acceptedQty(item) < orderedQty(item)"
                   class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2.5 text-sm text-foreground outline-none focus:border-green-500"
                   :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
                   @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
@@ -426,10 +499,10 @@ function goBack(): void {
                   <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
                 </select>
               </div>
-            </template>
-            <p v-if="errors[item.id]" class="mt-1.5 text-xs text-negative">{{ errors[item.id] }}</p>
+              <p v-if="errors[item.id]" class="px-2.5 pb-2 text-xs text-negative">{{ errors[item.id] }}</p>
+            </div>
           </div>
-        </div>
+        </template>
 
         <template v-if="blockedPrepaidItems.length">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Ожидают оплаты</span>
@@ -492,7 +565,7 @@ function goBack(): void {
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
-          <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums" />
+          <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
           <p v-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="text-xs text-warning">
             Меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
           </p>
