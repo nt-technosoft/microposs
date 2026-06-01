@@ -759,16 +759,6 @@ function cancelClear(): void {
   }
 }
 
-@media (min-width: 1024px) {
-  .cart-content {
-    padding-bottom: calc(var(--space-4) + 140px);
-  }
-
-  .cart-footer {
-    bottom: 0;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .cart-item-enter-active,
   .cart-item-leave-active,
