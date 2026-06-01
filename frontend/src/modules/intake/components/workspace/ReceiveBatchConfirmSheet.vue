@@ -5,6 +5,7 @@ import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import DatePickerField from '@/components/forms/DatePickerField.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { fetchLocations } from '@/api/inventory'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
@@ -394,14 +395,17 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
       <template v-if="currentStep === 'where'">
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Склад</span>
-          <select
-            class="h-11 w-full rounded-[10px] border border-neutral-200 bg-surface px-3 text-sm text-foreground outline-none focus:border-green-500"
-            :value="warehouseId"
-            @change="warehouseId = Number(($event.target as HTMLSelectElement).value)"
+          <Select
+            :model-value="warehouseId != null ? String(warehouseId) : undefined"
+            @update:model-value="(v) => (warehouseId = v ? Number(v) : null)"
           >
-            <option :value="null" disabled>Выберите склад</option>
-            <option v-for="w in warehouses" :key="w.id" :value="w.id">{{ w.name }}</option>
-          </select>
+            <SelectTrigger class="h-11! w-full justify-between rounded-[10px] border-neutral-200 px-3 text-sm">
+              <SelectValue placeholder="Выберите склад" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="w in warehouses" :key="w.id" :value="String(w.id)" class="py-2.5">{{ w.name }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Дата приёмки</span>
@@ -488,14 +492,18 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
                     />
                   </div>
                 </div>
-                <select
+                <Select
                   v-if="acceptedQty(item) < orderedQty(item)"
-                  class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2.5 text-sm text-foreground outline-none focus:border-green-500"
-                  :value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
-                  @change="(e) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = (e.target as HTMLSelectElement).value as ReasonKey }"
+                  :model-value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
+                  @update:model-value="(v) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = v as ReasonKey }"
                 >
-                  <option v-for="r in REASONS" :key="r.key" :value="r.key">{{ r.label }}</option>
-                </select>
+                  <SelectTrigger class="h-10! w-full justify-between rounded-[8px] border-neutral-200 px-2.5 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="r in REASONS" :key="r.key" :value="r.key" class="py-2.5">{{ r.label }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <p v-if="errors[item.id]" class="px-2.5 pb-2 text-xs text-negative">{{ errors[item.id] }}</p>
             </div>
@@ -552,14 +560,19 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
       <template v-else-if="currentStep === 'payment'">
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса</span>
-          <select
-            class="h-11 w-full rounded-[10px] border border-neutral-200 bg-surface px-3 text-sm text-foreground outline-none focus:border-green-500"
-            :value="selectedCashAccountId"
-            @change="selectedCashAccountId = Number(($event.target as HTMLSelectElement).value)"
+          <Select
+            :model-value="selectedCashAccountId != null ? String(selectedCashAccountId) : undefined"
+            @update:model-value="(v) => (selectedCashAccountId = v ? Number(v) : null)"
           >
-            <option v-if="!cashAccounts.length" :value="null">Загрузка…</option>
-            <option v-for="a in cashAccounts" :key="a.id" :value="a.id">{{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}</option>
-          </select>
+            <SelectTrigger class="h-11! w-full justify-between rounded-[10px] border-neutral-200 px-3 text-sm">
+              <SelectValue :placeholder="cashAccounts.length ? 'Выберите кассу' : 'Загрузка…'" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="a in cashAccounts" :key="a.id" :value="String(a.id)" class="py-2.5">
+                {{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
