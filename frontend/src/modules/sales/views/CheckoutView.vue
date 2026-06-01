@@ -222,7 +222,6 @@ function goToHistory(): void {
             </strong>
           </div>
           <p class="amount-meta">
-            {{ cartStore.itemCount }}
             {{ t('sales.itemCount', { count: cartStore.itemCount }) }}
           </p>
         </section>
@@ -883,16 +882,6 @@ function goToHistory(): void {
     left: 50%;
     transform: translateX(-50%);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  }
-}
-
-@media (min-width: 1024px) {
-  .checkout-content {
-    padding-bottom: calc(var(--space-4) + 88px);
-  }
-
-  .checkout-footer {
-    bottom: 0;
   }
 }
 
