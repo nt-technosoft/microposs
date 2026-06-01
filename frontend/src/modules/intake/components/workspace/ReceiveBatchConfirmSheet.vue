@@ -453,12 +453,10 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
             <div
               v-for="item in allReceivableItems"
               :key="item.id"
-              :class="cn('rounded-[10px] border transition-colors', selectedItemIds.has(item.id) ? 'border-neutral-200' : 'border-neutral-100 bg-neutral-50')"
+              :class="cn('rounded-[10px] border transition-colors', selectedItemIds.has(item.id) ? 'border-primary' : 'border-neutral-100 bg-neutral-50')"
             >
-              <div class="flex items-center gap-2 px-2.5 py-2">
-                <button type="button" class="shrink-0" :aria-label="selectedItemIds.has(item.id) ? 'Исключить' : 'Принять'" @click="toggleItemSelection(item.id)">
-                  <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
-                </button>
+              <div role="button" class="flex cursor-pointer items-center gap-2 px-2.5 py-2" @click="toggleItemSelection(item.id)">
+                <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5 shrink-0', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
                 <span :class="cn('min-w-0 flex-1 truncate text-sm', selectedItemIds.has(item.id) ? 'text-foreground' : 'text-neutral-400 line-through')">{{ item.product_variant_name }}</span>
                 <template v-if="selectedItemIds.has(item.id)">
                   <span :class="cn('shrink-0 text-sm tabular-nums', acceptedQty(item) < orderedQty(item) ? 'font-medium text-warning' : 'text-neutral-600')">
@@ -468,13 +466,13 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
                     type="button"
                     :class="cn('flex size-7 shrink-0 items-center justify-center rounded-md transition-colors', expandedItemId === item.id ? 'bg-primary/10 text-primary' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600')"
                     aria-label="Изменить количество"
-                    @click="expandedItemId = expandedItemId === item.id ? null : item.id"
+                    @click.stop="expandedItemId = expandedItemId === item.id ? null : item.id"
                   >
                     <Pencil class="size-3.5" />
                   </button>
                 </template>
               </div>
-              <div v-if="selectedItemIds.has(item.id) && expandedItemId === item.id" class="flex flex-col gap-2 border-t border-neutral-100 px-2.5 py-2.5">
+              <div v-if="selectedItemIds.has(item.id) && expandedItemId === item.id" class="flex flex-col gap-2 border-t border-neutral-100 px-2.5 py-2.5" @click.stop>
                 <div class="flex items-center justify-between gap-3">
                   <span class="text-xs text-neutral-500">Заказано {{ orderedQty(item) }}</span>
                   <div class="flex items-center gap-2">
