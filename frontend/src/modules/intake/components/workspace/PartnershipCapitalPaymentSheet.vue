@@ -43,30 +43,12 @@ const allocatedByCurrency = computed<Record<string, number>>(() => {
   return totals
 })
 
-// Which lines are already covered by prior allocations: walk lines in order
-// (items, then expenses) accumulating cost per currency; a line is "funded"
-// while the running cost stays within the allocated amount for its currency.
-// Money safety is still enforced by the backend's per-partner available check;
-// this only drives display + sensible defaults.
-const fundedIds = computed(() => {
-  const items = new Set<number>()
-  const expenses = new Set<number>()
-  const running: Record<string, number> = {}
-  const consume = (ccy: string, amount: number): boolean => {
-    const c = (ccy || 'UZS').toUpperCase()
-    const alloc = allocatedByCurrency.value[c] ?? 0
-    if ((running[c] ?? 0) + amount <= alloc + 0.01) {
-      running[c] = (running[c] ?? 0) + amount
-      return true
-    }
-    return false
-  }
-  for (const it of obligationItems.value) if (consume(it.currency, lineAmount(it))) items.add(it.id)
-  for (const ex of obligationExpenses.value) if (consume(ex.currency, expenseAmount(ex))) expenses.add(ex.id)
-  return { items, expenses }
-})
-const isItemFunded = (id: number) => fundedIds.value.items.has(id)
-const isExpenseFunded = (id: number) => fundedIds.value.expenses.has(id)
+const isPaidLine = (line: { payment_state?: string; lifecycle_state?: string } | undefined): boolean =>
+  line?.payment_state === 'PAID'
+  || line?.lifecycle_state === 'READY_FOR_RECEIVE'
+  || line?.lifecycle_state === 'RECEIVED'
+const isItemFunded = (id: number) => isPaidLine(obligationItems.value.find((item) => item.id === id))
+const isExpenseFunded = (id: number) => isPaidLine(obligationExpenses.value.find((expense) => expense.id === id))
 
 const unfundedItems = computed(() => obligationItems.value.filter((it) => !isItemFunded(it.id)))
 const unfundedExpenses = computed(() => obligationExpenses.value.filter((ex) => !isExpenseFunded(ex.id)))
@@ -165,6 +147,8 @@ function toggleExpense(id: number): void {
 function submit(): void {
   if (!canSubmit.value) return
   emit('dispatch', 'ALLOCATE_CAPITAL', {
+    item_ids: [...selectedItemIds.value],
+    expense_ids: [...selectedExpenseIds.value],
     allocations: allocations.value
       .filter((row) => (parseFloat(row.amount) || 0) > 0)
       .map((row) => ({ partner_id: row.partnerId, amount: row.amount, currency: row.currency })),

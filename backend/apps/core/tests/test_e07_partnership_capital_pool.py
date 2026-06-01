@@ -93,6 +93,7 @@ class PartnershipCapitalPoolTests(TestCase):
             JournalEntry.objects.filter(operation_type='capital_contribution').count(),
             2,
         )
+        first_item, second_item = list(procurement.items.order_by('id'))
         procurement = dispatch_workspace_action(
             tenant_id=ctx['business'].id,
             procurement=procurement,
@@ -100,7 +101,11 @@ class PartnershipCapitalPoolTests(TestCase):
             payload={'payload': {'allocations': [
                 {'partner_id': ctx['investor'].id, 'amount': Decimal('140'), 'currency': 'UZS'},
                 {'partner_id': ctx['operator'].id, 'amount': Decimal('60'), 'currency': 'UZS'},
-            ]}},
+            ], 'item_ids': [first_item.id, second_item.id]}},
+        )
+        self.assertEqual(
+            set(procurement.items.values_list('lifecycle_state', flat=True)),
+            {procurement.items.model.LifecycleState.READY_FOR_RECEIVE},
         )
 
         first_item, second_item = list(procurement.items.order_by('id'))

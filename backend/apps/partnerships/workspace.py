@@ -1248,6 +1248,8 @@ def allocate_workspace_capital(
     if not rows:
         raise ValueError('At least one allocation is required.')
 
+    item_ids = {int(value) for value in payload.get('item_ids') or payload.get('target_item_ids') or []}
+    expense_ids = {int(value) for value in payload.get('expense_ids') or payload.get('target_expense_ids') or []}
     date = payload.get('date') or timezone.now()
     created: list[AgreementAllocation] = []
     with transaction.atomic():
@@ -1271,6 +1273,29 @@ def allocate_workspace_capital(
         )
         if locked_procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
             raise ValueError('Cannot allocate capital to non-open procurement.')
+
+        selected_items: list[ProcurementItem] = []
+        selected_expenses: list[ProcurementExpense] = []
+        if item_ids:
+            selected_items = list(ProcurementItem.objects.select_for_update().filter(
+                tenant_id=tenant_id,
+                procurement=locked_procurement,
+                pk__in=item_ids,
+            ))
+            if {item.pk for item in selected_items} != item_ids:
+                raise ValueError('Selected procurement items were not found.')
+            if any(item.lifecycle_state != ProcurementItem.LifecycleState.DRAFT for item in selected_items):
+                raise ValueError('Selected procurement items are already paid, received, or cancelled.')
+        if expense_ids:
+            selected_expenses = list(ProcurementExpense.objects.select_for_update().filter(
+                tenant_id=tenant_id,
+                procurement=locked_procurement,
+                pk__in=expense_ids,
+            ))
+            if {expense.pk for expense in selected_expenses} != expense_ids:
+                raise ValueError('Selected procurement expenses were not found.')
+            if any(expense.lifecycle_state != ProcurementExpense.LifecycleState.DRAFT for expense in selected_expenses):
+                raise ValueError('Selected procurement expenses are already paid, received, or cancelled.')
 
         member_ids = set(locked_agreement.partners.values_list('partner_id', flat=True))
         available_by_partner = _agreement_available_by_partner(locked_agreement)
@@ -1342,6 +1367,8 @@ def allocate_workspace_capital(
                     'amount': str(allocation.amount),
                     'currency': allocation.currency,
                     'confirmation_status': allocation.confirmation_status,
+                    'item_ids': sorted(item_ids),
+                    'expense_ids': sorted(expense_ids),
                 },
             )
         publish_event(
@@ -1353,6 +1380,25 @@ def allocate_workspace_capital(
             },
             tenant_id=tenant_id,
         )
+
+        if item_ids:
+            ProcurementItem.objects.filter(
+                tenant_id=tenant_id,
+                procurement=locked_procurement,
+                pk__in=[item.pk for item in selected_items],
+            ).update(
+                lifecycle_state=ProcurementItem.LifecycleState.READY_FOR_RECEIVE,
+                updated_at=timezone.now(),
+            )
+        if expense_ids:
+            ProcurementExpense.objects.filter(
+                tenant_id=tenant_id,
+                procurement=locked_procurement,
+                pk__in=[expense.pk for expense in selected_expenses],
+            ).update(
+                lifecycle_state=ProcurementExpense.LifecycleState.READY_FOR_RECEIVE,
+                updated_at=timezone.now(),
+            )
     return created
 
 
