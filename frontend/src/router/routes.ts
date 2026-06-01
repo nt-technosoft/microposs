@@ -25,6 +25,14 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: false, layout: 'blank' },
   },
 
+  // Public integration docs (no auth)
+  {
+    path: '/docs/integrations',
+    name: 'integration-docs',
+    component: () => import('@/modules/docs/views/IntegrationDocsView.vue'),
+    meta: { requiresAuth: false, layout: 'blank' },
+  },
+
   // Sales (default tab)
   {
     path: '/',
