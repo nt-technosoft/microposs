@@ -2,12 +2,15 @@
 Core services — outbox event publishing, tenant utilities.
 """
 
+import logging
 from datetime import timedelta
 
 from django.contrib.auth.models import Group, User
 from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     Business,
@@ -20,12 +23,31 @@ from .models import (
 
 
 def publish_event(event_type: str, payload: dict, tenant_id: int) -> OutboxEvent:
-    """Create an OutboxEvent for async processing by Celery."""
-    return OutboxEvent.objects.create(
+    """Create an OutboxEvent and trigger its dispatch when the action commits.
+
+    The originating domain action (sale, receive, payment, …) is what should
+    drive its downstream effects to completion. We register an on_commit hook
+    that runs the outbox processor: in dev (CELERY_TASK_ALWAYS_EAGER) it runs
+    inline, in prod it enqueues to the worker. A scheduled poll, if present,
+    stays as a backstop for anything missed.
+    """
+    event = OutboxEvent.objects.create(
         event_type=event_type,
         payload=payload,
         tenant_id=tenant_id,
     )
+
+    def _trigger_dispatch() -> None:
+        try:
+            from apps.analytics.tasks import process_outbox_events
+            process_outbox_events.delay()
+        except Exception:
+            # A dispatch hiccup (e.g. broker down) must never break the action
+            # that produced the event; the backstop poll will pick it up.
+            logger.warning('Outbox dispatch trigger failed', exc_info=True)
+
+    transaction.on_commit(_trigger_dispatch)
+    return event
 
 
 def _investor_display_name(user, fallback: str = '') -> str:

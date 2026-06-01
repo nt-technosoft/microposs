@@ -212,7 +212,10 @@ class OutboxPipelineTests(TestCase):
             self.assertIsNone(event.failed_at, event.event_type)
             self.assertEqual(event.last_error, '', event.event_type)
 
-    def test_consumer_marks_unknown_events_failed(self):
+    def test_consumer_marks_unknown_events_as_terminal_noop(self):
+        # An unknown event type has no handler and never will at runtime, so the
+        # consumer treats it as a terminal no-op (processed), not a failure to be
+        # retried — otherwise every committed action re-attempts it forever.
         ctx = build_tenant()
         event = OutboxEvent.objects.create(
             event_type='unknown.event',
@@ -223,7 +226,5 @@ class OutboxPipelineTests(TestCase):
         process_outbox_events()
 
         event.refresh_from_db()
-        self.assertIsNone(event.processed_at)
-        self.assertIsNotNone(event.failed_at)
-        self.assertEqual(event.attempts, 1)
-        self.assertIn('Unhandled event type: unknown.event', event.last_error)
+        self.assertIsNotNone(event.processed_at)
+        self.assertIsNone(event.failed_at)

@@ -39,7 +39,14 @@ def process_outbox_events():
             continue
 
         if not handled:
-            event.mark_failed(f'Unhandled event type: {event.event_type}')
+            # Unknown event type will never gain a handler at runtime, so it is
+            # a terminal no-op for analytics — mark processed instead of failed,
+            # otherwise every future action retries it in an endless loop.
+            logger.warning(
+                'Outbox event %s has no analytics handler (type=%s); marking as no-op.',
+                event.pk, event.event_type,
+            )
+            event.mark_processed()
             continue
 
         event.mark_processed()
