@@ -3,9 +3,9 @@ import { ref, computed, watch, toRef } from 'vue'
 import { CheckCircle2, Circle, ChevronLeft, Pencil } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import DatePickerField from '@/components/forms/DatePickerField.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { fetchLocations } from '@/api/inventory'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
@@ -88,6 +88,15 @@ function acceptedQty(item: Item): number {
   const line = lines.value.find((l) => l.itemId === item.id)
   return parseInt(line?.qtyReceived ?? item.remaining_quantity) || 0
 }
+
+const reasonOptions = REASONS.map((r) => ({ value: r.key as string, label: r.label }))
+const warehouseOptions = computed(() => warehouses.value.map((w) => ({ value: w.id, label: w.name })))
+const cashOptions = computed(() =>
+  cashAccounts.value.map((a) => ({
+    value: a.id,
+    label: `${a.name} · ${parseFloat(a.balance).toLocaleString('ru-RU')} ${a.currency}`,
+  })),
+)
 const currentStep = computed<StepKey>(() => steps.value[currentStepIndex.value] ?? 'where')
 const isLastStep = computed(() => currentStepIndex.value >= steps.value.length - 1)
 const stepTitle = computed(() => STEP_TITLES[currentStep.value])
@@ -395,17 +404,13 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
       <template v-if="currentStep === 'where'">
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Склад</span>
-          <Select
-            :model-value="warehouseId != null ? String(warehouseId) : undefined"
-            @update:model-value="(v) => (warehouseId = v ? Number(v) : null)"
-          >
-            <SelectTrigger class="h-11! w-full justify-between rounded-[10px] border-neutral-200 px-3 text-sm">
-              <SelectValue placeholder="Выберите склад" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="w in warehouses" :key="w.id" :value="String(w.id)" class="py-2.5">{{ w.name }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <BaseSelect
+            :model-value="warehouseId"
+            :options="warehouseOptions"
+            title="Склад"
+            placeholder="Выберите склад"
+            @update:model-value="(v) => (warehouseId = v as number | null)"
+          />
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Дата приёмки</span>
@@ -492,18 +497,13 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
                     />
                   </div>
                 </div>
-                <Select
+                <BaseSelect
                   v-if="acceptedQty(item) < orderedQty(item)"
                   :model-value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
+                  :options="reasonOptions"
+                  title="Причина расхождения"
                   @update:model-value="(v) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = v as ReasonKey }"
-                >
-                  <SelectTrigger class="h-10! w-full justify-between rounded-[8px] border-neutral-200 px-2.5 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="r in REASONS" :key="r.key" :value="r.key" class="py-2.5">{{ r.label }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                />
               </div>
               <p v-if="errors[item.id]" class="px-2.5 pb-2 text-xs text-negative">{{ errors[item.id] }}</p>
             </div>
@@ -560,19 +560,13 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
       <template v-else-if="currentStep === 'payment'">
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса</span>
-          <Select
-            :model-value="selectedCashAccountId != null ? String(selectedCashAccountId) : undefined"
-            @update:model-value="(v) => (selectedCashAccountId = v ? Number(v) : null)"
-          >
-            <SelectTrigger class="h-11! w-full justify-between rounded-[10px] border-neutral-200 px-3 text-sm">
-              <SelectValue :placeholder="cashAccounts.length ? 'Выберите кассу' : 'Загрузка…'" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="a in cashAccounts" :key="a.id" :value="String(a.id)" class="py-2.5">
-                {{ a.name }} · {{ parseFloat(a.balance).toLocaleString('ru-RU') }} {{ a.currency }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <BaseSelect
+            :model-value="selectedCashAccountId"
+            :options="cashOptions"
+            title="Касса"
+            :placeholder="cashAccounts.length ? 'Выберите кассу' : 'Загрузка…'"
+            @update:model-value="(v) => (selectedCashAccountId = v as number | null)"
+          />
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
