@@ -10,6 +10,7 @@ const props = defineProps<{
   open: boolean
   accounts: CashAccountRecord[]
   fromAccountId: number | null
+  preferredToAccountId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -46,7 +47,8 @@ const toOptions = computed(() =>
 
 watch(() => props.open, (open) => {
   if (!open) return
-  toAccountId.value = null
+  const preferredTarget = eligibleTargets.value.find((account) => account.id === props.preferredToAccountId)
+  toAccountId.value = preferredTarget?.id ?? null
   amount.value = ''
   notes.value = ''
   error.value = null

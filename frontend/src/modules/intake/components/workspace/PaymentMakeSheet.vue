@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { AlertCircle, ArrowRight } from 'lucide-vue-next'
+import { AlertCircle, ArrowDownToLine, ArrowRightLeft, Repeat2 } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
+import CashTransferSheet from '@/modules/finance/views/CashTransferSheet.vue'
+import CurrencyExchangeSheet from '@/modules/finance/views/CurrencyExchangeSheet.vue'
 import { formatPrice } from '@/utils/currency'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
@@ -27,8 +29,6 @@ const emit = defineEmits<{
   dispatch: [actionKey: string, payload: Record<string, unknown>]
 }>()
 
-const router = useRouter()
-
 const settlement = computed(() => props.procurement.documents.settlement)
 const obligationCurrency = computed(() =>
   (props.currency ?? settlement.value?.currency_of_obligation ?? props.procurement.documents.payment_status?.currency ?? 'UZS').toUpperCase()
@@ -39,6 +39,10 @@ const notes = ref('')
 const cashAccountId = ref<number | null>(null)
 const cashAccounts = ref<CashAccountRecord[]>([])
 const isLoadingAccounts = ref(false)
+const depositSheetOpen = ref(false)
+const exchangeSheetOpen = ref(false)
+const transferSheetOpen = ref(false)
+const transferSourceAccountId = ref<number | null>(null)
 
 // Money discipline: an obligation is paid only from an operating cash register
 // in the SAME currency. Agreement capital pools are restricted; mismatched
@@ -52,10 +56,34 @@ const operatingAccounts = computed(() =>
 const selectedAccount = computed(() =>
   operatingAccounts.value.find((a) => a.id === cashAccountId.value) ?? null
 )
+const paymentTargetAccount = computed(() => selectedAccount.value ?? operatingAccounts.value[0] ?? null)
 const insufficient = computed(() =>
   !!selectedAccount.value &&
   parseFloat(amount.value || '0') > parseFloat(selectedAccount.value.balance || '0')
 )
+const exchangeSourceAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) =>
+      a.is_active !== false &&
+      a.kind !== 'agreement_capital' &&
+      (a.currency || 'UZS').toUpperCase() !== obligationCurrency.value &&
+      parseFloat(a.balance || '0') > 0,
+  ),
+)
+const transferSourceAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) =>
+      a.is_active !== false &&
+      a.kind !== 'agreement_capital' &&
+      a.id !== paymentTargetAccount.value?.id &&
+      (a.currency || 'UZS').toUpperCase() === obligationCurrency.value &&
+      parseFloat(a.balance || '0') > 0,
+  ),
+)
+const canQuickDeposit = computed(() => Boolean(paymentTargetAccount.value))
+const canQuickExchange = computed(() => Boolean(paymentTargetAccount.value && exchangeSourceAccounts.value.length))
+const canQuickTransfer = computed(() => Boolean(paymentTargetAccount.value && transferSourceAccounts.value.length))
+const quickActionColumns = computed(() => canQuickTransfer.value ? 'grid-cols-3' : 'grid-cols-2')
 
 async function loadAccounts(): Promise<void> {
   isLoadingAccounts.value = true
@@ -73,17 +101,28 @@ watch(() => props.open, async (isOpen) => {
   if (!stillValid) cashAccountId.value = operatingAccounts.value[0]?.id ?? null
 })
 
-function openExchange(): void {
-  const remaining = settlement.value?.remaining_amount ?? ''
-  router.push({
-    path: '/finance/currency-exchange',
-    query: {
-      from_currency: obligationCurrency.value === 'UZS' ? 'USD' : 'UZS',
-      to_currency: obligationCurrency.value,
-      amount: String(remaining),
-    },
-  })
-  emit('update:open', false)
+async function handleCashActionDone(): Promise<void> {
+  depositSheetOpen.value = false
+  exchangeSheetOpen.value = false
+  transferSheetOpen.value = false
+  await loadAccounts()
+}
+
+function openDepositSheet(): void {
+  if (!paymentTargetAccount.value) return
+  depositSheetOpen.value = true
+}
+
+function openExchangeSheet(): void {
+  if (!paymentTargetAccount.value || !exchangeSourceAccounts.value.length) return
+  exchangeSheetOpen.value = true
+}
+
+function openTransferSheet(): void {
+  const source = transferSourceAccounts.value[0]
+  if (!source || !paymentTargetAccount.value) return
+  transferSourceAccountId.value = source.id
+  transferSheetOpen.value = true
 }
 
 function onSave(): void {
@@ -141,12 +180,8 @@ const canSave = () =>
         <div v-else-if="!operatingAccounts.length" class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
           <div class="flex items-start gap-2">
             <AlertCircle class="mt-0.5 size-4 shrink-0 text-warning" />
-            <span>Нет кассы в валюте {{ obligationCurrency }}. Пополните её или сделайте обмен — платёж из кассы другой валюты невозможен.</span>
+            <span>Нет кассы в валюте {{ obligationCurrency }}. Создайте кассу этой валюты, пополните её или сделайте обмен — платёж из кассы другой валюты невозможен.</span>
           </div>
-          <Button variant="outline" size="sm" class="h-9 self-start gap-1" @click="openExchange">
-            Обменять валюту
-            <ArrowRight class="size-4" />
-          </Button>
         </div>
         <div v-else class="flex flex-col gap-2">
           <button
@@ -171,10 +206,44 @@ const canSave = () =>
           <AlertCircle class="mt-0.5 size-4 shrink-0 text-negative" />
           <span>Недостаточно средств в кассе. Пополните её или сделайте обмен валют.</span>
         </div>
-        <Button variant="outline" size="sm" class="h-9 self-start gap-1" @click="openExchange">
-          Обменять валюту
-          <ArrowRight class="size-4" />
-        </Button>
+        <div
+          v-if="canQuickDeposit || canQuickExchange || canQuickTransfer"
+          :class="cn('grid gap-2', quickActionColumns)"
+        >
+          <Button
+            v-if="canQuickDeposit"
+            variant="outline"
+            size="sm"
+            class="h-10"
+            type="button"
+            @click="openDepositSheet"
+          >
+            <ArrowDownToLine data-icon="inline-start" />
+            Пополнить
+          </Button>
+          <Button
+            v-if="canQuickExchange"
+            variant="outline"
+            size="sm"
+            class="h-10"
+            type="button"
+            @click="openExchangeSheet"
+          >
+            <ArrowRightLeft data-icon="inline-start" />
+            Обменять
+          </Button>
+          <Button
+            v-if="canQuickTransfer"
+            variant="outline"
+            size="sm"
+            class="h-10"
+            type="button"
+            @click="openTransferSheet"
+          >
+            <Repeat2 data-icon="inline-start" />
+            Перевести
+          </Button>
+        </div>
       </div>
 
       <!-- Примечание -->
@@ -188,4 +257,29 @@ const canSave = () =>
       </Button>
     </div>
   </AppBottomSheet>
+
+  <CashDepositSheet
+    :open="depositSheetOpen"
+    :account="paymentTargetAccount"
+    @close="depositSheetOpen = false"
+    @deposited="handleCashActionDone"
+  />
+
+  <CurrencyExchangeSheet
+    :open="exchangeSheetOpen"
+    :accounts="cashAccounts"
+    :target-currency="obligationCurrency"
+    :to-account-id="paymentTargetAccount?.id ?? null"
+    @close="exchangeSheetOpen = false"
+    @exchanged="handleCashActionDone"
+  />
+
+  <CashTransferSheet
+    :open="transferSheetOpen"
+    :accounts="cashAccounts"
+    :from-account-id="transferSourceAccountId"
+    :preferred-to-account-id="paymentTargetAccount?.id ?? null"
+    @close="transferSheetOpen = false"
+    @transferred="handleCashActionDone"
+  />
 </template>

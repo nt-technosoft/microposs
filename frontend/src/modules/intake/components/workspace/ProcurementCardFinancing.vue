@@ -35,7 +35,7 @@ const investorCapital = computed(() => Number.parseFloat(investor.value?.planned
 const investorCapitalPercent = computed(() => (budget.value > 0 ? Math.round((investorCapital.value / budget.value) * 100) : 0))
 const investorProfitPercent = computed(() => Math.round((Number.parseFloat(investor.value?.profit_share ?? '0') || 0) * 100))
 
-const availableByCurrency = computed<Record<string, number>>(() => {
+const unallocatedByCurrency = computed<Record<string, number>>(() => {
   const out: Record<string, number> = {}
   for (const perCurrency of Object.values(investment.value?.available_by_partner ?? {})) {
     for (const [cur, amount] of Object.entries(perCurrency)) {
@@ -45,9 +45,10 @@ const availableByCurrency = computed<Record<string, number>>(() => {
   return out
 })
 
-const availableAmount = computed(() => availableByCurrency.value[currency.value] ?? 0)
-const availablePercent = computed(() =>
-  budget.value > 0 ? Math.min(100, Math.max(0, (availableAmount.value / budget.value) * 100)) : 0,
+const poolCurrency = computed(() => investment.value?.pool?.currency ?? currency.value)
+const poolBalance = computed(() => Number.parseFloat(investment.value?.pool?.balance ?? '0') || 0)
+const poolPercent = computed(() =>
+  budget.value > 0 ? Math.min(100, Math.max(0, (poolBalance.value / budget.value) * 100)) : 0,
 )
 
 const investorName = computed(() => investor.value?.partner_name ?? 'Инвестор')
@@ -131,15 +132,21 @@ function onTopUp(): void {
           <div class="flex flex-col gap-3 border-t border-neutral-200 pt-3">
             <div>
               <div class="flex items-baseline justify-between gap-2">
-                <span class="text-xs text-neutral-500">Доступно из бюджета</span>
+                <span class="text-xs text-neutral-500">Остаток в пуле договора</span>
                 <span>
-                  <strong class="text-base font-semibold tabular-nums text-foreground">{{ formatPrice(availableAmount, currency) }}</strong>
-                  <span class="text-xs tabular-nums text-neutral-400"> / {{ formatPrice(budget, currency) }}</span>
+                  <strong class="text-base font-semibold tabular-nums text-foreground">{{ formatPrice(poolBalance, poolCurrency) }}</strong>
+                  <span class="text-xs tabular-nums text-neutral-400"> / план {{ formatPrice(budget, currency) }}</span>
                 </span>
               </div>
               <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-200">
-                <div class="h-full rounded-full bg-green-600" :style="{ width: `${availablePercent}%` }" />
+                <div class="h-full rounded-full bg-green-600" :style="{ width: `${poolPercent}%` }" />
               </div>
+            </div>
+            <div v-if="unallocatedByCurrency[currency] > 0" class="flex items-center justify-between gap-2">
+              <span class="text-xs text-neutral-500">Не выделено в приходы</span>
+              <span class="text-sm font-medium tabular-nums text-foreground">
+                {{ formatPrice(unallocatedByCurrency[currency], currency) }}
+              </span>
             </div>
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs text-neutral-500">Доли инвестора</span>

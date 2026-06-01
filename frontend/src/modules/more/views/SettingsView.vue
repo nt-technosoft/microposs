@@ -18,6 +18,7 @@ import {
   Scale,
   Truck,
   Map,
+  KeyRound,
 } from 'lucide-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
@@ -107,6 +108,12 @@ const managementLinks = computed<QuickLink[]>(() => {
       description: t('settings.quickLinks.reconciliationDescription'),
       routeName: 'reports-reconciliation',
       icon: Scale,
+    },
+    {
+      name: t('settings.quickLinks.integrations'),
+      description: t('settings.quickLinks.integrationsDescription'),
+      routeName: 'integrations',
+      icon: KeyRound,
     },
   ]
 })

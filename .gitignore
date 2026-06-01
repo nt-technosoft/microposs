@@ -76,3 +76,6 @@ dump.rdb
 
 # Presentation materials (working files)
 presentation/
+
+# Runtime-uploaded media (not source)
+backend/media/attachments/

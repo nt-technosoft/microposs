@@ -147,6 +147,8 @@ const uz: typeof ru = {
       exchangeDescription: 'Kassa amallari va FX-ayirboshlash',
       reconciliation: 'Solishtirish',
       reconciliationDescription: 'Qoldiq va tafovutlarni nazorat qilish',
+      integrations: 'Integratsiyalar',
+      integrationsDescription: 'Tashqi POS tizimlari uchun API kalitlar va kiruvchi ma’lumotlar',
       investors: 'Investorlar',
       investorsDescription: 'Biznes investorlariga taklif va kirishlar',
     },

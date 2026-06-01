@@ -147,6 +147,8 @@ const en: typeof ru = {
       exchangeDescription: 'Cash operations and FX exchange',
       reconciliation: 'Reconciliation',
       reconciliationDescription: 'Control balances and mismatches',
+      integrations: 'Integrations',
+      integrationsDescription: 'API keys and inbound data from external POS systems',
       investors: 'Investors',
       investorsDescription: 'Invites and investors linked to the business',
     },

@@ -46,6 +46,17 @@ def credentials_list_create(request: Request) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # One active credential per vendor (DB constraint). Surface a clear reason
+    # instead of a generic 500 when an active key already exists.
+    if IntegrationCredential.objects.filter(
+        tenant_id=tenant_id, vendor=vendor,
+        status=IntegrationCredential.Status.ACTIVE,
+    ).exists():
+        return Response(
+            {'detail': 'У этого провайдера уже есть активный ключ. Сначала отзовите его, затем создайте новый.'},
+            status=status.HTTP_409_CONFLICT,
+        )
+
     cred, full_key = create_credential(
         tenant_id=tenant_id,
         vendor=vendor,

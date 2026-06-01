@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Copy, Check } from 'lucide-vue-next'
+import { Copy, Check, ShieldAlert } from 'lucide-vue-next'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { useToast } from '@/composables/useToast'
+import { copyToClipboard } from '@/utils/clipboard'
 import { createCredential, type CreateCredentialResponse } from '@/api/integrations'
 
-const props = defineProps<{ open: boolean }>()
+defineProps<{ open: boolean }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; created: [] }>()
+
+const toast = useToast()
 
 const vendor = ref('yespos')
 const isSaving = ref(false)
@@ -13,12 +19,26 @@ const error = ref<string | null>(null)
 const result = ref<CreateCredentialResponse | null>(null)
 const copied = ref(false)
 
+async function copyKey(): Promise<void> {
+  if (!result.value) return
+  const ok = await copyToClipboard(result.value.full_key)
+  if (ok) {
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+    toast.success('Ключ скопирован в буфер обмена')
+  } else {
+    toast.error('Не удалось скопировать. Скопируйте ключ вручную.')
+  }
+}
+
 async function onGenerate(): Promise<void> {
   isSaving.value = true
   error.value = null
   try {
     result.value = await createCredential(vendor.value)
     emit('created')
+    // The key is shown only once — copy it immediately so it isn't lost.
+    await copyKey()
   } catch (err: any) {
     error.value = err?.response?.data?.detail ?? 'Ошибка создания ключа'
   } finally {
@@ -26,17 +46,11 @@ async function onGenerate(): Promise<void> {
   }
 }
 
-async function onCopy(): Promise<void> {
-  if (!result.value) return
-  await navigator.clipboard.writeText(result.value.full_key)
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 2000)
-}
-
 function onClose(): void {
   if (!result.value || window.confirm('Ключ больше не будет показан. Закрыть?')) {
     result.value = null
     error.value = null
+    copied.value = false
     emit('update:open', false)
   }
 }
@@ -44,61 +58,62 @@ function onClose(): void {
 
 <template>
   <AppBottomSheet :open="open" title="Новый ключ интеграции" @close="onClose">
-    <div class="sheet-body">
+    <div class="flex flex-col gap-4">
       <template v-if="!result">
-        <div class="section-label">Провайдер</div>
-        <div class="vendor-chip-row">
-          <button class="chip active" type="button">YesPos</button>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Провайдер</span>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-full border border-primary bg-primary/5 px-3.5 py-1.5 text-sm font-medium text-foreground"
+            >YesPos</button>
+          </div>
         </div>
 
-        <p class="hint">
-          Ключ будет показан один раз сразу после создания. Сохраните его в безопасном месте.
+        <p class="text-sm leading-relaxed text-neutral-500">
+          Ключ будет показан один раз сразу после создания и автоматически скопирован в буфер обмена. Сохраните его в безопасном месте.
         </p>
 
-        <div v-if="error" class="error-text">{{ error }}</div>
+        <p v-if="error" class="text-sm text-negative">{{ error }}</p>
 
-        <button
-          class="primary-btn"
-          type="button"
-          :disabled="isSaving"
-          @click="onGenerate"
-        >
+        <Button class="h-12 w-full text-base" :disabled="isSaving" @click="onGenerate">
           {{ isSaving ? 'Создание…' : 'Создать ключ' }}
-        </button>
+        </Button>
       </template>
 
       <template v-else>
-        <div class="warn-banner">
-          Сохраните ключ сейчас — больше он показан не будет.
+        <div class="flex items-start gap-2.5 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3">
+          <ShieldAlert class="mt-0.5 size-4 shrink-0 text-warning" />
+          <span class="text-sm font-medium text-foreground">Скопировано в буфер. Сохраните ключ сейчас — больше он показан не будет.</span>
         </div>
 
-        <div class="section-label">Ключ ({{ result.prefix }}…)</div>
-        <div class="key-display-row">
-          <code class="key-display">{{ result.full_key }}</code>
-          <button class="copy-btn" type="button" @click="onCopy">
-            <Check v-if="copied" :size="16" :stroke-width="2.5" />
-            <Copy v-else :size="16" :stroke-width="2" />
-          </button>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Ключ ({{ result.prefix }}…)</span>
+          <div class="flex items-center gap-2 rounded-[10px] border border-neutral-200 bg-neutral-50 p-3">
+            <code class="min-w-0 flex-1 break-all font-mono text-xs text-foreground">{{ result.full_key }}</code>
+            <button
+              type="button"
+              :class="cn(
+                'flex size-9 shrink-0 items-center justify-center rounded-[8px] border transition-colors',
+                copied ? 'border-positive/40 bg-positive/10 text-positive' : 'border-neutral-200 bg-surface text-neutral-500 hover:bg-neutral-100',
+              )"
+              :aria-label="copied ? 'Скопировано' : 'Скопировать'"
+              @click="copyKey"
+            >
+              <Check v-if="copied" :size="16" :stroke-width="2.5" />
+              <Copy v-else :size="16" :stroke-width="2" />
+            </button>
+          </div>
         </div>
 
-        <button class="primary-btn" type="button" @click="onClose">Готово</button>
+        <Button variant="outline" class="h-11 w-full gap-2" @click="copyKey">
+          <Check v-if="copied" :size="16" :stroke-width="2.5" />
+          <Copy v-else :size="16" :stroke-width="2" />
+          {{ copied ? 'Скопировано' : 'Скопировать ещё раз' }}
+        </Button>
+
+        <Button class="h-12 w-full text-base" @click="onClose">Готово</Button>
       </template>
     </div>
   </AppBottomSheet>
 </template>
-
-<style scoped>
-.sheet-body { display: grid; gap: var(--space-3); }
-.section-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.vendor-chip-row { display: flex; gap: var(--space-2); }
-.chip { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-full); background: transparent; color: var(--color-text-secondary); font-size: var(--text-sm); cursor: pointer; }
-.chip.active { border-color: var(--color-brand-600); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
-.hint { margin: 0; font-size: var(--text-sm); color: var(--color-text-secondary); }
-.error-text { font-size: var(--text-sm); color: var(--color-error); }
-.warn-banner { padding: var(--space-3); background: color-mix(in srgb, var(--color-warning) 12%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent); border-radius: var(--radius-md); font-size: var(--text-sm); color: var(--color-text-primary); font-weight: var(--font-semibold); }
-.key-display-row { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-3); background: var(--color-bg-secondary); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); }
-.key-display { flex: 1; font-size: var(--text-xs); font-family: var(--font-mono, monospace); word-break: break-all; color: var(--color-text-primary); }
-.copy-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); color: var(--color-text-secondary); cursor: pointer; flex-shrink: 0; }
-.primary-btn { min-height: 48px; border: 0; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); cursor: pointer; }
-.primary-btn:disabled { opacity: .55; cursor: not-allowed; }
-</style>

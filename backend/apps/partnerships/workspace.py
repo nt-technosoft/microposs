@@ -2602,6 +2602,10 @@ def _check_prepaid_coverage(tenant_id: int, procurement: Procurement, payload: d
     """PREPAID: items being received must not exceed total payments made so far."""
     from apps.inventory.models import Lot
 
+    if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+        # Partnership prepayment is capital allocated to the procurement, not a cash Payment row.
+        return
+
     total_paid_uzs = (
         Payment.objects
         .filter(
@@ -3125,8 +3129,8 @@ def _receive_funding_breakdown(items, item_values_uzs, expenses, expense_allocat
 
     for item, value_uzs in zip(items, item_values_uzs):
         _add(item.currency, item.fx_rate, value_uzs)
-    for expense, value_uzs in zip(expenses, expense_allocations_uzs):
-        _add(expense.currency, expense.fx_rate, value_uzs)
+    for expense in expenses:
+        _add(expense.currency, expense.fx_rate, _expense_value_uzs(expense))
 
     return native, func
 

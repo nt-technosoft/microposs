@@ -236,6 +236,13 @@ currency mid-flight change, approval workflow, PO numbers, tax line.
 
 ## Решённые вопросы (история)
 
+- ✓ 2026-05-29: **Frontend design-system foundation выбран и подключён.**
+  Для дальнейшего procurement UI polish используем инкрементальный стек:
+  MicroPOS CSS tokens как visual source of truth, Tailwind CSS v4 как utility
+  layer, shadcn-vue/Reka UI как primitives registry, lucide-vue-next как icon
+  source. Старые shared-компоненты не удаляются и мигрируют только по мере
+  реального redesign конкретных экранов.
+
 - ✓ 2026-05-22: **Cancel/edit semantics зафиксированы.** Прямое удаление item/expense
   через `cancel_item_ids` / `cancel_expense_ids` разрешено только пока строка
   в `lifecycle_state=DRAFT` (нет связанных Payment / ReceiveBatch). После Payment

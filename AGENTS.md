@@ -154,7 +154,12 @@ and unresolved risks.
 - API layer in `src/api/` with typed clients
 - Components: `src/components/` (shared) + `src/modules/<domain>/components/`
 - Reuse shared controls before creating new UI controls: `MoneyCurrencyInput` for amount+currency, `BaseSelect` for mobile-friendly selects.
-- Design tokens in CSS custom properties
+- Design system foundation: MicroPOS CSS tokens + Tailwind CSS v4 + shadcn-vue
+  + Reka UI. See `docs/frontend-design-system.md`.
+- For any frontend design/redesign, apply the project frontend workflow in
+  `.agents/skills/microposs-frontend-design/SKILL.md`: mobile-first, not
+  mobile-only; workflow before components; shadcn-vue primitives through domain
+  wrappers.
 - Lucide icons (no emojis as structural icons)
 - Any frontend/UI change must explicitly use `frontend-skill` as part of the workflow
 - All animations 150-300ms, respect prefers-reduced-motion

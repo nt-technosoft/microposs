@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { Plus } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useIntegrationsStore } from '@/stores/integrations'
 import CreateKeyModal from '../components/CreateKeyModal.vue'
 import RevokeConfirmDialog from '../components/RevokeConfirmDialog.vue'
@@ -18,6 +20,17 @@ function formatDate(iso: string | null): string {
   return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  active: 'Активен',
+  revoked: 'Отозван',
+  expired: 'Истёк',
+}
+function statusClass(status: string): string {
+  if (status === 'active') return 'bg-positive/10 text-positive'
+  if (status === 'revoked') return 'bg-negative/10 text-negative'
+  return 'bg-neutral-100 text-neutral-500'
+}
+
 async function onRevoke(): Promise<void> {
   if (!revokeTarget.value) return
   await store.revoke(revokeTarget.value.id)
@@ -26,53 +39,56 @@ async function onRevoke(): Promise<void> {
 </script>
 
 <template>
-  <div class="page">
-    <header class="page-header">
-      <h1 class="page-title">Интеграции</h1>
-      <button class="add-btn" type="button" @click="createOpen = true">
+  <div class="mx-auto flex max-w-[680px] flex-col gap-4 p-4">
+    <header class="flex flex-wrap items-center justify-between gap-3">
+      <h1 class="text-xl font-semibold text-foreground">Интеграции</h1>
+      <Button class="gap-1.5" @click="createOpen = true">
         <Plus :size="18" :stroke-width="2" />
         Добавить ключ
-      </button>
+      </Button>
     </header>
 
-    <div v-if="store.isLoading" class="state-msg">Загрузка…</div>
-    <div v-else-if="store.error" class="state-msg state-error">{{ store.error }}</div>
-    <div v-else-if="!store.credentials.length" class="state-msg">Нет ключей. Создайте первый.</div>
+    <p v-if="store.isLoading" class="py-10 text-center text-sm text-neutral-500">Загрузка…</p>
+    <p v-else-if="store.error" class="py-10 text-center text-sm text-negative">{{ store.error }}</p>
+    <p v-else-if="!store.credentials.length" class="py-10 text-center text-sm text-neutral-500">
+      Нет ключей. Создайте первый.
+    </p>
 
-    <div v-else class="table-wrap">
-      <table class="creds-table">
-        <thead>
-          <tr>
-            <th>Провайдер</th>
-            <th>Префикс</th>
-            <th>Статус</th>
-            <th>Создан</th>
-            <th>Последнее использование</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="c in store.credentials" :key="c.id" class="cred-row">
-            <td class="vendor-cell">{{ c.vendor }}</td>
-            <td class="mono-cell">{{ c.prefix }}…</td>
-            <td>
-              <span class="status-badge" :class="`status-${c.status}`">{{ c.status }}</span>
-            </td>
-            <td class="date-cell">{{ formatDate(c.created_at) }}</td>
-            <td class="date-cell">{{ formatDate(c.last_used_at) }}</td>
-            <td class="action-cell">
-              <button
-                v-if="c.status === 'active'"
-                class="revoke-btn"
-                type="button"
-                @click="revokeTarget = { id: c.id, prefix: c.prefix }"
-              >
-                Отозвать
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div v-else class="flex flex-col gap-2.5">
+      <div
+        v-for="c in store.credentials"
+        :key="c.id"
+        class="flex flex-col gap-3 rounded-[14px] border border-neutral-200 bg-surface p-4"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm font-semibold text-foreground">{{ c.vendor }}</span>
+          <span :class="cn('shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium', statusClass(c.status))">
+            {{ STATUS_LABEL[c.status] ?? c.status }}
+          </span>
+        </div>
+
+        <code class="block truncate font-mono text-xs text-neutral-600">{{ c.prefix }}…</code>
+
+        <div class="flex flex-col gap-1 border-t border-neutral-100 pt-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-xs text-neutral-400">Создан</span>
+            <span class="text-xs tabular-nums text-neutral-600">{{ formatDate(c.created_at) }}</span>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-xs text-neutral-400">Последнее использование</span>
+            <span class="text-xs tabular-nums text-neutral-600">{{ formatDate(c.last_used_at) }}</span>
+          </div>
+        </div>
+
+        <button
+          v-if="c.status === 'active'"
+          type="button"
+          class="h-10 rounded-[10px] border border-negative/30 text-sm font-medium text-negative transition-colors hover:bg-negative/5"
+          @click="revokeTarget = { id: c.id, prefix: c.prefix }"
+        >
+          Отозвать
+        </button>
+      </div>
     </div>
 
     <CreateKeyModal
@@ -88,26 +104,3 @@ async function onRevoke(): Promise<void> {
     />
   </div>
 </template>
-
-<style scoped>
-.page { padding: var(--space-4); max-width: 900px; margin: 0 auto; display: grid; gap: var(--space-4); }
-.page-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
-.page-title { font-size: var(--text-xl); font-weight: var(--font-semibold); color: var(--color-text-primary); margin: 0; }
-.add-btn { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-md); background: var(--color-brand-500); color: var(--color-text-inverse); font-size: var(--text-sm); font-weight: var(--font-semibold); cursor: pointer; }
-.state-msg { padding: var(--space-8); text-align: center; color: var(--color-text-secondary); font-size: var(--text-sm); }
-.state-error { color: var(--color-error); }
-.table-wrap { overflow-x: auto; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-bg-primary); }
-.creds-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.creds-table th { padding: var(--space-3) var(--space-4); text-align: left; font-size: var(--text-xs); font-weight: var(--font-semibold); text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-secondary); border-bottom: 1px solid var(--color-border-subtle); white-space: nowrap; }
-.cred-row td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border-subtle); color: var(--color-text-primary); vertical-align: middle; }
-.cred-row:last-child td { border-bottom: none; }
-.vendor-cell { font-weight: var(--font-semibold); }
-.mono-cell { font-family: var(--font-mono, monospace); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.date-cell { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.status-badge { display: inline-block; padding: 2px var(--space-2); border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--font-semibold); }
-.status-active { background: color-mix(in srgb, var(--color-success) 12%, transparent); color: var(--color-success); }
-.status-revoked { background: color-mix(in srgb, var(--color-error) 10%, transparent); color: var(--color-error); }
-.status-expired { background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent); color: var(--color-text-secondary); }
-.action-cell { text-align: right; }
-.revoke-btn { padding: var(--space-1) var(--space-2); border: 1px solid color-mix(in srgb, var(--color-error) 30%, transparent); border-radius: var(--radius-sm); background: transparent; color: var(--color-error); font-size: var(--text-xs); cursor: pointer; }
-</style>

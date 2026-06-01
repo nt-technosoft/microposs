@@ -145,6 +145,8 @@ const ru = {
       exchangeDescription: 'Кассовые операции и FX-обмен',
       reconciliation: 'Сверка',
       reconciliationDescription: 'Контроль остатков и расхождений',
+      integrations: 'Интеграции',
+      integrationsDescription: 'API-ключи и входящие данные от внешних POS-систем',
       investors: 'Инвесторы',
       investorsDescription: 'Приглашения и доступные инвесторы бизнеса',
     },
