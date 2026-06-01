@@ -54,36 +54,60 @@ def process_outbox_events():
 
 def _dispatch_event(event):
     """Route event to the correct aggregation task."""
+    # Keys MUST match the event_type strings actually emitted by publish_event
+    # across the domains. Keep this map in sync with the event vocabulary —
+    # an emitted type missing here becomes a terminal no-op (see _dispatch
+    # caller), so a drifted name silently stops triggering its effect.
     handlers = {
+        # --- Sales: feed DailySummary + CashFlowSummary, bust profitability cache
         'sale.completed': _handle_sale_completed,
         'sale.returned': _handle_sale_returned,
-        'receipt.confirmed': _handle_receipt_confirmed,
+        'finance.refund': _handle_financial_operation,
+        # --- Risk / write-offs (feed DailySummary.total_writeoffs)
         'risk.writeoff': _handle_risk_event,
-        'risk_event.created': _handle_risk_event,
         'risk.inventory_check_completed': _handle_noop_retired,
+        # --- Cash/operations that feed the daily aggregates
         'customer.debt_accrued': _handle_financial_operation,
         'customer.payment': _handle_financial_operation,
         'supplier.payment': _handle_financial_operation,
         'expense.recorded': _handle_financial_operation,
+        # --- POS sessions
         'pos_session.opened': _handle_session_event,
         'pos_session.closed': _handle_session_event,
+        # --- Procurement receive / reversal / structural edits: no sale revenue,
+        # but landed cost & projected profit on remaining stock change, so bust
+        # the profitability cache.
+        'procurement.receive_batch_posted': _handle_procurement_received,
+        'receive_batch.reversed': _handle_procurement_received,
+        'procurement.item_split': _handle_procurement_received,
+        'procurement.cancelled': _handle_procurement_received,
+        # --- Inventory
         'lot.transfer': _handle_lot_transfer,
-        'lot.transferred': _handle_lot_transfer,
+        # --- Investors
         'investor.contract_closed': _handle_contract_closed,
         'investor.invite_created': _handle_noop_retired,
         'investor.invite_accepted': _handle_noop_retired,
-        'procurement.opened': _handle_noop_retired,
-        'procurement.updated': _handle_noop_retired,
-        'procurement.contribution_added': _handle_noop_retired,
-        'procurement.withdrawal_added': _handle_noop_retired,
-        'procurement.balance_exchanged': _handle_noop_retired,
-        'procurement.items_paid': _handle_noop_retired,
-        'procurement.expenses_paid': _handle_noop_retired,
-        'procurement.received': _handle_procurement_received,
+        # --- No-op for the CURRENT aggregates. The finance.* cash movements below
+        # (purchases, owner draws/contributions, transfers, capital payments) do
+        # not feed today's DailySummary/CashFlowSummary (cash_out_purchases /
+        # investor flows are stubbed to 0). When E03 builds full cash flow, remap
+        # the cash-affecting ones to _handle_financial_operation.
+        'procurement.terms.amended': _handle_noop_retired,
+        'investment_agreement.opened': _handle_noop_retired,
+        'investment_agreement.contribution_added': _handle_noop_retired,
+        'investment_agreement.allocated_to_procurement': _handle_noop_retired,
+        'investment_agreement.withdrawal_added': _handle_noop_retired,
         'partnership.dividend_paid': _handle_noop_retired,
         'finance.currency_exchange': _handle_noop_retired,
-        'finance.refund': _handle_financial_operation,
         'finance.owner_contribution': _handle_noop_retired,
+        'finance.owner_drawing': _handle_noop_retired,
+        'finance.cash_transfer': _handle_noop_retired,
+        'finance.payment.posted': _handle_noop_retired,
+        'finance.capital_contribution_payment.posted': _handle_noop_retired,
+        'consignment_obligation.created': _handle_noop_retired,
+        'business.registration_request_created': _handle_noop_retired,
+        'business.registration_request_approved': _handle_noop_retired,
+        'business.registration_request_rejected': _handle_noop_retired,
     }
     handler = handlers.get(event.event_type)
     if handler is None:
@@ -110,10 +134,11 @@ def _handle_sale_returned(payload, tenant_id):
 
 
 def _handle_noop_retired(payload, tenant_id):
-    logger.info(
-        'Retired analytics handler skipped for tenant=%s payload=%s',
-        tenant_id,
-        payload,
+    # Known event with no effect on the current analytics aggregates. Mapped
+    # explicitly (rather than falling through to the unknown-type path) so it is
+    # silent in normal operation; DEBUG keeps it inspectable when needed.
+    logger.debug(
+        'No-op analytics handler for tenant=%s payload=%s', tenant_id, payload,
     )
 
 
