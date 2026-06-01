@@ -2151,7 +2151,7 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
         },
         'source': {
             'funding_source': procurement.funding_source,
-            'supplier_required': bool(terms and terms.type != 'PREPAID'),
+            'supplier_required': bool(terms and terms.type not in _SUPPLIER_OPTIONAL_TYPES),
             'supplier_id': procurement.supplier_id,
             'investment_agreement_required': procurement.funding_source == Procurement.FundingSource.PARTNERSHIP,
             'investment_agreement_id': procurement.agreement_id,
@@ -3178,13 +3178,16 @@ def _fund_partnership_receive_from_pools(
     return total_base_cost.quantize(Decimal('0.01'))
 
 
+_SUPPLIER_OPTIONAL_TYPES = {ProcurementTerms.Type.PREPAID, ProcurementTerms.Type.AT_RECEIPT}
+
+
 def _ensure_supplier_payable_after_receive(tenant_id: int, procurement: Procurement, terms):
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
         return None  # E11: partnership cost is settled from the capital pool, no supplier A/P
     if procurement.goods_ownership == Procurement.GoodsOwnership.CONSIGNED:
         return None  # CONSIGNED → payable создаётся per-sale, не at-receive
-    if not terms or terms.type == ProcurementTerms.Type.PREPAID:
-        return None
+    if not terms or terms.type in _SUPPLIER_OPTIONAL_TYPES:
+        return None  # PREPAID and AT_RECEIPT settle in cash immediately — no payable needed
     existing = SupplierPayable.objects.filter(
         tenant_id=tenant_id,
         procurement=procurement,

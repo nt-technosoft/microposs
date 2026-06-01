@@ -270,3 +270,88 @@ class AtReceiptCombinedActionTests(TestCase):
                     ],
                 },
             )
+
+
+class AtReceiptSupplierOptionalTests(TestCase):
+    """Canonical rule: AT_RECEIPT does NOT require a supplier (cash-now settlement).
+    DEFERRED/PARTIAL/INSTALLMENT/ON_SALE DO require a supplier (debt obligation).
+    """
+
+    def setUp(self):
+        self.ctx = build_tenant()
+
+    def test_at_receipt_own_funds_no_supplier_succeeds(self):
+        """OWN_FUNDS × AT_RECEIPT procurement receives+pays without a supplier."""
+        _fund_cash_account(self.ctx['cash_account'], '2000000')
+        # Create procurement explicitly without a supplier
+        proc = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=OWN_FUNDS,
+            supplier_id=None,
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'AT_RECEIPT',
+                'total_amount_due': '500000',
+                'currency_of_obligation': 'UZS',
+                'fx_rate_at_obligation': '1',
+            }},
+        )
+        proc = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': 50,
+                    'unit_purchase_price': '10000',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                }],
+            }},
+        )
+        # Must NOT raise — AT_RECEIPT is cash-now, supplier optional
+        batch = receive_workspace_batch(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            payload={
+                'warehouse_id': self.ctx['store'].id,
+                'payment_payload': {
+                    'cash_account_id': self.ctx['cash_account'].id,
+                    'amount': '500000',
+                    'currency': 'UZS',
+                },
+            },
+        )
+        self.assertIsNotNone(batch.pk)
+        payment_qs = Payment.objects.filter(
+            tenant_id=self.ctx['business'].id,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=proc.pk,
+        )
+        self.assertTrue(payment_qs.exists(), 'AT_RECEIPT receive must create a Payment even without supplier.')
+
+    def test_deferred_without_supplier_raises(self):
+        """OWN_FUNDS × DEFERRED procurement without supplier raises at terms validation."""
+        proc = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=OWN_FUNDS,
+            supplier_id=None,
+        )
+        with self.assertRaises(ValueError, msg='DEFERRED without supplier must be rejected'):
+            dispatch_workspace_action(
+                tenant_id=self.ctx['business'].id,
+                procurement=proc,
+                action='UPDATE_SETTLEMENT',
+                payload={'payload': {
+                    'type': 'DEFERRED',
+                    'total_amount_due': '500000',
+                    'currency_of_obligation': 'UZS',
+                    'fx_rate_at_obligation': '1',
+                    'deadline_date': '2026-12-31',
+                }},
+            )
