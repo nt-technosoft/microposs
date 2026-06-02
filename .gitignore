@@ -48,6 +48,9 @@ dokploy.env
 .idea/
 .vscode/
 
+# Redis
+*.rdb
+
 # Logs
 *.log
 
