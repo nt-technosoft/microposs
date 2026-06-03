@@ -61,6 +61,8 @@ class JournalEntry(ImmutableMixin, TenantModel):
         TRANSFER = 'transfer', 'Перемещение'
         DEBT_PAYMENT = 'debt_payment', 'Погашение долга'
         ADVANCE_SETTLE = 'advance_settle', 'Погашение капитального аванса'
+        CAPITAL_RETURN = 'capital_return', 'Возврат капитала'
+        PROFIT_DISTRIBUTION = 'profit_distrib', 'Распределение прибыли'
 
     operation_type = models.CharField(
         max_length=20,

@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.services import publish_event
+from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.partnerships.formulas import profit_shares_from_capital
 from apps.partnerships.procurement_cost import procurement_cost_by_currency
 
@@ -217,15 +218,13 @@ def add_agreement_contribution(
     # fx_rate is the to-UZS rate for functional GL. When the caller does not
     # supply one (the UI shouldn't have to know today's rate), resolve the
     # official snapshot for non-UZS contributions so the GL is correct.
-    if fx_rate in (None, '', 0, '0'):
-        if currency == 'UZS':
-            fx_rate = Decimal('1')
-        else:
-            from apps.finance.fx_rates import resolve_fx_rate_snapshot
-            fx_rate = resolve_fx_rate_snapshot(
-                tenant_id=tenant_id, operation_currency=currency, operation_at=date,
-            )
-    fx_rate = Decimal(str(fx_rate))
+    contribution_fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=None if fx_rate in (None, '', 0, '0') else fx_rate,
+    )
+    fx_rate = contribution_fx_snapshot.rate
 
     with transaction.atomic():
         if client_request_id:
@@ -256,7 +255,9 @@ def add_agreement_contribution(
             partner_id=partner_id,
             amount=amount,
             currency=currency,
-            fx_rate=Decimal(str(fx_rate)),
+            fx_rate=fx_rate,
+            fx_rate_source=contribution_fx_snapshot.source,
+            fx_rate_date=contribution_fx_snapshot.rate_date,
             date=date,
             source=source,
             confirmation_status=confirmation_status,
@@ -283,7 +284,9 @@ def add_agreement_contribution(
                 role=member.role, legal_mode=agreement.legal_mode,
             ),
             currency=currency,
-            fx_rate=Decimal(str(fx_rate)),
+            fx_rate=fx_rate,
+            fx_rate_source=contribution_fx_snapshot.source,
+            fx_rate_date=contribution_fx_snapshot.rate_date,
             paid_at=date,
             from_cash_account_id=from_cash_account_id,
             client_request_id=client_request_id,
@@ -344,6 +347,13 @@ def add_agreement_withdrawal(
         raise ValueError('Withdrawal amount must be > 0.')
     if date is None:
         date = timezone.now()
+    withdrawal_fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=None if fx_rate in (None, '', 0, '0') else fx_rate,
+    )
+    fx_rate = withdrawal_fx_snapshot.rate
 
     with transaction.atomic():
         if client_request_id:
@@ -380,7 +390,9 @@ def add_agreement_withdrawal(
             partner_id=partner_id,
             amount=amount,
             currency=currency,
-            fx_rate=Decimal(str(fx_rate)),
+            fx_rate=fx_rate,
+            fx_rate_source=withdrawal_fx_snapshot.source,
+            fx_rate_date=withdrawal_fx_snapshot.rate_date,
             date=date,
             source=source,
             confirmation_status=confirmation_status,
@@ -389,6 +401,43 @@ def add_agreement_withdrawal(
             reason=reason,
             client_request_id=client_request_id,
         )
+
+        # E15: capital return is PHYSICAL — draw the cash out of the agreement
+        # pool and book the equity reduction (DR partner equity / CR 1300). The
+        # leftover capital physically sits in the pool, so the return must move
+        # real cash and keep pool.balance reconciled (no more ledger-only drift).
+        pool = get_or_create_agreement_capital_account(tenant_id=tenant_id, agreement=agreement)
+        if str(pool.currency).upper() != currency:
+            raise ValueError(
+                f'Возврат капитала в {currency} не поддержан: пул договора ведётся в '
+                f'{pool.currency}. Мультивалютный возврат — отдельная задача.'
+            )
+        if Decimal(str(pool.balance)) < amount:
+            raise ValueError(
+                f'Недостаточно средств в пуле договора: доступно {money(pool.balance)} {currency}.'
+            )
+        from apps.finance.models import CashEntry
+        from apps.finance.services import create_cash_entry, create_journal_entry
+
+        role = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id).role
+        equity_code = _capital_equity_account_code(role=role, legal_mode=agreement.legal_mode)
+        functional = money(amount * Decimal(str(fx_rate)))
+        create_cash_entry(
+            tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
+            amount=amount, date=date,
+            source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
+        )
+        create_journal_entry(
+            tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
+            lines=[
+                {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
+                 'description': f'Возврат капитала #{withdrawal.pk}'},
+                {'account_code': pool.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+                 'description': f'Возврат капитала #{withdrawal.pk}'},
+            ],
+            description=f'Возврат капитала #{withdrawal.pk}', date=date,
+        )
+
         record_agreement_event(
             tenant_id=tenant_id,
             agreement=agreement,

@@ -99,8 +99,9 @@
 ## Задачи (чек-лист)
 
 ### Фаза 1
-- [ ] T-1.1 `add_agreement_withdrawal` → реальный отток из пула + journal + гарды
-- [ ] T-1.2 Тесты: пул ↓, equity ↓, инвариант, гард по доступному
+- [x] T-1.1 `add_agreement_withdrawal` → реальный отток из пула (CashEntry OUT) + journal
+  (DR equity / CR 1300) + гарды (≤ доступного, ≤ баланса пула; мультивалюта пока raise)
+- [x] T-1.2 Тесты: пул ↓, equity ↓, leftover-возврат сходится, гард по доступному (E08 не сломан)
 
 ### Фаза 2
 - [ ] T-2.1 `pay_dividend` → обязательный кэш, counterpart 3200, поле `destination`
