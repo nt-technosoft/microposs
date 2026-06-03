@@ -35,6 +35,7 @@
 | **E11** | Partnership Capital as Real Agreement Account (money source-of-truth) | 🟢 DONE | 100% | E07, E08 | [→](./roadmap/E11-partnership-capital-pool.md) |
 | **E12** | Multi-currency Capital (FIFO cost-basis) + Calc Precision | 🟢 DONE | 100% | E11 | [→](./roadmap/E12-multicurrency-capital-and-precision.md) |
 | **E13** | ⚠️ Mixed-currency procurement (затраты в разных валютах в одном приходе) | ⏸️ BLOCKED | 0% | E11, E12 + verified приход | [→](./roadmap/E13-multicurrency-procurement.md) |
+| **E14** | Сверка внесённого и договорного капитала (межпартнёрские авансы) | 🟡 IN_PROGRESS | 5% | E11, E12 | [→](./roadmap/E14-capital-reconciliation-advances.md) |
 
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
