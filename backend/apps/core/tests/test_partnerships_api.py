@@ -597,4 +597,4 @@ class PartnershipsApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['amount'], '50.00')
         self.assertEqual(CashEntry.objects.filter(source_ref_type='dividend_payment').count(), 1)
-        self.assertEqual(JournalEntry.objects.filter(operation_id=response.data['id'], operation_type='payment').count(), 1)
+        self.assertEqual(JournalEntry.objects.filter(operation_id=response.data['id'], operation_type='profit_distrib').count(), 1)
