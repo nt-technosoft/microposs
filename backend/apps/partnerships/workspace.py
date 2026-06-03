@@ -692,6 +692,12 @@ def reverse_workspace_receive_batch(
 
         _sync_procurement_status_after_reversal(procurement, received_at)
 
+        # E14: reversal is only reachable while the batch is fully unsold (sales
+        # block it above), so the whole funding event unwinds — cancel any
+        # inter-partner advances and refund prior cash settlements.
+        from apps.partnerships.advances import cancel_advances_for_batch
+        cancel_advances_for_batch(tenant_id=tenant_id, batch_id=batch.pk, when=received_at)
+
         publish_event(
             event_type='receive_batch.reversed',
             payload={

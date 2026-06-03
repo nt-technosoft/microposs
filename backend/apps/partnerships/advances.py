@@ -205,6 +205,61 @@ def _settle_cash(*, tenant_id, advance, agreement, amount, functional, when) -> 
     )
 
 
+def cancel_advances_for_batch(*, tenant_id: int, batch_id: int, when=None) -> int:
+    """E14: when a receive batch is reversed (only possible while fully unsold),
+    cancel its advances and refund any prior CASH settlements. The advance
+    creation posted no GL (equity stayed at actual contributions), so only
+    settlements need reversing. Returns the number of advances cancelled."""
+    when = when or _now()
+    cancelled = 0
+    for advance in CapitalAdvance.objects.select_for_update().filter(
+        tenant_id=tenant_id, batch_id=batch_id,
+    ).exclude(status=CapitalAdvance.Status.CANCELLED):
+        agreement = advance.agreement
+        for settlement in advance.settlements.all():
+            if settlement.source == CapitalAdvanceSettlement.Source.CASH:
+                _refund_cash_settlement(
+                    tenant_id=tenant_id, advance=advance, agreement=agreement,
+                    amount=Decimal(settlement.amount), when=when,
+                )
+        advance.status = CapitalAdvance.Status.CANCELLED
+        advance.save(update_fields=['status'])
+        cancelled += 1
+    return cancelled
+
+
+def _refund_cash_settlement(*, tenant_id, advance, agreement, amount, when) -> None:
+    """Inverse of _settle_cash: debtor's equity back down, creditor's back up,
+    cash returned to the debtor. Append-only reversing postings."""
+    pool = agreement.capital_account
+    fx = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id, operation_currency=advance.currency, operation_at=when)
+    functional = (Decimal(str(amount)) * Decimal(str(fx.rate))).quantize(_CENTS)
+
+    create_cash_entry(
+        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
+        amount=amount, date=when,
+        source_ref_type='advance_settle_reversal', source_ref_id=advance.id)
+    create_cash_entry(
+        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
+        amount=amount, date=when,
+        source_ref_type='advance_settle_reversal', source_ref_id=advance.id)
+
+    debtor_equity = _equity_account_code(
+        role=_partner_role(agreement, advance.debtor_id), legal_mode=agreement.legal_mode)
+    creditor_equity = _equity_account_code(
+        role=_partner_role(agreement, advance.creditor_id), legal_mode=agreement.legal_mode)
+    create_journal_entry(
+        tenant_id=tenant_id, operation_type='advance_settle', operation_id=advance.id,
+        lines=[
+            {'account_code': debtor_equity, 'debit': functional, 'credit': Decimal('0'),
+             'description': f'Advance #{advance.id} settlement reversed'},
+            {'account_code': creditor_equity, 'debit': Decimal('0'), 'credit': functional,
+             'description': f'Advance #{advance.id} settlement reversed'},
+        ],
+        description=f'Capital advance #{advance.id} settlement reversal', date=when)
+
+
 def _now():
     from django.utils import timezone
     return timezone.now()
