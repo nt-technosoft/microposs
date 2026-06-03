@@ -60,6 +60,7 @@ class JournalEntry(ImmutableMixin, TenantModel):
         WRITEOFF = 'writeoff', 'Списание'
         TRANSFER = 'transfer', 'Перемещение'
         DEBT_PAYMENT = 'debt_payment', 'Погашение долга'
+        ADVANCE_SETTLE = 'advance_settle', 'Погашение капитального аванса'
 
     operation_type = models.CharField(
         max_length=20,
@@ -155,6 +156,8 @@ class Expense(TenantModel):
         null=True,
         blank=True,
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     functional_amount_uzs = models.DecimalField(max_digits=16, decimal_places=2)
     occurred_at = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
@@ -381,6 +384,8 @@ class Payment(TenantModel):
     )
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.POSTED)
     paid_at = models.DateTimeField()
     client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
@@ -474,6 +479,8 @@ class CurrencyExchange(TenantModel):
     to_amount = models.DecimalField(max_digits=14, decimal_places=2)
     to_currency = models.CharField(max_length=3)
     effective_rate = models.DecimalField(max_digits=14, decimal_places=6)
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
 
@@ -517,6 +524,8 @@ class Refund(TenantModel):
         decimal_places=6,
         default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     account = models.ForeignKey(
         CashAccount,
         on_delete=models.PROTECT,
