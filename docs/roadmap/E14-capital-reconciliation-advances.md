@@ -174,7 +174,9 @@ canon (partnerships/finance domain). Живой прогон прихода — 
 - [x] T-3.1 Сервис `settle_capital_advance` — CASH полностью (кэш через пул + журнал,
   equity сходится к договорным долям, GL-тест), идемпотентность. FROM_PROFIT: гард готов,
   маршрутизация денег вынесена в T-3.2 (NotImplementedError-маркер).
-- [ ] T-3.2 Авто-гашение из прибыли при распределении профита (+ полная маршрутизация FROM_PROFIT)
+- [x] T-3.2 FROM_PROFIT маршрутизация (`_settle_from_profit`: DR 3200/CR капитал должника +
+  DR equity кредитора/CR касса; DIVIDEND_PAID должнику) + авто-гашение
+  (`auto_settle_advances_from_profit`) для режима FROM_PROFIT. Реализовано в рамках E15 Фазы 3.
 - [x] T-3.3 Гарды: тело-only, >0, ≤ outstanding, ≤ нераспределённого профита (для FROM_PROFIT)
 
 ### Фаза 4

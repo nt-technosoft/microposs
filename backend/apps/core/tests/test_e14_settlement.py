@@ -145,4 +145,44 @@ class FromProfitSettlementTests(TestCase):
             settle_capital_advance(
                 tenant_id=ctx['business'].id, advance_id=adv.id,
                 amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+                from_account_id=ctx['cash_account'].id,
             )
+
+    def test_from_profit_settles_via_debtor_profit_and_returns_creditor(self):
+        from apps.finance.services import get_account_balance, record_owner_contribution
+        from apps.finance.models import CashAccount
+        from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
+        from apps.partnerships.models import PartnerLedgerEntry, ProcurementReceiveBatch
+
+        ctx = build_tenant()
+        biz = ctx['business'].id
+        adv = _make_advance(ctx)
+        procurement_id = ProcurementReceiveBatch.objects.get(pk=adv.batch_id).procurement_id
+
+        # Debtor (investor) accrues profit; operating cash holds sales proceeds.
+        ledger = get_or_create_ledger(procurement_id=procurement_id, partner_id=adv.debtor_id, tenant_id=biz)
+        append_ledger_entry(ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+                            amount=Decimal('10'), currency='UZS')
+        record_owner_contribution(tenant_id=biz, amount=Decimal('500'), currency='UZS',
+                                  to_account_id=ctx['cash_account'].id)
+        cash_before = CashAccount.objects.get(pk=ctx['cash_account'].id).balance
+        e_debtor_before = get_account_balance(biz, '3100')
+        e_creditor_before = get_account_balance(biz, '3000')
+
+        settle_capital_advance(
+            tenant_id=biz, advance_id=adv.id, amount=Decimal('4.00'),
+            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            from_account_id=ctx['cash_account'].id,
+        )
+
+        adv.refresh_from_db()
+        self.assertEqual(adv.status, CapitalAdvance.Status.SETTLED)
+        # Creditor returned from operating cash.
+        self.assertEqual(CashAccount.objects.get(pk=ctx['cash_account'].id).balance,
+                         cash_before - Decimal('4.00'))
+        # Equity moves toward agreed: debtor capital +4, creditor capital -4.
+        self.assertEqual(get_account_balance(biz, '3100'), e_debtor_before + Decimal('4.00'))
+        self.assertEqual(get_account_balance(biz, '3000'), e_creditor_before - Decimal('4.00'))
+        # Debtor's profit consumed.
+        self.assertTrue(PartnerLedgerEntry.objects.filter(
+            ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID).exists())

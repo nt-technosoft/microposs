@@ -109,9 +109,9 @@
 - [x] T-2.2 Тесты: касса ↓, DR 3200, DIVIDEND_PAID, гард ≤ pending, гард на источник
 
 ### Фаза 3
-- [ ] T-3.1 FROM_PROFIT routing в `settle_capital_advance`
-- [ ] T-3.2 Авто-гашение из прибыли при распределении (toggle)
-- [ ] T-3.3 Тесты целевого поведения + Sharia-инварианты
+- [x] T-3.1 FROM_PROFIT routing в `settle_capital_advance` (`_settle_from_profit`) + `from_account_id`
+- [x] T-3.2 Авто-гашение `auto_settle_advances_from_profit` (тумблер FROM_PROFIT, oldest-first)
+- [x] T-3.3 Тесты: equity→договорные, касса↓, DIVIDEND_PAID, гард ≤ pending, частичное гашение
 
 ### Фаза 4
 - [ ] T-4.1 Workspace actions + REST endpoints

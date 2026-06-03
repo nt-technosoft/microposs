@@ -103,6 +103,7 @@ def settle_capital_advance(
     advance_id: int,
     amount: Decimal,
     source: str,
+    from_account_id: int | None = None,
     client_request_id=None,
     paid_at=None,
 ) -> CapitalAdvance:
@@ -152,8 +153,10 @@ def settle_capital_advance(
                     f'FROM_PROFIT settlement {functional} UZS exceeds the debtor\'s '
                     f'undistributed profit {pending} UZS.'
                 )
-            # Profit-routed repayment is wired with the profit-distribution path (T-3.2).
-            raise NotImplementedError('FROM_PROFIT settlement money movement lands in T-3.2.')
+            _settle_from_profit(
+                tenant_id=tenant_id, advance=advance, agreement=agreement,
+                amount=amount, functional=functional, when=when, from_account_id=from_account_id,
+            )
         else:
             raise ValueError(f'Unknown settlement source: {source}.')
 
@@ -203,6 +206,88 @@ def _settle_cash(*, tenant_id, advance, agreement, amount, functional, when) -> 
         description=f'Capital advance #{advance.id} cash settlement',
         date=when,
     )
+
+
+def auto_settle_advances_from_profit(
+    *, tenant_id: int, agreement_id: int, partner_id: int, from_account_id: int, paid_at=None,
+) -> Decimal:
+    """E15: settle the partner's FROM_PROFIT-mode outstanding advances out of their
+    available undistributed profit (oldest first), until profit runs out. Used to
+    implement the "repay from profit" toggle — first profit closes the debt, the
+    rest stays the partner's. Returns the total settled (advance currency)."""
+    settled = Decimal('0.00')
+    advances = (
+        CapitalAdvance.objects.filter(
+            tenant_id=tenant_id, agreement_id=agreement_id, debtor_id=partner_id,
+            repayment_mode=CapitalAdvance.RepaymentMode.FROM_PROFIT,
+        )
+        .exclude(status__in=[CapitalAdvance.Status.SETTLED, CapitalAdvance.Status.CANCELLED])
+        .order_by('id')
+    )
+    for adv in advances:
+        pending = undistributed_profit_uzs(
+            tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id)
+        if pending <= 0:
+            break
+        take = min(adv.outstanding_balance, pending)
+        if take <= 0:
+            continue
+        settle_capital_advance(
+            tenant_id=tenant_id, advance_id=adv.id, amount=take,
+            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            from_account_id=from_account_id, paid_at=paid_at)
+        settled += take
+    return settled
+
+
+def _settle_from_profit(*, tenant_id, advance, agreement, amount, functional, when, from_account_id) -> None:
+    """E15: the debtor's accrued profit repays the creditor. Profit becomes the
+    debtor's capital (DR 3200 / CR debtor capital), and the creditor's fronted
+    principal is returned in cash from operating funds (DR creditor equity /
+    CR cash). The debtor's profit_pending drops (DIVIDEND_PAID). Principal-only."""
+    from apps.finance.models import CashAccount
+    from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
+
+    if from_account_id is None:
+        raise ValueError('FROM_PROFIT settlement requires a source operating cash account (from_account_id).')
+    if str(advance.currency).upper() != 'UZS':
+        raise ValueError('FROM_PROFIT settlement is supported only for UZS agreements for now.')
+
+    account = CashAccount.objects.select_for_update().get(pk=from_account_id, tenant_id=tenant_id)
+    if not account.linked_account_id:
+        raise ValueError('Source account has no linked GL account.')
+    if Decimal(str(account.balance)) < amount:
+        raise ValueError(f'Insufficient cash in {account.name}: have {account.balance}, need {amount}.')
+
+    debtor_capital = _equity_account_code(
+        role=_partner_role(agreement, advance.debtor_id), legal_mode=agreement.legal_mode)
+    creditor_equity = _equity_account_code(
+        role=_partner_role(agreement, advance.creditor_id), legal_mode=agreement.legal_mode)
+
+    create_cash_entry(
+        tenant_id=tenant_id, account=account, direction=CashEntry.Direction.OUT,
+        amount=amount, date=when,
+        source_ref_type='advance_from_profit', source_ref_id=advance.id)
+    create_journal_entry(
+        tenant_id=tenant_id, operation_type='advance_settle', operation_id=advance.id,
+        lines=[
+            {'account_code': '3200', 'debit': functional, 'credit': Decimal('0'),
+             'description': f'Advance #{advance.id}: debtor profit consumed'},
+            {'account_code': debtor_capital, 'debit': Decimal('0'), 'credit': functional,
+             'description': f'Advance #{advance.id}: debtor capital completed'},
+            {'account_code': creditor_equity, 'debit': functional, 'credit': Decimal('0'),
+             'description': f'Advance #{advance.id}: creditor return'},
+            {'account_code': account.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+             'description': f'Advance #{advance.id}: creditor return (cash)'},
+        ],
+        description=f'Capital advance #{advance.id} settled from profit', date=when)
+
+    ledger = get_or_create_ledger(
+        procurement_id=advance.batch.procurement_id, partner_id=advance.debtor_id, tenant_id=tenant_id)
+    append_ledger_entry(
+        ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID,
+        amount=amount, currency=advance.currency,
+        source_ref=f'advance_from_profit:{advance.id}', date=when)
 
 
 def cancel_advances_for_batch(*, tenant_id: int, batch_id: int, when=None) -> int:
