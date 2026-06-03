@@ -614,6 +614,112 @@ class ProcurementReceiveBatchCapitalAllocation(TenantModel):
         raise ImmutableRecordError('ProcurementReceiveBatchCapitalAllocation is append-only.')
 
 
+class CapitalAdvance(TenantModel):
+    """E14: interest-free inter-partner capital advance (qard) created when a
+    Path-2 receive holds the agreed shares despite a funding gap. The debtor
+    under-contributed; the creditor (or, when null, the pool) covered the
+    shortfall. Shares are pinned at receive and never move — only this balance
+    moves, via append-only CapitalAdvanceSettlement events. Principal-only,
+    no markup: loss is borne on the agreed snapshot share, not on this debt."""
+
+    class RepaymentMode(models.TextChoices):
+        LUMP = 'LUMP', 'Единым платежом'
+        FROM_PROFIT = 'FROM_PROFIT', 'Из прибыли'
+
+    class Status(models.TextChoices):
+        OUTSTANDING = 'OUTSTANDING', 'Не погашен'
+        PARTIAL = 'PARTIAL', 'Частично погашен'
+        SETTLED = 'SETTLED', 'Погашен'
+        CANCELLED = 'CANCELLED', 'Аннулирован (реверс)'
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement, on_delete=models.PROTECT, related_name='capital_advances',
+    )
+    batch = models.ForeignKey(
+        ProcurementReceiveBatch, on_delete=models.PROTECT, related_name='capital_advances',
+    )
+    debtor = models.ForeignKey(
+        'core.Partner', on_delete=models.PROTECT, related_name='capital_advances_owed',
+    )
+    creditor = models.ForeignKey(
+        'core.Partner', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='capital_advances_due',
+        help_text='Partner who covered the shortfall. NULL = pool-mediated.',
+    )
+    principal = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    repayment_mode = models.CharField(
+        max_length=16, choices=RepaymentMode.choices, default=RepaymentMode.LUMP,
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.OUTSTANDING,
+    )
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_capital_advance'
+        indexes = [
+            models.Index(fields=['agreement']),
+            models.Index(fields=['batch']),
+            models.Index(fields=['status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_capital_advance_idempotent',
+            ),
+        ]
+
+    @property
+    def settled_amount(self) -> Decimal:
+        from django.db.models import Sum
+        total = self.settlements.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        return Decimal(total).quantize(Decimal('0.01'))
+
+    @property
+    def outstanding_balance(self) -> Decimal:
+        return (Decimal(self.principal) - self.settled_amount).quantize(Decimal('0.01'))
+
+
+class CapitalAdvanceSettlement(TenantModel):
+    """E14: append-only settlement event reducing a CapitalAdvance. `source`
+    records how it was paid — CASH (top-up / from balance) or FROM_PROFIT
+    (from the debtor's undistributed profit). Tело-only; never below zero."""
+
+    class Source(models.TextChoices):
+        CASH = 'CASH', 'Деньгами (пополнение/из баланса)'
+        FROM_PROFIT = 'FROM_PROFIT', 'Из нераспределённой прибыли'
+
+    advance = models.ForeignKey(
+        CapitalAdvance, on_delete=models.PROTECT, related_name='settlements',
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    source = models.CharField(max_length=16, choices=Source.choices)
+    date = models.DateTimeField(auto_now_add=True)
+    source_ref = models.CharField(max_length=100, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_capital_advance_settlement'
+        indexes = [models.Index(fields=['advance'])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_advance_settlement_idempotent',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('CapitalAdvanceSettlement is append-only.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('CapitalAdvanceSettlement is append-only.')
+
+
 class InvestmentContract(TenantModel):
     """
     Musharaka+Mudaraba hybrid contract attached to a partnership procurement.
@@ -708,6 +814,8 @@ class AgreementContribution(TenantModel):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     date = models.DateTimeField()
     source = models.CharField(
         max_length=24,
@@ -772,6 +880,8 @@ class AgreementWithdrawal(TenantModel):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     date = models.DateTimeField()
     source = models.CharField(
         max_length=24,
@@ -988,6 +1098,8 @@ class PartnerLedgerEntry(TenantModel):
         PROFIT_REVERSED = 'PROFIT_REVERSED', 'Сторно прибыли'
         DIVIDEND_PAID = 'DIVIDEND_PAID', 'Выплачен дивиденд'
         LOSS_INCURRED = 'LOSS_INCURRED', 'Зафиксирован убыток'
+        ADVANCE_OUT = 'ADVANCE_OUT', 'Капитальный аванс (выдан)'
+        ADVANCE_REPAID = 'ADVANCE_REPAID', 'Капитальный аванс (погашен)'
 
     ledger = models.ForeignKey(
         ProcurementPartnerLedger,
@@ -1058,6 +1170,8 @@ class DividendPayment(TenantModel):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')
     fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     paid_from_account = models.ForeignKey(
         'finance.CashAccount',
         on_delete=models.PROTECT,
