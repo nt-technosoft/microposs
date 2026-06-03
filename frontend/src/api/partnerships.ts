@@ -904,6 +904,46 @@ export interface ProcurementUpsertPayload {
   }>
 }
 
+export interface CapitalAdvanceRecord {
+  id: number
+  agreement: number
+  batch: number
+  debtor: number
+  debtor_name: string
+  creditor: number | null
+  creditor_name: string
+  principal: string
+  currency: string
+  repayment_mode: 'LUMP' | 'FROM_PROFIT'
+  status: 'OUTSTANDING' | 'PARTIAL' | 'SETTLED' | 'CANCELLED'
+  outstanding_balance: string
+  settled_amount: string
+}
+
+export interface AdvanceSettlePayload {
+  advance_id: number
+  amount: string
+  source: 'CASH' | 'FROM_PROFIT'
+  from_account_id?: number | null
+  client_request_id?: string
+}
+
+export async function fetchAgreementAdvances(id: number): Promise<CapitalAdvanceRecord[]> {
+  const { data } = await api.get<CapitalAdvanceRecord[]>(`/api/v1/partnerships/agreements/${id}/advances/`)
+  return Array.isArray(data) ? data : (data as { results?: CapitalAdvanceRecord[] }).results ?? []
+}
+
+export async function settleAgreementAdvance(
+  id: number,
+  payload: AdvanceSettlePayload,
+): Promise<CapitalAdvanceRecord> {
+  const { data } = await api.post<CapitalAdvanceRecord>(
+    `/api/v1/partnerships/agreements/${id}/settle-advance/`,
+    payload,
+  )
+  return data
+}
+
 export async function fetchInvestmentAgreements(): Promise<InvestmentAgreementListItem[]> {
   const { data } = await api.get<InvestmentAgreementListItem[]>('/api/v1/partnerships/agreements/')
   return Array.isArray(data) ? data : (data as { results?: InvestmentAgreementListItem[] }).results ?? []

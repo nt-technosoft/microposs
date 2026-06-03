@@ -29,9 +29,14 @@ import {
   createAgreementAllocations,
   fetchAgreementAllocationPreview,
   fetchInvestmentAgreement,
+  fetchAgreementAdvances,
   type AgreementAllocationPreview,
+  type CapitalAdvanceRecord,
   type InvestmentAgreementDetail,
 } from '@/api/partnerships'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
+import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
+import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
@@ -47,6 +52,10 @@ const { t, locale } = useI18n()
 const agreement = ref<InvestmentAgreementDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
+const advances = ref<CapitalAdvanceRecord[]>([])
+const operatingAccounts = ref<CashAccountRecord[]>([])
+const settleOpen = ref(false)
+const activeAdvance = ref<CapitalAdvanceRecord | null>(null)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
 const contributionCurrency = ref<'USD' | 'UZS'>('USD')
@@ -193,6 +202,7 @@ async function load(): Promise<void> {
     contributionPartnerId.value = agreement.value.partners[0]?.partner ?? null
     withdrawalPartnerId.value = agreement.value.partners[0]?.partner ?? null
     allocationProcurementId.value = activeProcurements.value[0]?.id ?? null
+    await loadAdvances()
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : t('procurements.agreementLoadFailed')
   } finally {
@@ -248,6 +258,29 @@ async function saveWithdrawal(): Promise<void> {
   } finally {
     savingWithdrawal.value = false
   }
+}
+
+async function loadAdvances(): Promise<void> {
+  try {
+    const [adv, accounts] = await Promise.all([
+      fetchAgreementAdvances(agreementId.value),
+      operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
+    ])
+    advances.value = adv
+    operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
+  } catch {
+    // advances are supplementary — keep the page usable if they fail to load
+  }
+}
+
+function openSettle(advance: CapitalAdvanceRecord): void {
+  activeAdvance.value = advance
+  settleOpen.value = true
+}
+
+async function onAdvanceSettled(): Promise<void> {
+  settleOpen.value = false
+  await load()
 }
 
 async function loadAllocationPreview(): Promise<void> {
@@ -385,6 +418,8 @@ onMounted(async () => {
             </div>
           </CardContent>
         </Card>
+
+        <AgreementAdvancesCard :advances="advances" @settle="openSettle" />
 
         <div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Card class="rounded-2xl bg-background">
@@ -597,5 +632,14 @@ onMounted(async () => {
         </Card>
       </template>
     </section>
+
+    <AdvanceSettleSheet
+      :open="settleOpen"
+      :agreement-id="agreementId"
+      :advance="activeAdvance"
+      :accounts="operatingAccounts"
+      @close="settleOpen = false"
+      @settled="onAdvanceSettled"
+    />
   </main>
 </template>
