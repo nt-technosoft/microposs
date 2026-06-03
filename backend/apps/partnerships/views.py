@@ -5,12 +5,14 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 
-from .models import DividendPayment, InvestmentAgreement, Procurement
+from .models import CapitalAdvance, DividendPayment, InvestmentAgreement, Procurement
 from .serializers import (
     AgreementAllocationCreateSerializer,
     AgreementAllocationSerializer,
     AgreementContributionSerializer,
     AgreementWithdrawalSerializer,
+    CapitalAdvanceSerializer,
+    CapitalAdvanceSettleSerializer,
     AgreementContributionCreateSerializer,
     AgreementWithdrawalCreateSerializer,
     DividendPaymentCreateSerializer,
@@ -29,6 +31,7 @@ from .serializers import (
 from .agreement_services import (
     pay_dividend,
 )
+from .advances import settle_capital_advance
 from .workspace_support import (
     add_agreement_contribution,
     add_agreement_withdrawal,
@@ -181,6 +184,38 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(AgreementAllocationSerializer(allocations, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='advances')
+    def advances(self, request, pk=None):
+        agreement = self.get_object()
+        qs = CapitalAdvance.objects.filter(
+            tenant_id=request.tenant_id, agreement=agreement,
+        ).order_by('id')
+        return Response(CapitalAdvanceSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='settle-advance')
+    def settle_advance(self, request, pk=None):
+        agreement = self.get_object()
+        serializer = CapitalAdvanceSettleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        advance = CapitalAdvance.objects.filter(
+            tenant_id=request.tenant_id, agreement=agreement,
+            pk=serializer.validated_data['advance_id'],
+        ).first()
+        if advance is None:
+            raise ValidationError({'advance_id': 'Advance not found in this agreement.'})
+        try:
+            result = settle_capital_advance(
+                tenant_id=request.tenant_id,
+                advance_id=advance.id,
+                amount=serializer.validated_data['amount'],
+                source=serializer.validated_data['source'],
+                from_account_id=serializer.validated_data.get('from_account_id'),
+                client_request_id=serializer.validated_data.get('client_request_id'),
+            )
+        except (ValueError, NotImplementedError) as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(CapitalAdvanceSerializer(result).data, status=status.HTTP_200_OK)
 
 
 class ProcurementViewSet(viewsets.ModelViewSet):

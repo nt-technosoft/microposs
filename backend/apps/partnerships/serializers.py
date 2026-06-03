@@ -8,6 +8,8 @@ from .models import (
     AgreementEvent,
     AgreementPartner,
     AgreementWithdrawal,
+    CapitalAdvance,
+    CapitalAdvanceSettlement,
     CapitalCommitment,
     InvestmentAgreement,
     ContractPartner,
@@ -199,6 +201,32 @@ class CapitalCommitmentSerializer(serializers.ModelSerializer):
         if user is None:
             return ''
         return user.get_full_name() or user.get_username()
+
+
+class CapitalAdvanceSerializer(serializers.ModelSerializer):
+    """E14/E15: inter-partner advance, with derived balances for the agreement card."""
+    debtor_name = serializers.CharField(source='debtor.display_name', read_only=True)
+    creditor_name = serializers.CharField(source='creditor.display_name', read_only=True, default='')
+    outstanding_balance = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
+    settled_amount = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = CapitalAdvance
+        fields = [
+            'id', 'agreement', 'batch', 'debtor', 'debtor_name', 'creditor', 'creditor_name',
+            'principal', 'currency', 'repayment_mode', 'status',
+            'outstanding_balance', 'settled_amount',
+        ]
+
+
+class CapitalAdvanceSettleSerializer(serializers.Serializer):
+    """Settle an advance: CASH (debtor pays in) or FROM_PROFIT (debtor profit routes
+    to the creditor). from_account_id is the source operating account for FROM_PROFIT."""
+    advance_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    source = serializers.ChoiceField(choices=CapitalAdvanceSettlement.Source.choices)
+    from_account_id = serializers.IntegerField(required=False, allow_null=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class AgreementContributionSerializer(serializers.ModelSerializer):
