@@ -20,7 +20,7 @@ export interface SaleLineInput {
 export interface SalePaymentInput {
   amount: string
   currency: string
-  fx_rate?: string
+  fx_rate?: string | number | null
   method: PaymentMethod
   account_id?: number | null
 }
@@ -59,7 +59,7 @@ export interface ReturnRefundPaymentPayload {
   method: PaymentMethod | 'RECEIVABLE_OFFSET'
   amount: string
   currency: string
-  fx_rate?: string
+  fx_rate?: string | number | null
   account_id?: number | null
 }
 
@@ -85,6 +85,8 @@ export interface SaleReturn {
     amount: string
     currency: string
     fx_rate: string
+    fx_rate_source?: string
+    fx_rate_date?: string | null
     method: string
     account_id: number | null
   }>
@@ -104,6 +106,8 @@ export interface SaleReturnPreviewLine {
   operation_currency: string
   operation_unit_price: string
   fx_rate_snapshot: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
 }
 
 export interface SaleReturnPreview {
@@ -182,6 +186,8 @@ export interface SaleExplanationReceivableEntry {
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   source_ref: string
 }
 
@@ -244,6 +250,8 @@ export interface SaleExplanation {
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs?: string
   account_id: number | null
   }>

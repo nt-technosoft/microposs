@@ -25,6 +25,8 @@ const isSaving = ref(false)
 const formError = ref<string | null>(null)
 const {
   rate: latestUsdUzsRate,
+  rateDate: latestUsdUzsRateDate,
+  source: latestUsdUzsRateSource,
   error: latestUsdUzsRateError,
   load: loadLatestUsdUzsRate,
 } = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
@@ -107,6 +109,12 @@ const exchangeDirectionHint = computed(() => {
 
 function suggestedRate(): string {
   return latestUsdUzsRate.value
+}
+
+function rateSourceLabel(source: string): string {
+  if (source === 'CBU') return 'ЦБ Узбекистана'
+  if (source === 'MANUAL') return 'ручной курс'
+  return source || 'источник не указан'
 }
 
 function syncRate(): void {
@@ -347,6 +355,11 @@ onMounted(async () => {
                 {{ latestUsdUzsRate ? trimTrailingZeros(latestUsdUzsRate) : t('finance.noRate') }}
               </strong>
             </div>
+            <p v-if="latestUsdUzsRate" class="helper-note">
+              Справочный курс: 1 USD = {{ trimTrailingZeros(latestUsdUzsRate) }} UZS ·
+              {{ rateSourceLabel(latestUsdUzsRateSource) }} · {{ latestUsdUzsRateDate || 'дата не указана' }}.
+              Курс в поле выше — фактический курс этой операции.
+            </p>
             <p v-if="latestUsdUzsRateError" class="helper-error">{{ latestUsdUzsRateError }}</p>
             <div class="helper-row">
               <span>{{ t('finance.exchangeDirection') }}</span>
@@ -495,6 +508,7 @@ onMounted(async () => {
 .rate-reset { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: calc(var(--radius-md) - 2px); border: 1px solid var(--color-border-default); background: var(--color-bg-elevated); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
 .helper-card { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-brand-50); color: var(--color-brand-700); }
 .helper-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.helper-note { margin: 0; font-size: var(--font-size-xs); line-height: 1.45; color: var(--color-text-secondary); }
 .helper-error { margin: 0; font-size: var(--font-size-xs); line-height: 1.4; color: var(--color-danger); }
 .error-box { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-error-bg); color: var(--color-danger); }
 .section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }

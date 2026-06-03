@@ -6,6 +6,7 @@ official CBU sync, and immutable operation snapshots.
 """
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from urllib.error import HTTPError, URLError
@@ -18,6 +19,23 @@ from .models import ExchangeRate
 
 
 _CBU_RATE_URL_TEMPLATE = 'https://cbu.uz/ru/arkhiv-kursov-valyut/json/{currency}/{rate_date}/'
+
+
+class OperationFxRateSource:
+    """Operation-level FX snapshot source labels."""
+
+    CBU = 'CBU'
+    MANUAL = 'MANUAL'
+    CUSTOM = 'CUSTOM'
+    FUNCTIONAL = 'FUNCTIONAL'
+    DERIVED = 'DERIVED'
+
+
+@dataclass(frozen=True)
+class FxRateSnapshot:
+    rate: Decimal
+    rate_date: date
+    source: str
 
 
 def _to_decimal(value: str | int | float | Decimal) -> Decimal:
@@ -220,30 +238,41 @@ def get_fx_rate_for_date(
     )
 
 
-def resolve_fx_rate_snapshot(
+def _operation_rate_date(operation_at: datetime | date | None = None) -> date:
+    if isinstance(operation_at, datetime):
+        return operation_at.date()
+    if isinstance(operation_at, date):
+        return operation_at
+    return timezone.localdate()
+
+
+def resolve_fx_rate_snapshot_details(
     *,
     tenant_id: int,
     operation_currency: str,
     operation_at: datetime | date | None = None,
     fx_rate_snapshot: Decimal | None = None,
-) -> Decimal:
-    """Resolve immutable FX snapshot for operation datetime/date."""
+) -> FxRateSnapshot:
+    """Resolve immutable FX snapshot with source/date metadata."""
     currency = str(operation_currency or 'UZS').upper()
+    target_date = _operation_rate_date(operation_at)
+
     if currency == 'UZS':
-        return Decimal('1')
+        return FxRateSnapshot(
+            rate=Decimal('1'),
+            rate_date=target_date,
+            source=OperationFxRateSource.FUNCTIONAL,
+        )
 
     if fx_rate_snapshot is not None:
         provided = _to_decimal(fx_rate_snapshot).quantize(Decimal('0.000001'))
         if provided <= 0:
             raise ValueError('fx_rate_snapshot must be > 0')
-        return provided
-
-    if isinstance(operation_at, datetime):
-        target_date = operation_at.date()
-    elif isinstance(operation_at, date):
-        target_date = operation_at
-    else:
-        target_date = timezone.localdate()
+        return FxRateSnapshot(
+            rate=provided,
+            rate_date=target_date,
+            source=OperationFxRateSource.CUSTOM,
+        )
 
     rate_row = get_fx_rate_for_date(
         tenant_id=tenant_id,
@@ -256,7 +285,27 @@ def resolve_fx_rate_snapshot(
             f'FX rate for {currency}/UZS is missing on {target_date}. '
             f'Add manual rate or run official sync first.'
         )
-    return _to_decimal(rate_row.rate).quantize(Decimal('0.000001'))
+    return FxRateSnapshot(
+        rate=_to_decimal(rate_row.rate).quantize(Decimal('0.000001')),
+        rate_date=rate_row.rate_date,
+        source=rate_row.source,
+    )
+
+
+def resolve_fx_rate_snapshot(
+    *,
+    tenant_id: int,
+    operation_currency: str,
+    operation_at: datetime | date | None = None,
+    fx_rate_snapshot: Decimal | None = None,
+) -> Decimal:
+    """Resolve immutable FX snapshot for operation datetime/date."""
+    return resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=operation_currency,
+        operation_at=operation_at,
+        fx_rate_snapshot=fx_rate_snapshot,
+    ).rate
 
 
 def to_functional_amount_uzs(

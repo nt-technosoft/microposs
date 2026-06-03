@@ -136,6 +136,7 @@ class SalePaymentSerializer(serializers.ModelSerializer):
         model = SalePayment
         fields = [
             'id', 'date', 'amount', 'currency', 'fx_rate',
+            'fx_rate_source', 'fx_rate_date',
             'functional_amount_uzs', 'method', 'role', 'account_id',
         ]
         read_only_fields = ['id']
@@ -148,7 +149,7 @@ class SalePaymentInputSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, default='UZS')
     fx_rate = serializers.DecimalField(
-        max_digits=14, decimal_places=6, required=False, default='1',
+        max_digits=14, decimal_places=6, required=False, allow_null=True,
     )
     method = serializers.ChoiceField(choices=SalePayment.Method.choices)
     account_id = serializers.IntegerField(required=False, allow_null=True)
@@ -172,7 +173,8 @@ class SaleLineSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'lot', 'product_variant', 'product_name',
             'quantity', 'unit_price', 'base_price',
-            'operation_currency', 'operation_unit_price', 'fx_rate_snapshot',
+            'operation_currency', 'operation_unit_price',
+            'fx_rate_snapshot', 'fx_rate_source', 'fx_rate_date',
             'price_changed', 'discount_reason',
             'unit_purchase_price', 'unit_landed_cost',
             'profit_distribution_snapshot',
@@ -454,7 +456,9 @@ class ReturnRefundPaymentSerializer(serializers.Serializer):
     ])
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(required=False, default='UZS', max_length=3)
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False)
+    fx_rate = serializers.DecimalField(
+        max_digits=14, decimal_places=6, required=False, allow_null=True,
+    )
     account_id = serializers.IntegerField(required=False, allow_null=True)
 
 

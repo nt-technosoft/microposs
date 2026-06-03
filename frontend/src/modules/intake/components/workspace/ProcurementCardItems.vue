@@ -45,6 +45,7 @@ function formatTotal(amount: number, currency: string): string {
 }
 
 function openAdd(): void {
+  if (!canEdit.value) return
   editingItemId.value = null
   editSheetOpen.value = true
 }
@@ -66,6 +67,7 @@ function toActionItem(it: Item): ActionItem {
 }
 
 function onSheetSave(payload: ActionItem): void {
+  if (!canEdit.value) return
   const base = items.value.map(toActionItem)
   if (payload.id) {
     emit('update-items', base.map((it) => (it.id === payload.id ? payload : it)))
@@ -75,10 +77,12 @@ function onSheetSave(payload: ActionItem): void {
 }
 
 function onSheetDelete(itemId: number): void {
+  if (!canEdit.value) return
   emit('delete-item', itemId)
 }
 
 function openSplit(itemId: number): void {
+  if (!canEdit.value) return
   splittingItemId.value = itemId
   splitQty.value = ''
   splitSheetOpen.value = true
@@ -129,6 +133,7 @@ function onSplitConfirm(): void {
       </div>
 
       <button
+        v-if="canEdit"
         type="button"
         class="flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-neutral-300 px-3.5 py-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-50/40"
         @click="openAdd"

@@ -71,7 +71,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
             customer_id=customer.pk,
             amount=data['amount'],
             currency=data.get('currency', 'UZS'),
-            fx_rate=data.get('fx_rate', '1'),
+            fx_rate=data.get('fx_rate'),
             payment_method=data['payment_method'],
             notes=data.get('notes', ''),
             account_id=data.get('account_id'),

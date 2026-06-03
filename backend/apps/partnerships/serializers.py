@@ -184,6 +184,9 @@ class CapitalCommitmentSerializer(serializers.ModelSerializer):
         model = CapitalCommitment
         fields = [
             'id', 'partner', 'partner_name', 'partner_role',
+            # CapitalCommitment is a plan/intent record, not a money movement —
+            # fx snapshot (source/date) lives only on actual flows (contribution/
+            # withdrawal/dividend). Decision from Codex session 2026-05-26.
             'amount', 'currency', 'fx_rate', 'date',
             'source', 'confirmation_status', 'created_by',
             'created_by_name', 'actor_partner', 'actor_partner_name',
@@ -208,7 +211,7 @@ class AgreementContributionSerializer(serializers.ModelSerializer):
         model = AgreementContribution
         fields = [
             'id', 'partner', 'partner_name', 'partner_role',
-            'amount', 'currency', 'fx_rate', 'date',
+            'amount', 'currency', 'fx_rate', 'fx_rate_source', 'fx_rate_date', 'date',
             'source', 'confirmation_status', 'created_by',
             'created_by_name', 'actor_partner', 'actor_partner_name',
             'notes', 'client_request_id',
@@ -743,7 +746,7 @@ class ProcurementItemInputSerializer(serializers.Serializer):
     quantity = serializers.DecimalField(max_digits=14, decimal_places=3)
     unit_purchase_price = serializers.DecimalField(max_digits=14, decimal_places=6)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
 
 
 class ProcurementExpenseInputSerializer(serializers.Serializer):
@@ -751,7 +754,7 @@ class ProcurementExpenseInputSerializer(serializers.Serializer):
     expense_type = serializers.ChoiceField(choices=ProcurementExpense.ExpenseType.choices)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     allocation_method = serializers.ChoiceField(
         choices=ProcurementExpense.AllocationMethod.choices,
         required=False,
@@ -820,7 +823,7 @@ class AgreementContributionCreateSerializer(serializers.Serializer):
     partner_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     cash_account_id = serializers.IntegerField(required=False, allow_null=True)
 
@@ -829,7 +832,7 @@ class AgreementWithdrawalCreateSerializer(serializers.Serializer):
     partner_id = serializers.IntegerField(required=False, allow_null=True)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     reason = serializers.CharField(required=False, default='', allow_blank=True)
 
 
@@ -924,7 +927,8 @@ class DividendPaymentSerializer(serializers.ModelSerializer):
         model = DividendPayment
         fields = [
             'id', 'partner', 'procurement', 'amount', 'currency',
-            'fx_rate', 'paid_from_account_id', 'date',
+            'fx_rate', 'fx_rate_source', 'fx_rate_date',
+            'paid_from_account_id', 'date',
         ]
         read_only_fields = ['id', 'date']
 
@@ -934,5 +938,5 @@ class DividendPaymentCreateSerializer(serializers.Serializer):
     procurement_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     paid_from_account_id = serializers.IntegerField(required=False, allow_null=True)

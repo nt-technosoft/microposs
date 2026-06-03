@@ -12,7 +12,8 @@ class ReceivableEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = ReceivableEntry
         fields = [
-            'id', 'date', 'amount', 'currency', 'fx_rate',
+            'id', 'date', 'amount', 'currency',
+            'fx_rate', 'fx_rate_source', 'fx_rate_date',
             'entry_type', 'due_date', 'source_ref',
             'created_at',
         ]
@@ -59,7 +60,7 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
         model = CustomerPayment
         fields = [
             'id', 'customer', 'customer_name',
-            'amount', 'currency', 'fx_rate',
+            'amount', 'currency', 'fx_rate', 'fx_rate_source', 'fx_rate_date',
             'payment_method', 'date', 'notes',
             'created_at',
         ]
@@ -72,7 +73,7 @@ class CustomerPaymentCreateSerializer(serializers.Serializer):
     )
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(
-        max_digits=14, decimal_places=6, required=False, default='1',
+        max_digits=14, decimal_places=6, required=False, allow_null=True,
     )
     payment_method = serializers.ChoiceField(choices=['cash', 'bank'])
     account_id = serializers.IntegerField(required=False, allow_null=True)

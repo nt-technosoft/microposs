@@ -44,7 +44,10 @@ function formatTotal(amount: number, currency: string): string {
   return `${formatted} ${currency}`
 }
 
-function openAdd(): void { editingExpenseId.value = null; editSheetOpen.value = true }
+function openAdd(): void {
+  if (!canEdit.value) return
+  editingExpenseId.value = null; editSheetOpen.value = true
+}
 function openEdit(id: number): void { editingExpenseId.value = id; editSheetOpen.value = true }
 
 function toAction(ex: Expense): ActionExpense {
@@ -60,6 +63,7 @@ function toAction(ex: Expense): ActionExpense {
 }
 
 function onSheetSave(payload: ActionExpense): void {
+  if (!canEdit.value) return
   const base = expenses.value.map(toAction)
   if (payload.id) {
     emit('update-expenses', base.map((ex) => (ex.id === payload.id ? payload : ex)))
@@ -69,6 +73,7 @@ function onSheetSave(payload: ActionExpense): void {
 }
 
 function onSheetDelete(expenseId: number): void {
+  if (!canEdit.value) return
   emit('delete-expense', expenseId)
 }
 </script>
@@ -124,6 +129,7 @@ function onSheetDelete(expenseId: number): void {
         </div>
 
         <button
+          v-if="canEdit"
           type="button"
           class="flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-neutral-300 px-3.5 py-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-50/40"
           @click="openAdd"

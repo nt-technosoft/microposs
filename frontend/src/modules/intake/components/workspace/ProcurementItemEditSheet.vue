@@ -38,9 +38,12 @@ const { rate: fetchedFx, load: loadFx } = useFxRate()
 const editItem = computed<Item | null>(() =>
   props.editingItemId ? (props.procurement.documents.items.find((i) => i.id === props.editingItemId) ?? null) : null,
 )
+const canMutate = computed(() =>
+  props.procurement.status === 'OPEN' && (!editItem.value || !editItem.value.locked_reason),
+)
 const canSplit = computed(
   () => !!editItem.value
-    && props.procurement.status === 'OPEN'
+    && canMutate.value
     && !editItem.value.locked_reason
     && Math.round(parseFloat(editItem.value.quantity) || 0) > 1,
 )
@@ -100,9 +103,13 @@ watch([vpSearch, vpCategory], () => { if (vpOpen.value) debouncedLoadVariants() 
 watch(vpOpen, (v) => { if (v) { vpSearch.value = ''; vpCategory.value = null; loadVariants() } })
 
 function onVariantSelect(v: ProductVariant): void {
+  if (!canMutate.value) return
   variantId.value = v.id; variantName.value = variantDisplay(v); vpOpen.value = false
 }
-function onNewProduct(): void { vpOpen.value = false; qpOpen.value = true }
+function onNewProduct(): void {
+  if (!canMutate.value) return
+  vpOpen.value = false; qpOpen.value = true
+}
 
 async function onQpSubmit(): Promise<void> {
   if (!qpName.value.trim()) { qpError.value = 'Название обязательно'; return }
@@ -117,6 +124,7 @@ async function onQpSubmit(): Promise<void> {
 }
 
 function onSave(): void {
+  if (!canMutate.value) return
   if (!variantId.value) return
   emit('save', {
     ...(props.editingItemId ? { id: props.editingItemId } : {}),
@@ -130,12 +138,14 @@ function onSave(): void {
 }
 
 function onDelete(): void {
+  if (!canMutate.value) return
   if (!props.editingItemId) return
   emit('delete', props.editingItemId)
   emit('update:open', false)
 }
 
 function onSplit(): void {
+  if (!canMutate.value) return
   if (!props.editingItemId) return
   emit('split', props.editingItemId)
   emit('update:open', false)
@@ -150,8 +160,9 @@ function onSplit(): void {
         <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Товар</span>
         <button
           type="button"
-          class="flex w-full items-center justify-between gap-2 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40"
-          @click="vpOpen = true"
+          :disabled="!canMutate"
+          class="flex w-full items-center justify-between gap-2 rounded-[10px] border border-neutral-200 px-3.5 py-3 text-left transition-colors hover:border-green-300 hover:bg-green-50/40 disabled:cursor-default disabled:bg-neutral-50 disabled:hover:border-neutral-200"
+          @click="canMutate && (vpOpen = true)"
         >
           <span class="min-w-0 truncate text-sm font-medium" :class="variantName ? 'text-foreground' : 'text-neutral-400'">{{ variantName || 'Выбрать товар' }}</span>
           <ChevronRight class="size-4 shrink-0 text-neutral-400" />
@@ -162,11 +173,11 @@ function onSplit(): void {
       <div class="flex gap-3">
         <div class="flex w-28 shrink-0 flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Количество</span>
-          <Input v-model="qty" type="number" min="1" step="1" inputmode="numeric" class="h-11 tabular-nums" />
+          <Input v-model="qty" type="number" min="1" step="1" inputmode="numeric" class="h-11 tabular-nums" :disabled="!canMutate" />
         </div>
         <div class="flex flex-1 flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Цена закупки</span>
-          <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" :currencies="allowedCurrencies" />
+          <MoneyCurrencyInput v-model:model-value="price" v-model:currency="currency" :currencies="allowedCurrencies" :disabled="!canMutate" />
         </div>
       </div>
       <p v-if="lockedCurrency" class="-mt-1.5 text-xs text-neutral-400">
@@ -174,10 +185,13 @@ function onSplit(): void {
       </p>
 
       <div class="flex flex-col gap-2 pt-1">
-        <Button class="h-12 w-full text-base" :disabled="!variantId" @click="onSave">Сохранить</Button>
+        <p v-if="!canMutate" class="rounded-[10px] bg-neutral-50 px-3.5 py-3 text-sm text-neutral-500">
+          Позиция уже участвует в оплате или приёмке, поэтому доступна только для просмотра.
+        </p>
+        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!variantId" @click="onSave">Сохранить</Button>
         <Button v-if="canSplit" variant="outline" class="w-full" @click="onSplit">Разделить позицию</Button>
         <button
-          v-if="editingItemId"
+          v-if="canMutate && editingItemId"
           type="button"
           class="h-11 rounded-[10px] border border-negative/30 text-sm font-medium text-negative transition-colors hover:bg-negative/5"
           @click="onDelete"

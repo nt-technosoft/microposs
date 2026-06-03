@@ -206,6 +206,8 @@ class SalePayment(TenantModel):
         decimal_places=6,
         default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     method = models.CharField(max_length=20, choices=Method.choices)
     role = models.CharField(
         max_length=20,
@@ -271,6 +273,8 @@ class SaleLine(TenantModel):
         default=Decimal('1'),
         help_text='Immutable FX snapshot used to convert operation price to UZS.',
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     base_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,

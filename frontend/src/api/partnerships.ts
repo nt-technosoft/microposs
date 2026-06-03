@@ -23,9 +23,13 @@ export type WorkspaceActionKey =
   | 'ALLOCATE_CAPITAL'
   | 'CONVERT_CAPITAL_POOL'
   | 'PAY_COSTS'
+  | 'RESOLVE_OVERPAYMENT'
   | 'PAY_SUPPLIER_PAYABLE'
   | 'GENERATE_INSTALLMENT_SCHEDULE'
   | 'RECEIVE_BATCH'
+  | 'AMEND_ITEMS'
+  | 'AMEND_EXPENSES'
+  | 'REVERSE_BATCH'
   | 'VIEW_HISTORY'
   | 'AMEND_SETTLEMENT'
   | 'RETURN_CONSIGNMENT'
@@ -116,6 +120,12 @@ export interface ProcurementWorkspacePayload {
       remaining_quantity: string
       locked_reason: string | null
       goods_ownership: 'OWNED' | 'CONSIGNED'
+      estimated_allocated_expense_uzs?: string
+      estimated_landed_cost_per_unit_uzs?: string
+      estimated_landed_cost_per_unit?: string
+      actual_allocated_expense_uzs?: string
+      actual_landed_cost_per_unit_uzs?: string
+      actual_landed_cost_per_unit?: string
     }>
     expenses: Array<{
       id: number
@@ -276,6 +286,7 @@ export interface ProcurementWorkspacePayload {
     date: string
     title: string
     document_id: number
+    reason?: string
   }>
 }
 
@@ -696,6 +707,8 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     amount: string
     currency: string
     fx_rate: string
+    fx_rate_source?: string
+    fx_rate_date?: string | null
     date: string
     source: string
     confirmation_status: string
@@ -714,6 +727,8 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
     amount: string
     currency: string
     fx_rate: string
+    fx_rate_source?: string
+    fx_rate_date?: string | null
     date: string
     source: string
     confirmation_status: string
@@ -1052,6 +1067,8 @@ export async function addProcurementContribution(
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   date: string
   notes: string
 }> {
@@ -1068,6 +1085,8 @@ export async function addProcurementWithdrawal(
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   date: string
   reason: string
 }> {

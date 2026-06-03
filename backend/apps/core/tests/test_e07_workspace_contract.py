@@ -1,12 +1,15 @@
 from decimal import Decimal
 
+from django.db import models
 from django.test import TestCase
 from rest_framework.test import APITestCase
 
+from apps.finance.models import Payment
 from apps.inventory.models import Lot
 from apps.partnerships.models import (
     Procurement,
     ProcurementExpense,
+    ProcurementExpenseTarget,
     ProcurementItem,
     ProcurementTerms,
 )
@@ -145,6 +148,480 @@ class ProcurementWorkspaceContractTests(TestCase):
         self.assertIsNotNone(procurement.agreement_id)
         self.assertEqual(payload['documents']['source']['funding_source'], Procurement.FundingSource.PARTNERSHIP)
         self.assertEqual(payload['flow']['current_step'], 'purchase_intent')
+
+    def test_updating_expense_targets_keeps_existing_links(self):
+        procurement = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=self.ctx['supplier'].id,
+        )
+
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '10',
+                        'unit_purchase_price': '100',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '5',
+                        'unit_purchase_price': '200',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                ],
+                'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '250',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        item_ids = list(procurement.items.order_by('id').values_list('id', flat=True))
+        expense = procurement.expenses.get()
+
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_EXPENSES',
+            payload={'payload': {'expenses': [{
+                'id': expense.id,
+                'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                'amount': '250',
+                'currency': 'UZS',
+                'fx_rate': '1',
+                'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                'target_item_ids': [item_ids[0]],
+            }]}},
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_EXPENSES',
+            payload={'payload': {'expenses': [{
+                'id': expense.id,
+                'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                'amount': '250',
+                'currency': 'UZS',
+                'fx_rate': '1',
+                'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                'target_item_ids': item_ids,
+            }]}},
+        )
+
+        self.assertEqual(
+            set(ProcurementExpenseTarget.objects.filter(expense=expense).values_list('item_id', flat=True)),
+            set(item_ids),
+        )
+
+    def test_partial_receive_prorates_shared_expense_and_keeps_remainder(self):
+        procurement = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=self.ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                ],
+                'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '300',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'PREPAID',
+                'currency_of_obligation': 'UZS',
+                'total_amount_due': '2300',
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='PAY_COSTS',
+            payload={'payload': {'cash_account_id': self.cash.id}},
+        )
+
+        first_item, second_item = list(procurement.items.order_by('id'))
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': self.ctx['storage'].id,
+                'item_ids': [first_item.id],
+            }},
+        )
+
+        expense = procurement.expenses.get()
+        batch_expense = expense.receive_batch_expenses.get()
+        self.assertEqual(batch_expense.allocated_amount_uzs, Decimal('150.00'))
+        expense.refresh_from_db()
+        self.assertEqual(expense.lifecycle_state, ProcurementExpense.LifecycleState.READY_FOR_RECEIVE)
+        payment_status = build_workspace_payload(procurement)['documents']['payment_status']
+        self.assertEqual(payment_status['state'], 'paid_full')
+        self.assertEqual(payment_status['obligation_amount'], '2300.00')
+        self.assertEqual(payment_status['paid_amount'], '2300.00')
+
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': self.ctx['storage'].id,
+                'item_ids': [second_item.id],
+            }},
+        )
+
+        expense.refresh_from_db()
+        self.assertEqual(expense.lifecycle_state, ProcurementExpense.LifecycleState.RECEIVED)
+        self.assertEqual(
+            expense.receive_batch_expenses.aggregate(total=models.Sum('allocated_amount_uzs'))['total'],
+            Decimal('300.00'),
+        )
+
+    def test_paid_unreceived_lines_can_be_amended_but_not_cancelled(self):
+        procurement = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=self.ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [{
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': '10',
+                    'unit_purchase_price': '100',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                }],
+                'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '300',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'PREPAID',
+                'currency_of_obligation': 'UZS',
+                'total_amount_due': '1300',
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='PAY_COSTS',
+            payload={'payload': {'cash_account_id': self.cash.id}},
+        )
+        item = procurement.items.get()
+        expense = procurement.expenses.get()
+
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='AMEND_ITEMS',
+            payload={'payload': {
+                'reason': 'Supplier corrected quantity before delivery.',
+                'items': [{
+                    'id': item.id,
+                    'product_variant_id': item.product_variant_id,
+                    'quantity': '12',
+                    'unit_purchase_price': '90',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                }],
+            }},
+        )
+        item.refresh_from_db()
+        self.assertEqual(item.lifecycle_state, ProcurementItem.LifecycleState.READY_FOR_RECEIVE)
+        self.assertEqual(item.quantity, Decimal('12.000'))
+        self.assertEqual(item.unit_purchase_price, Decimal('90.000000'))
+
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='AMEND_EXPENSES',
+            payload={'payload': {
+                'reason': 'Customs amount corrected before receipt.',
+                'expenses': [{
+                    'id': expense.id,
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '350',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        expense.refresh_from_db()
+        self.assertEqual(expense.lifecycle_state, ProcurementExpense.LifecycleState.READY_FOR_RECEIVE)
+        self.assertEqual(expense.amount, Decimal('350.00'))
+
+        payload = build_workspace_payload(procurement)
+        payment_status = payload['documents']['payment_status']
+        self.assertEqual(payment_status['state'], 'underpaid')
+        self.assertEqual(payment_status['obligation_amount'], '1430.00')
+        self.assertEqual(payment_status['paid_amount'], '1300.00')
+        self.assertEqual(payment_status['remaining_by_currency']['UZS'], '130.00')
+
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='PAY_COSTS',
+            payload={'payload': {
+                'cash_account_id': self.cash.id,
+                'amount': '130',
+                'currency': 'UZS',
+            }},
+        )
+        payload = build_workspace_payload(procurement)
+        self.assertEqual(payload['documents']['payment_status']['state'], 'paid_full')
+        self.assertEqual(
+            Payment.objects.filter(
+                tenant_id=self.ctx['business'].id,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=procurement.id,
+            ).count(),
+            2,
+        )
+
+        with self.assertRaisesMessage(ValueError, 'only DRAFT lines can be removed'):
+            dispatch_workspace_action(
+                tenant_id=self.ctx['business'].id,
+                procurement=procurement,
+                action='AMEND_ITEMS',
+                payload={'payload': {
+                    'reason': 'Try invalid remove.',
+                    'items': [{'id': item.id, '_cancel': True}],
+                }},
+            )
+
+        with self.assertRaisesMessage(ValueError, 'only DRAFT expenses can be removed'):
+            dispatch_workspace_action(
+                tenant_id=self.ctx['business'].id,
+                procurement=procurement,
+                action='AMEND_EXPENSES',
+                payload={'payload': {
+                    'reason': 'Try invalid remove.',
+                    'expenses': [{'id': expense.id, '_cancel': True}],
+                }},
+            )
+
+        self.assertTrue(any(event['kind'] == 'PROCUREMENT_AMENDMENT' for event in payload['history']))
+
+    def test_partially_received_expense_amendment_reallocates_only_remaining_amount(self):
+        procurement = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=self.ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                ],
+                'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '300',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'DEFERRED',
+                'currency_of_obligation': 'UZS',
+                'total_amount_due': '2300',
+                'deadline_date': '2026-06-01',
+            }},
+        )
+        first_item, second_item = list(procurement.items.order_by('id'))
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': self.ctx['storage'].id,
+                'item_ids': [first_item.id],
+            }},
+        )
+        expense = procurement.expenses.get()
+        self.assertEqual(expense.receive_batch_expenses.get().allocated_amount_uzs, Decimal('150.00'))
+
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='AMEND_EXPENSES',
+            payload={'payload': {
+                'reason': 'Customs invoice increased after first batch.',
+                'expenses': [{
+                    'id': expense.id,
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '500',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        expense.refresh_from_db()
+        self.assertEqual(expense.lifecycle_state, ProcurementExpense.LifecycleState.READY_FOR_RECEIVE)
+
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': self.ctx['storage'].id,
+                'item_ids': [second_item.id],
+            }},
+        )
+        expense.refresh_from_db()
+        allocations = list(expense.receive_batch_expenses.order_by('id').values_list('allocated_amount_uzs', flat=True))
+        self.assertEqual(allocations, [Decimal('150.00'), Decimal('350.00')])
+        self.assertEqual(sum(allocations, Decimal('0.00')), Decimal('500.00'))
+
+    def test_partially_received_expense_cannot_be_reduced_below_allocated_amount(self):
+        procurement = create_workspace(
+            tenant_id=self.ctx['business'].id,
+            funding_source=Procurement.FundingSource.OWN_FUNDS,
+            supplier_id=self.ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {
+                'items': [
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                    {
+                        'product_variant_id': self.ctx['variant'].id,
+                        'quantity': '1',
+                        'unit_purchase_price': '1000',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                    },
+                ],
+                'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': '300',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                }],
+            }},
+        )
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'DEFERRED',
+                'currency_of_obligation': 'UZS',
+                'total_amount_due': '2300',
+                'deadline_date': '2026-06-01',
+            }},
+        )
+        first_item = procurement.items.order_by('id').first()
+        procurement = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': self.ctx['storage'].id,
+                'item_ids': [first_item.id],
+            }},
+        )
+        expense = procurement.expenses.get()
+
+        with self.assertRaisesMessage(ValueError, 'below already received amount'):
+            dispatch_workspace_action(
+                tenant_id=self.ctx['business'].id,
+                procurement=procurement,
+                action='AMEND_EXPENSES',
+                payload={'payload': {
+                    'reason': 'Invalid decrease.',
+                    'expenses': [{
+                        'id': expense.id,
+                        'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                        'amount': '100',
+                        'currency': 'UZS',
+                        'fx_rate': '1',
+                        'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                    }],
+                }},
+            )
 
     def test_partnership_agreement_moves_to_capital_step_before_allocation_exists(self):
         procurement = create_workspace(

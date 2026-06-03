@@ -89,6 +89,8 @@ class ReceivableEntry(TenantModel):
     fx_rate = models.DecimalField(
         max_digits=14, decimal_places=6, default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     entry_type = models.CharField(max_length=20, choices=EntryType.choices)
     due_date = models.DateField(null=True, blank=True)
     source_ref = models.CharField(
@@ -130,6 +132,8 @@ class CustomerPayment(TenantModel):
     fx_rate = models.DecimalField(
         max_digits=14, decimal_places=6, default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices)
     date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')

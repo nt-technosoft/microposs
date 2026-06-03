@@ -15,8 +15,11 @@ from .models import (
     Payment, PaymentAllocation, Refund,
 )
 from .fx_rates import (
+    FxRateSnapshot,
     get_fx_rate_for_date,
+    OperationFxRateSource,
     resolve_fx_rate_snapshot,
+    resolve_fx_rate_snapshot_details,
     sync_official_exchange_rate,
     to_functional_amount_uzs,
     upsert_exchange_rate,
@@ -476,6 +479,8 @@ def record_generic_cash_payment(
     amount: Decimal,
     currency: str | None = None,
     fx_rate: Decimal | None = None,
+    fx_rate_source: str = '',
+    fx_rate_date=None,
     paid_at=None,
     counterpart_account_code: str,
     operation_type: str = 'payment',
@@ -517,19 +522,14 @@ def record_generic_cash_payment(
                 f'Insufficient cash in {account.name}: have {account.balance}, need {amount}.'
             )
 
-        resolved_fx_rate = (
-            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
-            if fx_rate is not None
-            else (
-                Decimal('1')
-                if payment_currency == 'UZS'
-                else resolve_fx_rate_snapshot(
-                    tenant_id=tenant_id,
-                    operation_currency=payment_currency,
-                    operation_at=paid_at,
-                )
-            )
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=tenant_id,
+            operation_currency=payment_currency,
+            operation_at=paid_at,
+            fx_rate_snapshot=fx_rate,
         )
+        resolved_fx_source = fx_rate_source or fx_snapshot.source
+        resolved_fx_date = fx_rate_date or fx_snapshot.rate_date
 
         payment = Payment.objects.create(
             tenant_id=tenant_id,
@@ -539,7 +539,9 @@ def record_generic_cash_payment(
             target_id=target_id,
             amount=amount,
             currency=payment_currency,
-            fx_rate=resolved_fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=resolved_fx_source,
+            fx_rate_date=resolved_fx_date,
             paid_at=paid_at,
             client_request_id=client_request_id,
             notes=notes,
@@ -601,6 +603,8 @@ def record_capital_pool_contribution(
     equity_account_code: str,
     currency: str = 'UZS',
     fx_rate: Decimal | None = None,
+    fx_rate_source: str = '',
+    fx_rate_date=None,
     paid_at=None,
     from_cash_account_id: int | None = None,
     client_request_id=None,
@@ -650,19 +654,14 @@ def record_capital_pool_contribution(
             raise ValueError(
                 'Contribution currency must match the agreement capital pool currency.'
             )
-        resolved_fx_rate = (
-            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
-            if fx_rate is not None
-            else (
-                Decimal('1')
-                if payment_currency == 'UZS'
-                else resolve_fx_rate_snapshot(
-                    tenant_id=tenant_id,
-                    operation_currency=payment_currency,
-                    operation_at=paid_at,
-                )
-            )
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=tenant_id,
+            operation_currency=payment_currency,
+            operation_at=paid_at,
+            fx_rate_snapshot=fx_rate,
         )
+        resolved_fx_source = fx_rate_source or fx_snapshot.source
+        resolved_fx_date = fx_rate_date or fx_snapshot.rate_date
 
         if from_cash_account_id is not None:
             source_type = Payment.SourceType.CASH_ACCOUNT
@@ -679,7 +678,9 @@ def record_capital_pool_contribution(
             target_id=contribution_id,
             amount=amount,
             currency=payment_currency,
-            fx_rate=resolved_fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=resolved_fx_source,
+            fx_rate_date=resolved_fx_date,
             paid_at=paid_at,
             client_request_id=client_request_id,
             notes=notes,
@@ -694,7 +695,7 @@ def record_capital_pool_contribution(
         )
 
         # GL is functional UZS; the pool cash subledger is the agreement currency.
-        functional_uzs = (amount * resolved_fx_rate).quantize(Decimal('0.01'))
+        functional_uzs = (amount * fx_snapshot.rate).quantize(Decimal('0.01'))
 
         pool_entry = create_cash_entry(
             tenant_id=tenant_id,
@@ -834,14 +835,19 @@ def record_capital_pool_payment(
                 f'Insufficient capital pool funds in {pool.name}: '
                 f'have {pool.balance}, need {amount}.'
             )
-        resolved_fx_rate = (
-            _to_decimal(fx_rate).quantize(Decimal('0.000001'))
-            if fx_rate is not None
-            else (
-                Decimal('1') if payment_currency == 'UZS'
-                else (functional_amount_uzs / amount).quantize(Decimal('0.000001'))
+        if fx_rate is not None or payment_currency == 'UZS':
+            fx_snapshot = resolve_fx_rate_snapshot_details(
+                tenant_id=tenant_id,
+                operation_currency=payment_currency,
+                operation_at=paid_at,
+                fx_rate_snapshot=fx_rate,
             )
-        )
+        else:
+            fx_snapshot = FxRateSnapshot(
+                rate=(functional_amount_uzs / amount).quantize(Decimal('0.000001')),
+                rate_date=paid_at.date() if hasattr(paid_at, 'date') else paid_at,
+                source=OperationFxRateSource.DERIVED,
+            )
 
         payment = Payment.objects.create(
             tenant_id=tenant_id,
@@ -851,7 +857,9 @@ def record_capital_pool_payment(
             target_id=target_id,
             amount=amount,
             currency=payment_currency,
-            fx_rate=resolved_fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             paid_at=paid_at,
             client_request_id=client_request_id,
             notes=notes,
@@ -922,7 +930,7 @@ def record_expense(
         raise ValueError('operation_amount must be > 0')
 
     currency = str(operation_currency or 'UZS').upper()
-    rate = resolve_fx_rate_snapshot(
+    fx_snapshot = resolve_fx_rate_snapshot_details(
         tenant_id=tenant_id,
         operation_currency=currency,
         operation_at=occurred_at,
@@ -933,7 +941,7 @@ def record_expense(
         functional = to_functional_amount_uzs(
             operation_amount=amount,
             operation_currency=currency,
-            fx_rate_snapshot=rate,
+            fx_rate_snapshot=fx_snapshot.rate,
         )
     else:
         functional = Decimal(str(functional_amount_uzs)).quantize(Decimal('0.01'))
@@ -954,7 +962,9 @@ def record_expense(
             source_account_code=cash_account_code,
             operation_currency=currency,
             operation_amount=amount,
-            fx_rate_snapshot=rate,
+            fx_rate_snapshot=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             functional_amount_uzs=functional,
             occurred_at=occurred_at,
             notes=notes,
@@ -1271,6 +1281,8 @@ def exchange_currency(
             to_amount=to_amount,
             to_currency=to_acc.currency,
             effective_rate=rate,
+            fx_rate_source=OperationFxRateSource.CUSTOM,
+            fx_rate_date=date.date() if hasattr(date, 'date') else date,
             date=date,
             notes=notes,
         )
@@ -1305,7 +1317,7 @@ def refund_customer(
     sale_id: int,
     amount: Decimal,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
     method: str,
     account_id: int | None = None,
     return_ref_id: int | None = None,
@@ -1323,6 +1335,12 @@ def refund_customer(
 
     amount = _to_decimal(amount).quantize(Decimal('0.01'))
     currency = currency.upper()
+    fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=fx_rate,
+    )
 
     if amount <= 0:
         raise ValueError('Refund amount must be > 0')
@@ -1394,7 +1412,9 @@ def refund_customer(
                 date=date,
                 amount=-amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=fx_snapshot.rate,
+                fx_rate_source=fx_snapshot.source,
+                fx_rate_date=fx_snapshot.rate_date,
                 entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
                 source_ref=f'refund:pending',
             )
@@ -1405,7 +1425,9 @@ def refund_customer(
             date=date,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             account=account,
             method=method,
             return_ref_id=return_ref_id,

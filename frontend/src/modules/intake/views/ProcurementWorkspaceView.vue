@@ -119,7 +119,8 @@ async function retryLastPayment(): Promise<void> {
 }
 
 function handleMenuAction(actionKey: string): void {
-  if (actionKey === 'amend') { amendTarget.value = 'items'; amendSheetOpen.value = true; return }
+  if (actionKey === 'amend_items') { amendTarget.value = 'items'; amendSheetOpen.value = true; return }
+  if (actionKey === 'amend_expenses') { amendTarget.value = 'expenses'; amendSheetOpen.value = true; return }
   if (actionKey === 'cancel') { cancelDialogOpen.value = true; return }
   if (actionKey === 'reverse_receive') { reverseDialogOpen.value = true; return }
   toast.info(`Будет реализовано: ${actionKey}`)
@@ -178,6 +179,7 @@ onBeforeUnmount(() => store.$reset())
       :status="procurement?.status ?? null"
       :title="procurement?.display.title ?? 'Новый приход'"
       :subtitle="procurement?.display.subtitle ?? null"
+      :procurement="procurement"
       @back="router.back()"
       @menu-action="handleMenuAction"
     />

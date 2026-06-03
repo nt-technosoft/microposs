@@ -101,6 +101,7 @@ function fmtDate(iso: string): string {
               <span class="mt-1.5 size-2 shrink-0 rounded-full bg-green-400" />
               <div class="flex flex-col gap-0.5">
                 <span class="text-sm text-foreground">{{ event.title }}</span>
+                <span v-if="event.reason" class="text-xs leading-snug text-neutral-500">{{ event.reason }}</span>
                 <span class="text-xs text-neutral-500">{{ fmtDate(event.date) }}</span>
               </div>
             </div>

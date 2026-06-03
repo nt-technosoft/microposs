@@ -135,7 +135,11 @@ class FxRateApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         expense = Expense.objects.get(pk=response.data['id'])
         self.assertEqual(expense.fx_rate_snapshot, Decimal('12500.000000'))
+        self.assertEqual(expense.fx_rate_source, ExchangeRate.Source.MANUAL)
+        self.assertEqual(expense.fx_rate_date, date(2026, 4, 15))
         self.assertEqual(expense.functional_amount_uzs, Decimal('125000.00'))
+        self.assertEqual(response.data['fx_rate_source'], ExchangeRate.Source.MANUAL)
+        self.assertEqual(response.data['fx_rate_date'], '2026-04-15')
 
     @patch('apps.finance.fx_rates.fetch_official_cbu_rate')
     def test_daily_fx_task_keeps_manual_rate_when_overwrite_disabled(self, fetch_rate):

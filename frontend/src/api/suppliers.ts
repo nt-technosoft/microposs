@@ -16,6 +16,8 @@ export interface SupplierCreatePayload {
 export interface SupplierPaymentPayload {
   amount: number
   payment_method: 'cash' | 'bank'
+  operation_currency?: string
+  fx_rate_snapshot?: string | number | null
   notes?: string
 }
 
@@ -25,6 +27,8 @@ export interface SupplierPayment {
   operation_currency?: string
   operation_amount?: string | null
   fx_rate_snapshot?: string | null
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs?: string | null
   amount: string
   payment_method: 'cash' | 'bank'

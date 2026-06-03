@@ -11,6 +11,7 @@ from apps.partnerships.models import Procurement, ProcurementAmendment
 from apps.partnerships.workspace import (
     apply_expenses_amendment,
     apply_items_amendment,
+    build_workspace_payload,
     create_workspace,
     dispatch_workspace_action,
     receive_workspace_batch,
@@ -190,6 +191,68 @@ class AmendItemsTests(TestCase):
             target_id=proc.pk,
         ).count()
         self.assertEqual(payment_count_before, payment_count_after)
+        payment_status = build_workspace_payload(proc)['documents']['payment_status']
+        self.assertEqual(payment_status['state'], 'overpaid')
+        self.assertEqual(payment_status['delta'], '2000.00')
+
+    def test_resolve_own_funds_overpayment_records_supplier_refund_to_cash(self):
+        from apps.finance.models import CashEntry, Payment
+
+        proc = _build_open_procurement(self.ctx)
+        CashAccount.objects.filter(pk=self.ctx['cash_account'].pk).update(balance=Decimal('20000'))
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id, procurement=proc,
+            action='PAY_COSTS',
+            payload={'payload': {'cash_account_id': self.ctx['cash_account'].id,
+                                 'amount': '5000', 'currency': 'UZS'}},
+        )
+
+        item = proc.items.first()
+        apply_items_amendment(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            new_items_payload=[{
+                'id': item.id,
+                'product_variant_id': item.product_variant_id,
+                'quantity': 3, 'unit_purchase_price': '1000',
+                'currency': 'UZS', 'fx_rate': '1',
+            }],
+            reason='supplier removed units after prepayment',
+        )
+        self.assertEqual(
+            build_workspace_payload(proc)['documents']['payment_status']['state'],
+            'overpaid',
+        )
+
+        dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            action='RESOLVE_OVERPAYMENT',
+            payload={'payload': {
+                'cash_account_id': self.ctx['cash_account'].id,
+                'amount': '2000',
+                'currency': 'UZS',
+            }},
+        )
+
+        self.ctx['cash_account'].refresh_from_db()
+        self.assertEqual(self.ctx['cash_account'].balance, Decimal('17000.00'))
+        self.assertTrue(Payment.objects.filter(
+            tenant_id=self.ctx['business'].id,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=proc.pk,
+            reversed_payment__isnull=False,
+            amount=Decimal('2000.00'),
+        ).exists())
+        self.assertTrue(CashEntry.objects.filter(
+            tenant_id=self.ctx['business'].id,
+            account=self.ctx['cash_account'],
+            direction=CashEntry.Direction.IN,
+            amount=Decimal('2000.00'),
+        ).exists())
+        payment_status = build_workspace_payload(proc)['documents']['payment_status']
+        self.assertEqual(payment_status['state'], 'paid_full')
+        self.assertEqual(payment_status['paid_by_currency']['UZS'], '3000.00')
 
     def test_amend_items_increases_cost_blocks_receive(self):
         """

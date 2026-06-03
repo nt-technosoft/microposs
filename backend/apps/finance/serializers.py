@@ -92,6 +92,8 @@ class ExpenseSerializer(serializers.ModelSerializer):
             'operation_currency',
             'operation_amount',
             'fx_rate_snapshot',
+            'fx_rate_source',
+            'fx_rate_date',
             'functional_amount_uzs',
             'occurred_at',
             'notes',
@@ -324,10 +326,25 @@ class ExchangeRateRefreshSerializer(serializers.Serializer):
 
 
 class CashAccountSerializer(serializers.ModelSerializer):
+    # For AGREEMENT_CAPITAL pools — the owning investment agreement, so the UI
+    # can link a capital pool to its agreement (no operations happen in Касса).
+    agreement_id = serializers.SerializerMethodField()
+
     class Meta:
         model = CashAccount
-        fields = ['id', 'name', 'currency', 'balance', 'kind', 'linked_account', 'is_active']
+        fields = ['id', 'name', 'currency', 'balance', 'kind', 'linked_account', 'is_active', 'agreement_id']
         read_only_fields = ['id', 'balance']
+
+    def get_agreement_id(self, account) -> int | None:
+        if account.kind != CashAccount.Kind.AGREEMENT_CAPITAL:
+            return None
+        backed = account.backed_agreements.first()  # base pool
+        if backed is not None:
+            return backed.pk
+        # Per-currency sub-pool (E12)
+        from apps.partnerships.models import AgreementCurrencyPool
+        pool = AgreementCurrencyPool.objects.filter(cash_account=account).first()
+        return pool.agreement_id if pool is not None else None
 
 
 class CashAccountCreateSerializer(serializers.Serializer):
@@ -355,7 +372,7 @@ class CurrencyExchangeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'from_account', 'from_account_name', 'to_account', 'to_account_name',
             'from_amount', 'from_currency', 'to_amount', 'to_currency',
-            'effective_rate', 'date', 'notes',
+            'effective_rate', 'fx_rate_source', 'fx_rate_date', 'date', 'notes',
         ]
         read_only_fields = ['id']
 
@@ -371,7 +388,11 @@ class CurrencyExchangeCreateSerializer(serializers.Serializer):
 class RefundSerializer(serializers.ModelSerializer):
     class Meta:
         model = Refund
-        fields = ['id', 'customer', 'date', 'amount', 'currency', 'fx_rate', 'account', 'method', 'return_ref']
+        fields = [
+            'id', 'customer', 'date', 'amount', 'currency',
+            'fx_rate', 'fx_rate_source', 'fx_rate_date',
+            'account', 'method', 'return_ref',
+        ]
         read_only_fields = ['id']
 
 
@@ -380,7 +401,7 @@ class RefundCreateSerializer(serializers.Serializer):
     sale_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal('0.01'))
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
-    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, default='1')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     method = serializers.ChoiceField(choices=Refund.Method.choices)
     account_id = serializers.IntegerField(required=False, allow_null=True)
     return_ref_id = serializers.IntegerField(required=False, allow_null=True)

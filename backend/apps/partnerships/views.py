@@ -115,7 +115,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 partner_id=serializer.validated_data['partner_id'],
                 amount=serializer.validated_data['amount'],
                 currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
+                fx_rate=serializer.validated_data.get('fx_rate'),
                 notes=serializer.validated_data.get('notes', ''),
                 created_by_id=request.user.id if request.user.is_authenticated else None,
             )
@@ -135,7 +135,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 partner_id=serializer.validated_data['partner_id'],
                 amount=serializer.validated_data['amount'],
                 currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
+                fx_rate=serializer.validated_data.get('fx_rate'),
                 reason=serializer.validated_data.get('reason', ''),
                 created_by_id=request.user.id if request.user.is_authenticated else None,
             )
@@ -521,7 +521,7 @@ class DividendPaymentViewSet(viewsets.ModelViewSet):
                 procurement_id=serializer.validated_data['procurement_id'],
                 amount=serializer.validated_data['amount'],
                 currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
+                fx_rate=serializer.validated_data.get('fx_rate'),
                 from_account_id=serializer.validated_data.get('paid_from_account_id'),
             )
         except ValueError as error:

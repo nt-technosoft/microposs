@@ -2,14 +2,220 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.finance.models import JournalEntry, Payment
-from apps.partnerships.models import Procurement, ProcurementReceiveBatchCapitalAllocation
-from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
+from apps.finance.models import CashEntry, JournalEntry, Payment
+from apps.partnerships.models import AgreementAllocation, Procurement, ProcurementReceiveBatchCapitalAllocation
+from apps.partnerships.workspace import apply_items_amendment, build_workspace_payload, create_workspace, dispatch_workspace_action
 
 from ._helpers import build_tenant
 
 
 class PartnershipCapitalPoolTests(TestCase):
+    def test_resolve_partnership_overpayment_returns_money_to_agreement_pool(self):
+        ctx = build_tenant()
+        procurement = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': Decimal('0.5'),
+                'planned_budget': Decimal('150'),
+                'currency': 'UZS',
+                'partners': [
+                    {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
+                     'planned_capital_share': Decimal('100'), 'profit_share': Decimal('0.333333')},
+                    {'partner_id': ctx['operator'].id, 'role': 'OPERATOR',
+                     'planned_capital_share': Decimal('50'), 'profit_share': Decimal('0.666667')},
+                ],
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }]}},
+        )
+        for partner_id, amount in (
+            (ctx['investor'].id, Decimal('100')),
+            (ctx['operator'].id, Decimal('50')),
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': Decimal('1'),
+                }},
+            )
+
+        item = procurement.items.get()
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('80'), 'currency': 'UZS'},
+                {'partner_id': ctx['operator'].id, 'amount': Decimal('20'), 'currency': 'UZS'},
+            ], 'item_ids': [item.id]}},
+        )
+        procurement.agreement.capital_account.refresh_from_db()
+        self.assertEqual(procurement.agreement.capital_account.balance, Decimal('50.00'))
+
+        apply_items_amendment(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            new_items_payload=[{
+                'id': item.id,
+                'product_variant_id': item.product_variant_id,
+                'quantity': Decimal('8'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            reason='supplier removed two units after prepayment',
+        )
+        self.assertEqual(
+            build_workspace_payload(procurement)['documents']['payment_status']['state'],
+            'overpaid',
+        )
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RESOLVE_OVERPAYMENT',
+            payload={'payload': {'amount': Decimal('20'), 'currency': 'UZS'}},
+        )
+
+        procurement.agreement.capital_account.refresh_from_db()
+        self.assertEqual(procurement.agreement.capital_account.balance, Decimal('70.00'))
+        self.assertTrue(AgreementAllocation.objects.filter(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+            amount=Decimal('20.00'),
+        ).exists())
+        self.assertTrue(CashEntry.objects.filter(
+            tenant_id=ctx['business'].id,
+            account=procurement.agreement.capital_account,
+            direction=CashEntry.Direction.IN,
+            amount=Decimal('20.00'),
+        ).exists())
+        payment_status = build_workspace_payload(procurement)['documents']['payment_status']
+        self.assertEqual(payment_status['state'], 'paid_full')
+        self.assertEqual(payment_status['paid_by_currency']['UZS'], '80.00')
+
+    def test_paid_unreceived_partnership_procurement_can_allocate_correction_delta(self):
+        ctx = build_tenant()
+        procurement = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': Decimal('0.5'),
+                'planned_budget': Decimal('150'),
+                'currency': 'UZS',
+                'partners': [
+                    {
+                        'partner_id': ctx['investor'].id,
+                        'role': 'INVESTOR',
+                        'planned_capital_share': Decimal('100'),
+                        'profit_share': Decimal('0.333333'),
+                    },
+                    {
+                        'partner_id': ctx['operator'].id,
+                        'role': 'OPERATOR',
+                        'planned_capital_share': Decimal('50'),
+                        'profit_share': Decimal('0.666667'),
+                    },
+                ],
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }]}},
+        )
+        for partner_id, amount in (
+            (ctx['investor'].id, Decimal('120')),
+            (ctx['operator'].id, Decimal('30')),
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': Decimal('1'),
+                }},
+            )
+
+        item = procurement.items.get()
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('80'), 'currency': 'UZS'},
+                {'partner_id': ctx['operator'].id, 'amount': Decimal('20'), 'currency': 'UZS'},
+            ], 'item_ids': [item.id]}},
+        )
+
+        apply_items_amendment(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            new_items_payload=[{
+                'id': item.id,
+                'product_variant_id': item.product_variant_id,
+                'quantity': Decimal('12'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            reason='Supplier added two units before receipt.',
+        )
+        payload = build_workspace_payload(procurement)
+        self.assertEqual(payload['documents']['payment_status']['state'], 'underpaid')
+        self.assertEqual(payload['documents']['payment_status']['remaining_by_currency']['UZS'], '20.00')
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('20'), 'currency': 'UZS'},
+            ]}},
+        )
+        payload = build_workspace_payload(procurement)
+        self.assertEqual(payload['documents']['payment_status']['state'], 'paid_full')
+        self.assertEqual(payload['documents']['payment_status']['paid_by_currency']['UZS'], '120.00')
+
     def test_partial_receives_keep_independent_68_32_and_72_28_snapshots(self):
         ctx = build_tenant()
         procurement = create_workspace(

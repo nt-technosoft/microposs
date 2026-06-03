@@ -41,11 +41,18 @@ const editExpense = computed<Expense | null>(() =>
     ? (props.procurement.documents.expenses.find((e) => e.id === props.editingExpenseId) ?? null)
     : null,
 )
+const canMutate = computed(() =>
+  props.procurement.status === 'OPEN' && (!editExpense.value || !editExpense.value.locked_reason),
+)
 // Defensive: never offer soft-deleted (CANCELLED) goods as expense targets
 // (the payload already excludes them at the source).
 const items = computed(() =>
   props.procurement.documents.items.filter((it) => it.lifecycle_state !== 'CANCELLED'),
 )
+const targetableItems = computed(() =>
+  canMutate.value ? items.value.filter((it) => it.lifecycle_state === 'DRAFT') : items.value,
+)
+const hasLockedItems = computed(() => targetableItems.value.length !== items.value.length)
 const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
   const currencies = new Set(
     [
@@ -81,23 +88,27 @@ watch(() => props.open, (isOpen) => {
   } else {
     expenseType.value = 'LOGISTICS'; amount.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS')
     fxRateLocal.value = '1'; allocMethod.value = 'BY_VALUE'
-    targetScope.value = 'all'; selectedTargets.value = []
+    targetScope.value = hasLockedItems.value ? 'selected' : 'all'
+    selectedTargets.value = hasLockedItems.value ? targetableItems.value.map((it) => it.id) : []
   }
 })
 
 function toggleTarget(itemId: number): void {
+  if (!canMutate.value) return
   selectedTargets.value = selectedTargets.value.includes(itemId)
     ? selectedTargets.value.filter((id) => id !== itemId)
     : [...selectedTargets.value, itemId]
 }
 
 function toggleAllTargets(): void {
-  selectedTargets.value = selectedTargets.value.length === items.value.length
+  if (!canMutate.value) return
+  selectedTargets.value = selectedTargets.value.length === targetableItems.value.length
     ? []
-    : items.value.map((it) => it.id)
+    : targetableItems.value.map((it) => it.id)
 }
 
 function onSave(): void {
+  if (!canMutate.value) return
   emit('save', {
     ...(props.editingExpenseId ? { id: props.editingExpenseId } : {}),
     expense_type: expenseType.value,
@@ -111,6 +122,7 @@ function onSave(): void {
 }
 
 function onDelete(): void {
+  if (!canMutate.value) return
   if (!props.editingExpenseId) return
   emit('delete', props.editingExpenseId)
   emit('update:open', false)
@@ -131,7 +143,9 @@ function onDelete(): void {
             :class="cn(
               'rounded-full border px-3 py-1.5 text-sm transition-colors',
               expenseType === t.key ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+              !canMutate && 'cursor-default opacity-70 hover:bg-transparent',
             )"
+            :disabled="!canMutate"
             @click="expenseType = t.key"
           >{{ t.label }}</button>
         </div>
@@ -140,7 +154,7 @@ function onDelete(): void {
       <!-- Сумма -->
       <div class="flex flex-col gap-1.5">
         <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма</span>
-        <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" :currencies="allowedCurrencies" />
+        <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" :currencies="allowedCurrencies" :disabled="!canMutate" />
         <p v-if="lockedCurrency" class="text-xs text-neutral-400">Валюта прихода зафиксирована: {{ lockedCurrency }}.</p>
       </div>
 
@@ -155,7 +169,9 @@ function onDelete(): void {
             :class="cn(
               'rounded-full border px-3 py-1.5 text-sm transition-colors',
               allocMethod === m.key ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+              !canMutate && 'cursor-default opacity-70 hover:bg-transparent',
             )"
+            :disabled="!canMutate"
             @click="allocMethod = m.key"
           >{{ m.label }}</button>
         </div>
@@ -167,40 +183,47 @@ function onDelete(): void {
         <div class="flex flex-wrap gap-2">
           <button
             type="button"
+            :disabled="!canMutate || hasLockedItems"
             :class="cn(
               'rounded-full border px-3 py-1.5 text-sm transition-colors',
               targetScope === 'all' ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
+              (!canMutate || hasLockedItems) && 'cursor-not-allowed opacity-40 hover:bg-transparent',
             )"
             @click="targetScope = 'all'"
           >Все товары</button>
           <button
             type="button"
-            :disabled="!items.length"
+            :disabled="!canMutate || !targetableItems.length"
             :class="cn(
               'rounded-full border px-3 py-1.5 text-sm transition-colors',
               targetScope === 'selected' ? 'border-primary bg-primary/5 font-medium text-foreground' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50',
-              !items.length && 'cursor-not-allowed opacity-40 hover:bg-transparent',
+              (!canMutate || !targetableItems.length) && 'cursor-not-allowed opacity-40 hover:bg-transparent',
             )"
             @click="targetScope = 'selected'"
           >Выбранные</button>
         </div>
+        <p v-if="canMutate && hasLockedItems" class="text-xs text-neutral-400">
+          Уже оплаченные или принятые товары нельзя добавлять в новые расходы.
+        </p>
       </div>
 
-      <template v-if="targetScope === 'selected' && items.length">
+      <template v-if="targetScope === 'selected' && targetableItems.length">
         <div class="flex items-center justify-between">
-          <span class="text-xs text-neutral-500">Выбрано {{ selectedTargets.length }} из {{ items.length }}</span>
-          <button type="button" class="text-xs font-medium text-green-700" @click="toggleAllTargets">
-            {{ selectedTargets.length === items.length ? 'Снять все' : 'Выбрать все' }}
+          <span class="text-xs text-neutral-500">Выбрано {{ selectedTargets.length }} из {{ targetableItems.length }}</span>
+          <button v-if="canMutate" type="button" class="text-xs font-medium text-green-700" @click="toggleAllTargets">
+            {{ selectedTargets.length === targetableItems.length ? 'Снять все' : 'Выбрать все' }}
           </button>
         </div>
         <div class="flex max-h-[40vh] flex-col gap-1 overflow-y-auto">
           <button
-            v-for="item in items"
+            v-for="item in targetableItems"
             :key="item.id"
             type="button"
+            :disabled="!canMutate"
             :class="cn(
               'flex w-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition-colors',
               selectedTargets.includes(item.id) ? 'border-primary bg-primary/5' : 'border-neutral-200 hover:bg-neutral-50',
+              !canMutate && 'cursor-default opacity-80 hover:bg-transparent',
             )"
             @click="toggleTarget(item.id)"
           >
@@ -215,9 +238,12 @@ function onDelete(): void {
       </template>
 
       <div class="flex flex-col gap-2 pt-1">
-        <Button class="h-12 w-full text-base" :disabled="!amount" @click="onSave">Сохранить</Button>
+        <p v-if="!canMutate" class="rounded-[10px] bg-neutral-50 px-3.5 py-3 text-sm text-neutral-500">
+          Расход уже участвует в оплате или приёмке, поэтому доступен только для просмотра.
+        </p>
+        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!amount" @click="onSave">Сохранить</Button>
         <button
-          v-if="editingExpenseId"
+          v-if="canMutate && editingExpenseId"
           type="button"
           class="h-11 rounded-[10px] border border-negative/30 text-sm font-medium text-negative transition-colors hover:bg-negative/5"
           @click="onDelete"

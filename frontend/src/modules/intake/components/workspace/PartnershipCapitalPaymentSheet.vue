@@ -23,6 +23,7 @@ const selectedExpenseIds = ref<Set<number>>(new Set())
 const allocations = ref<AllocationRow[]>([])
 
 const investment = computed(() => props.procurement.documents.investment)
+const paymentStatus = computed(() => props.procurement.documents.payment_status)
 
 function lineAmount(item: ProcurementWorkspacePayload['documents']['items'][number]): number {
   return (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_purchase_price) || 0)
@@ -73,14 +74,46 @@ const hasSelection = computed(() => selectedItemIds.value.size > 0 || selectedEx
 const isMixedSelection = computed(() => selectedCurrencies.value.length > 1)
 const selectedCurrency = computed(() => selectedCurrencies.value[0] ?? investment.value?.currency ?? 'UZS')
 const selectedTotal = computed(() => selectedTotals.value[selectedCurrency.value] ?? 0)
-const alreadyFunded = computed(() => allocatedByCurrency.value[selectedCurrency.value] ?? 0)
 const allocatedTotal = computed(() => allocations.value.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0))
-const allocationDelta = computed(() => Number((selectedTotal.value - allocatedTotal.value).toFixed(2)))
+const allocationDelta = computed(() => Number((fundingTotal.value - allocatedTotal.value).toFixed(2)))
+const remainingByCurrency = computed<Record<string, number>>(() => {
+  const totals: Record<string, number> = {}
+  for (const [currency, amount] of Object.entries(paymentStatus.value?.remaining_by_currency ?? {})) {
+    const numeric = parseFloat(amount)
+    if (Number.isFinite(numeric) && numeric > 0.01) totals[currency.toUpperCase()] = numeric
+  }
+  return totals
+})
+const remainingCurrencies = computed(() => Object.keys(remainingByCurrency.value))
+const deltaMode = computed(() =>
+  remainingCurrencies.value.length === 1
+  && unfundedItems.value.length === 0
+  && unfundedExpenses.value.length === 0
+  && remainingByCurrency.value[remainingCurrencies.value[0]] > 0,
+)
+const mixedDeltaMode = computed(() =>
+  remainingCurrencies.value.length > 1
+  && unfundedItems.value.length === 0
+  && unfundedExpenses.value.length === 0,
+)
+const fundingCurrency = computed(() =>
+  deltaMode.value ? remainingCurrencies.value[0] : selectedCurrency.value,
+)
+const fundingTotal = computed(() =>
+  deltaMode.value ? remainingByCurrency.value[fundingCurrency.value] ?? 0 : selectedTotal.value,
+)
+const alreadyFunded = computed(() => allocatedByCurrency.value[fundingCurrency.value] ?? 0)
 const allUnfundedSelected = computed(
-  () => unfundedItems.value.length === 0 && unfundedExpenses.value.length === 0,
+  () => unfundedItems.value.length === 0
+    && unfundedExpenses.value.length === 0
+    && remainingCurrencies.value.length === 0,
 )
 const canSubmit = computed(() =>
-  hasSelection.value && !isMixedSelection.value && selectedTotal.value > 0 && Math.abs(allocationDelta.value) <= 0.01,
+  (hasSelection.value || deltaMode.value)
+  && !mixedDeltaMode.value
+  && !isMixedSelection.value
+  && fundingTotal.value > 0
+  && Math.abs(Number((fundingTotal.value - allocatedTotal.value).toFixed(2))) <= 0.01,
 )
 
 function partnerAvailable(partnerId: number, currency: string): number {
@@ -127,8 +160,8 @@ function allocateProportionally(total: number, partners: Partner[], currency: st
 // manual per-partner step. Per-partner SHARES are fixed at receive (snapshot).
 function recomputeAllocations(): void {
   const inv = investment.value
-  if (!inv || isMixedSelection.value) { allocations.value = []; return }
-  allocations.value = allocateProportionally(selectedTotal.value, inv.partners, selectedCurrency.value)
+  if (!inv || isMixedSelection.value || remainingCurrencies.value.length > 1) { allocations.value = []; return }
+  allocations.value = allocateProportionally(fundingTotal.value, inv.partners, fundingCurrency.value)
 }
 function toggleItem(id: number): void {
   if (isItemFunded(id)) return
@@ -147,8 +180,10 @@ function toggleExpense(id: number): void {
 function submit(): void {
   if (!canSubmit.value) return
   emit('dispatch', 'ALLOCATE_CAPITAL', {
-    item_ids: [...selectedItemIds.value],
-    expense_ids: [...selectedExpenseIds.value],
+    ...(deltaMode.value ? {} : {
+      item_ids: [...selectedItemIds.value],
+      expense_ids: [...selectedExpenseIds.value],
+    }),
     allocations: allocations.value
       .filter((row) => (parseFloat(row.amount) || 0) > 0)
       .map((row) => ({ partner_id: row.partnerId, amount: row.amount, currency: row.currency })),
@@ -179,16 +214,20 @@ watch(() => props.open, (isOpen) => {
         <div class="flex flex-col gap-1.5 rounded-[10px] bg-neutral-50 px-3.5 py-3">
           <div v-if="alreadyFunded > 0" class="flex items-center justify-between gap-2">
             <span class="text-sm text-neutral-500">Уже профинансировано</span>
-            <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(alreadyFunded, selectedCurrency) }}</span>
+            <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(alreadyFunded, fundingCurrency) }}</span>
           </div>
           <div class="flex items-center justify-between gap-2">
-            <span class="text-sm text-neutral-500">Осталось профинансировать</span>
-            <span class="text-base font-semibold tabular-nums text-foreground">{{ formatPrice(selectedTotal, selectedCurrency) }}</span>
+            <span class="text-sm text-neutral-500">{{ deltaMode ? 'Доплата после корректировки' : 'Осталось профинансировать' }}</span>
+            <span class="text-base font-semibold tabular-nums text-foreground">{{ formatPrice(fundingTotal, fundingCurrency) }}</span>
           </div>
         </div>
 
+        <div v-if="deltaMode" class="rounded-[10px] border border-primary/20 bg-primary/5 px-3.5 py-3 text-sm leading-relaxed text-foreground">
+          Стоимость прихода изменилась после оплаты. Товары уже отмечены как профинансированные, поэтому сейчас нужно довыделить только разницу.
+        </div>
+
         <!-- Товары -->
-        <div class="flex flex-col gap-1.5">
+        <div v-if="!deltaMode" class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Товары</span>
           <div class="flex flex-col gap-1">
             <button
@@ -214,7 +253,7 @@ watch(() => props.open, (isOpen) => {
         </div>
 
         <!-- Расходы -->
-        <div v-if="obligationExpenses.length" class="flex flex-col gap-1.5">
+        <div v-if="!deltaMode && obligationExpenses.length" class="flex flex-col gap-1.5">
           <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Расходы</span>
           <div class="flex flex-col gap-1">
             <button
@@ -241,6 +280,10 @@ watch(() => props.open, (isOpen) => {
 
         <div v-if="isMixedSelection" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
           В выбранных строках разные валюты. Разделите оплату на отдельные транши.
+        </div>
+
+        <div v-if="mixedDeltaMode" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
+          После корректировки осталась дельта в нескольких валютах. Закройте её отдельными траншами по каждой валюте.
         </div>
 
         <!-- Payment comes from the common pool; shares are fixed at receive -->

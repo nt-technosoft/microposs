@@ -206,6 +206,29 @@ Rules:
 - each receive batch gets its own cost and capital snapshot;
 - received lines become immutable except through explicit correction documents.
 
+## Amendments After Facts
+
+Procurement amendments are append-only corrections. They change the current
+procurement document, but they do not rewrite posted money movements, receive
+batches or lots.
+
+Production rules:
+
+- paid but unreceived items/expenses may be amended;
+- hard removal/cancellation is allowed only for `DRAFT` lines without payment or
+  receive facts;
+- received quantities, receive batches and lot snapshots are immutable;
+- if an amendment increases obligation after payment/capital allocation,
+  `payment_status` must show an underpaid delta and the user must create an
+  explicit top-up/allocation;
+- if an amendment decreases obligation after payment/capital allocation,
+  `payment_status` must show `overpaid`; the excess is closed only by explicit
+  `RESOLVE_OVERPAYMENT`: own-funds procurement records a supplier refund into a
+  selected cash account, partnership procurement returns the excess from the
+  procurement back to the agreement capital pool;
+- partially allocated expenses may be increased for future receive batches, but
+  cannot be reduced below the amount already allocated into received batches.
+
 ## Consignment
 
 Consignment has two commercial modes:

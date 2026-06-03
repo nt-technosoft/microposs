@@ -73,7 +73,7 @@ from .services import (
     get_agreement_profitability_detail,
 )
 from .fx_rates import get_fx_rate_for_date, sync_official_exchange_rate, upsert_exchange_rate
-from .report_currency import ReportCurrencyError
+from .report_currency import ReportCurrencyError, resolve_report_currency_context
 from .chart_of_accounts import setup_chart_of_accounts
 
 
@@ -291,7 +291,7 @@ class RefundViewSet(viewsets.ModelViewSet):
             sale_id=data['sale_id'],
             amount=data['amount'],
             currency=data['currency'],
-            fx_rate=data['fx_rate'],
+            fx_rate=data.get('fx_rate'),
             method=data['method'],
             account_id=data.get('account_id'),
             return_ref_id=data.get('return_ref_id'),
@@ -794,12 +794,20 @@ class ReportSummaryView(APIView):
 
         date_from_raw = request.query_params.get('date_from')
         date_to_raw = request.query_params.get('date_to')
+        report_currency = request.query_params.get('report_currency')
 
         date_from, date_to, is_computing = _ensure_finance_aggregates(
             request.tenant_id,
             date_from_raw=date_from_raw,
             date_to_raw=date_to_raw,
         )
+        try:
+            report_currency_context = resolve_report_currency_context(
+                tenant_id=request.tenant_id,
+                requested_currency=report_currency,
+            )
+        except ReportCurrencyError as exc:
+            raise ValidationError({'report_currency': str(exc)})
 
         daily_qs = DailySummary.objects.filter(tenant_id=request.tenant_id)
         if date_from:
@@ -818,6 +826,7 @@ class ReportSummaryView(APIView):
 
         return Response({
             'is_computing': is_computing,
+            'report_currency': report_currency_context.meta(),
             'daily_summary': DailySummarySerializer(daily_qs.order_by('-date'), many=True).data,
             'cash_flow': CashFlowSummarySerializer(cash_qs.order_by('-date'), many=True).data,
             'debt': get_customer_debt_summary(request.tenant_id),

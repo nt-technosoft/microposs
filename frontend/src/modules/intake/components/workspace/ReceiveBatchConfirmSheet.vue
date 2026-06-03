@@ -17,6 +17,7 @@ import type { Location } from '@/types/models'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
 type Item = ProcurementWorkspacePayload['documents']['items'][number]
+type Expense = ProcurementWorkspacePayload['documents']['expenses'][number]
 
 const REASONS = [
   { key: 'NONE', label: 'Без расхождения' },
@@ -95,6 +96,16 @@ function acceptedQty(item: Item): number {
   const line = lines.value.find((l) => l.itemId === item.id)
   return parseInt(line?.qtyReceived ?? item.remaining_quantity) || 0
 }
+function itemLineAmount(item: Item): number {
+  return (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_purchase_price) || 0)
+}
+function landedUnitDisplay(item: Item): string {
+  const raw = item.estimated_landed_cost_per_unit ?? item.actual_landed_cost_per_unit
+  const value = parseFloat(raw ?? '')
+  if (!Number.isFinite(value) || value <= 0) return ''
+  const digits = item.currency === 'USD' ? 2 : 0
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: digits })} ${item.currency}/шт`
+}
 
 const reasonOptions = REASONS.map((r) => ({ value: r.key as string, label: r.label }))
 const warehouseOptions = computed(() => warehouses.value.map((w) => ({ value: w.id, label: w.name })))
@@ -156,7 +167,7 @@ const allReceivableItems = computed(() =>
   activeItems.value.filter((it) => {
     if (parseFloat(it.remaining_quantity) <= 0) return false
     if (it.lifecycle_state === 'RECEIVED') return false
-    if (!isPartnership.value && isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    if (isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
     return true
   }),
 )
@@ -164,8 +175,60 @@ const receivableItems = computed(() =>
   allReceivableItems.value.filter((it) => selectedItemIds.value.has(it.id)),
 )
 
+const receivableExpenses = computed(() =>
+  props.procurement.documents.expenses.filter((expense) => {
+    if (expense.lifecycle_state === 'RECEIVED' || expense.lifecycle_state === 'CANCELLED') return false
+    if (isPrepaid.value && expense.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    return true
+  }),
+)
+
+const hasDelayedItems = computed(() =>
+  allReceivableItems.value.some((item) => !selectedItemIds.value.has(item.id)),
+)
+
+const partialExpenseScopeNotice = computed(() => {
+  if (!hasDelayedItems.value) return ''
+  for (const expense of receivableExpenses.value) {
+    const targetIds = expense.target_item_ids ?? []
+    if (!targetIds.length) return 'Общие расходы будут распределены пропорционально между принятой и отложенной частью.'
+    const touchesSelected = targetIds.some((id) => selectedItemIds.value.has(id))
+    const touchesDelayed = targetIds.some((id) => !selectedItemIds.value.has(id))
+    if (touchesSelected && touchesDelayed) {
+      return 'Расход будет распределён пропорционально: часть попадёт в текущую приёмку, остаток останется на отложенные товары.'
+    }
+  }
+  return ''
+})
+
+const receivableBatchExpenses = computed<Expense[]>(() => {
+  if (!hasDelayedItems.value) return receivableExpenses.value
+  return receivableExpenses.value.filter((expense) =>
+    !(expense.target_item_ids ?? []).length
+    || (expense.target_item_ids ?? []).some((id) => selectedItemIds.value.has(id)),
+  )
+})
+
+function expenseBatchAmount(expense: Expense): number {
+  const targetIds = new Set(expense.target_item_ids ?? [])
+  const scopeItems = activeItems.value.filter((item) =>
+    item.lifecycle_state !== 'CANCELLED'
+    && (!targetIds.size || targetIds.has(item.id)),
+  )
+  const selectedScopeItems = scopeItems.filter((item) => selectedItemIds.value.has(item.id))
+  if (!selectedScopeItems.length) return 0
+  const basis = (item: Item) =>
+    expense.allocation_method === 'BY_QUANTITY'
+      ? (parseFloat(item.quantity) || 0)
+      : itemLineAmount(item)
+  const totalBasis = scopeItems.reduce((sum, item) => sum + basis(item), 0)
+  if (totalBasis <= 0) return 0
+  const selectedBasis = selectedScopeItems.reduce((sum, item) => sum + basis(item), 0)
+  return (parseFloat(expense.amount) || 0) * selectedBasis / totalBasis
+}
+
 const blockedPrepaidItems = computed(() =>
-  !isPartnership.value && isPrepaid.value
+  isPrepaid.value
     ? activeItems.value.filter(
         (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' && it.lifecycle_state !== 'RECEIVED',
       )
@@ -186,6 +249,10 @@ const receiveBatchCostByCurrency = computed((): Record<string, number> => {
     const price = parseFloat(item.unit_purchase_price) || 0
     const cur = item.currency || 'UZS'
     totals[cur] = (totals[cur] ?? 0) + qty * price
+  }
+  for (const expense of receivableBatchExpenses.value) {
+    const cur = expense.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + expenseBatchAmount(expense)
   }
   return totals
 })
@@ -534,7 +601,12 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
                 class="flex items-center gap-2.5 border-b border-neutral-100 py-2 last:border-0"
               >
                 <CheckCircle2 class="size-4 shrink-0 text-primary" />
-                <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
+                  <span v-if="landedUnitDisplay(item)" class="block truncate text-[11px] text-neutral-500">
+                    себестоимость {{ landedUnitDisplay(item) }}
+                  </span>
+                </span>
                 <span class="shrink-0 text-sm font-medium tabular-nums text-foreground">{{ orderedQty(item) }} шт</span>
               </div>
             </div>
@@ -549,7 +621,12 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
             >
               <div role="button" class="flex cursor-pointer items-center gap-2 px-2.5 py-2" @click="toggleItemSelection(item.id)">
                 <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5 shrink-0', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
-                <span :class="cn('min-w-0 flex-1 truncate text-sm', selectedItemIds.has(item.id) ? 'text-foreground' : 'text-neutral-400 line-through')">{{ item.product_variant_name }}</span>
+                <span :class="cn('min-w-0 flex-1', selectedItemIds.has(item.id) ? 'text-foreground' : 'text-neutral-400 line-through')">
+                  <span class="block truncate text-sm">{{ item.product_variant_name }}</span>
+                  <span v-if="landedUnitDisplay(item)" class="block truncate text-[11px] text-neutral-500">
+                    себестоимость {{ landedUnitDisplay(item) }}
+                  </span>
+                </span>
                 <template v-if="selectedItemIds.has(item.id)">
                   <span :class="cn('shrink-0 text-sm tabular-nums', acceptedQty(item) < orderedQty(item) ? 'font-medium text-warning' : 'text-neutral-600')">
                     {{ acceptedQty(item) }}<span v-if="acceptedQty(item) < orderedQty(item)" class="text-neutral-400">/{{ orderedQty(item) }}</span> шт
@@ -606,6 +683,9 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
         <p v-if="receiveMixedCurrency" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
           В выбранной приёмке разные валюты. Разделите приёмку на отдельные партии.
         </p>
+        <p v-if="partialExpenseScopeNotice" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          {{ partialExpenseScopeNotice }}
+        </p>
       </template>
 
       <!-- STEP: shares (partnership) -->
@@ -617,6 +697,9 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
           <span class="text-sm text-neutral-500">Стоимость приёмки</span>
           <span class="text-sm font-semibold tabular-nums text-foreground">{{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}</span>
         </div>
+        <p v-if="receivableBatchExpenses.length" class="text-xs leading-relaxed text-neutral-500">
+          В сумму включены расходы: {{ receivableBatchExpenses.map((expense) => expense.expense_type).join(', ') }}.
+        </p>
         <div class="flex flex-col gap-2.5">
           <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
             <div class="min-w-0">

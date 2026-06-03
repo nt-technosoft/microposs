@@ -48,7 +48,8 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'supplier', 'supplier_name',
             'operation_currency', 'operation_amount',
-            'fx_rate_snapshot', 'functional_amount_uzs',
+            'fx_rate_snapshot', 'fx_rate_source', 'fx_rate_date',
+            'functional_amount_uzs',
             'amount', 'payment_method', 'date', 'notes',
             'created_at',
         ]

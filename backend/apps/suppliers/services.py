@@ -66,14 +66,15 @@ def record_supplier_payment(
             if functional_amount is None:
                 functional_amount = amount
         else:
-            from apps.finance.fx_rates import resolve_fx_rate_snapshot, to_functional_amount_uzs
+            from apps.finance.fx_rates import resolve_fx_rate_snapshot_details, to_functional_amount_uzs
 
-            rate = resolve_fx_rate_snapshot(
+            fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=currency,
                 operation_at=payment_dt,
                 fx_rate_snapshot=fx_rate_snapshot,
             )
+            rate = fx_snapshot.rate
             if operation_amount_value is None:
                 operation_amount_value = (amount / rate).quantize(Decimal('0.01'))
             if functional_amount is None:
@@ -90,6 +91,13 @@ def record_supplier_payment(
             operation_currency=currency,
             operation_amount=operation_amount_value,
             fx_rate_snapshot=rate,
+            fx_rate_source=(
+                fx_snapshot.source if currency != 'UZS' else 'FUNCTIONAL'
+            ),
+            fx_rate_date=(
+                fx_snapshot.rate_date if currency != 'UZS'
+                else (payment_dt.date() if hasattr(payment_dt, 'date') else payment_dt)
+            ),
             functional_amount_uzs=functional_amount,
             payment_method=payment_method,
             date=payment_dt,
@@ -228,7 +236,7 @@ def _resolve_payment_allocations(
     used to convert obligation_currency ↔ UZS (functional), `None` if
     obligation is UZS.
     """
-    from apps.finance.fx_rates import resolve_fx_rate_snapshot
+    from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 
     if not allocations:
         raise ValueError('At least one allocation is required.')
@@ -246,13 +254,18 @@ def _resolve_payment_allocations(
 
         if cur == 'UZS':
             rate = Decimal('1')
+            rate_source = 'FUNCTIONAL'
+            rate_date = payment_dt.date() if hasattr(payment_dt, 'date') else payment_dt
             amt_uzs = _q(amt)
         else:
-            rate = resolve_fx_rate_snapshot(
+            fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=cur,
                 operation_at=payment_dt,
             )
+            rate = fx_snapshot.rate
+            rate_source = fx_snapshot.source
+            rate_date = fx_snapshot.rate_date
             amt_uzs = _q(amt * rate)
 
         total_uzs += amt_uzs
@@ -261,6 +274,8 @@ def _resolve_payment_allocations(
             'amount': str(_q(amt)),
             'currency': cur,
             'fx_rate': str(rate),
+            'fx_rate_source': rate_source,
+            'fx_rate_date': str(rate_date),
             'amount_uzs': str(amt_uzs),
         })
 
@@ -270,11 +285,12 @@ def _resolve_payment_allocations(
         total_in_obligation = _q(total_uzs)
         rate_for_snapshot: Decimal | None = None
     else:
-        obligation_rate = resolve_fx_rate_snapshot(
+        obligation_snapshot = resolve_fx_rate_snapshot_details(
             tenant_id=tenant_id,
             operation_currency=obligation_currency,
             operation_at=payment_dt,
         )
+        obligation_rate = obligation_snapshot.rate
         # total_in_obligation = total_uzs / rate (UZS -> obligation_currency)
         total_in_obligation = _q(total_uzs / obligation_rate) if obligation_rate else _ZERO
         rate_for_snapshot = obligation_rate
@@ -425,6 +441,8 @@ def record_payable_payment(
                 amount=Decimal(str(allocation['amount'])),
                 currency=allocation['currency'],
                 fx_rate=Decimal(str(allocation['fx_rate'])),
+                fx_rate_source=allocation.get('fx_rate_source', ''),
+                fx_rate_date=allocation.get('fx_rate_date'),
                 paid_at=payment_dt,
                 counterpart_account_code='2000',
                 operation_type='supplier_payment',

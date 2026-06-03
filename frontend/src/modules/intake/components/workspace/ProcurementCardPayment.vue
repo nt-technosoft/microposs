@@ -6,6 +6,7 @@ import PaymentScheduleEditor from './PaymentScheduleEditor.vue'
 import ConsignmentObligationsBlock from './ConsignmentObligationsBlock.vue'
 import PartnershipCapitalPaymentSheet from './PartnershipCapitalPaymentSheet.vue'
 import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
+import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -35,6 +36,11 @@ const paySheetExpenseIds = ref<number[] | undefined>(undefined)
 const paySheetCurrency = ref<string | undefined>(undefined)
 const scheduleEditorOpen = ref(false)
 const capitalPaymentSheetOpen = ref(false)
+const overpaymentSheetOpen = ref(false)
+const overpaymentAccountsLoading = ref(false)
+const overpaymentAccounts = ref<CashAccountRecord[]>([])
+const overpaymentCashAccountId = ref<number | null>(null)
+const overpaymentAmount = ref('')
 
 const selectionMode = ref(false)
 const selectedItemIds = ref<Set<number>>(new Set())
@@ -111,6 +117,36 @@ const displayPaidByCurrency = computed<Record<string, string>>(() =>
 const displayRemainingByCurrency = computed<Record<string, string>>(() =>
   isPartnership.value ? partnershipRemainingByCurrency.value : remainingByCurrency.value,
 )
+const overpaidByCurrency = computed<Record<string, string>>(() => {
+  const result: Record<string, string> = {}
+  for (const [currency, value] of Object.entries(remainingByCurrency.value)) {
+    const amount = parseFloat(value) || 0
+    if (amount < 0) result[currency] = Math.abs(amount).toFixed(2)
+  }
+  return result
+})
+const isOverpaid = computed(() =>
+  paymentStatus.value?.state === 'overpaid' || Object.keys(overpaidByCurrency.value).length > 0,
+)
+const overpaymentCurrency = computed(() => Object.keys(overpaidByCurrency.value)[0])
+const overpaymentMaxAmount = computed(() => {
+  const currency = overpaymentCurrency.value
+  return currency ? overpaidByCurrency.value[currency] : ''
+})
+const overpaymentOperatingAccounts = computed(() =>
+  overpaymentAccounts.value.filter((account) =>
+    account.is_active &&
+    account.kind !== 'AGREEMENT_CAPITAL' &&
+    account.currency.toUpperCase() === (overpaymentCurrency.value || '').toUpperCase(),
+  ),
+)
+const overpaymentPool = computed(() => {
+  const inv = props.procurement.documents.investment
+  const currency = overpaymentCurrency.value
+  if (!inv || !currency) return null
+  if (inv.pool?.currency.toUpperCase() === currency.toUpperCase()) return inv.pool
+  return inv.currency_pools.find((pool) => pool.currency.toUpperCase() === currency.toUpperCase()) ?? null
+})
 
 const isPartnershipCovered = computed(() => {
   if (!isPartnership.value) return false
@@ -121,7 +157,7 @@ const isPartnershipCovered = computed(() => {
   )
 })
 
-const isFilled = computed(() => paymentStatus.value?.state === 'paid_full' || isPartnershipCovered.value)
+const isFilled = computed(() => paymentStatus.value?.state === 'paid_full' || isOverpaid.value || isPartnershipCovered.value)
 
 const remainingAmount = computed(() => {
   const ps = paymentStatus.value
@@ -264,6 +300,35 @@ function openPayScheduleEntry(entryId: number, amount: string): void {
 function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>): void {
   emit('dispatch', actionKey, payload)
 }
+
+async function openResolveOverpayment(): Promise<void> {
+  const currency = overpaymentCurrency.value
+  if (!currency) return
+  overpaymentAmount.value = overpaymentMaxAmount.value
+  overpaymentCashAccountId.value = null
+  if (!isPartnership.value) {
+    overpaymentAccountsLoading.value = true
+    try {
+      overpaymentAccounts.value = await fetchCashAccounts()
+      overpaymentCashAccountId.value = overpaymentOperatingAccounts.value[0]?.id ?? null
+    } finally {
+      overpaymentAccountsLoading.value = false
+    }
+  }
+  overpaymentSheetOpen.value = true
+}
+
+function submitResolveOverpayment(): void {
+  const currency = overpaymentCurrency.value
+  if (!currency || !overpaymentAmount.value) return
+  if (!isPartnership.value && !overpaymentCashAccountId.value) return
+  emit('dispatch', 'RESOLVE_OVERPAYMENT', {
+    currency,
+    amount: overpaymentAmount.value,
+    cash_account_id: isPartnership.value ? undefined : overpaymentCashAccountId.value,
+  })
+  overpaymentSheetOpen.value = false
+}
 </script>
 
 <template>
@@ -285,7 +350,11 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
           <span class="text-sm text-neutral-500">{{ isPartnership ? 'Выделено' : 'Оплачено' }}</span>
           <span class="text-sm font-semibold tabular-nums text-foreground">{{ fmtMoneyMap(displayPaidByCurrency) }}</span>
         </div>
-        <div v-if="!isFilled" class="flex items-center justify-between gap-2">
+        <div v-if="isOverpaid" class="flex items-center justify-between gap-2">
+          <span class="text-sm text-neutral-500">Переплата</span>
+          <span class="text-sm font-semibold tabular-nums text-warning">{{ fmtMoneyMap(overpaidByCurrency) }}</span>
+        </div>
+        <div v-else-if="!isFilled" class="flex items-center justify-between gap-2">
           <span class="text-sm text-neutral-500">Остаток</span>
           <span class="text-sm font-semibold tabular-nums text-warning">{{ fmtMoneyMap(displayRemainingByCurrency) }}</span>
         </div>
@@ -307,6 +376,14 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
           Оплатить из партнёрского капитала
         </Button>
       </template>
+      <div v-else-if="isPartnership && isOverpaid" class="text-sm font-medium text-warning">
+        <div class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3">
+          <span>Выделено больше текущего обязательства.</span>
+          <Button variant="outline" class="h-10 w-full bg-white text-foreground" @click="openResolveOverpayment">
+            Вернуть переплату в капитал договора
+          </Button>
+        </div>
+      </div>
       <div v-else-if="isPartnership && isFilled" class="text-sm font-medium text-positive">
         Оплачено из партнёрского капитала
       </div>
@@ -458,6 +535,13 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
           </template>
         </template>
       </template>
+
+      <div v-if="!isPartnership && isOverpaid" class="flex flex-col gap-2 rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm">
+        <span class="font-medium text-warning">Оплачено больше текущего обязательства.</span>
+        <Button variant="outline" class="h-10 w-full bg-white text-foreground" @click="openResolveOverpayment">
+          Принять возврат в кассу
+        </Button>
+      </div>
     </CardContent>
   </Card>
 
@@ -486,6 +570,77 @@ function onPaymentDispatch(actionKey: string, payload: Record<string, unknown>):
     @close="depositSheetOpen = false"
     @deposited="onDeposited"
   />
+
+  <AppBottomSheet :open="overpaymentSheetOpen" title="Закрыть переплату" @close="overpaymentSheetOpen = false">
+    <div class="flex flex-col gap-4 px-4 pb-4">
+      <div class="rounded-[12px] bg-neutral-50 px-4 py-3">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm text-neutral-500">Переплата</span>
+          <span class="text-lg font-semibold tabular-nums text-foreground">{{ fmt(overpaymentMaxAmount) }} {{ overpaymentCurrency }}</span>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма</span>
+        <div class="flex items-center gap-2 rounded-[12px] border border-neutral-200 px-4 py-3 focus-within:border-green-400">
+          <input
+            v-model="overpaymentAmount"
+            type="number"
+            min="0"
+            step="0.01"
+            inputmode="decimal"
+            class="min-w-0 flex-1 bg-transparent text-2xl font-semibold tabular-nums text-foreground outline-none placeholder:text-neutral-300"
+            placeholder="0"
+          />
+          <span class="shrink-0 text-sm font-medium text-neutral-500">{{ overpaymentCurrency }}</span>
+        </div>
+      </div>
+
+      <template v-if="isPartnership">
+        <div class="rounded-[12px] border border-neutral-200 px-4 py-3">
+          <p class="text-xs font-medium uppercase tracking-wide text-neutral-500">Куда вернуть</p>
+          <p class="mt-1 text-sm font-semibold text-foreground">
+            Капитал договора
+            <span v-if="overpaymentPool" class="font-normal text-neutral-500">
+              · баланс {{ fmt(overpaymentPool.balance) }} {{ overpaymentPool.currency }}
+            </span>
+          </p>
+        </div>
+      </template>
+      <template v-else>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса для возврата ({{ overpaymentCurrency }})</span>
+          <p v-if="overpaymentAccountsLoading" class="text-sm text-neutral-500">Загрузка…</p>
+          <div v-else-if="!overpaymentOperatingAccounts.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm text-foreground">
+            Нет активной кассы в валюте {{ overpaymentCurrency }}.
+          </div>
+          <div v-else class="flex flex-col gap-2">
+            <button
+              v-for="account in overpaymentOperatingAccounts"
+              :key="account.id"
+              type="button"
+              :class="cn(
+                'flex w-full items-center justify-between gap-3 rounded-[10px] border px-3.5 py-3 transition-colors',
+                account.id === overpaymentCashAccountId ? 'border-primary bg-primary/5' : 'border-neutral-200 hover:bg-neutral-50',
+              )"
+              @click="overpaymentCashAccountId = account.id"
+            >
+              <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ account.name }}</span>
+              <span class="shrink-0 text-xs tabular-nums text-neutral-500">{{ fmt(account.balance) }} {{ account.currency }}</span>
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <Button
+        class="h-12 w-full text-base"
+        :disabled="!overpaymentAmount || (!isPartnership && !overpaymentCashAccountId)"
+        @click="submitResolveOverpayment"
+      >
+        Закрыть переплату
+      </Button>
+    </div>
+  </AppBottomSheet>
 
   <PaymentScheduleEditor
     v-if="settlement"

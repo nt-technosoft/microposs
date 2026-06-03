@@ -16,6 +16,8 @@ export interface CustomerCreatePayload {
 export interface CustomerPaymentPayload {
   amount: number
   payment_method: 'cash' | 'bank'
+  currency?: string
+  fx_rate?: string | number | null
   notes?: string
 }
 
@@ -25,6 +27,9 @@ export interface CustomerPayment {
   operation_currency?: string
   operation_amount?: string | null
   fx_rate_snapshot?: string | null
+  fx_rate?: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs?: string | null
   amount: string
   payment_method: 'cash' | 'bank'

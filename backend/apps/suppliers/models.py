@@ -302,6 +302,8 @@ class SupplierPayment(TenantModel):
         null=True,
         blank=True,
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     functional_amount_uzs = models.DecimalField(
         max_digits=16,
         decimal_places=2,

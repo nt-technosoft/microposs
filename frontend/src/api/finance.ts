@@ -26,6 +26,7 @@ export interface CashAccountRecord {
   kind: string
   linked_account: number | null
   is_active: boolean
+  agreement_id?: number | null
 }
 
 export interface JournalEntry {
@@ -69,6 +70,8 @@ export interface ExpenseItem {
   operation_currency: string
   operation_amount: string
   fx_rate_snapshot: string | null
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs: string
   occurred_at: string
   notes: string
@@ -621,6 +624,7 @@ export async function createCurrencyExchange(
 
 export interface ReportSummaryResponse {
   is_computing: boolean
+  report_currency?: ReportCurrencyMeta
   daily_summary: DailySummary[]
   cash_flow: CashFlowItem[]
   debt: DebtSummaryItem[]
@@ -634,6 +638,7 @@ export interface ReportSummaryResponse {
 
 interface BackendReportSummaryResponse {
   is_computing: boolean
+  report_currency?: ReportCurrencyMeta
   daily_summary: BackendDailySummary[]
   cash_flow: BackendCashFlowItem[]
   debt: DebtSummaryItem[]
@@ -654,6 +659,7 @@ export interface ReportAnalyticsResponse {
 export interface FetchReportSummaryParams {
   date_from?: string
   date_to?: string
+  report_currency?: string
 }
 
 export interface FetchReportAnalyticsParams {

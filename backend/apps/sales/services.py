@@ -15,7 +15,7 @@ from apps.core.exceptions import (
     InvalidUnitPriceError,
     PricingModeViolationError,
 )
-from apps.finance.fx_rates import resolve_fx_rate_snapshot
+from apps.finance.fx_rates import resolve_fx_rate_snapshot, resolve_fx_rate_snapshot_details
 from apps.partnerships.formulas import (
     calculate_lot_profit_distribution,
     distribute_loss_by_capital_from_snapshot,
@@ -299,7 +299,7 @@ def create_sale(
                 if operation_unit_price_raw is not None
                 else line_data['unit_price']
             ))
-            line_fx_rate = resolve_fx_rate_snapshot(
+            line_fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=operation_currency,
                 operation_at=date,
@@ -309,7 +309,7 @@ def create_sale(
                 functional_amount_uzs(
                     amount=operation_unit_price,
                     currency=operation_currency,
-                    fx_rate=line_fx_rate,
+                    fx_rate=line_fx_snapshot.rate,
                 )
                 if has_operation_price
                 else Decimal(str(line_data['unit_price'])).quantize(Decimal('0.01'))
@@ -370,7 +370,9 @@ def create_sale(
                     base_price=base_price,
                     operation_currency=operation_currency,
                     operation_unit_price=operation_unit_price,
-                    fx_rate_snapshot=line_fx_rate,
+                    fx_rate_snapshot=line_fx_snapshot.rate,
+                    fx_rate_source=line_fx_snapshot.source,
+                    fx_rate_date=line_fx_snapshot.rate_date,
                     price_changed=price_changed,
                     discount_reason_id=resolved_discount_reason_id,
                     unit_purchase_price=unit_purchase,
@@ -451,7 +453,7 @@ def create_sale(
         for pay in payments:
             amount = Decimal(str(pay['amount']))
             currency = str(pay.get('currency', 'UZS')).upper()
-            fx_rate = resolve_fx_rate_snapshot(
+            payment_fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=currency,
                 operation_at=date,
@@ -470,7 +472,9 @@ def create_sale(
                 date=date,
                 amount=amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=payment_fx_snapshot.rate,
+                fx_rate_source=payment_fx_snapshot.source,
+                fx_rate_date=payment_fx_snapshot.rate_date,
                 method=pay['method'],
                 role=SalePayment.Role.INCOMING,
                 account_id=account_id,
@@ -478,7 +482,7 @@ def create_sale(
             functional_amount = functional_amount_uzs(
                 amount=amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=payment_fx_snapshot.rate,
             )
             payment_functional_total += functional_amount
 
@@ -486,7 +490,9 @@ def create_sale(
                 credit_payments.append({
                     'amount': amount,
                     'currency': currency,
-                    'fx_rate': fx_rate,
+                    'fx_rate': payment_fx_snapshot.rate,
+                    'fx_rate_source': payment_fx_snapshot.source,
+                    'fx_rate_date': payment_fx_snapshot.rate_date,
                 })
                 settlement_journals.append({
                     'amount': functional_amount,
@@ -548,6 +554,8 @@ def create_sale(
                 amount=credit['amount'],
                 currency=credit['currency'],
                 fx_rate=credit['fx_rate'],
+                fx_rate_source=credit.get('fx_rate_source', ''),
+                fx_rate_date=credit.get('fx_rate_date'),
                 source_ref=f'sale:{sale.pk}',
                 date=date,
             )
@@ -901,7 +909,7 @@ def _issue_return_refund(
     finance_method = _refund_method_to_finance_method(payment_payload['method'])
     amount = money(payment_payload['amount'])
     currency = str(payment_payload.get('currency') or 'UZS').upper()
-    fx_rate = resolve_fx_rate_snapshot(
+    fx_snapshot = resolve_fx_rate_snapshot_details(
         tenant_id=tenant_id,
         operation_currency=currency,
         operation_at=date,
@@ -910,7 +918,7 @@ def _issue_return_refund(
     functional_amount = functional_amount_uzs(
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
     )
     if amount <= 0:
         raise ValueError('Refund amount must be > 0.')
@@ -947,7 +955,9 @@ def _issue_return_refund(
         date=date,
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
+        fx_rate_source=fx_snapshot.source,
+        fx_rate_date=fx_snapshot.rate_date,
         account=account,
         method=finance_method,
         return_ref=return_doc,
@@ -959,7 +969,9 @@ def _issue_return_refund(
         date=date,
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
+        fx_rate_source=fx_snapshot.source,
+        fx_rate_date=fx_snapshot.rate_date,
         method=method,
         role=SalePayment.Role.REFUND,
         account_id=account.pk if account else None,
@@ -980,7 +992,9 @@ def _issue_return_refund(
             date=date,
             amount=-amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
             source_ref=f'refund:{refund.pk}',
         )
