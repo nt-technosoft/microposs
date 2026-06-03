@@ -7,12 +7,17 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from apps.core.services import publish_event
-from apps.finance.models import CashAccount, Payment
+from apps.finance.models import CashAccount, CashEntry, Payment, PaymentAllocation
+from apps.finance.fx_rates import resolve_fx_rate_snapshot
 from apps.finance.services import (
+    create_cash_entry,
     create_journal_entry,
     record_capital_pool_payment,
     record_generic_cash_payment,
+    record_journal_from_cash_entry,
+    record_pool_journal_functional,
 )
+from apps.partnerships.multicurrency import get_or_create_currency_pool
 from apps.partnerships.formulas import profit_shares_from_capital
 from apps.suppliers.models import SupplierPayable
 from apps.suppliers.services import create_payable_from_procurement, record_payable_payment
@@ -23,6 +28,7 @@ from .models import (
     AgreementConfirmationStatus,
     AgreementContribution,
     AgreementPartner,
+    CapitalAdvance,
     InvestmentAgreement,
     PartnerLedgerEntry,
     Procurement,
@@ -64,6 +70,7 @@ ACTION_MAP = {
     'edit_items': 'UPDATE_ITEMS',
     'pay': 'PAY_COSTS',
     'pay_from_capital_pool': 'PAY_COSTS',
+    'resolve_overpayment': 'RESOLVE_OVERPAYMENT',
     'pay_supplier_payable': 'PAY_SUPPLIER_PAYABLE',
     'receive': 'RECEIVE_BATCH',
     'amend_terms': 'AMEND_SETTLEMENT',
@@ -85,6 +92,7 @@ ACTION_LABELS = {
     'ALLOCATE_CAPITAL': 'Распределить капитал',
     'CONVERT_CAPITAL_POOL': 'Конвертировать валюту пула',
     'PAY_COSTS': 'Оплатить',
+    'RESOLVE_OVERPAYMENT': 'Закрыть переплату',
     'PAY_SUPPLIER_PAYABLE': 'Оплатить поставщика',
     'GENERATE_INSTALLMENT_SCHEDULE': 'Сгенерировать график',
     'RECEIVE_BATCH': 'Принять товар',
@@ -375,7 +383,7 @@ def _resync_draft_terms_total(tenant_id: int, procurement: Procurement) -> None:
     if terms is None:
         return
     active_items, active_expenses = active_procurement_lines(procurement)
-    cost_map = procurement_cost_by_currency(active_items, active_expenses)
+    cost_map = _remaining_obligation_cost_by_currency(active_items, active_expenses)
     if len(cost_map) > 1:
         raise ValueError(
             'Все товары прихода должны быть в одной валюте. '
@@ -450,6 +458,15 @@ def dispatch_workspace_action(
             procurement=procurement,
             payload=mutation_payload,
             client_request_id=client_request_id,
+        )
+        return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
+    if normalized == 'RESOLVE_OVERPAYMENT':
+        resolve_workspace_overpayment(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            payload=mutation_payload,
+            client_request_id=client_request_id,
+            user_id=user_id,
         )
         return Procurement.objects.get(pk=procurement.pk, tenant_id=tenant_id)
     if normalized == 'PAY_SUPPLIER_PAYABLE':
@@ -737,17 +754,27 @@ def apply_items_amendment(
             .values_list('item_id', flat=True)
             .distinct()
         )
-        cancel_item_ids = {int(v) for v in (new_items_payload or []) if _is_cancel_row(v)}
+        cancel_item_ids = {_row_id(v) for v in (new_items_payload or []) if _is_cancel_row(v)}
         for item_id in cancel_item_ids:
+            item = ProcurementItem.objects.get(
+                pk=item_id,
+                tenant_id=tenant_id,
+                procurement=locked,
+            )
             if item_id in received_item_ids:
                 raise ValueError(
                     f'Cannot cancel item {item_id}: it already has received quantities in a batch.'
+                )
+            if item.lifecycle_state != ProcurementItem.LifecycleState.DRAFT:
+                raise ValueError(
+                    f'Cannot cancel item {item_id}: only DRAFT lines can be removed. '
+                    'Use an amendment to change unreceived quantities/prices, or reverse the receive batch.'
                 )
 
         for row in new_items_payload or []:
             if _is_cancel_row(row):
                 item = ProcurementItem.objects.get(
-                    pk=int(row.get('id') or row.get('item_id')),
+                    pk=_row_id(row),
                     tenant_id=tenant_id,
                     procurement=locked,
                 )
@@ -796,7 +823,7 @@ def apply_expenses_amendment(
 
         before_snapshot = _expenses_snapshot(locked)
 
-        cancel_expense_ids = {int(v) for v in (new_expenses_payload or []) if _is_cancel_row(v)}
+        cancel_expense_ids = {_row_id(v) for v in (new_expenses_payload or []) if _is_cancel_row(v)}
         received_expense_ids = set(
             ProcurementReceiveBatchExpense.objects
             .filter(tenant_id=tenant_id, batch__procurement=locked)
@@ -804,22 +831,33 @@ def apply_expenses_amendment(
             .distinct()
         )
         for expense_id in cancel_expense_ids:
+            expense = ProcurementExpense.objects.get(
+                pk=expense_id,
+                tenant_id=tenant_id,
+                procurement=locked,
+            )
             if expense_id in received_expense_ids:
                 raise ValueError(
                     f'Cannot cancel expense {expense_id}: it already has received facts in a batch.'
+                )
+            if expense.lifecycle_state != ProcurementExpense.LifecycleState.DRAFT:
+                raise ValueError(
+                    f'Cannot cancel expense {expense_id}: only DRAFT expenses can be removed. '
+                    'Use an amendment to change the remaining amount, or reverse the receive batch.'
                 )
 
         for row in new_expenses_payload or []:
             if _is_cancel_row(row):
                 expense = ProcurementExpense.objects.get(
-                    pk=int(row.get('id') or row.get('expense_id')),
+                    pk=_row_id(row),
                     tenant_id=tenant_id,
                     procurement=locked,
                 )
                 expense.lifecycle_state = ProcurementExpense.LifecycleState.CANCELLED
                 expense.save(update_fields=['lifecycle_state', 'updated_at'])
             else:
-                _upsert_workspace_expense(tenant_id, locked, row)
+                expense = _upsert_workspace_expense_for_amendment(tenant_id, locked, row)
+                _sync_expense_lifecycle_after_amendment(expense)
 
         after_snapshot = _expenses_snapshot(locked)
         return ProcurementAmendment.objects.create(
@@ -838,6 +876,16 @@ def _is_cancel_row(row) -> bool:
     if isinstance(row, dict):
         return bool(row.get('_cancel') or row.get('cancel'))
     return False
+
+
+def _row_id(row) -> int:
+    if isinstance(row, dict):
+        value = row.get('id') or row.get('item_id') or row.get('expense_id')
+    else:
+        value = row
+    if value is None:
+        raise ValueError('Amendment row id is required.')
+    return int(value)
 
 
 def _items_snapshot(procurement: Procurement) -> list[dict]:
@@ -864,6 +912,8 @@ def _expenses_snapshot(procurement: Procurement) -> list[dict]:
             'amount': str(expense.amount),
             'currency': expense.currency,
             'fx_rate': str(expense.fx_rate),
+            'allocation_method': expense.allocation_method,
+            'target_item_ids': list(expense.targets.values_list('item_id', flat=True)),
             'lifecycle_state': expense.lifecycle_state,
         }
         for expense in procurement.expenses.order_by('id')
@@ -879,21 +929,34 @@ def _amendment_item_for_update(tenant_id: int, procurement: Procurement, item_id
         raise ValueError(
             f'Cannot amend item {item_id} in state {item.lifecycle_state}.'
         )
+    if _received_quantity(item) > 0:
+        raise ValueError(
+            f'Cannot amend item {item_id}: it already has received quantities. '
+            'Reverse the receive batch or split/amend only the unreceived line.'
+        )
     return item
 
 
 def _upsert_workspace_item_for_amendment(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
     item_id = row.get('id') or row.get('item_id')
+    current_item = None
+    if item_id:
+        current_item = _amendment_item_for_update(tenant_id, procurement, int(item_id))
     values = {
         'product_variant_id': int(row['product_variant_id']),
         'quantity': Decimal(str(row['quantity'])),
         'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
-        'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
+        'fx_rate': _resolve_procurement_row_fx_rate(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            row=row,
+            current_fx_rate=current_item.fx_rate if current_item is not None else None,
+        ),
         'goods_ownership': procurement.goods_ownership,
     }
     if item_id:
-        item = _amendment_item_for_update(tenant_id, procurement, int(item_id))
+        item = current_item
         for key, val in values.items():
             setattr(item, key, val)
         item.save(update_fields=list(values.keys()) + ['updated_at'])
@@ -905,16 +968,24 @@ def _upsert_workspace_item_for_amendment(tenant_id: int, procurement: Procuremen
 
 def _upsert_workspace_item(tenant_id: int, procurement: Procurement, row: dict) -> ProcurementItem:
     item_id = row.get('id') or row.get('item_id')
+    current_item = None
+    if item_id:
+        current_item = _draft_item_for_update(tenant_id, procurement, int(item_id))
     values = {
         'product_variant_id': int(row['product_variant_id']),
         'quantity': Decimal(str(row['quantity'])),
         'unit_purchase_price': Decimal(str(row['unit_purchase_price'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
-        'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
+        'fx_rate': _resolve_procurement_row_fx_rate(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            row=row,
+            current_fx_rate=current_item.fx_rate if current_item is not None else None,
+        ),
         'goods_ownership': procurement.goods_ownership,
     }
     if item_id:
-        item = _draft_item_for_update(tenant_id, procurement, int(item_id))
+        item = current_item
         for key, value in values.items():
             setattr(item, key, value)
         item.save(update_fields=[*values.keys(), 'updated_at'])
@@ -939,16 +1010,24 @@ def _upsert_workspace_expense(tenant_id: int, procurement: Procurement, row: dic
         )
         return expense
 
+    current_expense = None
+    if expense_id:
+        current_expense = _draft_expense_for_update(tenant_id, procurement, int(expense_id))
     values = {
         'expense_type': row['expense_type'],
         'amount': Decimal(str(row['amount'])),
         'currency': str(row.get('currency') or 'UZS').upper(),
-        'fx_rate': Decimal(str(row.get('fx_rate', '1'))),
+        'fx_rate': _resolve_procurement_row_fx_rate(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            row=row,
+            current_fx_rate=current_expense.fx_rate if current_expense is not None else None,
+        ),
         'allocation_method': row.get('allocation_method') or ProcurementExpense.AllocationMethod.BY_VALUE,
         'notes': row.get('notes', ''),
     }
     if expense_id:
-        expense = _draft_expense_for_update(tenant_id, procurement, int(expense_id))
+        expense = current_expense
         for key, value in values.items():
             setattr(expense, key, value)
         expense.save(update_fields=[*values.keys(), 'updated_at'])
@@ -968,6 +1047,99 @@ def _upsert_workspace_expense(tenant_id: int, procurement: Procurement, row: dic
             row.get('target_item_ids') or [],
         )
     return expense
+
+
+def _amendment_expense_for_update(tenant_id: int, procurement: Procurement, expense_id: int) -> ProcurementExpense:
+    expense = ProcurementExpense.objects.select_for_update().get(
+        pk=expense_id,
+        tenant_id=tenant_id,
+        procurement=procurement,
+    )
+    if expense.lifecycle_state in (
+        ProcurementExpense.LifecycleState.RECEIVED,
+        ProcurementExpense.LifecycleState.CANCELLED,
+    ):
+        raise ValueError(
+            f'Cannot amend expense {expense_id} in state {expense.lifecycle_state}.'
+        )
+    return expense
+
+
+def _upsert_workspace_expense_for_amendment(
+    tenant_id: int,
+    procurement: Procurement,
+    row: dict,
+) -> ProcurementExpense:
+    expense_id = row.get('id') or row.get('expense_id')
+    if not expense_id:
+        return _upsert_workspace_expense(tenant_id, procurement, row)
+
+    expense = _amendment_expense_for_update(tenant_id, procurement, int(expense_id))
+    allocated_uzs = _expense_allocated_value_uzs(expense)
+
+    if allocated_uzs > 0:
+        new_currency = str(row.get('currency') or expense.currency or 'UZS').upper()
+        new_fx_rate = _resolve_procurement_row_fx_rate(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            row={**row, 'currency': new_currency},
+            current_fx_rate=expense.fx_rate,
+        )
+        new_type = row.get('expense_type') or expense.expense_type
+        if new_currency != str(expense.currency or 'UZS').upper():
+            raise ValueError('Cannot change currency of an expense that is already partly received.')
+        if new_fx_rate != Decimal(str(expense.fx_rate or '1')):
+            raise ValueError('Cannot change FX rate of an expense that is already partly received.')
+        if new_type != expense.expense_type:
+            raise ValueError('Cannot change type of an expense that is already partly received.')
+
+    values = {
+        'expense_type': row.get('expense_type') or expense.expense_type,
+        'amount': Decimal(str(row.get('amount', expense.amount))),
+        'currency': str(row.get('currency') or expense.currency or 'UZS').upper(),
+        'fx_rate': _resolve_procurement_row_fx_rate(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            row={**row, 'currency': row.get('currency') or expense.currency or 'UZS'},
+            current_fx_rate=expense.fx_rate,
+        ),
+        'allocation_method': row.get('allocation_method') or expense.allocation_method,
+        'notes': row.get('notes', expense.notes),
+    }
+    new_total_uzs = (values['amount'] * values['fx_rate']).quantize(Decimal('0.01'))
+    if allocated_uzs > new_total_uzs:
+        raise ValueError(
+            f'Cannot reduce expense below already received amount. '
+            f'Already allocated: {allocated_uzs} UZS, new total: {new_total_uzs} UZS.'
+        )
+
+    for key, value in values.items():
+        setattr(expense, key, value)
+    expense.save(update_fields=[*values.keys(), 'updated_at'])
+
+    if 'target_item_ids' in row:
+        _replace_expense_targets(
+            tenant_id,
+            procurement,
+            expense,
+            row.get('target_item_ids') or [],
+        )
+    return expense
+
+
+def _sync_expense_lifecycle_after_amendment(expense: ProcurementExpense) -> None:
+    allocated = _expense_allocated_value_uzs(expense)
+    if allocated <= 0:
+        return
+    total = _expense_value_uzs(expense)
+    next_state = (
+        ProcurementExpense.LifecycleState.RECEIVED
+        if allocated >= total - Decimal('0.01')
+        else ProcurementExpense.LifecycleState.READY_FOR_RECEIVE
+    )
+    if expense.lifecycle_state != next_state:
+        expense.lifecycle_state = next_state
+        expense.save(update_fields=['lifecycle_state', 'updated_at'])
 
 
 def _draft_item_for_update(tenant_id: int, procurement: Procurement, item_id: int) -> ProcurementItem:
@@ -1088,7 +1260,7 @@ def _replace_expense_targets(
     expense: ProcurementExpense,
     item_ids: list[int],
 ) -> None:
-    ids = [int(item_id) for item_id in item_ids]
+    ids = list(dict.fromkeys(int(item_id) for item_id in item_ids))
     if ids:
         existing = set(
             ProcurementItem.objects.filter(
@@ -1100,7 +1272,23 @@ def _replace_expense_targets(
         if existing != set(ids):
             raise ValueError('Some expense targets do not belong to this procurement.')
 
-    expense.targets.all().delete()
+    ProcurementExpenseTarget.objects.filter(
+        tenant_id=tenant_id,
+        expense=expense,
+    ).exclude(item_id__in=ids).hard_delete()
+    ProcurementExpenseTarget.all_objects.filter(
+        tenant_id=tenant_id,
+        expense=expense,
+        item_id__in=ids,
+        deleted_at__isnull=False,
+    ).delete()
+    existing_targets = set(
+        ProcurementExpenseTarget.objects.filter(
+            tenant_id=tenant_id,
+            expense=expense,
+            item_id__in=ids,
+        ).values_list('item_id', flat=True)
+    )
     ProcurementExpenseTarget.objects.bulk_create([
         ProcurementExpenseTarget(
             tenant_id=tenant_id,
@@ -1108,6 +1296,7 @@ def _replace_expense_targets(
             item_id=item_id,
         )
         for item_id in ids
+        if item_id not in existing_targets
     ])
 
 
@@ -1371,6 +1560,13 @@ def allocate_workspace_capital(
                     'expense_ids': sorted(expense_ids),
                 },
             )
+        _spend_allocated_partnership_capital(
+            tenant_id=tenant_id,
+            procurement=locked_procurement,
+            items=selected_items,
+            expenses=selected_expenses,
+            paid_at=date,
+        )
         publish_event(
             event_type='investment_agreement.allocated_to_procurement',
             payload={
@@ -1437,7 +1633,7 @@ def build_workspace_capital_allocation_preview(
     else:
         currency = str(agreement.currency or 'UZS').upper()
         required = Decimal('0.00')
-    required_uzs = procurement_cost_uzs_for_reporting(active_items, active_expenses)  # reporting only
+    required_uzs = _remaining_obligation_cost_uzs(active_items, active_expenses)
     members = list(agreement.partners.select_related('partner').all())
     available = _agreement_available_by_partner(agreement)
     suggestions = _auto_capital_amounts(required, members, {
@@ -1478,8 +1674,8 @@ def pay_workspace_costs(
     terms = getattr(procurement, 'terms', None)
     if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
         raise ValueError('AT_RECEIPT procurement pays only at receive moment, use receive action.')
-    if procurement.status != Procurement.Status.OPEN:
-        raise ValueError('Costs can be paid only while procurement is OPEN.')
+    if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
+        raise ValueError('Costs can be paid only while procurement is OPEN or PARTIALLY_RECEIVED.')
 
     cash_account_id = payload.get('cash_account_id')
     if not cash_account_id:
@@ -1500,7 +1696,9 @@ def pay_workspace_costs(
 
     selected_items = list(items)
     selected_expenses = list(expenses)
-    if not selected_items and not selected_expenses:
+    amount = payload.get('amount')
+    is_delta_payment = amount is not None and item_ids is None and expense_ids is None
+    if not selected_items and not selected_expenses and not is_delta_payment:
         raise ValueError('No draft items or expenses selected for payment.')
 
     cash_account = CashAccount.objects.get(pk=cash_account_id, tenant_id=tenant_id, is_active=True)
@@ -1508,7 +1706,11 @@ def pay_workspace_costs(
     terms = getattr(procurement, 'terms', None)
     currency_of_obligation = (
         str(terms.currency_of_obligation).upper() if terms and terms.currency_of_obligation
-        else _derive_items_currency(list(selected_items))
+        else (
+            _derive_items_currency(list(selected_items))
+            if selected_items
+            else str(payload.get('currency') or cash_account.currency or 'UZS').upper()
+        )
     )
 
     if str(cash_account.currency).upper() != currency_of_obligation:
@@ -1520,9 +1722,11 @@ def pay_workspace_costs(
     payment_currency = currency_of_obligation
     payment_fx_rate = payload.get('fx_rate')
 
-    amount = payload.get('amount')
     if amount is None:
         amount = _draft_cost_total_in_obligation_currency(selected_items, selected_expenses)
+    amount = Decimal(str(amount)).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Payment amount must be > 0.')
 
     if terms is not None:
         terms.activate()
@@ -1532,7 +1736,7 @@ def pay_workspace_costs(
         cash_account_id=cash_account.pk,
         target_type=Payment.TargetType.PROCUREMENT_COST,
         target_id=procurement.pk,
-        amount=Decimal(str(amount)),
+        amount=amount,
         currency=payment_currency,
         fx_rate=payment_fx_rate,
         counterpart_account_code='1100',
@@ -1562,6 +1766,422 @@ def pay_workspace_costs(
         updated_at=timezone.now(),
     )
     return payment
+
+
+def resolve_workspace_overpayment(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    payload: dict,
+    client_request_id: str | None = None,
+    user_id: int | None = None,
+):
+    if procurement.status not in (Procurement.Status.OPEN, Procurement.Status.PARTIALLY_RECEIVED):
+        raise ValueError('Overpayment can be resolved only while procurement is OPEN or PARTIALLY_RECEIVED.')
+
+    currency = _normalize_currency(payload.get('currency') or None)
+    payments = list(Payment.objects.filter(
+        tenant_id=tenant_id,
+        target_type=Payment.TargetType.PROCUREMENT_COST,
+        target_id=procurement.pk,
+        status=Payment.Status.POSTED,
+    ))
+    capital_allocations = []
+    if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+        capital_allocations = list(AgreementAllocation.objects.filter(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+        ))
+    status = _payment_status_block(
+        getattr(procurement, 'terms', None),
+        payments,
+        items=list(procurement.items.all()),
+        expenses=list(procurement.expenses.all()),
+        capital_allocations=capital_allocations,
+    )
+    overpaid_by_currency = {
+        c: -Decimal(str(value)).quantize(Decimal('0.01'))
+        for c, value in status.get('remaining_by_currency', {}).items()
+        if Decimal(str(value)) < 0
+    }
+    if not overpaid_by_currency:
+        raise ValueError('Procurement has no overpayment to resolve.')
+    if payload.get('currency') is None and len(overpaid_by_currency) == 1:
+        currency = next(iter(overpaid_by_currency))
+    max_amount = overpaid_by_currency.get(currency, Decimal('0.00'))
+    if max_amount <= 0:
+        raise ValueError(f'No overpayment in {currency}.')
+
+    amount = Decimal(str(payload.get('amount') or max_amount)).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Overpayment amount must be > 0.')
+    if amount > max_amount:
+        raise ValueError(f'Overpayment amount cannot exceed {max_amount} {currency}.')
+
+    if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+        return _return_partnership_overpayment_to_pool(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            amount=amount,
+            currency=currency,
+            payload=payload,
+            client_request_id=client_request_id,
+            user_id=user_id,
+        )
+    return _record_own_funds_overpayment_refund(
+        tenant_id=tenant_id,
+        procurement=procurement,
+        amount=amount,
+        currency=currency,
+        payload=payload,
+        client_request_id=client_request_id,
+    )
+
+
+def _record_own_funds_overpayment_refund(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    amount: Decimal,
+    currency: str,
+    payload: dict,
+    client_request_id: str | None,
+) -> Payment:
+    cash_account_id = payload.get('cash_account_id')
+    if not cash_account_id:
+        raise ValueError('cash_account_id is required to receive supplier refund.')
+    paid_at = _resolve_action_datetime(payload.get('date') or payload.get('paid_at'))
+
+    with transaction.atomic():
+        if client_request_id:
+            existing = Payment.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=cash_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if account.kind == CashAccount.Kind.AGREEMENT_CAPITAL:
+            raise ValueError('Use partnership overpayment action for agreement capital accounts.')
+        if str(account.currency or '').upper() != currency:
+            raise ValueError(f'Cash account currency must be {currency}.')
+
+        original_payment = (
+            Payment.objects
+            .filter(
+                tenant_id=tenant_id,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=procurement.pk,
+                source_type=Payment.SourceType.CASH_ACCOUNT,
+                currency=currency,
+                status=Payment.Status.POSTED,
+                reversed_payment__isnull=True,
+            )
+            .order_by('-paid_at', '-id')
+            .first()
+        )
+        if original_payment is None:
+            raise ValueError('No posted procurement payment found for this currency.')
+
+        fx_rate = Decimal(str(payload.get('fx_rate') or original_payment.fx_rate or '1')).quantize(Decimal('0.000001'))
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CASH_ACCOUNT,
+            source_id=account.pk,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.pk,
+            amount=amount,
+            currency=currency,
+            fx_rate=fx_rate,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            reversed_payment=original_payment,
+            notes=payload.get('notes') or f'Overpayment refund for procurement #{procurement.pk}',
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.pk,
+            amount=amount,
+            currency=currency,
+        )
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = record_journal_from_cash_entry(
+            tenant_id=tenant_id,
+            cash_entry=cash_entry,
+            operation_type='payment_refund',
+            operation_id=payment.pk,
+            counterpart_account_code='1100',
+            description=f'Procurement #{procurement.pk} overpayment refund',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.payment.reversed',
+            payload={
+                'payment_id': payment.pk,
+                'reversed_payment_id': original_payment.pk,
+                'target_type': payment.target_type,
+                'target_id': payment.target_id,
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+        return payment
+
+
+def _return_partnership_overpayment_to_pool(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    amount: Decimal,
+    currency: str,
+    payload: dict,
+    client_request_id: str | None,
+    user_id: int | None,
+) -> list[AgreementAllocation]:
+    paid_at = _resolve_action_datetime(payload.get('date') or payload.get('paid_at'))
+    agreement = _require_workspace_agreement(procurement)
+
+    with transaction.atomic():
+        if client_request_id:
+            existing = list(AgreementAllocation.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+                direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+            ))
+            if existing:
+                return existing
+
+        locked_agreement = (
+            InvestmentAgreement.objects
+            .select_for_update()
+            .prefetch_related('partners', 'allocations')
+            .get(pk=agreement.pk, tenant_id=tenant_id)
+        )
+        locked_procurement = Procurement.objects.select_for_update().get(
+            pk=procurement.pk,
+            tenant_id=tenant_id,
+        )
+        pool = get_or_create_currency_pool(
+            tenant_id=tenant_id,
+            agreement=locked_agreement,
+            currency=currency,
+        )
+        pool = CashAccount.objects.select_for_update().get(
+            pk=pool.pk,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if str(pool.currency or '').upper() != currency:
+            raise ValueError(f'Agreement capital pool currency must be {currency}.')
+
+        partner_splits = _resolve_overpayment_partner_splits(
+            locked_procurement,
+            currency=currency,
+            requested_partner_id=payload.get('partner_id'),
+            amount=amount,
+        )
+        fx_rate = Decimal(str(payload.get('fx_rate') or '1')).quantize(Decimal('0.000001'))
+        original_payment = (
+            Payment.objects
+            .filter(
+                tenant_id=tenant_id,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=locked_procurement.pk,
+                source_type=Payment.SourceType.CAPITAL_POOL,
+                source_id=pool.pk,
+                currency=currency,
+                status=Payment.Status.POSTED,
+                reversed_payment__isnull=True,
+            )
+            .order_by('-paid_at', '-id')
+            .first()
+        )
+        if original_payment is not None:
+            fx_rate = Decimal(str(payload.get('fx_rate') or original_payment.fx_rate or fx_rate)).quantize(Decimal('0.000001'))
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            source_id=pool.pk,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=locked_procurement.pk,
+            amount=amount,
+            currency=currency,
+            fx_rate=fx_rate,
+            paid_at=paid_at,
+            reversed_payment=original_payment,
+            notes=f'Capital pool return for procurement #{locked_procurement.pk}',
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=locked_procurement.pk,
+            amount=amount,
+            currency=currency,
+        )
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=pool,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        functional_amount = (amount * fx_rate).quantize(Decimal('0.01'))
+        journal = record_pool_journal_functional(
+            tenant_id=tenant_id,
+            cash_entry=cash_entry,
+            functional_amount_uzs=functional_amount,
+            operation_type='capital_return',
+            operation_id=payment.pk,
+            counterpart_account_code='1100',
+            description=f'Procurement #{locked_procurement.pk} overpayment returned to capital pool',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        allocations: list[AgreementAllocation] = []
+        for partner_id, split_amount in partner_splits:
+            allocation = AgreementAllocation.objects.create(
+                tenant_id=tenant_id,
+                agreement=locked_agreement,
+                procurement=locked_procurement,
+                partner_id=partner_id,
+                direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+                amount=split_amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                date=paid_at,
+                source=AgreementActionSource.BUSINESS_RECORDED,
+                confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+                created_by_id=user_id,
+                actor_partner_id=partner_id,
+                notes=_with_client_request_id(
+                    payload.get('notes') or f'Overpayment returned from procurement #{locked_procurement.pk}',
+                    client_request_id,
+                ),
+                client_request_id=client_request_id,
+            )
+            allocations.append(allocation)
+            ledger = get_or_create_ledger(
+                procurement_id=locked_procurement.pk,
+                partner_id=partner_id,
+                tenant_id=tenant_id,
+            )
+            append_ledger_entry(
+                ledger=ledger,
+                entry_type=PartnerLedgerEntry.EntryType.CAPITAL_OUT,
+                amount=split_amount,
+                currency=currency,
+                fx_rate=fx_rate,
+                source_ref=f'allocation:{allocation.pk}',
+                date=paid_at,
+            )
+            record_agreement_event(
+                tenant_id=tenant_id,
+                agreement=locked_agreement,
+                event_type='allocation.from_procurement',
+                source=AgreementActionSource.BUSINESS_RECORDED,
+                actor_user_id=user_id,
+                actor_partner_id=partner_id,
+                related_model='AgreementAllocation',
+                related_id=allocation.pk,
+                payload={
+                    'procurement_id': locked_procurement.pk,
+                    'partner_id': partner_id,
+                    'amount': str(split_amount),
+                    'currency': currency,
+                    'payment_id': payment.pk,
+                },
+            )
+        publish_event(
+            event_type='investment_agreement.returned_from_procurement',
+            payload={
+                'agreement_id': locked_agreement.pk,
+                'procurement_id': locked_procurement.pk,
+                'allocation_ids': [allocation.pk for allocation in allocations],
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+        return allocations
+
+
+def _resolve_overpayment_partner_splits(
+    procurement: Procurement,
+    *,
+    currency: str,
+    requested_partner_id,
+    amount: Decimal,
+) -> list[tuple[int, Decimal]]:
+    net_by_partner: dict[int, Decimal] = {}
+    for allocation in AgreementAllocation.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement=procurement,
+        currency=currency,
+        confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+    ):
+        delta = Decimal(str(allocation.amount))
+        if allocation.direction == AgreementAllocation.Direction.FROM_PROCUREMENT:
+            delta = -delta
+        net_by_partner[allocation.partner_id] = (
+            net_by_partner.get(allocation.partner_id, Decimal('0')) + delta
+        ).quantize(Decimal('0.01'))
+
+    if requested_partner_id:
+        partner_id = int(requested_partner_id)
+        available = net_by_partner.get(partner_id, Decimal('0.00'))
+        if available < amount:
+            raise ValueError(f'Selected partner has only {available} {currency} allocated to this procurement.')
+        return [(partner_id, amount)]
+
+    candidates = sorted(net_by_partner.items(), key=lambda row: row[1], reverse=True)
+    remaining = amount
+    splits: list[tuple[int, Decimal]] = []
+    for partner_id, available in candidates:
+        if available <= 0:
+            continue
+        split = min(available, remaining).quantize(Decimal('0.01'))
+        if split <= 0:
+            continue
+        splits.append((partner_id, split))
+        remaining = (remaining - split).quantize(Decimal('0.01'))
+        if remaining <= 0:
+            return splits
+    raise ValueError('Partner allocations cannot cover this overpayment amount.')
+
+
+def _resolve_action_datetime(value):
+    if not value:
+        return timezone.now()
+    if hasattr(value, 'isoformat'):
+        return value
+    parsed = parse_datetime(str(value))
+    return parsed or timezone.now()
 
 
 def pay_workspace_supplier_payable(
@@ -1701,7 +2321,7 @@ def receive_workspace_batch(
             allowed_states=allowed_states,
             is_partial_receive=has_delayed_lines,
         )
-        expense_allocations_uzs = _landed_expense_allocations(items, expenses)
+        expense_allocations_uzs, expense_values_uzs = _landed_expense_allocations(items, expenses)
         item_values_uzs = [_item_value_uzs(item) for item in items]
         total_inventory_uzs = (
             sum(item_values_uzs, Decimal('0'))
@@ -1710,6 +2330,12 @@ def receive_workspace_batch(
 
         contract_snapshot: dict = {}
         capital_rows: list[dict] = []
+        capital_advances: list[dict] = []
+        # E14: 'AGREED' (Path 2) pins agreed shares + records the funding gap as
+        # an inter-partner advance; 'FACTUAL' (Path 1) is the backward-compatible
+        # default. The product/UI sends 'AGREED' as its default choice.
+        share_basis = str(payload.get('share_basis') or 'FACTUAL').upper()
+        advance_repayment_mode = str(payload.get('advance_repayment_mode') or 'LUMP').upper()
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
             # E12: fund the receive out of the capital pools, per obligation
             # currency (base direct; non-base via FIFO cost-basis). The returned
@@ -1717,15 +2343,28 @@ def receive_workspace_batch(
             required_base = None
             if locked.goods_ownership != Procurement.GoodsOwnership.CONSIGNED and total_inventory_uzs > 0:
                 native_by_ccy, func_by_ccy = _receive_funding_breakdown(
-                    items, item_values_uzs, expenses, expense_allocations_uzs,
+                    items,
+                    item_values_uzs,
+                    expenses,
+                    expense_allocations_uzs,
+                    expense_values_uzs,
                 )
-                required_base = _fund_partnership_receive_from_pools(
-                    tenant_id=tenant_id,
-                    procurement=locked,
-                    native_by_ccy=native_by_ccy,
-                    func_by_ccy=func_by_ccy,
-                    received_at=received_at,
-                )
+                if _partnership_receive_lines_already_paid(items, expenses):
+                    required_base = _prepaid_partnership_receive_base_cost(
+                        tenant_id=tenant_id,
+                        procurement=locked,
+                        native_by_ccy=native_by_ccy,
+                        func_by_ccy=func_by_ccy,
+                        received_at=received_at,
+                    )
+                else:
+                    required_base = _fund_partnership_receive_from_pools(
+                        tenant_id=tenant_id,
+                        procurement=locked,
+                        native_by_ccy=native_by_ccy,
+                        func_by_ccy=func_by_ccy,
+                        received_at=received_at,
+                    )
             if terms and terms.type == ProcurementTerms.Type.AT_RECEIPT:
                 _pre_allocate_at_receipt_partnership_capital(
                     tenant_id=tenant_id,
@@ -1735,13 +2374,14 @@ def receive_workspace_batch(
                     received_at=received_at,
                     required_base=required_base,
                 )
-            contract_snapshot, capital_rows = _resolve_workspace_capital_snapshot(
+            contract_snapshot, capital_rows, capital_advances = _resolve_workspace_capital_snapshot(
                 tenant_id=tenant_id,
                 procurement=locked,
                 required_uzs=total_inventory_uzs,
                 raw_allocations=payload.get('capital_allocations') or payload.get('allocations'),
                 received_at=received_at,
                 required_base=required_base,
+                share_basis=share_basis,
             )
 
         batch = ProcurementReceiveBatch.objects.create(
@@ -1761,6 +2401,22 @@ def receive_workspace_batch(
                 amount_contract_currency=row['amount_contract_currency'],
                 capital_share=row['capital_share'],
                 profit_share=row['profit_share'],
+            )
+
+        # E14: Path-2 (AGREED) funding gap → inter-partner advances. The advance
+        # entity is the source of truth for the obligation; shares stay pinned to
+        # the agreed snapshot above and never move (Rule #14). GL equity stays at
+        # actual contributions — the advance reconciles agreed ownership vs paid.
+        for adv in capital_advances:
+            CapitalAdvance.objects.create(
+                tenant_id=tenant_id,
+                agreement_id=locked.agreement_id,
+                batch=batch,
+                debtor_id=adv['debtor'],
+                creditor_id=adv['creditor'],
+                principal=adv['principal'],
+                currency=contract_snapshot.get('contract_currency', 'UZS'),
+                repayment_mode=advance_repayment_mode,
             )
 
         from apps.inventory.models import Lot, LotStock, StockMovement
@@ -1831,21 +2487,28 @@ def receive_workspace_batch(
                 landed_cost_per_unit_uzs=landed_per_unit,
             )
 
+        expenses_to_mark_received: list[int] = []
         for expense in expenses:
+            allocated_amount_uzs = Decimal(str(expense_values_uzs.get(expense.id, Decimal('0.00')))).quantize(Decimal('0.01'))
+            if allocated_amount_uzs <= 0:
+                continue
+            is_fully_allocated = _expense_is_fully_allocated_after_receive(expense, allocated_amount_uzs)
             ProcurementReceiveBatchExpense.objects.create(
                 tenant_id=tenant_id,
                 batch=batch,
                 expense=expense,
-                allocated_amount_uzs=_expense_value_uzs(expense),
+                allocated_amount_uzs=allocated_amount_uzs,
             )
+            if is_fully_allocated:
+                expenses_to_mark_received.append(expense.id)
 
         if items_to_mark_received:
             ProcurementItem.objects.filter(pk__in=items_to_mark_received).update(
                 lifecycle_state=ProcurementItem.LifecycleState.RECEIVED,
                 updated_at=received_at,
             )
-        if expenses:
-            ProcurementExpense.objects.filter(pk__in=[expense.id for expense in expenses]).update(
+        if expenses_to_mark_received:
+            ProcurementExpense.objects.filter(pk__in=expenses_to_mark_received).update(
                 lifecycle_state=ProcurementExpense.LifecycleState.RECEIVED,
                 updated_at=received_at,
             )
@@ -2110,8 +2773,29 @@ def _payment_obligation_complete(procurement: Procurement, terms, payables) -> b
     ):
         return True
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
-        return _has_capital_activity(procurement)
-    return _has_payment_activity(procurement, payables)
+        payment_status = _payment_status_block(
+            terms,
+            [],
+            items=list(procurement.items.all()),
+            expenses=list(procurement.expenses.all()),
+            capital_allocations=list(AgreementAllocation.objects.filter(
+                tenant_id=procurement.tenant_id,
+                procurement=procurement,
+            )),
+        )
+        return payment_status['state'] in ('paid_full', 'overpaid')
+    payment_status = _payment_status_block(
+        terms,
+        list(Payment.objects.filter(
+            tenant_id=procurement.tenant_id,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.pk,
+            status=Payment.Status.POSTED,
+        )),
+        items=list(procurement.items.all()),
+        expenses=list(procurement.expenses.all()),
+    )
+    return payment_status['state'] in ('paid_full', 'overpaid') or _has_payment_activity(procurement, payables)
 
 
 def _terms_status_for_paid_amount(total_amount_due: Decimal, paid_amount: Decimal) -> str:
@@ -2199,6 +2883,16 @@ def _sections_payload(policy) -> list[dict]:
 
 
 def _documents_payload(procurement: Procurement, terms, payables, receive_batches, payments) -> dict:
+    items_for_display = [
+        item for item in procurement.items.all()
+        if item.lifecycle_state != ProcurementItem.LifecycleState.CANCELLED
+    ]
+    expenses_for_display = [
+        expense for expense in procurement.expenses.all()
+        if expense.lifecycle_state != ProcurementExpense.LifecycleState.CANCELLED
+    ]
+    item_cost_preview = _item_cost_preview(procurement)
+
     return {
         'procurement': {
             'id': procurement.id,
@@ -2221,12 +2915,10 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
         # frontend consumer (items / expenses / payment selection) can leak them.
         # Cancelled lines remain available via amendments/history, not here.
         'items': [
-            _item_payload(item) for item in procurement.items.all()
-            if item.lifecycle_state != ProcurementItem.LifecycleState.CANCELLED
+            _item_payload(item, item_cost_preview.get(item.id)) for item in items_for_display
         ],
         'expenses': [
-            _expense_payload(expense) for expense in procurement.expenses.all()
-            if expense.lifecycle_state != ProcurementExpense.LifecycleState.CANCELLED
+            _expense_payload(expense) for expense in expenses_for_display
         ],
         'settlement': _settlement_payload(terms),
         'payables': [_payable_payload(payable) for payable in payables],
@@ -2238,11 +2930,17 @@ def _documents_payload(procurement: Procurement, terms, payables, receive_batche
             terms, payments,
             items=list(procurement.items.all()),
             expenses=list(procurement.expenses.all()),
+            capital_allocations=list(
+                AgreementAllocation.objects.filter(
+                    tenant_id=procurement.tenant_id,
+                    procurement=procurement,
+                )
+            ),
         ),
     }
 
 
-def _item_payload(item) -> dict:
+def _item_payload(item, cost_preview: dict | None = None) -> dict:
     return {
         'id': item.id,
         'product_variant_id': item.product_variant_id,
@@ -2257,6 +2955,7 @@ def _item_payload(item) -> dict:
         'received_quantity': str(_received_quantity(item)),
         'remaining_quantity': str(Decimal(str(item.quantity)) - _received_quantity(item)),
         'locked_reason': None if item.lifecycle_state == item.LifecycleState.DRAFT else 'Line already has facts.',
+        **(cost_preview or {}),
     }
 
 
@@ -2275,7 +2974,7 @@ def _expense_payload(expense) -> dict:
     }
 
 
-def _payment_status_block(terms, payments: list, items=None, expenses=None) -> dict:
+def _payment_status_block(terms, payments: list, items=None, expenses=None, capital_allocations=None) -> dict:
     """obligation vs paid, PER CURRENCY. Single source = procurement_cost_by_currency.
 
     Supports mixed-currency procurement (e.g. USD goods + UZS local logistics):
@@ -2283,28 +2982,51 @@ def _payment_status_block(terms, payments: list, items=None, expenses=None) -> d
     Backward-compat single fields are populated only when there's one currency.
     """
     if items is not None:
-        active_items = [i for i in items if i.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
-        active_expenses = [e for e in (expenses or []) if e.lifecycle_state not in ('CANCELLED', 'RECEIVED')]
+        active_items = [i for i in items if i.lifecycle_state != 'CANCELLED']
+        active_expenses = [e for e in (expenses or []) if e.lifecycle_state != 'CANCELLED']
         obligation_by_currency = procurement_cost_by_currency(active_items, active_expenses)
+        paid_by_currency: dict[str, Decimal] = {}
+        if capital_allocations:
+            for allocation in capital_allocations:
+                cur = str(getattr(allocation, 'currency', 'UZS') or 'UZS').upper()
+                delta = Decimal(str(allocation.amount))
+                if allocation.direction != AgreementAllocation.Direction.TO_PROCUREMENT:
+                    delta = -delta
+                paid_by_currency[cur] = paid_by_currency.get(cur, Decimal('0')) + delta
+        else:
+            for payment in (payments or []):
+                if getattr(payment, 'status', Payment.Status.POSTED) != Payment.Status.POSTED:
+                    continue
+                cur = str(getattr(payment, 'currency', 'UZS') or 'UZS').upper()
+                delta = Decimal(str(payment.amount))
+                if getattr(payment, 'reversed_payment_id', None):
+                    delta = -delta
+                paid_by_currency[cur] = paid_by_currency.get(cur, Decimal('0')) + delta
     else:
         cur = str(getattr(terms, 'currency_of_obligation', 'UZS') or 'UZS').upper()
         amt = Decimal(str(getattr(terms, 'total_amount_due', 0) or 0)).quantize(Decimal('0.01'))
         obligation_by_currency = {cur: amt} if amt else {}
 
-    paid_by_currency: dict[str, Decimal] = {}
-    for p in (payments or []):
-        cur = str(getattr(p, 'currency', 'UZS') or 'UZS').upper()
-        paid_by_currency[cur] = paid_by_currency.get(cur, Decimal('0')) + Decimal(str(p.amount))
-    paid_by_currency = {c: v.quantize(Decimal('0.01')) for c, v in paid_by_currency.items()}
+        paid_by_currency: dict[str, Decimal] = {}
+        for p in (payments or []):
+            cur = str(getattr(p, 'currency', 'UZS') or 'UZS').upper()
+            delta = Decimal(str(p.amount))
+            if getattr(p, 'reversed_payment_id', None):
+                delta = -delta
+            paid_by_currency[cur] = paid_by_currency.get(cur, Decimal('0')) + delta
+    paid_by_currency = {c: Decimal(str(v)).quantize(Decimal('0.01')) for c, v in paid_by_currency.items()}
 
     currencies = set(obligation_by_currency) | set(paid_by_currency)
     remaining_by_currency: dict[str, Decimal] = {}
     any_remaining = False
+    any_overpaid = False
     for c in currencies:
         rem = (obligation_by_currency.get(c, Decimal('0')) - paid_by_currency.get(c, Decimal('0'))).quantize(Decimal('0.01'))
         remaining_by_currency[c] = rem
         if rem > 0:
             any_remaining = True
+        if rem < 0:
+            any_overpaid = True
 
     any_paid = bool(paid_by_currency)
     total_obligation = sum(obligation_by_currency.values(), Decimal('0'))
@@ -2314,6 +3036,8 @@ def _payment_status_block(terms, payments: list, items=None, expenses=None) -> d
         state = 'unpaid'
     elif any_remaining:
         state = 'underpaid'
+    elif any_overpaid:
+        state = 'overpaid'
     else:
         state = 'paid_full'
 
@@ -2599,6 +3323,8 @@ def _summaries_payload(procurement: Procurement, payables) -> dict:
 
 
 def _history_payload(procurement: Procurement, receive_batches, payables) -> list[dict]:
+    from apps.partnerships.models import ProcurementAmendment
+
     history = [{
         'kind': 'WORKSPACE_OPENED',
         'date': procurement.opened_at.isoformat(),
@@ -2617,6 +3343,19 @@ def _history_payload(procurement: Procurement, receive_batches, payables) -> lis
         'title': f'Supplier payable #{payable.id}',
         'document_id': payable.id,
     } for payable in payables)
+    history.extend({
+        'kind': 'PROCUREMENT_AMENDMENT',
+        'date': amendment.amended_at.isoformat(),
+        'title': (
+            'Корректировка товаров'
+            if amendment.target_type == ProcurementAmendment.TargetType.ITEMS
+            else 'Корректировка расходов'
+            if amendment.target_type == ProcurementAmendment.TargetType.EXPENSES
+            else 'Корректировка'
+        ),
+        'document_id': amendment.id,
+        'reason': amendment.reason,
+    } for amendment in procurement.amendments.all())
     return sorted(history, key=lambda item: item['date'], reverse=True)
 
 
@@ -2630,6 +3369,44 @@ def _primary_currency(procurement: Procurement) -> str:
 
 def _normalize_currency(value: str | None) -> str:
     return 'USD' if str(value or 'UZS').upper() == 'USD' else 'UZS'
+
+
+def _resolve_workspace_fx_rate(
+    *,
+    tenant_id: int,
+    currency: str | None,
+    fx_rate,
+    operation_at=None,
+) -> Decimal:
+    normalized_currency = _normalize_currency(currency)
+    raw_fx = fx_rate
+    if raw_fx in ('', '0', 0):
+        raw_fx = None
+    return resolve_fx_rate_snapshot(
+        tenant_id=tenant_id,
+        operation_currency=normalized_currency,
+        operation_at=operation_at,
+        fx_rate_snapshot=raw_fx,
+    )
+
+
+def _resolve_procurement_row_fx_rate(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    row: dict,
+    current_fx_rate=None,
+) -> Decimal:
+    currency = _normalize_currency(row.get('currency'))
+    raw_fx = row.get('fx_rate')
+    if raw_fx is None and current_fx_rate is not None:
+        raw_fx = current_fx_rate
+    return _resolve_workspace_fx_rate(
+        tenant_id=tenant_id,
+        currency=currency,
+        fx_rate=raw_fx,
+        operation_at=procurement.opened_at,
+    )
 
 
 def _has_capital_activity(procurement: Procurement) -> bool:
@@ -2742,6 +3519,8 @@ def _coerce_datetime(value):
 
 
 def _receivable_line_states(procurement: Procurement, terms) -> tuple[str, ...]:
+    if terms and terms.type == ProcurementTerms.Type.PREPAID:
+        return (ProcurementItem.LifecycleState.READY_FOR_RECEIVE,)
     if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
         return (
             ProcurementItem.LifecycleState.DRAFT,
@@ -2767,6 +3546,116 @@ def _expense_value_uzs(expense) -> Decimal:
     return (Decimal(str(expense.amount)) * Decimal(str(expense.fx_rate))).quantize(Decimal('0.01'))
 
 
+def _expense_allocated_value_uzs(expense) -> Decimal:
+    return (
+        ProcurementReceiveBatchExpense.objects
+        .filter(expense=expense)
+        .aggregate(total=models.Sum('allocated_amount_uzs'))['total']
+        or Decimal('0.00')
+    ).quantize(Decimal('0.01'))
+
+
+def _expense_remaining_value_uzs(expense) -> Decimal:
+    return max(Decimal('0.00'), _expense_value_uzs(expense) - _expense_allocated_value_uzs(expense)).quantize(Decimal('0.01'))
+
+
+def _remaining_obligation_cost_by_currency(items, expenses) -> dict[str, Decimal]:
+    cost_map: dict[str, Decimal] = {}
+    for item in items:
+        remaining_qty = _remaining_item_quantity(item)
+        if remaining_qty <= 0:
+            continue
+        currency = str(item.currency or 'UZS').upper()
+        amount = (remaining_qty * Decimal(str(item.unit_purchase_price))).quantize(Decimal('0.01'))
+        cost_map[currency] = (cost_map.get(currency, Decimal('0.00')) + amount).quantize(Decimal('0.01'))
+    for expense in expenses:
+        remaining_uzs = _expense_remaining_value_uzs(expense)
+        if remaining_uzs <= 0:
+            continue
+        currency = str(expense.currency or 'UZS').upper()
+        fx_rate = Decimal(str(expense.fx_rate or '1'))
+        native_amount = (remaining_uzs / fx_rate if fx_rate else remaining_uzs).quantize(Decimal('0.01'))
+        cost_map[currency] = (cost_map.get(currency, Decimal('0.00')) + native_amount).quantize(Decimal('0.01'))
+    return cost_map
+
+
+def _remaining_obligation_cost_uzs(items, expenses) -> Decimal:
+    item_total = sum((_remaining_item_value_uzs(item) for item in items), Decimal('0.00'))
+    expense_total = sum((_expense_remaining_value_uzs(expense) for expense in expenses), Decimal('0.00'))
+    return (item_total + expense_total).quantize(Decimal('0.01'))
+
+
+def _expense_is_fully_allocated_after_receive(expense, current_allocated_uzs: Decimal) -> bool:
+    allocated = (_expense_allocated_value_uzs(expense) + Decimal(str(current_allocated_uzs))).quantize(Decimal('0.01'))
+    return allocated >= (_expense_value_uzs(expense) - Decimal('0.01'))
+
+
+def _item_cost_preview(procurement: Procurement) -> dict[int, dict]:
+    previews: dict[int, dict] = {}
+    active_items = list(
+        procurement.items
+        .filter(lifecycle_state__in=[
+            ProcurementItem.LifecycleState.DRAFT,
+            ProcurementItem.LifecycleState.READY_FOR_RECEIVE,
+        ])
+        .select_related('product_variant')
+    )
+    active_expenses = list(
+        procurement.expenses
+        .filter(lifecycle_state__in=[
+            ProcurementExpense.LifecycleState.DRAFT,
+            ProcurementExpense.LifecycleState.READY_FOR_RECEIVE,
+        ])
+        .prefetch_related('targets')
+    )
+    allocations, _expense_values = _landed_expense_allocations(active_items, active_expenses)
+    for item, allocated_expense_uzs in zip(active_items, allocations):
+        remaining_qty = Decimal(str(item.quantity)) - _received_quantity(item)
+        if remaining_qty <= 0:
+            continue
+        unit_purchase_uzs = (
+            Decimal(str(item.unit_purchase_price)) * Decimal(str(item.fx_rate or '1'))
+        ).quantize(Decimal('0.01'))
+        landed_uzs = (
+            unit_purchase_uzs + (Decimal(str(allocated_expense_uzs)) / remaining_qty)
+        ).quantize(Decimal('0.01'))
+        fx_rate = Decimal(str(item.fx_rate or '1'))
+        previews[item.id] = {
+            'estimated_allocated_expense_uzs': str(Decimal(str(allocated_expense_uzs)).quantize(Decimal('0.01'))),
+            'estimated_landed_cost_per_unit_uzs': str(landed_uzs),
+            'estimated_landed_cost_per_unit': str((landed_uzs / fx_rate if fx_rate else landed_uzs).quantize(Decimal('0.000001'))),
+        }
+
+    actual_rows = (
+        ProcurementReceiveBatchLine.objects
+        .filter(tenant_id=procurement.tenant_id, item__procurement=procurement, batch__is_reversal=False)
+        .values('item_id')
+        .annotate(
+            qty=models.Sum('quantity_received'),
+            allocated=models.Sum('allocated_expense_uzs'),
+            total_landed=models.Sum(models.F('landed_cost_per_unit_uzs') * models.F('quantity_received')),
+        )
+    )
+    fx_by_item = {
+        item.id: Decimal(str(item.fx_rate or '1'))
+        for item in procurement.items.all()
+    }
+    for row in actual_rows:
+        item_id = row['item_id']
+        qty = Decimal(str(row['qty'] or '0'))
+        if qty <= 0:
+            continue
+        landed_uzs = (Decimal(str(row['total_landed'] or '0')) / qty).quantize(Decimal('0.01'))
+        allocated_uzs = Decimal(str(row['allocated'] or '0')).quantize(Decimal('0.01'))
+        fx_rate = fx_by_item.get(item_id, Decimal('1'))
+        previews.setdefault(item_id, {}).update({
+            'actual_allocated_expense_uzs': str(allocated_uzs),
+            'actual_landed_cost_per_unit_uzs': str(landed_uzs),
+            'actual_landed_cost_per_unit': str((landed_uzs / fx_rate if fx_rate else landed_uzs).quantize(Decimal('0.000001'))),
+        })
+    return previews
+
+
 def _expenses_for_receive(
     *,
     procurement: Procurement,
@@ -2786,51 +3675,76 @@ def _expenses_for_receive(
     for expense in expenses:
         target_ids = {target.item_id for target in expense.targets.all()}
         if not target_ids:
-            raise ValueError('Partial receive requires explicit expense item targets.')
+            selected.append(expense)
+            continue
         touches_selected = bool(target_ids & selected_item_ids)
-        touches_delayed = bool(target_ids - selected_item_ids)
-        if touches_selected and touches_delayed:
-            raise ValueError('Expense targets selected and delayed items. Split the expense first.')
         if touches_selected:
             selected.append(expense)
     return selected
 
 
-def _landed_expense_allocations(items: list, expenses: list) -> list[Decimal]:
+def _landed_expense_allocations(items: list, expenses: list) -> tuple[list[Decimal], dict[int, Decimal]]:
     allocations = [Decimal('0.00') for _ in items]
+    expense_values_uzs: dict[int, Decimal] = {}
     if not items:
-        return allocations
+        return allocations, expense_values_uzs
 
-    item_values = [_item_value_uzs(item) for item in items]
-    item_quantities = [Decimal(str(item.quantity)) for item in items]
     item_indexes = {item.id: index for index, item in enumerate(items)}
 
     for expense in expenses:
         target_ids = {target.item_id for target in expense.targets.all()}
-        target_indexes = (
-            [item_indexes[item_id] for item_id in target_ids if item_id in item_indexes]
-            if target_ids else list(range(len(items)))
-        )
-        if not target_indexes:
+        scope_qs = ProcurementItem.objects.filter(
+            tenant_id=expense.tenant_id,
+            procurement=expense.procurement,
+        ).exclude(
+            lifecycle_state=ProcurementItem.LifecycleState.CANCELLED,
+        ).exclude(
+            lifecycle_state=ProcurementItem.LifecycleState.RECEIVED,
+        ).order_by('id')
+        if target_ids:
+            scope_qs = scope_qs.filter(pk__in=target_ids)
+        scope_items = list(scope_qs)
+        selected_scope_ids = {item.id for item in scope_items} & set(item_indexes)
+        if not selected_scope_ids:
             continue
-        bases = (
-            [item_values[index] for index in target_indexes]
+        scope_bases = (
+            {item.id: _remaining_item_value_uzs(item) for item in scope_items}
             if expense.allocation_method == ProcurementExpense.AllocationMethod.BY_VALUE
-            else [item_quantities[index] for index in target_indexes]
+            else {item.id: _remaining_item_quantity(item) for item in scope_items}
         )
-        total_base = sum(bases, Decimal('0'))
-        expense_amount = _expense_value_uzs(expense)
+        total_base = sum(scope_bases.values(), Decimal('0'))
+        expense_amount = _expense_remaining_value_uzs(expense)
+        if expense_amount <= 0:
+            continue
         remaining = expense_amount
-        for local_index, item_index in enumerate(target_indexes):
-            if local_index == len(target_indexes) - 1:
+        for local_index, scope_item in enumerate(scope_items):
+            if local_index == len(scope_items) - 1:
                 amount = remaining
             elif total_base > 0:
-                amount = (expense_amount * bases[local_index] / total_base).quantize(Decimal('0.01'))
+                amount = (expense_amount * scope_bases[scope_item.id] / total_base).quantize(Decimal('0.01'))
                 remaining -= amount
             else:
                 amount = Decimal('0.00')
+            if scope_item.id not in selected_scope_ids:
+                continue
+            item_index = item_indexes[scope_item.id]
             allocations[item_index] = (allocations[item_index] + amount).quantize(Decimal('0.01'))
-    return allocations
+            expense_values_uzs[expense.id] = (
+                expense_values_uzs.get(expense.id, Decimal('0.00')) + amount
+            ).quantize(Decimal('0.01'))
+    return allocations, expense_values_uzs
+
+
+def _remaining_item_quantity(item) -> Decimal:
+    return max(Decimal('0.000'), Decimal(str(item.quantity)) - _received_quantity(item)).quantize(Decimal('0.001'))
+
+
+def _remaining_item_value_uzs(item) -> Decimal:
+    return (
+        _remaining_item_quantity(item)
+        * Decimal(str(item.unit_purchase_price))
+        * Decimal(str(item.fx_rate))
+    ).quantize(Decimal('0.01'))
 
 
 def _draft_cost_total_uzs(items, expenses) -> Decimal:
@@ -2966,7 +3880,20 @@ def _resolve_workspace_capital_snapshot(
     raw_allocations: list[dict] | None,
     received_at,
     required_base: Decimal | None = None,
-) -> tuple[dict, list[dict]]:
+    share_basis: str = 'FACTUAL',
+) -> tuple[dict, list[dict], list[dict]]:
+    """E14: `share_basis` selects how lot ownership is fixed.
+
+    - 'FACTUAL' (Path 1, default): capital_share derived from the actual cash
+      each partner allocated; profit via profit_shares_from_capital. No advances.
+    - 'AGREED' (Path 2): capital_share/profit_share pinned to the agreed
+      AgreementPartner shares regardless of actual cash; the per-partner gap
+      (agreed − actual) becomes a CapitalAdvance (debtor owes, creditor covered).
+      `amount_contract_currency` still records the ACTUAL cash (keeps pool /
+      availability accounting honest); the advance bridges to the agreed share.
+
+    Returns (contract_snapshot, capital_rows, advances). `advances` is always
+    empty under FACTUAL."""
     agreement = _require_workspace_agreement(procurement)
     currency = str(agreement.currency or 'UZS').upper()
     # E12: when the receive was funded from currency sub-pools, the base-currency
@@ -3018,17 +3945,35 @@ def _resolve_workspace_capital_snapshot(
     # those, and the aggregate check is implicit in the per-partner availability
     # validation above.
 
+    basis = str(share_basis or 'FACTUAL').upper()
+
+    # Agreed capital ratio per partner (used by AGREED basis and advances).
+    planned_total = sum((Decimal(str(m.planned_capital_share)) for m in members), Decimal('0'))
+
     partners_meta = []
     for member in members:
         amount = amounts.get(member.partner_id, Decimal('0')).quantize(Decimal('0.01'))
-        capital_share = (amount / required).quantize(Decimal('0.000001')) if required > 0 else Decimal('0')
+        actual_share = (amount / required).quantize(Decimal('0.000001')) if required > 0 else Decimal('0')
+        if basis == 'AGREED':
+            agreed_ratio = (
+                (Decimal(str(member.planned_capital_share)) / planned_total).quantize(Decimal('0.000001'))
+                if planned_total > 0 else Decimal('0')
+            )
+            capital_share = agreed_ratio
+        else:
+            capital_share = actual_share
         partners_meta.append({
             'partner_id': member.partner_id,
             'role': member.role,
-            'capital_amount_contract_currency': str(amount),
+            'capital_amount_contract_currency': str(amount),  # actual cash (honest pool accounting)
             'capital_share': str(capital_share),
         })
-    profit_shares = profit_shares_from_capital(partners_meta, agreement.mudaraba_ratio)
+
+    if basis == 'AGREED':
+        # Profit by agreement (negotiated AgreementPartner.profit_share), not derived.
+        profit_shares = {m.partner_id: Decimal(str(m.profit_share)) for m in members}
+    else:
+        profit_shares = profit_shares_from_capital(partners_meta, agreement.mudaraba_ratio)
 
     rows = []
     snapshot_partners = []
@@ -3049,13 +3994,59 @@ def _resolve_workspace_capital_snapshot(
             'profit_share': profit_share,
         })
 
+    advances: list[dict] = []
+    if basis == 'AGREED' and planned_total > 0:
+        advances = _compute_capital_advances(
+            members=members, amounts=amounts, required=required, planned_total=planned_total,
+        )
+
     return {
         'agreement_id': agreement.id,
         'contract_currency': currency,
         'mudaraba_ratio': str(agreement.mudaraba_ratio),
         'loss_rule': agreement.loss_rule,
         'partners': snapshot_partners,
-    }, rows
+    }, rows, advances
+
+
+def _compute_capital_advances(
+    *, members: list, amounts: dict[int, Decimal], required: Decimal, planned_total: Decimal,
+) -> list[dict]:
+    """Pair under-contributors (debtors) to over-contributors (creditors) pro-rata.
+
+    delta_i = agreed_amount_i − actual_amount_i. Σ delta == 0 (the batch is fully
+    funded), so Σ shortfalls == Σ surpluses. Returns one spec per (debtor, creditor)
+    pair: {debtor, creditor, principal}."""
+    cents = Decimal('0.01')
+    debtors: list[list] = []   # [partner_id, remaining_shortfall]
+    creditors: list[list] = []  # [partner_id, remaining_surplus]
+    for member in members:
+        agreed = (required * Decimal(str(member.planned_capital_share)) / planned_total).quantize(cents)
+        actual = amounts.get(member.partner_id, Decimal('0')).quantize(cents)
+        delta = (agreed - actual).quantize(cents)
+        if delta > 0:
+            debtors.append([member.partner_id, delta])
+        elif delta < 0:
+            creditors.append([member.partner_id, -delta])
+
+    advances: list[dict] = []
+    ci = 0
+    for debtor in debtors:
+        debtor_id, owed = debtor
+        while owed > 0 and ci < len(creditors):
+            creditor_id, avail = creditors[ci]
+            take = min(owed, avail)
+            if take > 0:
+                advances.append({
+                    'debtor': debtor_id, 'creditor': creditor_id, 'principal': take,
+                })
+            owed = (owed - take).quantize(cents)
+            avail = (avail - take).quantize(cents)
+            creditors[ci][1] = avail
+            if avail <= 0:
+                ci += 1
+        debtor[1] = owed
+    return advances
 
 
 def _amount_uzs_to_currency(*, tenant_id: int, amount_uzs: Decimal, currency: str, received_at) -> Decimal:
@@ -3154,7 +4145,13 @@ def _sync_procurement_status_after_receive(procurement: Procurement, received_at
         procurement.save(update_fields=['status', 'received_at', 'updated_at'])
 
 
-def _receive_funding_breakdown(items, item_values_uzs, expenses, expense_allocations_uzs):
+def _receive_funding_breakdown(
+    items,
+    item_values_uzs,
+    expenses,
+    expense_allocations_uzs,
+    expense_values_uzs: dict[int, Decimal] | None = None,
+):
     """E12: per-currency obligation of this receive batch.
 
     Returns (native_by_ccy, func_by_ccy):
@@ -3176,9 +4173,94 @@ def _receive_funding_breakdown(items, item_values_uzs, expenses, expense_allocat
     for item, value_uzs in zip(items, item_values_uzs):
         _add(item.currency, item.fx_rate, value_uzs)
     for expense in expenses:
-        _add(expense.currency, expense.fx_rate, _expense_value_uzs(expense))
+        expense_value_uzs = (
+            expense_values_uzs.get(expense.id, Decimal('0.00'))
+            if expense_values_uzs is not None
+            else _expense_value_uzs(expense)
+        )
+        _add(expense.currency, expense.fx_rate, expense_value_uzs)
 
     return native, func
+
+
+def _partnership_receive_lines_already_paid(items, expenses) -> bool:
+    lines = [*items, *expenses]
+    return bool(lines) and all(
+        line.lifecycle_state == line.LifecycleState.READY_FOR_RECEIVE
+        for line in lines
+    )
+
+
+def _prepaid_partnership_receive_base_cost(
+    *, tenant_id: int, procurement: Procurement, native_by_ccy, func_by_ccy, received_at,
+) -> Decimal:
+    agreement = _require_workspace_agreement(procurement)
+    base_ccy = str(agreement.currency or 'UZS').upper()
+    total_base_cost = Decimal('0')
+    for ccy in sorted(func_by_ccy.keys()):
+        native_amt = Decimal(str(native_by_ccy[ccy])).quantize(Decimal('0.01'))
+        if native_amt <= 0:
+            continue
+        if ccy == base_ccy:
+            total_base_cost += native_amt
+        else:
+            total_base_cost += _amount_uzs_to_currency(
+                tenant_id=tenant_id,
+                amount_uzs=Decimal(str(func_by_ccy[ccy])).quantize(Decimal('0.01')),
+                currency=base_ccy,
+                received_at=received_at,
+            )
+    return total_base_cost.quantize(Decimal('0.01'))
+
+
+def _spend_allocated_partnership_capital(
+    *,
+    tenant_id: int,
+    procurement: Procurement,
+    items: list[ProcurementItem],
+    expenses: list[ProcurementExpense],
+    paid_at,
+) -> None:
+    if not items and not expenses:
+        return
+    agreement = _require_workspace_agreement(procurement)
+    if not agreement.capital_account_id:
+        raise ValueError('Partnership agreement has no capital pool.')
+
+    item_values_uzs = [_item_value_uzs(item) for item in items]
+    native_by_ccy, func_by_ccy = _receive_funding_breakdown(
+        items,
+        item_values_uzs,
+        expenses,
+        [Decimal('0.00') for _ in items],
+    )
+    for ccy in sorted(func_by_ccy.keys()):
+        native_amt = Decimal(str(native_by_ccy[ccy])).quantize(Decimal('0.01'))
+        func_uzs = Decimal(str(func_by_ccy[ccy])).quantize(Decimal('0.01'))
+        if native_amt <= 0 or func_uzs <= 0:
+            continue
+        pool = CashAccount.objects.select_for_update().get(
+            pk=agreement.capital_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if str(pool.currency or '').upper() != ccy:
+            raise ValueError(
+                f'Agreement capital pool is in {pool.currency}, but selected prepaid lines are in {ccy}.'
+            )
+        record_capital_pool_payment(
+            tenant_id=tenant_id,
+            pool_account_id=pool.pk,
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.pk,
+            amount=native_amt,
+            functional_amount_uzs=func_uzs,
+            counterpart_account_code='1100',
+            currency=ccy,
+            paid_at=paid_at,
+            operation_type='procurement_payment',
+            description=f'Procurement #{procurement.pk} prepaid from capital pool ({ccy})',
+        )
 
 
 def _fund_partnership_receive_from_pools(
