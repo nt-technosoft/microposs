@@ -9,6 +9,7 @@ from django.db import transaction, models
 from django.utils import timezone
 
 from apps.finance.models import CashAccount, CashEntry
+from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.services import create_cash_entry, record_journal_from_cash_entry
 from apps.core.services import publish_event
 
@@ -178,7 +179,7 @@ def pay_dividend(
     procurement_id: int,
     amount: Decimal,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
     from_account_id: int | None = None,
     tenant_id: int,
     date=None,
@@ -191,6 +192,17 @@ def pay_dividend(
 
     if date is None:
         date = timezone.now()
+    currency = str(currency or 'UZS').upper()
+    # E15: a dividend is a real payout — it must move cash from a concrete
+    # account (sales proceeds live in operating cash). No ledger-only dividends.
+    if from_account_id is None:
+        raise ValueError('Dividend payout requires a source cash account (from_account_id).')
+    fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=fx_rate,
+    )
 
     with transaction.atomic():
         ledger = get_or_create_ledger(
@@ -215,7 +227,7 @@ def pay_dividend(
         already_paid = totals.get('DIVIDEND_PAID', _ZERO)
         pending = max(_ZERO, profit_net - already_paid)
 
-        payment_functional_uzs = _functional_uzs(amount, currency, fx_rate)
+        payment_functional_uzs = _functional_uzs(amount, currency, fx_snapshot.rate)
         if payment_functional_uzs > pending:
             raise ValueError(
                 f'Dividend amount {payment_functional_uzs} UZS exceeds pending payout {pending} UZS '
@@ -228,7 +240,9 @@ def pay_dividend(
             procurement_id=procurement_id,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             paid_from_account_id=from_account_id,
             date=date,
         )
@@ -263,19 +277,21 @@ def pay_dividend(
             entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
             source_ref=f'dividend_payment:{payment.pk}',
             date=date,
         )
 
         if cash_entry is not None and cash_entry.account.linked_account_id:
+            # E15: profit distribution reduces retained earnings (3200), not the
+            # investor-payable liability (2100, the old placeholder). DR 3200 / CR cash.
             record_journal_from_cash_entry(
                 tenant_id=tenant_id,
                 cash_entry=cash_entry,
-                operation_type='payment',
+                operation_type='profit_distrib',
                 operation_id=payment.pk,
-                counterpart_account_code='2100',
-                description=f'Dividend payment #{payment.pk}',
+                counterpart_account_code='3200',
+                description=f'Profit distribution #{payment.pk}',
                 date=date,
             )
 

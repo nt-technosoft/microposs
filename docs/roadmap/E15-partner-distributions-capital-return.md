@@ -104,8 +104,9 @@
 - [x] T-1.2 Тесты: пул ↓, equity ↓, leftover-возврат сходится, гард по доступному (E08 не сломан)
 
 ### Фаза 2
-- [ ] T-2.1 `pay_dividend` → обязательный кэш, counterpart 3200, поле `destination`
-- [ ] T-2.2 Тесты: касса ↓, 3200, DIVIDEND_PAID, гард ≤ pending
+- [x] T-2.1 `pay_dividend` → кэш обязателен (raise если нет источника), counterpart 3200
+  (не 2100). (`destination`-поле добавлю в Фазе 3, где FROM_PROFIT его использует.)
+- [x] T-2.2 Тесты: касса ↓, DR 3200, DIVIDEND_PAID, гард ≤ pending, гард на источник
 
 ### Фаза 3
 - [ ] T-3.1 FROM_PROFIT routing в `settle_capital_advance`
