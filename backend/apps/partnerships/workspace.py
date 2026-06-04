@@ -3147,6 +3147,8 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         'agreement_label': f'Investment agreement #{agreement.id}',
         'opened_at': agreement.opened_at.isoformat(),
         'legal_mode': agreement.legal_mode,
+        'reconciliation_mode': agreement.reconciliation_mode,
+        'default_advance_repayment_mode': agreement.default_advance_repayment_mode,
         'currency': agreement.currency,
         'planned_budget': str(agreement.planned_budget),
         'pool': ({

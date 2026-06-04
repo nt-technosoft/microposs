@@ -201,6 +201,8 @@ export interface ProcurementWorkspacePayload {
       agreement_label: string
       opened_at: string
       legal_mode: string | null
+      reconciliation_mode: 'FACTUAL' | 'AGREED'
+      default_advance_repayment_mode: 'LUMP' | 'FROM_PROFIT'
       currency: string
       planned_budget: string
       pool: {

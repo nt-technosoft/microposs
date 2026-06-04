@@ -354,6 +354,53 @@ function redistributeCapital(changedPartnerId: number, rawValue: string): void {
   })
 }
 
+// E14: the reconciliation path is fixed on the agreement; the receive only
+// reflects it. FACTUAL → editable allocation grid (dynamic recalc); AGREED →
+// hold agreed shares, show the resulting inter-partner debt read-only.
+const reconciliationMode = computed(() => investment.value?.reconciliation_mode ?? 'FACTUAL')
+const isAgreedMode = computed(() => reconciliationMode.value === 'AGREED')
+
+const partnerAgreedAmounts = computed(() => {
+  const inv = investment.value
+  if (!inv) return []
+  const total = batchObligationTotal.value
+  const currency = batchObligationCurrency.value
+  const weightTotal = inv.partners.reduce((s, p) => s + (parseFloat(p.planned_capital_share) || 0), 0)
+    || inv.partners.length || 1
+  return inv.partners.map((p) => {
+    const agreed = total * (parseFloat(p.planned_capital_share) || 0) / weightTotal
+    const actual = receiveAvailable(p.partner_id, currency)
+    return { partnerId: p.partner_id, name: p.partner_name, agreed, actual, delta: Number((agreed - actual).toFixed(2)) }
+  })
+})
+
+// Pair under-contributors (debtors) to over-contributors (creditors) pro-rata.
+const advancePreview = computed(() => {
+  const debtors = partnerAgreedAmounts.value.filter((r) => r.delta > 0.001).map((r) => ({ name: r.name, owed: r.delta }))
+  const creditors = partnerAgreedAmounts.value.filter((r) => r.delta < -0.001).map((r) => ({ name: r.name, avail: -r.delta }))
+  const out: Array<{ debtor: string; creditor: string; amount: number }> = []
+  let ci = 0
+  for (const d of debtors) {
+    let owed = d.owed
+    while (owed > 0.001 && ci < creditors.length) {
+      const c = creditors[ci]
+      const take = Math.min(owed, c.avail)
+      if (take > 0.001) out.push({ debtor: d.name, creditor: c.name, amount: Number(take.toFixed(2)) })
+      owed = Number((owed - take).toFixed(2))
+      c.avail = Number((c.avail - take).toFixed(2))
+      if (c.avail <= 0.001) ci += 1
+    }
+  }
+  return out
+})
+
+const totalReceiveAvailable = computed(() => {
+  const inv = investment.value
+  if (!inv) return 0
+  return inv.partners.reduce((s, p) => s + receiveAvailable(p.partner_id, batchObligationCurrency.value), 0)
+})
+const agreedModeFunded = computed(() => totalReceiveAvailable.value + 0.01 >= batchObligationTotal.value)
+
 function intQty(val: string | number): string {
   return String(Math.round(parseFloat(String(val)) || 0))
 }
@@ -480,7 +527,10 @@ function onSave(): void {
     item_ids: [...selectedItemIds.value],
     item_discrepancies: itemDiscrepancies,
   }
-  if (isPartnership.value && capAllocs.value.length) {
+  // FACTUAL sends the (editable) allocation grid. AGREED omits it: the backend
+  // auto-derives actual contributions from available capital, pins the agreed
+  // shares, and records the funding gap as an advance.
+  if (isPartnership.value && !isAgreedMode.value && capAllocs.value.length) {
     payload.capital_allocations = capAllocs.value.map((a) => ({ partner_id: a.partnerId, amount: a.amount, currency: a.currency }))
   }
   if (isAtReceipt.value && isOwnFunds.value) {
@@ -500,7 +550,9 @@ const canProceed = computed(() => {
   switch (currentStep.value) {
     case 'where': return !!warehouseId.value
     case 'items': return receivableItems.value.length > 0 && !receiveMixedCurrency.value
-    case 'shares': return !receiveMixedCurrency.value && capitalShortfall.value <= 0
+    case 'shares': return !receiveMixedCurrency.value && (
+      isAgreedMode.value ? agreedModeFunded.value : capitalShortfall.value <= 0
+    )
     case 'payment': return !!selectedCashAccountId.value && parseFloat(paymentAmount.value) > 0 && !paymentExceedsBalance.value
     default: return true
   }
@@ -690,9 +742,6 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
 
       <!-- STEP: shares (partnership) -->
       <template v-else-if="currentStep === 'shares' && investment">
-        <p class="text-xs leading-relaxed text-neutral-500">
-          Доли участников в этой партии. Предзаполнено из плановых долей; можно скорректировать в пределах доступного капитала. Фиксируется при приёмке.
-        </p>
         <div class="flex items-center justify-between rounded-[10px] bg-neutral-50 px-3.5 py-3">
           <span class="text-sm text-neutral-500">Стоимость приёмки</span>
           <span class="text-sm font-semibold tabular-nums text-foreground">{{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}</span>
@@ -700,26 +749,63 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
         <p v-if="receivableBatchExpenses.length" class="text-xs leading-relaxed text-neutral-500">
           В сумму включены расходы: {{ receivableBatchExpenses.map((expense) => expense.expense_type).join(', ') }}.
         </p>
-        <div class="flex flex-col gap-2.5">
-          <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
-            <div class="min-w-0">
-              <span class="block truncate text-sm text-foreground">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? ('#' + alloc.partnerId) }}</span>
-              <small v-if="alloc.isCorrected" class="text-xs text-warning">↓ по доступному</small>
+
+        <!-- FACTUAL: доли следуют факту — редактируемая сетка (динамический пересчёт) -->
+        <template v-if="!isAgreedMode">
+          <p class="text-xs leading-relaxed text-neutral-500">
+            Доли по факту: предзаполнено из плановых, можно скорректировать в пределах доступного капитала. Фиксируется при приёмке.
+          </p>
+          <div class="flex flex-col gap-2.5">
+            <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
+              <div class="min-w-0">
+                <span class="block truncate text-sm text-foreground">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? ('#' + alloc.partnerId) }}</span>
+                <small v-if="alloc.isCorrected" class="text-xs text-warning">↓ по доступному</small>
+              </div>
+              <input
+                class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
+                type="number"
+                min="0"
+                step="0.01"
+                :value="alloc.amount"
+                @input="redistributeCapital(alloc.partnerId, ($event.target as HTMLInputElement).value)"
+              />
+              <span class="text-sm text-neutral-500">{{ alloc.currency }}</span>
             </div>
-            <input
-              class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
-              type="number"
-              min="0"
-              step="0.01"
-              :value="alloc.amount"
-              @input="redistributeCapital(alloc.partnerId, ($event.target as HTMLInputElement).value)"
-            />
-            <span class="text-sm text-neutral-500">{{ alloc.currency }}</span>
           </div>
-        </div>
-        <div v-if="capitalShortfall > 0" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
-          Не хватает капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}. Пополните капитал договора.
-        </div>
+          <div v-if="capitalShortfall > 0" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+            Не хватает капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}. Пополните капитал договора.
+          </div>
+        </template>
+
+        <!-- AGREED: держим договорные доли — разницу показываем как долг (read-only) -->
+        <template v-else>
+          <p class="text-xs leading-relaxed text-neutral-500">
+            Доли держим договорными. Разницу между договорной долей и фактически внесённым фиксируем как долг между сторонами.
+          </p>
+          <div class="flex flex-col gap-1.5">
+            <div v-for="row in partnerAgreedAmounts" :key="row.partnerId" class="flex items-center justify-between gap-3 rounded-[10px] bg-neutral-50 px-3.5 py-2.5">
+              <span class="truncate text-sm text-foreground">{{ row.name }}</span>
+              <span class="text-sm tabular-nums text-neutral-500">
+                <strong class="text-foreground">{{ row.agreed.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</strong>
+                <template v-if="Math.abs(row.delta) > 0.01"> · внёс {{ row.actual.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</template>
+                {{ batchObligationCurrency }}
+              </span>
+            </div>
+          </div>
+          <div v-if="advancePreview.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+            <p class="font-medium">Возникнет долг:</p>
+            <p v-for="(a, i) in advancePreview" :key="i" class="mt-1 tabular-nums">
+              {{ a.debtor }} → {{ a.creditor }}: {{ a.amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}
+            </p>
+            <p class="mt-1.5 text-xs text-neutral-500">Закрыть можно позже в карточке договора — деньгами или из прибыли.</p>
+          </div>
+          <div v-else class="rounded-[10px] bg-neutral-50 px-3.5 py-2.5 text-sm text-neutral-500">
+            Внесено ровно по договору — долга не возникнет.
+          </div>
+          <div v-if="!agreedModeFunded" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+            Не хватает капитала в пуле договора на эту приёмку. Пополните договор.
+          </div>
+        </template>
       </template>
 
       <!-- STEP: payment (own funds AT_RECEIPT) -->
