@@ -56,6 +56,31 @@ class CapitalAdvanceEndpointTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_capital_positions_and_settle_partner(self):
+        # Net position: investor under-contributed 4 (owes pool), operator -4.
+        resp = self.client.get(f'/api/v1/partnerships/agreements/{self.agreement_id}/capital-positions/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        by_partner = {r['partner_id']: r for r in resp.data}
+        self.assertEqual(by_partner[self.advance.debtor_id]['net'], '4.00')
+
+        # Settle the debtor's shortfall per-partner.
+        resp = self.client.post(
+            f'/api/v1/partnerships/agreements/{self.agreement_id}/settle-partner-capital/',
+            {'partner_id': self.advance.debtor_id, 'amount': '4.00', 'source': 'CASH'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        by_partner = {r['partner_id']: r for r in resp.data}
+        self.assertEqual(by_partner[self.advance.debtor_id]['net'], '0.00')
+
+    def test_settle_partner_overpayment_rejected(self):
+        resp = self.client.post(
+            f'/api/v1/partnerships/agreements/{self.agreement_id}/settle-partner-capital/',
+            {'partner_id': self.advance.debtor_id, 'amount': '99.00', 'source': 'CASH'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_profit_summary_lists_payable_rows(self):
         from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
         from apps.partnerships.models import PartnerLedgerEntry

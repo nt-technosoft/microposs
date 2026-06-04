@@ -13,6 +13,7 @@ from .serializers import (
     AgreementWithdrawalSerializer,
     CapitalAdvanceSerializer,
     CapitalAdvanceSettleSerializer,
+    SettlePartnerCapitalSerializer,
     AgreementContributionCreateSerializer,
     AgreementWithdrawalCreateSerializer,
     DividendPaymentCreateSerializer,
@@ -34,7 +35,7 @@ from .agreement_services import (
     get_partner_aggregate,
     pay_dividend,
 )
-from .advances import settle_capital_advance
+from .advances import partner_capital_positions, settle_capital_advance, settle_partner_capital
 from .workspace_support import (
     add_agreement_contribution,
     add_agreement_withdrawal,
@@ -245,6 +246,47 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         except (ValueError, NotImplementedError) as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(CapitalAdvanceSerializer(result).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='capital-positions')
+    def capital_positions(self, request, pk=None):
+        """B (participant↔pool): net capital position per partner vs the pool."""
+        agreement = self.get_object()
+        positions = partner_capital_positions(agreement)
+        members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
+        rows = []
+        for partner_id, pos in positions.items():
+            member = members.get(partner_id)
+            rows.append({
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+                'agreed': str(pos['agreed']),
+                'actual': str(pos['actual']),
+                'settled': str(pos['settled']),
+                'net': str(pos['net']),
+                'currency': agreement.currency,
+            })
+        rows.sort(key=lambda r: r['partner_id'])
+        return Response(rows)
+
+    @action(detail=True, methods=['post'], url_path='settle-partner-capital')
+    def settle_partner_capital_action(self, request, pk=None):
+        agreement = self.get_object()
+        serializer = SettlePartnerCapitalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            settle_partner_capital(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement.id,
+                partner_id=serializer.validated_data['partner_id'],
+                amount=serializer.validated_data['amount'],
+                source=serializer.validated_data['source'],
+                from_account_id=serializer.validated_data.get('from_account_id'),
+                client_request_id=serializer.validated_data.get('client_request_id'),
+            )
+        except (ValueError, NotImplementedError) as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return self.capital_positions(request, pk=pk)
 
 
 class ProcurementViewSet(viewsets.ModelViewSet):

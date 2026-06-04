@@ -229,6 +229,15 @@ class CapitalAdvanceSettleSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
 
+class SettlePartnerCapitalSerializer(serializers.Serializer):
+    """B (participant↔pool): settle a partner's net capital shortfall vs the pool."""
+    partner_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    source = serializers.ChoiceField(choices=CapitalAdvanceSettlement.Source.choices)
+    from_account_id = serializers.IntegerField(required=False, allow_null=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+
+
 class AgreementContributionSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
     partner_role = serializers.CharField(source='partner.role', read_only=True)
