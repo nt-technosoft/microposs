@@ -122,9 +122,10 @@
   (`dividends/`) уже существуют — теперь физичны. API-тесты зелёные.
 
 ### Фаза 5
-- [~] T-5.1 Карточка договора (`AgreementDetail.vue`): блок «Взаиморасчёты сторон»
-  (`AgreementAdvancesCard`) + лист погашения (`AdvanceSettleSheet`, CASH/FROM_PROFIT) —
-  готово, vue-tsc чист. Осталось: лист выплаты дивиденда + живой прогон mobile/desktop (с основателем).
+- [x] T-5.1 Карточка договора (`AgreementDetail.vue`): блок «Взаиморасчёты сторон»
+  (`AgreementAdvancesCard`) + лист погашения (`AdvanceSettleSheet`, CASH/FROM_PROFIT) +
+  «Распределить прибыль» (`DividendPaySheet`) + эндпоинт `profit-summary`. vue-tsc чист,
+  API-тесты зелёные. Осталось: живой прогон mobile/desktop (с основателем).
 
 ### Фаза 6
 - [ ] T-6.1 Отчёты + ADR + живой прогон

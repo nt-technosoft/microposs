@@ -28,7 +28,10 @@ from .serializers import (
     TermsAmendmentSerializer,
     ProcurementTermsAmendmentSerializer,
 )
+from decimal import Decimal
+
 from .agreement_services import (
+    get_partner_aggregate,
     pay_dividend,
 )
 from .advances import settle_capital_advance
@@ -184,6 +187,30 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(AgreementAllocationSerializer(allocations, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='profit-summary')
+    def profit_summary(self, request, pk=None):
+        """Per-partner, per-procurement undistributed profit (UZS) — payable rows
+        for the dividend sheet. Only rows with pending > 0."""
+        agreement = self.get_object()
+        procurements = list(Procurement.objects.filter(
+            tenant_id=request.tenant_id, agreement=agreement,
+        ))
+        members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
+        rows = []
+        for proc in procurements:
+            for partner_id, member in members.items():
+                agg = get_partner_aggregate(partner_id, request.tenant_id, proc.id)
+                pending = agg.get('profit_pending_payout') or Decimal('0')
+                if pending and Decimal(pending) > 0:
+                    rows.append({
+                        'procurement_id': proc.id,
+                        'partner_id': partner_id,
+                        'partner_name': getattr(member.partner, 'display_name', str(partner_id)),
+                        'role': member.role,
+                        'pending': str(pending),
+                    })
+        return Response(rows)
 
     @action(detail=True, methods=['get'], url_path='advances')
     def advances(self, request, pk=None):

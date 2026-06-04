@@ -55,3 +55,26 @@ class CapitalAdvanceEndpointTests(APITestCase):
             format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_profit_summary_lists_payable_rows(self):
+        from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
+        from apps.partnerships.models import PartnerLedgerEntry
+
+        # No accrued profit yet → empty payable list.
+        resp = self.client.get(f'/api/v1/partnerships/agreements/{self.agreement_id}/profit-summary/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data, [])
+
+        # Accrue profit for the investor on the agreement's procurement.
+        procurement_id = ProcurementReceiveBatch.objects.get(pk=self.advance.batch_id).procurement_id
+        ledger = get_or_create_ledger(
+            procurement_id=procurement_id, partner_id=self.advance.debtor_id,
+            tenant_id=self.ctx['business'].id)
+        append_ledger_entry(ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+                            amount=Decimal('25'), currency='UZS')
+
+        resp = self.client.get(f'/api/v1/partnerships/agreements/{self.agreement_id}/profit-summary/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(resp.data[0]['partner_id'], self.advance.debtor_id)
+        self.assertEqual(resp.data[0]['pending'], '25.00')

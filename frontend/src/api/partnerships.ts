@@ -944,6 +944,32 @@ export async function settleAgreementAdvance(
   return data
 }
 
+export interface AgreementProfitRow {
+  procurement_id: number
+  partner_id: number
+  partner_name: string
+  role: string
+  pending: string
+}
+
+export interface PayDividendPayload {
+  partner_id: number
+  procurement_id: number
+  amount: string
+  currency?: string
+  paid_from_account_id: number
+}
+
+export async function fetchAgreementProfitSummary(id: number): Promise<AgreementProfitRow[]> {
+  const { data } = await api.get<AgreementProfitRow[]>(`/api/v1/partnerships/agreements/${id}/profit-summary/`)
+  return Array.isArray(data) ? data : (data as { results?: AgreementProfitRow[] }).results ?? []
+}
+
+export async function payDividend(payload: PayDividendPayload): Promise<{ id: number; amount: string }> {
+  const { data } = await api.post('/api/v1/partnerships/dividends/', payload)
+  return data
+}
+
 export async function fetchInvestmentAgreements(): Promise<InvestmentAgreementListItem[]> {
   const { data } = await api.get<InvestmentAgreementListItem[]>('/api/v1/partnerships/agreements/')
   return Array.isArray(data) ? data : (data as { results?: InvestmentAgreementListItem[] }).results ?? []

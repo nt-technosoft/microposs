@@ -30,13 +30,16 @@ import {
   fetchAgreementAllocationPreview,
   fetchInvestmentAgreement,
   fetchAgreementAdvances,
+  fetchAgreementProfitSummary,
   type AgreementAllocationPreview,
+  type AgreementProfitRow,
   type CapitalAdvanceRecord,
   type InvestmentAgreementDetail,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
 import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
+import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
@@ -53,9 +56,11 @@ const agreement = ref<InvestmentAgreementDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
 const advances = ref<CapitalAdvanceRecord[]>([])
+const profitRows = ref<AgreementProfitRow[]>([])
 const operatingAccounts = ref<CashAccountRecord[]>([])
 const settleOpen = ref(false)
 const activeAdvance = ref<CapitalAdvanceRecord | null>(null)
+const dividendOpen = ref(false)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
 const contributionCurrency = ref<'USD' | 'UZS'>('USD')
@@ -262,14 +267,16 @@ async function saveWithdrawal(): Promise<void> {
 
 async function loadAdvances(): Promise<void> {
   try {
-    const [adv, accounts] = await Promise.all([
+    const [adv, profit, accounts] = await Promise.all([
       fetchAgreementAdvances(agreementId.value),
+      fetchAgreementProfitSummary(agreementId.value),
       operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
     ])
     advances.value = adv
+    profitRows.value = profit
     operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
   } catch {
-    // advances are supplementary — keep the page usable if they fail to load
+    // advances/distributions are supplementary — keep the page usable if they fail
   }
 }
 
@@ -280,6 +287,11 @@ function openSettle(advance: CapitalAdvanceRecord): void {
 
 async function onAdvanceSettled(): Promise<void> {
   settleOpen.value = false
+  await load()
+}
+
+async function onDividendPaid(): Promise<void> {
+  dividendOpen.value = false
   await load()
 }
 
@@ -420,6 +432,16 @@ onMounted(async () => {
         </Card>
 
         <AgreementAdvancesCard :advances="advances" @settle="openSettle" />
+
+        <div class="flex flex-wrap items-center gap-2">
+          <Button type="button" :disabled="!profitRows.length" @click="dividendOpen = true">
+            <HandCoins data-icon="inline-start" />
+            Распределить прибыль
+          </Button>
+          <span v-if="!profitRows.length" class="text-xs text-muted-foreground">
+            Накопленной прибыли к выплате пока нет
+          </span>
+        </div>
 
         <div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Card class="rounded-2xl bg-background">
@@ -640,6 +662,14 @@ onMounted(async () => {
       :accounts="operatingAccounts"
       @close="settleOpen = false"
       @settled="onAdvanceSettled"
+    />
+
+    <DividendPaySheet
+      :open="dividendOpen"
+      :rows="profitRows"
+      :accounts="operatingAccounts"
+      @close="dividendOpen = false"
+      @paid="onDividendPaid"
     />
   </main>
 </template>
