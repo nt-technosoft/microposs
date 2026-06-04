@@ -29,9 +29,6 @@ const landedDisplay = computed(() => {
   if (!Number.isFinite(value) || value <= 0) return ''
   return value.toLocaleString('ru-RU', { maximumFractionDigits: props.item.currency === 'USD' ? 2 : 0 })
 })
-const allocatedExpenseUzs = computed(() =>
-  parseFloat(props.item.estimated_allocated_expense_uzs ?? props.item.actual_allocated_expense_uzs ?? '0') || 0,
-)
 </script>
 
 <template>
@@ -58,9 +55,7 @@ const allocatedExpenseUzs = computed(() =>
       <div v-if="landedDisplay" class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
         <span>Себестоимость</span>
         <span class="font-medium tabular-nums text-foreground">{{ landedDisplay }} {{ item.currency }}/шт</span>
-        <span v-if="allocatedExpenseUzs > 0" class="tabular-nums text-neutral-400">
-          +{{ allocatedExpenseUzs.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) }} UZS расх.
-        </span>
+        <span class="text-neutral-400">вкл. расходы</span>
       </div>
     </div>
     <span class="shrink-0 text-sm font-semibold tabular-nums text-foreground">
