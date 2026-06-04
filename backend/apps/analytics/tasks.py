@@ -96,8 +96,9 @@ def _dispatch_event(event):
         'investment_agreement.opened': _handle_noop_retired,
         'investment_agreement.contribution_added': _handle_noop_retired,
         'investment_agreement.allocated_to_procurement': _handle_noop_retired,
-        'investment_agreement.withdrawal_added': _handle_noop_retired,
-        'partnership.dividend_paid': _handle_noop_retired,
+        # E15: partner outflows feed CashFlowSummary.cash_out_investor_payments.
+        'investment_agreement.withdrawal_added': _handle_financial_operation,
+        'partnership.dividend_paid': _handle_financial_operation,
         'finance.currency_exchange': _handle_noop_retired,
         'finance.owner_contribution': _handle_noop_retired,
         'finance.owner_drawing': _handle_noop_retired,
@@ -315,7 +316,32 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         occurred_at__range=(day_start, day_end),
     ).aggregate(total=Sum('functional_amount_uzs'))['total'] or Decimal('0')
 
-    net_cash = cash_sales + debt_payments - cash_refunds - supplier_payments - expense_outflows
+    # E15: payments OUT to partners — dividends (from operating cash) + capital
+    # returns (from the agreement pool). Surfaced as a single "to investors"
+    # outflow line so distributions/returns are visible (no longer stubbed 0).
+    # NOTE: precise operating-vs-pool cash-flow separation is E03's remap; here
+    # both are summed into the partner-outflow line and the net.
+    from apps.partnerships.models import AgreementWithdrawal, DividendPayment
+
+    def _functional(amount, fx_rate) -> Decimal:
+        return (Decimal(str(amount)) * Decimal(str(fx_rate or 1))).quantize(Decimal('0.01'))
+
+    dividends_out = sum(
+        (_functional(p.amount, p.fx_rate) for p in DividendPayment.objects.filter(
+            tenant_id=tenant_id, date__range=(day_start, day_end))),
+        Decimal('0'),
+    )
+    capital_returns_out = sum(
+        (_functional(w.amount, w.fx_rate) for w in AgreementWithdrawal.objects.filter(
+            tenant_id=tenant_id, date__range=(day_start, day_end))),
+        Decimal('0'),
+    )
+    investor_payments = (dividends_out + capital_returns_out).quantize(Decimal('0.01'))
+
+    net_cash = (
+        cash_sales + debt_payments
+        - cash_refunds - supplier_payments - expense_outflows - investor_payments
+    )
 
     CashFlowSummary.objects.update_or_create(
         tenant_id=tenant_id,
@@ -328,7 +354,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             'cash_out_supplier_payments': supplier_payments,
             'cash_out_expenses': expense_outflows,
             'cash_out_refunds': cash_refunds,
-            'cash_out_investor_payments': Decimal('0'),
+            'cash_out_investor_payments': investor_payments,
             'net_cash_flow': net_cash,
         },
     )

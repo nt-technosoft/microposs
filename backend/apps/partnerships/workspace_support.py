@@ -461,6 +461,7 @@ def add_agreement_withdrawal(
                 'partner_id': partner_id,
                 'amount': str(amount),
                 'currency': currency,
+                'date': date.isoformat(),
             },
             tenant_id=tenant_id,
         )

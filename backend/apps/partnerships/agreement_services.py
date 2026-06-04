@@ -303,6 +303,7 @@ def pay_dividend(
                 'procurement_id': procurement_id,
                 'amount': str(amount),
                 'currency': currency,
+                'date': date.isoformat(),
             },
             tenant_id=tenant_id,
         )
