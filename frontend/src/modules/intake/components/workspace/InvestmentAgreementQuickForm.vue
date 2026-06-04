@@ -283,34 +283,78 @@ onMounted(loadPartners)
           </label>
         </div>
 
-        <div class="grid overflow-hidden rounded-xl border border-border sm:grid-cols-3">
-          <div class="bg-primary p-3 text-primary-foreground">
-            <p class="text-xs opacity-75">{{ selectedInvestor?.display_name ?? 'Инвестор' }}</p>
-            <p class="mt-1 text-lg font-semibold tabular-nums">{{ formatPrice(investorCapital, currency) }}</p>
-            <p class="mt-1 text-xs opacity-75">плановый вклад</p>
+        <div class="grid grid-cols-3 gap-px overflow-hidden rounded-xl bg-border text-center">
+          <div class="bg-primary px-2 py-2 text-primary-foreground">
+            <p class="text-[11px] opacity-80">Инвестор</p>
+            <p class="text-sm font-semibold tabular-nums">{{ formatPrice(investorCapital, currency) }}</p>
           </div>
-          <div class="border-t border-border p-3 sm:border-l sm:border-t-0">
-            <p class="text-xs text-muted-foreground">Бизнесу внести</p>
-            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(operatorCapital, currency) }}</p>
-            <p class="mt-1 text-xs text-muted-foreground">доля {{ formatPercent(operatorCapitalPercentValue) }}</p>
+          <div class="bg-background px-2 py-2">
+            <p class="text-[11px] text-muted-foreground">Бизнес</p>
+            <p class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(operatorCapital, currency) }}</p>
           </div>
-          <div class="border-t border-border p-3 sm:border-l sm:border-t-0">
-            <p class="text-xs text-muted-foreground">Общий объём</p>
-            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudgetValue, currency) }}</p>
-            <p class="mt-1 text-xs text-muted-foreground">план договора</p>
+          <div class="bg-background px-2 py-2">
+            <p class="text-[11px] text-muted-foreground">Итого</p>
+            <p class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudgetValue, currency) }}</p>
           </div>
         </div>
-
-        <div class="flex items-center justify-between gap-3 rounded-xl bg-muted/60 px-3 py-2">
-          <span class="text-sm text-muted-foreground">Коэффициент Mudaraba для будущего пересчёта</span>
-          <span class="font-mono text-sm font-semibold text-foreground">
-            {{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(6) : '—' }}
-          </span>
-        </div>
+        <p class="text-xs text-muted-foreground">
+          Доля бизнеса {{ formatPercent(operatorCapitalPercentValue) }} · коэф. Mudaraba
+          {{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(4) : '—' }}
+        </p>
       </CardContent>
     </Card>
 
+    <!-- Развилка договора: определяет, нужен ли блок «План-факт» ниже -->
     <Card class="rounded-2xl bg-background">
+      <CardContent class="flex flex-col gap-3 pt-4">
+        <span class="text-sm font-medium text-foreground">Если внесут не ровно по договору</span>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="reconciliationMode === 'AGREED' ? 'border-primary bg-primary/5' : 'border-border'"
+            @click="reconciliationMode = 'AGREED'"
+          >
+            <span class="block text-sm font-semibold text-foreground">Держим договорные доли</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Разницу фиксируем как долг между сторонами.</span>
+          </button>
+          <button
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="reconciliationMode === 'FACTUAL' ? 'border-primary bg-primary/5' : 'border-border'"
+            @click="reconciliationMode = 'FACTUAL'"
+          >
+            <span class="block text-sm font-semibold text-foreground">Пересчёт по факту</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Без долга.</span>
+          </button>
+        </div>
+        <!-- Единым платежом доступно всегда; из прибыли — дополнительная опция -->
+        <button
+          v-if="reconciliationMode === 'AGREED'"
+          type="button"
+          class="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition hover:bg-muted/40"
+          @click="repaymentMode = repaymentMode === 'FROM_PROFIT' ? 'LUMP' : 'FROM_PROFIT'"
+        >
+          <span class="min-w-0">
+            <span class="block text-sm font-medium text-foreground">Разрешить гасить долг из прибыли</span>
+            <span class="mt-0.5 block text-xs text-muted-foreground">Единым платежом долг можно закрыть всегда; из прибыли — дополнительно.</span>
+          </span>
+          <span
+            class="relative h-6 w-10 shrink-0 rounded-full transition-colors"
+            :class="repaymentMode === 'FROM_PROFIT' ? 'bg-primary' : 'bg-muted-foreground/30'"
+            aria-hidden="true"
+          >
+            <span
+              class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-all"
+              :class="repaymentMode === 'FROM_PROFIT' ? 'left-[18px]' : 'left-0.5'"
+            />
+          </span>
+        </button>
+      </CardContent>
+    </Card>
+
+    <!-- План-факт: только при пересчёте по факту (при «держим доли» он не нужен) -->
+    <Card v-if="reconciliationMode === 'FACTUAL'" class="rounded-2xl bg-background">
       <CardHeader>
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -362,49 +406,6 @@ onMounted(loadPartners)
             <RefreshCcw data-icon="inline-start" />
             Сбросить
           </Button>
-        </div>
-      </CardContent>
-    </Card>
-
-    <Card class="rounded-2xl bg-background">
-      <CardContent class="flex flex-col gap-3 pt-4">
-        <span class="text-sm font-medium text-foreground">Если внесут не ровно по договору</span>
-        <div class="grid gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            class="rounded-xl border p-3 text-left transition"
-            :class="reconciliationMode === 'AGREED' ? 'border-primary bg-primary/5' : 'border-border'"
-            @click="reconciliationMode = 'AGREED'"
-          >
-            <span class="block text-sm font-semibold text-foreground">Держим договорные доли</span>
-            <span class="mt-1 block text-xs text-muted-foreground">Разницу фиксируем как долг между сторонами.</span>
-          </button>
-          <button
-            type="button"
-            class="rounded-xl border p-3 text-left transition"
-            :class="reconciliationMode === 'FACTUAL' ? 'border-primary bg-primary/5' : 'border-border'"
-            @click="reconciliationMode = 'FACTUAL'"
-          >
-            <span class="block text-sm font-semibold text-foreground">Пересчёт по факту</span>
-            <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Без долга.</span>
-          </button>
-        </div>
-        <div v-if="reconciliationMode === 'AGREED'" class="flex flex-col gap-2">
-          <span class="text-xs text-muted-foreground">Как гасить долг по умолчанию</span>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              class="flex-1 rounded-lg border px-3 py-2 text-sm transition"
-              :class="repaymentMode === 'LUMP' ? 'border-primary bg-primary/5 font-medium' : 'border-border'"
-              @click="repaymentMode = 'LUMP'"
-            >Единым платежом</button>
-            <button
-              type="button"
-              class="flex-1 rounded-lg border px-3 py-2 text-sm transition"
-              :class="repaymentMode === 'FROM_PROFIT' ? 'border-primary bg-primary/5 font-medium' : 'border-border'"
-              @click="repaymentMode = 'FROM_PROFIT'"
-            >Из прибыли</button>
-          </div>
         </div>
       </CardContent>
     </Card>
