@@ -681,6 +681,7 @@ export interface InvestmentAgreementListItem {
   planned_budget: string
   currency: string
   mudaraba_ratio: string
+  reconciliation_mode?: 'FACTUAL' | 'AGREED'
   balances: Record<string, string>
   partners_count: number
   investor_names: string[]

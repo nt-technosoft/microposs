@@ -334,7 +334,7 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
         model = InvestmentAgreement
         fields = [
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
-            'planned_budget', 'currency', 'mudaraba_ratio', 'balances',
+            'planned_budget', 'currency', 'mudaraba_ratio', 'reconciliation_mode', 'balances',
             'partners_count', 'investor_names', 'operator_names',
             'investor_shares', 'procurements_count', 'notes',
         ]
