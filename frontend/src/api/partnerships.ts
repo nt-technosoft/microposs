@@ -937,6 +937,41 @@ export interface AdvanceSettlePayload {
   client_request_id?: string
 }
 
+export interface CapitalPositionRow {
+  partner_id: number
+  partner_name: string
+  role: string
+  agreed: string
+  actual: string
+  settled: string
+  net: string
+  currency: string
+}
+
+export interface SettlePartnerCapitalPayload {
+  partner_id: number
+  amount: string
+  source: 'CASH' | 'FROM_PROFIT'
+  from_account_id?: number | null
+  client_request_id?: string
+}
+
+export async function fetchCapitalPositions(id: number): Promise<CapitalPositionRow[]> {
+  const { data } = await api.get<CapitalPositionRow[]>(`/api/v1/partnerships/agreements/${id}/capital-positions/`)
+  return Array.isArray(data) ? data : (data as { results?: CapitalPositionRow[] }).results ?? []
+}
+
+export async function settlePartnerCapital(
+  id: number,
+  payload: SettlePartnerCapitalPayload,
+): Promise<CapitalPositionRow[]> {
+  const { data } = await api.post<CapitalPositionRow[]>(
+    `/api/v1/partnerships/agreements/${id}/settle-partner-capital/`,
+    payload,
+  )
+  return Array.isArray(data) ? data : (data as { results?: CapitalPositionRow[] }).results ?? []
+}
+
 export async function fetchAgreementAdvances(id: number): Promise<CapitalAdvanceRecord[]> {
   const { data } = await api.get<CapitalAdvanceRecord[]>(`/api/v1/partnerships/agreements/${id}/advances/`)
   return Array.isArray(data) ? data : (data as { results?: CapitalAdvanceRecord[] }).results ?? []

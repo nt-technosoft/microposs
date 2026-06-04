@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { useToast } from '@/composables/useToast'
-import { settleAgreementAdvance, type CapitalAdvanceRecord } from '@/api/partnerships'
+import { settlePartnerCapital, type CapitalPositionRow } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { getApiErrorMessage } from '@/utils/errors'
 
@@ -15,7 +15,7 @@ interface OperatingAccount {
 const props = defineProps<{
   open: boolean
   agreementId: number
-  advance: CapitalAdvanceRecord | null
+  position: CapitalPositionRow | null
   accounts: OperatingAccount[]
 }>()
 
@@ -31,7 +31,8 @@ const fromAccountId = ref<number | null>(null)
 const isSaving = ref(false)
 const error = ref<string | null>(null)
 
-const outstanding = computed(() => Number(props.advance?.outstanding_balance ?? 0) || 0)
+const outstanding = computed(() => Math.max(0, Number(props.position?.net ?? 0) || 0))
+const currency = computed(() => props.position?.currency ?? 'UZS')
 const amountValue = computed(() => Number.parseFloat(String(amount.value).replace(',', '.')) || 0)
 
 // FROM_PROFIT is repaid in functional UZS from operating cash, so only UZS accounts apply.
@@ -40,27 +41,23 @@ const eligibleAccounts = computed(() => props.accounts.filter((a) => a.currency.
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen && props.advance) {
-      amount.value = props.advance.outstanding_balance
-      source.value = props.advance.repayment_mode === 'FROM_PROFIT' ? 'FROM_PROFIT' : 'CASH'
+    if (isOpen && props.position) {
+      amount.value = props.position.net
+      source.value = 'CASH'
       fromAccountId.value = eligibleAccounts.value[0]?.id ?? null
       error.value = null
     }
   },
 )
 
-function onClose() {
-  emit('close')
-}
-
 async function submit() {
-  if (!props.advance) return
+  if (!props.position) return
   if (amountValue.value <= 0) {
     error.value = 'Введите сумму больше 0'
     return
   }
   if (amountValue.value > outstanding.value + 1e-6) {
-    error.value = `Нельзя погасить больше остатка (${formatPrice(outstanding.value, props.advance.currency)})`
+    error.value = `Нельзя погасить больше долга (${formatPrice(outstanding.value, currency.value)})`
     return
   }
   if (source.value === 'FROM_PROFIT' && !fromAccountId.value) {
@@ -70,8 +67,8 @@ async function submit() {
   isSaving.value = true
   error.value = null
   try {
-    await settleAgreementAdvance(props.agreementId, {
-      advance_id: props.advance.id,
+    await settlePartnerCapital(props.agreementId, {
+      partner_id: props.position.partner_id,
       amount: String(amountValue.value),
       source: source.value,
       from_account_id: source.value === 'FROM_PROFIT' ? fromAccountId.value : null,
@@ -88,12 +85,10 @@ async function submit() {
 </script>
 
 <template>
-  <AppBottomSheet :open="open" title="Погасить взаиморасчёт" @close="onClose">
-    <div v-if="advance" class="sheet-body">
-      <p class="who">
-        {{ advance.debtor_name }} → {{ advance.creditor_name || 'Пул' }}
-      </p>
-      <p class="hint">Остаток долга: <strong>{{ formatPrice(outstanding, advance.currency) }}</strong></p>
+  <AppBottomSheet :open="open" title="Погасить взаиморасчёт" @close="emit('close')">
+    <div v-if="position" class="sheet-body">
+      <p class="who">{{ position.partner_name }} → пул договора</p>
+      <p class="hint">Долг перед пулом: <strong>{{ formatPrice(outstanding, currency) }}</strong></p>
 
       <div class="field">
         <span class="field-label">Чем гасим</span>
@@ -121,7 +116,7 @@ async function submit() {
       </div>
 
       <div class="field">
-        <label class="field-label">Сумма ({{ advance.currency }})</label>
+        <label class="field-label">Сумма ({{ currency }})</label>
         <input
           v-model="amount"
           type="number"

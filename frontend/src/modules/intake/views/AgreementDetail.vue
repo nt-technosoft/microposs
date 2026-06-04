@@ -28,11 +28,11 @@ import {
   createAgreementAllocations,
   fetchAgreementAllocationPreview,
   fetchInvestmentAgreement,
-  fetchAgreementAdvances,
+  fetchCapitalPositions,
   fetchAgreementProfitSummary,
   type AgreementAllocationPreview,
   type AgreementProfitRow,
-  type CapitalAdvanceRecord,
+  type CapitalPositionRow,
   type InvestmentAgreementDetail,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
@@ -54,11 +54,12 @@ const { t, locale } = useI18n()
 const agreement = ref<InvestmentAgreementDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
-const advances = ref<CapitalAdvanceRecord[]>([])
+const positions = ref<CapitalPositionRow[]>([])
+const hasInterparty = computed(() => positions.value.some((p) => Math.abs(Number(p.net) || 0) > 0.01))
 const profitRows = ref<AgreementProfitRow[]>([])
 const operatingAccounts = ref<CashAccountRecord[]>([])
 const settleOpen = ref(false)
-const activeAdvance = ref<CapitalAdvanceRecord | null>(null)
+const activePosition = ref<CapitalPositionRow | null>(null)
 const dividendOpen = ref(false)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
@@ -264,21 +265,21 @@ async function saveWithdrawal(): Promise<void> {
 
 async function loadAdvances(): Promise<void> {
   try {
-    const [adv, profit, accounts] = await Promise.all([
-      fetchAgreementAdvances(agreementId.value),
+    const [pos, profit, accounts] = await Promise.all([
+      fetchCapitalPositions(agreementId.value),
       fetchAgreementProfitSummary(agreementId.value),
       operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
     ])
-    advances.value = adv
+    positions.value = pos
     profitRows.value = profit
     operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
   } catch {
-    // advances/distributions are supplementary — keep the page usable if they fail
+    // positions/distributions are supplementary — keep the page usable if they fail
   }
 }
 
-function openSettle(advance: CapitalAdvanceRecord): void {
-  activeAdvance.value = advance
+function openSettle(position: CapitalPositionRow): void {
+  activePosition.value = position
   settleOpen.value = true
 }
 
@@ -394,7 +395,7 @@ onMounted(async () => {
         </Card>
 
         <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
-        <AgreementAdvancesCard v-if="advances.length" :advances="advances" @settle="openSettle" />
+        <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" />
 
         <!-- Распределение прибыли — только когда есть что распределять -->
         <div v-if="profitRows.length" class="flex flex-wrap items-center gap-2">
@@ -622,7 +623,7 @@ onMounted(async () => {
     <AdvanceSettleSheet
       :open="settleOpen"
       :agreement-id="agreementId"
-      :advance="activeAdvance"
+      :position="activePosition"
       :accounts="operatingAccounts"
       @close="settleOpen = false"
       @settled="onAdvanceSettled"
