@@ -401,6 +401,10 @@ const totalReceiveAvailable = computed(() => {
 })
 const agreedModeFunded = computed(() => totalReceiveAvailable.value + 0.01 >= batchObligationTotal.value)
 
+function fmtAmount(n: number): string {
+  return n.toLocaleString('ru-RU', { maximumFractionDigits: 2 })
+}
+
 function intQty(val: string | number): string {
   return String(Math.round(parseFloat(String(val)) || 0))
 }
@@ -779,28 +783,41 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
 
         <!-- AGREED: держим договорные доли — разницу показываем как долг (read-only) -->
         <template v-else>
-          <p class="text-xs leading-relaxed text-neutral-500">
-            Доли держим договорными. Разницу между договорной долей и фактически внесённым фиксируем как долг между сторонами.
+          <p class="text-sm leading-relaxed text-neutral-600">
+            Доли в этой партии — как в договоре. Если кто-то внёс меньше своей доли, разницу за него покрывает другая сторона — и это становится долгом.
           </p>
-          <div class="flex flex-col gap-1.5">
-            <div v-for="row in partnerAgreedAmounts" :key="row.partnerId" class="flex items-center justify-between gap-3 rounded-[10px] bg-neutral-50 px-3.5 py-2.5">
-              <span class="truncate text-sm text-foreground">{{ row.name }}</span>
-              <span class="text-sm tabular-nums text-neutral-500">
-                <strong class="text-foreground">{{ row.agreed.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</strong>
-                <template v-if="Math.abs(row.delta) > 0.01"> · внёс {{ row.actual.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }}</template>
-                {{ batchObligationCurrency }}
-              </span>
+          <div class="flex flex-col gap-2">
+            <div v-for="row in partnerAgreedAmounts" :key="row.partnerId" class="rounded-[10px] border border-neutral-200 px-3.5 py-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ row.name }}</span>
+                <span v-if="row.delta > 0.01" class="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
+                  должен {{ fmtAmount(row.delta) }} {{ batchObligationCurrency }}
+                </span>
+                <span v-else-if="row.delta < -0.01" class="shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                  покрыл {{ fmtAmount(-row.delta) }} {{ batchObligationCurrency }}
+                </span>
+                <span v-else class="shrink-0 text-xs text-neutral-400">ровно по договору</span>
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-500">
+                <span>Доля по договору</span>
+                <span class="tabular-nums text-foreground">{{ fmtAmount(row.agreed) }} {{ batchObligationCurrency }}</span>
+              </div>
+              <div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-neutral-500">
+                <span>Фактически внёс</span>
+                <span class="tabular-nums text-foreground">{{ fmtAmount(row.actual) }} {{ batchObligationCurrency }}</span>
+              </div>
             </div>
           </div>
-          <div v-if="advancePreview.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
-            <p class="font-medium">Возникнет долг:</p>
-            <p v-for="(a, i) in advancePreview" :key="i" class="mt-1 tabular-nums">
-              {{ a.debtor }} → {{ a.creditor }}: {{ a.amount.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}
+          <div v-if="advancePreview.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm">
+            <p v-for="(a, i) in advancePreview" :key="i" class="leading-relaxed text-foreground">
+              <strong>{{ a.creditor }}</strong> внёс <strong class="tabular-nums">{{ fmtAmount(a.amount) }} {{ batchObligationCurrency }}</strong> за <strong>{{ a.debtor }}</strong>.
             </p>
-            <p class="mt-1.5 text-xs text-neutral-500">Закрыть можно позже в карточке договора — деньгами или из прибыли.</p>
+            <p class="mt-2 text-xs leading-relaxed text-neutral-500">
+              {{ advancePreview.length === 1 ? 'Эту сумму' : 'Эти суммы' }} должник вернёт позже — деньгами или из своей прибыли. Долг зафиксируется при приёмке.
+            </p>
           </div>
           <div v-else class="rounded-[10px] bg-neutral-50 px-3.5 py-2.5 text-sm text-neutral-500">
-            Внесено ровно по договору — долга не возникнет.
+            Все внесли ровно по договору — долга не возникнет.
           </div>
           <div v-if="!agreedModeFunded" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
             Не хватает капитала в пуле договора на эту приёмку. Пополните договор.
