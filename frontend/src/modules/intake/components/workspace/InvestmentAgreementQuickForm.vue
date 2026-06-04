@@ -198,9 +198,6 @@ onMounted(loadPartners)
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <CardTitle class="text-base">Инвестор</CardTitle>
-            <CardDescription class="mt-1 leading-relaxed">
-              Бизнес участвует автоматически. Для договора нужен внешний инвестор и понятная формула долей.
-            </CardDescription>
           </div>
           <Badge variant="secondary" class="shrink-0">1 шаг</Badge>
         </div>
@@ -254,9 +251,6 @@ onMounted(loadPartners)
         <div class="flex items-start justify-between gap-3">
           <div>
             <CardTitle class="text-base">Формула договора</CardTitle>
-            <CardDescription class="mt-1 leading-relaxed">
-              Введите вклад инвестора и договорённые проценты. Общий бюджет и вклад бизнеса считаются автоматически.
-            </CardDescription>
           </div>
           <Calculator class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         </div>
@@ -272,7 +266,7 @@ onMounted(loadPartners)
           />
         </label>
 
-        <div class="grid gap-3 sm:grid-cols-2">
+        <div class="grid grid-cols-2 gap-3">
           <label class="flex flex-col gap-2">
             <span class="text-sm font-medium text-muted-foreground">Капитал инвестора, %</span>
             <Input v-model="investorCapitalPercent" inputmode="decimal" placeholder="напр. 70" class="h-10" />
@@ -297,10 +291,6 @@ onMounted(loadPartners)
             <p class="text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudgetValue, currency) }}</p>
           </div>
         </div>
-        <p class="text-xs text-muted-foreground">
-          Доля бизнеса {{ formatPercent(operatorCapitalPercentValue) }} · коэф. Mudaraba
-          {{ Number.isFinite(mudarabaRatio) ? mudarabaRatio.toFixed(4) : '—' }}
-        </p>
       </CardContent>
     </Card>
 
@@ -358,10 +348,7 @@ onMounted(loadPartners)
       <CardHeader>
         <div class="flex items-start justify-between gap-3">
           <div>
-            <CardTitle class="text-base">План и факт</CardTitle>
-            <CardDescription class="mt-1 leading-relaxed">
-              Если фактический вклад отличается от плана, прибыль пересчитывается по коэффициенту договора.
-            </CardDescription>
+            <CardTitle class="text-base">Доли при фактическом вкладе</CardTitle>
           </div>
           <HandCoins class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         </div>
@@ -381,19 +368,28 @@ onMounted(loadPartners)
           :style="simulationRangeStyle"
           @input="(event) => setSimulationCapitalPercent((event.target as HTMLInputElement).value)"
         />
-        <div class="flex justify-between gap-3 text-xs text-muted-foreground">
-          <span>Бизнес {{ formatPercent(100 - simulatedInvestorCapitalPercent) }}</span>
-          <span>Инвестор {{ formatPercent(simulatedInvestorCapitalPercent) }}</span>
-        </div>
-
-        <div class="grid gap-3 sm:grid-cols-2">
-          <div class="rounded-xl border border-border bg-muted/40 p-3">
-            <p class="text-xs text-muted-foreground">Прибыль инвестора</p>
-            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedInvestorProfitPercent) }}</p>
+        <div class="grid grid-cols-2 gap-2">
+          <div class="rounded-xl border border-border bg-primary/5 p-3">
+            <p class="text-xs font-semibold text-foreground">Инвестор</p>
+            <div class="mt-2 flex items-baseline justify-between gap-2">
+              <span class="text-xs text-muted-foreground">капитал</span>
+              <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedInvestorCapitalPercent) }}</span>
+            </div>
+            <div class="mt-1 flex items-baseline justify-between gap-2">
+              <span class="text-xs text-muted-foreground">прибыль</span>
+              <span class="text-lg font-semibold tabular-nums text-primary">{{ formatPercent(simulatedInvestorProfitPercent) }}</span>
+            </div>
           </div>
           <div class="rounded-xl border border-border bg-muted/40 p-3">
-            <p class="text-xs text-muted-foreground">Прибыль бизнеса</p>
-            <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedOperatorProfitPercent) }}</p>
+            <p class="text-xs font-semibold text-foreground">Бизнес</p>
+            <div class="mt-2 flex items-baseline justify-between gap-2">
+              <span class="text-xs text-muted-foreground">капитал</span>
+              <span class="text-sm font-semibold tabular-nums text-foreground">{{ formatPercent(100 - simulatedInvestorCapitalPercent) }}</span>
+            </div>
+            <div class="mt-1 flex items-baseline justify-between gap-2">
+              <span class="text-xs text-muted-foreground">прибыль</span>
+              <span class="text-lg font-semibold tabular-nums text-foreground">{{ formatPercent(simulatedOperatorProfitPercent) }}</span>
+            </div>
           </div>
         </div>
 
