@@ -94,10 +94,8 @@ const contributedTotal = computed(() => agreement.value?.participant_totals.redu
 const allocatedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) ?? 0)
 const usedTotal = computed(() => Math.max(0, contributedTotal.value - availablePrimaryAmount.value))
 const budgetBase = computed(() => Math.max(plannedBudget.value, contributedTotal.value, 1))
-const contributedProgress = computed(() => Math.min(100, (contributedTotal.value / budgetBase.value) * 100))
 const availableProgress = computed(() => Math.min(100, (availablePrimaryAmount.value / budgetBase.value) * 100))
 const usedProgress = computed(() => Math.min(100, (usedTotal.value / budgetBase.value) * 100))
-const isFunded = computed(() => plannedBudget.value > 0 && contributedTotal.value >= plannedBudget.value)
 const investorName = computed(() => agreement.value?.partners.find((partner) => partner.role === 'INVESTOR')?.partner_name ?? 'Инвестор')
 const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
   value: partner.partner,
@@ -372,75 +370,45 @@ onMounted(async () => {
 
       <template v-else-if="agreement">
         <Card class="overflow-hidden rounded-2xl bg-background">
-          <CardHeader class="gap-4">
-            <div class="flex flex-wrap items-start justify-between gap-3">
+          <CardHeader class="pb-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <CardTitle class="text-lg">Инвестдоговор #{{ agreement.id }}</CardTitle>
+              <Badge variant="secondary">{{ agreementStatusLabel(agreement.status) }}</Badge>
+            </div>
+            <CardDescription class="mt-1">{{ investorName }} · {{ dateOnly(agreement.opened_at) }}</CardDescription>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3 pt-4">
+            <div class="flex items-end justify-between gap-3">
               <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <CardTitle class="text-xl">Инвестдоговор #{{ agreement.id }}</CardTitle>
-                  <Badge variant="secondary">{{ agreementStatusLabel(agreement.status) }}</Badge>
-                </div>
-                <CardDescription class="mt-1">
-                  {{ investorName }} · {{ dateOnly(agreement.opened_at) }}
-                </CardDescription>
+                <p class="text-xs text-muted-foreground">{{ t('procurements.freeBalance') }}</p>
+                <p class="text-2xl font-semibold tabular-nums text-foreground">{{ balanceLabel }}</p>
               </div>
-              <Button variant="outline" size="sm" type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
+              <Button variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
                 <Plus data-icon="inline-start" />
                 Новый приход
               </Button>
             </div>
-          </CardHeader>
-          <CardContent class="flex flex-col gap-4">
-            <div class="grid overflow-hidden rounded-xl border border-border md:grid-cols-4">
-              <div class="bg-primary p-4 text-primary-foreground md:col-span-1">
-                <p class="text-xs opacity-75">{{ t('procurements.freeBalance') }}</p>
-                <p class="mt-1 text-2xl font-semibold tabular-nums">{{ balanceLabel }}</p>
-                <p class="mt-2 text-xs opacity-75">деньги, доступные в пуле договора</p>
-              </div>
-              <div class="border-t border-border p-4 md:border-l md:border-t-0">
-                <p class="text-xs text-muted-foreground">План договора</p>
-                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(plannedBudget, primaryCurrency) }}</p>
-              </div>
-              <div class="border-t border-border p-4 md:border-l md:border-t-0">
-                <p class="text-xs text-muted-foreground">{{ t('procurements.contributed') }}</p>
-                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(contributedTotal, primaryCurrency) }}</p>
-              </div>
-              <div class="border-t border-border p-4 md:border-l md:border-t-0">
-                <p class="text-xs text-muted-foreground">{{ t('procurements.allocatedToProcurements') }}</p>
-                <p class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatPrice(allocatedTotal, primaryCurrency) }}</p>
-              </div>
+            <div class="flex h-1.5 overflow-hidden rounded-full bg-muted">
+              <div class="bg-primary" :style="{ width: `${availableProgress}%` }" />
+              <div class="bg-muted-foreground/40" :style="{ width: `${usedProgress}%` }" />
             </div>
-
-            <div class="flex flex-col gap-2">
-              <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span>{{ isFunded ? 'Профинансировано' : 'Профинансировано от плана' }}</span>
-                <span>{{ Math.round(contributedProgress) }}%</span>
-              </div>
-              <div class="flex h-2 overflow-hidden rounded-full bg-muted">
-                <div class="bg-primary" :style="{ width: `${availableProgress}%` }" />
-                <div class="bg-muted-foreground/40" :style="{ width: `${usedProgress}%` }" />
-              </div>
-              <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="size-2 rounded-full bg-primary" aria-hidden="true" /> Доступно {{ formatPrice(availablePrimaryAmount, primaryCurrency) }}
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="size-2 rounded-full bg-muted-foreground/40" aria-hidden="true" /> Использовано {{ formatPrice(usedTotal, primaryCurrency) }}
-                </span>
-              </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-muted-foreground">
+              <span>План <strong class="font-semibold text-foreground">{{ formatPrice(plannedBudget, primaryCurrency) }}</strong></span>
+              <span>Внесено <strong class="font-semibold text-foreground">{{ formatPrice(contributedTotal, primaryCurrency) }}</strong></span>
+              <span>В приходах <strong class="font-semibold text-foreground">{{ formatPrice(allocatedTotal, primaryCurrency) }}</strong></span>
             </div>
           </CardContent>
         </Card>
 
-        <AgreementAdvancesCard :advances="advances" @settle="openSettle" />
+        <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
+        <AgreementAdvancesCard v-if="advances.length" :advances="advances" @settle="openSettle" />
 
-        <div class="flex flex-wrap items-center gap-2">
-          <Button type="button" :disabled="!profitRows.length" @click="dividendOpen = true">
+        <!-- Распределение прибыли — только когда есть что распределять -->
+        <div v-if="profitRows.length" class="flex flex-wrap items-center gap-2">
+          <Button type="button" @click="dividendOpen = true">
             <HandCoins data-icon="inline-start" />
             Распределить прибыль
           </Button>
-          <span v-if="!profitRows.length" class="text-xs text-muted-foreground">
-            Накопленной прибыли к выплате пока нет
-          </span>
         </div>
 
         <div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
@@ -518,7 +486,7 @@ onMounted(async () => {
               </CardContent>
             </Card>
 
-            <Card class="rounded-2xl bg-background">
+            <Card v-if="contributedTotal > 0" class="rounded-2xl bg-background">
               <CardHeader>
                 <div class="flex items-start justify-between gap-3">
                   <div>
