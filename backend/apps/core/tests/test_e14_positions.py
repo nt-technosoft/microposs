@@ -10,7 +10,11 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.partnerships.advances import partner_capital_positions, settle_capital_advance
+from apps.partnerships.advances import (
+    partner_capital_positions,
+    settle_capital_advance,
+    settle_partner_capital,
+)
 from apps.partnerships.models import (
     CapitalAdvance,
     CapitalAdvanceSettlement,
@@ -62,3 +66,43 @@ class PartnerCapitalPositionsTests(TestCase):
         pos = partner_capital_positions(agreement)
         # Investor's debt is now fully settled → net 0.
         self.assertEqual(pos[ctx['investor'].id]['net'], Decimal('0.00'))
+
+
+class SettlePartnerCapitalTests(TestCase):
+    def _setup(self, ctx):
+        procurement = _build_funded(
+            ctx, planned=(Decimal('70'), Decimal('30')),
+            profit=(Decimal('0.35'), Decimal('0.65')),
+            contributions=(Decimal('66'), Decimal('34')),
+        )
+        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
+        return InvestmentAgreement.objects.get(pk=procurement.agreement_id)
+
+    def test_cash_settlement_clears_net(self):
+        ctx = build_tenant()
+        agreement = self._setup(ctx)
+        settle_partner_capital(
+            tenant_id=ctx['business'].id, agreement_id=agreement.id,
+            partner_id=ctx['investor'].id, amount=Decimal('4.00'),
+            source=CapitalAdvanceSettlement.Source.CASH)
+        pos = partner_capital_positions(agreement)
+        self.assertEqual(pos[ctx['investor'].id]['net'], Decimal('0.00'))
+
+    def test_overpayment_rejected(self):
+        ctx = build_tenant()
+        agreement = self._setup(ctx)
+        with self.assertRaises(ValueError):
+            settle_partner_capital(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['investor'].id, amount=Decimal('99.00'),
+                source=CapitalAdvanceSettlement.Source.CASH)
+
+    def test_creditor_has_no_debt(self):
+        ctx = build_tenant()
+        agreement = self._setup(ctx)
+        # Operator over-contributed (net < 0) → cannot "settle" (nothing owed).
+        with self.assertRaises(ValueError):
+            settle_partner_capital(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['operator'].id, amount=Decimal('1.00'),
+                source=CapitalAdvanceSettlement.Source.CASH)

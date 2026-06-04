@@ -222,9 +222,10 @@ canon (partnerships/finance domain). Живой прогон прихода — 
 ### Слайсы
 - [x] **B-1. Деривация** `partner_capital_positions(agreement)` (из снапшотов + погашений),
   additive, тест. (commit 2026-06-05)
-- [ ] **B-2. Погашение по партнёру + re-key.** `CapitalAdvanceSettlement` → ключ (agreement,
-  partner) вместо (advance) + миграция. Сервис `settle_partner_capital(agreement, partner,
-  amount, source)` (Model B: довнос в пул). Гард: amount ≤ net-долга партнёра.
+- [x] **B-2. Погашение по партнёру + re-key.** `CapitalAdvanceSettlement` получил (agreement,
+  partner) (миграция 0021); старый путь тоже их проставляет (аддитивно). Сервис
+  `settle_partner_capital` (CASH=довнос в пул, FROM_PROFIT=прибыль→пул), гард ≤ net-долга.
+  Деривация читает погашения по (agreement, partner). Тесты зелёные.
 - [ ] **B-3. Приход больше не плодит попарные авансы.** Снапшот уже несёт Δ; убрать
   `_compute_capital_advances` + создание `CapitalAdvance` на приёмке. Превью — из деривации.
 - [ ] **B-4. Endpoints + UI.** `GET .../capital-positions` (нетто по сторонам); `POST

@@ -86,6 +86,126 @@ def undistributed_profit_uzs(*, tenant_id: int, agreement_id: int, partner_id: i
     return max(Decimal('0.00'), Decimal(pending).quantize(_CENTS))
 
 
+def settle_partner_capital(
+    *, tenant_id: int, agreement_id: int, partner_id: int, amount, source: str,
+    from_account_id: int | None = None, client_request_id=None, paid_at=None,
+):
+    """B (participant↔pool): settle a partner's net capital shortfall vs the pool.
+    CASH — the partner contributes the owed capital into the pool; FROM_PROFIT —
+    their accrued profit is reinvested as capital. Bounded by their net shortfall.
+    The creditor side recovers its surplus separately via a capital withdrawal."""
+    from .models import InvestmentAgreement
+
+    amount = Decimal(str(amount)).quantize(_CENTS)
+    source = str(source).upper()
+    when = paid_at or _now()
+
+    with transaction.atomic():
+        agreement = InvestmentAgreement.objects.select_for_update().get(pk=agreement_id, tenant_id=tenant_id)
+
+        if client_request_id is not None:
+            existing = CapitalAdvanceSettlement.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id).first()
+            if existing is not None:
+                return partner_capital_positions(agreement).get(partner_id)
+
+        if amount <= 0:
+            raise ValueError('Settlement amount must be positive.')
+        net = (partner_capital_positions(agreement).get(partner_id) or {}).get('net', Decimal('0'))
+        if net <= 0:
+            raise ValueError('This partner has no outstanding capital owed to the pool.')
+        if amount - net > _CENTS:
+            raise ValueError(f'Settlement {amount} exceeds the partner\'s outstanding {net}.')
+
+        currency = str(agreement.currency or 'UZS').upper()
+        if source == CapitalAdvanceSettlement.Source.CASH:
+            from apps.partnerships.workspace_support import add_agreement_contribution
+            add_agreement_contribution(
+                tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id,
+                amount=amount, currency=currency, date=when,
+                notes='Погашение капитального долга (довнос в пул)')
+        elif source == CapitalAdvanceSettlement.Source.FROM_PROFIT:
+            functional = (amount * _agreement_fx_rate(tenant_id, currency, when)).quantize(_CENTS)
+            pending = undistributed_profit_uzs(
+                tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id)
+            if functional - pending > _CENTS:
+                raise ValueError(
+                    f'FROM_PROFIT settlement {functional} UZS exceeds undistributed profit {pending} UZS.')
+            _settle_partner_from_profit(
+                tenant_id=tenant_id, agreement=agreement, partner_id=partner_id,
+                amount=amount, functional=functional, when=when, from_account_id=from_account_id)
+        else:
+            raise ValueError(f'Unknown settlement source: {source}.')
+
+        CapitalAdvanceSettlement.objects.create(
+            tenant_id=tenant_id, agreement=agreement, partner_id=partner_id,
+            amount=amount, source=source,
+            source_ref=f'agreement:{agreement_id}:partner:{partner_id}',
+            client_request_id=client_request_id)
+        return partner_capital_positions(agreement).get(partner_id)
+
+
+def _agreement_fx_rate(tenant_id: int, currency: str, when) -> Decimal:
+    fx = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id, operation_currency=currency, operation_at=when)
+    return Decimal(str(fx.rate))
+
+
+def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, functional, when, from_account_id) -> None:
+    """Per-partner FROM_PROFIT (Model B): profit cash operating → pool, retained
+    earnings → partner capital, profit_pending drops, + contribution row so the
+    derived balance reconciles. UZS agreements only for now."""
+    from apps.finance.models import CashAccount
+    from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
+    from apps.partnerships.models import AgreementConfirmationStatus, AgreementContribution
+
+    if from_account_id is None:
+        raise ValueError('FROM_PROFIT settlement requires a source operating cash account.')
+    if str(agreement.currency or 'UZS').upper() != 'UZS':
+        raise ValueError('FROM_PROFIT settlement is supported only for UZS agreements for now.')
+    pool = agreement.capital_account
+    if pool is None:
+        raise ValueError('Agreement has no capital pool account.')
+    account = CashAccount.objects.select_for_update().get(pk=from_account_id, tenant_id=tenant_id)
+    if not account.linked_account_id:
+        raise ValueError('Source account has no linked GL account.')
+    if Decimal(str(account.balance)) < amount:
+        raise ValueError(f'Insufficient cash in {account.name}: have {account.balance}, need {amount}.')
+
+    procurement = agreement.procurements.first()
+    if procurement is None:
+        raise ValueError('Agreement has no procurement for the profit ledger.')
+    debtor_capital = _equity_account_code(
+        role=_partner_role(agreement, partner_id), legal_mode=agreement.legal_mode)
+
+    create_cash_entry(tenant_id=tenant_id, account=account, direction=CashEntry.Direction.OUT,
+                      amount=amount, date=when, source_ref_type='partner_from_profit', source_ref_id=partner_id)
+    create_cash_entry(tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
+                      amount=amount, date=when, source_ref_type='partner_from_profit', source_ref_id=partner_id)
+    create_journal_entry(
+        tenant_id=tenant_id, operation_type='advance_settle', operation_id=agreement.id,
+        lines=[
+            {'account_code': pool.linked_account.code, 'debit': functional, 'credit': Decimal('0'),
+             'description': 'Погашение из прибыли — в пул'},
+            {'account_code': account.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+             'description': 'Погашение из прибыли — из операционной кассы'},
+            {'account_code': '3200', 'debit': functional, 'credit': Decimal('0'),
+             'description': 'Прибыль партнёра потреблена'},
+            {'account_code': debtor_capital, 'debit': Decimal('0'), 'credit': functional,
+             'description': 'Капитал партнёра достроен'},
+        ],
+        description='Погашение капитального долга из прибыли', date=when)
+    ledger = get_or_create_ledger(procurement_id=procurement.id, partner_id=partner_id, tenant_id=tenant_id)
+    append_ledger_entry(ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID,
+                        amount=amount, currency=agreement.currency or 'UZS',
+                        source_ref=f'partner_from_profit:{partner_id}', date=when)
+    AgreementContribution.objects.create(
+        tenant_id=tenant_id, agreement=agreement, partner_id=partner_id,
+        amount=amount, currency=agreement.currency or 'UZS', fx_rate=Decimal('1'), date=when,
+        confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+        notes='Погашение капитального долга из прибыли')
+
+
 def partner_capital_positions(agreement) -> dict:
     """E14 (participant↔pool): net capital position per partner vs the agreement
     pool, DERIVED from the immutable receive snapshots + settlements. Nets across
@@ -115,14 +235,12 @@ def partner_capital_positions(agreement) -> dict:
             agreed[r.partner_id] = agreed.get(r.partner_id, Decimal('0')) + ag
             actual[r.partner_id] = actual.get(r.partner_id, Decimal('0')) + Decimal(str(r.amount_contract_currency))
 
-    # Settlements are currently recorded against per-batch advances; sum them by
-    # the debtor partner (re-keying to (agreement, partner) is a later slice).
+    # Settlements are keyed by (agreement, partner).
     settled: dict[int, Decimal] = {}
-    for s in CapitalAdvanceSettlement.objects.filter(
-        tenant_id=tenant_id, advance__agreement=agreement,
-    ).select_related('advance'):
-        pid = s.advance.debtor_id
-        settled[pid] = settled.get(pid, Decimal('0')) + Decimal(str(s.amount))
+    for s in CapitalAdvanceSettlement.objects.filter(tenant_id=tenant_id, agreement=agreement):
+        if s.partner_id is None:
+            continue
+        settled[s.partner_id] = settled.get(s.partner_id, Decimal('0')) + Decimal(str(s.amount))
 
     positions: dict[int, dict] = {}
     for pid in set(agreed) | set(actual):
@@ -211,7 +329,9 @@ def settle_capital_advance(
             raise ValueError(f'Unknown settlement source: {source}.')
 
         CapitalAdvanceSettlement.objects.create(
-            tenant_id=tenant_id, advance=advance, amount=amount, source=source,
+            tenant_id=tenant_id, advance=advance,
+            agreement_id=advance.agreement_id, partner_id=advance.debtor_id,
+            amount=amount, source=source,
             source_ref=f'capital_advance:{advance.id}', client_request_id=client_request_id,
         )
         _recompute_status(advance)

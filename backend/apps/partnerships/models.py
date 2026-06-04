@@ -716,8 +716,19 @@ class CapitalAdvanceSettlement(TenantModel):
         CASH = 'CASH', 'Деньгами (пополнение/из баланса)'
         FROM_PROFIT = 'FROM_PROFIT', 'Из нераспределённой прибыли'
 
+    # B (participant↔pool): settlements are keyed by (agreement, partner). The
+    # per-batch advance link is kept nullable for the transition / audit.
     advance = models.ForeignKey(
         CapitalAdvance, on_delete=models.PROTECT, related_name='settlements',
+        null=True, blank=True,
+    )
+    agreement = models.ForeignKey(
+        InvestmentAgreement, on_delete=models.PROTECT, related_name='capital_settlements',
+        null=True, blank=True,
+    )
+    partner = models.ForeignKey(
+        'core.Partner', on_delete=models.PROTECT, related_name='capital_settlements',
+        null=True, blank=True,
     )
     amount = models.DecimalField(max_digits=20, decimal_places=2)
     source = models.CharField(max_length=16, choices=Source.choices)
@@ -727,7 +738,10 @@ class CapitalAdvanceSettlement(TenantModel):
 
     class Meta:
         db_table = 'partnerships_capital_advance_settlement'
-        indexes = [models.Index(fields=['advance'])]
+        indexes = [
+            models.Index(fields=['advance']),
+            models.Index(fields=['agreement', 'partner']),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=['tenant', 'client_request_id'],
