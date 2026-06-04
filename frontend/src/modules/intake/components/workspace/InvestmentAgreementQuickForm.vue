@@ -32,6 +32,10 @@ const investorCapitalPercent = ref('')
 const investorProfitPercentInput = ref('')
 const simulatedInvestorCapitalPercentDraft = ref('')
 const notes = ref('')
+// E14: reconciliation policy is fixed here, at agreement creation. AGREED (Путь 2)
+// is the product default; the receive only reflects this choice later.
+const reconciliationMode = ref<'AGREED' | 'FACTUAL'>('AGREED')
+const repaymentMode = ref<'LUMP' | 'FROM_PROFIT'>('LUMP')
 const saving = ref(false)
 const isLoading = ref(false)
 const error = ref('')
@@ -166,6 +170,9 @@ async function submit(): Promise<void> {
       investor_profit_percent: investorProfitPercentValue.value.toFixed(4),
       currency: currency.value,
       notes: notes.value,
+      reconciliation_mode: reconciliationMode.value,
+      default_advance_repayment_mode:
+        reconciliationMode.value === 'AGREED' ? repaymentMode.value : 'LUMP',
     })
     toast.success('Инвестдоговор создан')
     emit('created', agreement)
@@ -355,6 +362,49 @@ onMounted(loadPartners)
             <RefreshCcw data-icon="inline-start" />
             Сбросить
           </Button>
+        </div>
+      </CardContent>
+    </Card>
+
+    <Card class="rounded-2xl bg-background">
+      <CardContent class="flex flex-col gap-3 pt-4">
+        <span class="text-sm font-medium text-foreground">Если внесут не ровно по договору</span>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="reconciliationMode === 'AGREED' ? 'border-primary bg-primary/5' : 'border-border'"
+            @click="reconciliationMode = 'AGREED'"
+          >
+            <span class="block text-sm font-semibold text-foreground">Держим договорные доли</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Разницу фиксируем как долг между сторонами.</span>
+          </button>
+          <button
+            type="button"
+            class="rounded-xl border p-3 text-left transition"
+            :class="reconciliationMode === 'FACTUAL' ? 'border-primary bg-primary/5' : 'border-border'"
+            @click="reconciliationMode = 'FACTUAL'"
+          >
+            <span class="block text-sm font-semibold text-foreground">Пересчёт по факту</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Без долга.</span>
+          </button>
+        </div>
+        <div v-if="reconciliationMode === 'AGREED'" class="flex flex-col gap-2">
+          <span class="text-xs text-muted-foreground">Как гасить долг по умолчанию</span>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="flex-1 rounded-lg border px-3 py-2 text-sm transition"
+              :class="repaymentMode === 'LUMP' ? 'border-primary bg-primary/5 font-medium' : 'border-border'"
+              @click="repaymentMode = 'LUMP'"
+            >Единым платежом</button>
+            <button
+              type="button"
+              class="flex-1 rounded-lg border px-3 py-2 text-sm transition"
+              :class="repaymentMode === 'FROM_PROFIT' ? 'border-primary bg-primary/5 font-medium' : 'border-border'"
+              @click="repaymentMode = 'FROM_PROFIT'"
+            >Из прибыли</button>
+          </div>
         </div>
       </CardContent>
     </Card>

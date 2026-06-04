@@ -690,6 +690,8 @@ export interface InvestmentAgreementListItem {
 
 export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
   loss_rule: string
+  reconciliation_mode: 'FACTUAL' | 'AGREED'
+  default_advance_repayment_mode: 'LUMP' | 'FROM_PROFIT'
   client_request_id: string | null
   partners: Array<{
     id: number
@@ -829,6 +831,8 @@ export interface InvestmentAgreementCreatePayload {
   investor_profit_percent?: string | number
   currency?: string
   notes?: string
+  reconciliation_mode?: 'FACTUAL' | 'AGREED'
+  default_advance_repayment_mode?: 'LUMP' | 'FROM_PROFIT'
   partners?: AgreementPartnerPayload[]
 }
 
@@ -852,6 +856,8 @@ export interface ProcurementContractPayload {
   mudaraba_ratio: string
   planned_budget: string
   currency: string
+  reconciliation_mode?: 'FACTUAL' | 'AGREED'
+  default_advance_repayment_mode?: 'LUMP' | 'FROM_PROFIT'
   partners: Array<{
     partner_id: number
     role: string
