@@ -95,8 +95,9 @@ function modeLabel(mode: string): string {
         </li>
       </ul>
 
-      <p v-if="hasOpen" class="text-xs text-muted-foreground">
-        Долг можно закрыть деньгами или из накопленной прибыли должника.
+      <p v-if="hasOpen" class="text-xs leading-relaxed text-muted-foreground">
+        Погашение довносит капитал должника в пул договора (деньгами или из его прибыли).
+        Сторона, которая переплатила, забирает свою переплату отдельно — через «Возврат капитала».
       </p>
     </CardContent>
   </Card>
