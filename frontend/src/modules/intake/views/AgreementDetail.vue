@@ -9,7 +9,6 @@ import {
   CalendarDays,
   HandCoins,
   Plus,
-  ReceiptText,
   RotateCcw,
   Send,
   Users,
@@ -378,15 +377,9 @@ onMounted(async () => {
             <CardDescription class="mt-1">{{ investorName }} · {{ dateOnly(agreement.opened_at) }}</CardDescription>
           </CardHeader>
           <CardContent class="flex flex-col gap-3 pt-4">
-            <div class="flex items-end justify-between gap-3">
-              <div class="min-w-0">
-                <p class="text-xs text-muted-foreground">{{ t('procurements.freeBalance') }}</p>
-                <p class="text-2xl font-semibold tabular-nums text-foreground">{{ balanceLabel }}</p>
-              </div>
-              <Button variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
-                <Plus data-icon="inline-start" />
-                Новый приход
-              </Button>
+            <div class="min-w-0">
+              <p class="text-xs text-muted-foreground">{{ t('procurements.freeBalance') }}</p>
+              <p class="text-2xl font-semibold tabular-nums text-foreground">{{ balanceLabel }}</p>
             </div>
             <div class="flex h-1.5 overflow-hidden rounded-full bg-muted">
               <div class="bg-primary" :style="{ width: `${availableProgress}%` }" />
@@ -536,7 +529,10 @@ onMounted(async () => {
                   <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
                   <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
                 </div>
-                <ReceiptText class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <Button variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
+                  <Plus data-icon="inline-start" />
+                  Новый приход
+                </Button>
               </div>
             </CardHeader>
             <CardContent class="flex flex-col gap-2">
