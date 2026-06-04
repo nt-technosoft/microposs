@@ -392,6 +392,7 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'mudaraba_ratio', 'loss_rule', 'planned_budget', 'currency',
+            'reconciliation_mode', 'default_advance_repayment_mode',
             'balances', 'notes', 'client_request_id', 'partners',
             'commitments', 'contributions', 'withdrawals', 'allocations',
             'events', 'procurements', 'participant_totals', 'history',
@@ -674,6 +675,10 @@ class InvestmentAgreementCreateSerializer(serializers.Serializer):
     investor_profit_percent = serializers.DecimalField(max_digits=7, decimal_places=4, required=False)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     notes = serializers.CharField(required=False, default='', allow_blank=True)
+    reconciliation_mode = serializers.ChoiceField(
+        choices=InvestmentAgreement.ReconciliationMode.choices, required=False)
+    default_advance_repayment_mode = serializers.ChoiceField(
+        choices=InvestmentAgreement.AdvanceRepaymentMode.choices, required=False)
     partners = ContractPartnerInputSerializer(many=True, required=False)
 
     def validate(self, attrs):

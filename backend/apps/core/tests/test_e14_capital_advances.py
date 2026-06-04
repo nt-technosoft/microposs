@@ -24,9 +24,11 @@ from apps.partnerships.workspace import create_workspace, dispatch_workspace_act
 from ._helpers import build_tenant
 
 
-def _build_funded(ctx, *, planned, profit, contributions, required_units=10, unit_price=10):
+def _build_funded(ctx, *, planned, profit, contributions, required_units=10, unit_price=10,
+                  reconciliation_mode='AGREED', repayment_mode='LUMP'):
     """Agreement (planned capital + profit shares) funded by `contributions`,
-    items worth required_units*unit_price, capital allocated to the procurement."""
+    items worth required_units*unit_price, capital allocated to the procurement.
+    The reconciliation path is fixed on the agreement at creation (E14)."""
     procurement = create_workspace(
         tenant_id=ctx['business'].id,
         funding_source=Procurement.FundingSource.PARTNERSHIP,
@@ -39,6 +41,8 @@ def _build_funded(ctx, *, planned, profit, contributions, required_units=10, uni
             'mudaraba_ratio': Decimal('0.5'),
             'planned_budget': Decimal(str(required_units * unit_price)),
             'currency': 'UZS',
+            'reconciliation_mode': reconciliation_mode,
+            'default_advance_repayment_mode': repayment_mode,
             'partners': [
                 {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
                  'planned_capital_share': planned[0], 'profit_share': profit[0]},
@@ -76,15 +80,16 @@ def _build_funded(ctx, *, planned, profit, contributions, required_units=10, uni
     return procurement
 
 
-def _receive(ctx, procurement, *, share_basis, allocations, repayment_mode='LUMP'):
+def _receive(ctx, procurement, *, share_basis='AGREED', allocations, repayment_mode='LUMP'):
+    # E14: share_basis/repayment_mode now come from the agreement (set at creation),
+    # not the receive payload. These kwargs are kept for caller compatibility but the
+    # receive no longer chooses the path — it reflects the agreement's reconciliation_mode.
     item = procurement.items.get()
     return dispatch_workspace_action(
         tenant_id=ctx['business'].id, procurement=procurement, action='RECEIVE_BATCH',
         payload={'payload': {
             'warehouse_id': ctx['storage'].id,
             'item_ids': [item.id],
-            'share_basis': share_basis,
-            'advance_repayment_mode': repayment_mode,
             'capital_allocations': [
                 {'partner_id': ctx['investor'].id, 'amount': allocations[0]},
                 {'partner_id': ctx['operator'].id, 'amount': allocations[1]},
@@ -151,10 +156,9 @@ class Path1FactualUnchangedTests(TestCase):
             ctx, planned=(Decimal('70'), Decimal('30')),
             profit=(Decimal('0.35'), Decimal('0.65')),
             contributions=(Decimal('66'), Decimal('34')),
+            reconciliation_mode='FACTUAL',
         )
-        # No share_basis → backward-compatible FACTUAL.
-        _receive(ctx, procurement, share_basis='FACTUAL',
-                 allocations=(Decimal('66'), Decimal('34')))
+        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
         batch = ProcurementReceiveBatch.objects.get(procurement=procurement)
         inv_alloc = ProcurementReceiveBatchCapitalAllocation.objects.get(
             batch=batch, partner_id=ctx['investor'].id)

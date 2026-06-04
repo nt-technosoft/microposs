@@ -30,9 +30,9 @@ class AutoSettleFromProfitTests(TestCase):
             ctx, planned=(Decimal('70'), Decimal('30')),
             profit=(Decimal('0.35'), Decimal('0.65')),
             contributions=(Decimal('66'), Decimal('34')),
+            repayment_mode='FROM_PROFIT',
         )
-        _receive(ctx, procurement, share_basis='AGREED',
-                 allocations=(Decimal('66'), Decimal('34')), repayment_mode='FROM_PROFIT')
+        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
         batch = ProcurementReceiveBatch.objects.get(procurement=procurement, is_reversal=False)
         adv = CapitalAdvance.objects.get(batch=batch)
         self.assertEqual(adv.repayment_mode, CapitalAdvance.RepaymentMode.FROM_PROFIT)
@@ -61,9 +61,9 @@ class AutoSettleFromProfitTests(TestCase):
             ctx, planned=(Decimal('70'), Decimal('30')),
             profit=(Decimal('0.35'), Decimal('0.65')),
             contributions=(Decimal('66'), Decimal('34')),
+            repayment_mode='FROM_PROFIT',
         )
-        _receive(ctx, procurement, share_basis='AGREED',
-                 allocations=(Decimal('66'), Decimal('34')), repayment_mode='FROM_PROFIT')
+        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
         batch = ProcurementReceiveBatch.objects.get(procurement=procurement, is_reversal=False)
         adv = CapitalAdvance.objects.get(batch=batch)
 

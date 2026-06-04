@@ -101,6 +101,8 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 planned_budget=data['planned_budget'],
                 currency=data.get('currency', 'UZS'),
                 notes=data.get('notes', ''),
+                reconciliation_mode=data.get('reconciliation_mode') or 'FACTUAL',
+                default_advance_repayment_mode=data.get('default_advance_repayment_mode') or 'LUMP',
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
                 created_by_id=request.user.id if request.user.is_authenticated else None,
                 partners=[dict(partner) for partner in data.get('partners', [])],

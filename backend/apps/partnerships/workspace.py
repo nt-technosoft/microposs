@@ -1324,6 +1324,8 @@ def create_and_link_workspace_agreement(
         planned_budget=Decimal(str(payload.get('planned_budget', '0'))),
         currency=payload.get('currency', 'UZS'),
         notes=payload.get('notes', ''),
+        reconciliation_mode=payload.get('reconciliation_mode') or 'FACTUAL',
+        default_advance_repayment_mode=payload.get('default_advance_repayment_mode') or 'LUMP',
         client_request_id=client_request_id,
         created_by_id=user_id,
         partners=payload.get('partners') or [],
@@ -2337,12 +2339,16 @@ def receive_workspace_batch(
         contract_snapshot: dict = {}
         capital_rows: list[dict] = []
         capital_advances: list[dict] = []
-        # E14: 'AGREED' (Path 2) pins agreed shares + records the funding gap as
-        # an inter-partner advance; 'FACTUAL' (Path 1) is the backward-compatible
-        # default. The product/UI sends 'AGREED' as its default choice.
-        share_basis = str(payload.get('share_basis') or 'FACTUAL').upper()
-        advance_repayment_mode = str(payload.get('advance_repayment_mode') or 'LUMP').upper()
+        # E14: the reconciliation path (AGREED = hold agreed shares + advance;
+        # FACTUAL = dynamic recalc) is fixed on the AGREEMENT at creation — the
+        # receive only reflects it, it does not re-choose. Read from the agreement.
+        share_basis = 'FACTUAL'
+        advance_repayment_mode = 'LUMP'
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            _agreement_for_basis = _require_workspace_agreement(locked)
+            share_basis = str(_agreement_for_basis.reconciliation_mode or 'FACTUAL').upper()
+            advance_repayment_mode = str(
+                _agreement_for_basis.default_advance_repayment_mode or 'LUMP').upper()
             # E12: fund the receive out of the capital pools, per obligation
             # currency (base direct; non-base via FIFO cost-basis). The returned
             # base cost drives shares — honest acquisition cost, not market rate.
