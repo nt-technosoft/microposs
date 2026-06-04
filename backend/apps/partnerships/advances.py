@@ -86,6 +86,56 @@ def undistributed_profit_uzs(*, tenant_id: int, agreement_id: int, partner_id: i
     return max(Decimal('0.00'), Decimal(pending).quantize(_CENTS))
 
 
+def partner_capital_positions(agreement) -> dict:
+    """E14 (participant↔pool): net capital position per partner vs the agreement
+    pool, DERIVED from the immutable receive snapshots + settlements. Nets across
+    all receives; reversed batches are excluded.
+
+    Per partner: {agreed, actual, settled, net}. net > 0 → the partner owes the
+    pool (under-contributed vs agreed). net < 0 → the pool owes the partner
+    (over-contributed — withdrawable). Under FACTUAL the agreed share equals the
+    actual, so net is ~0 and nobody owes."""
+    from .models import (
+        ProcurementReceiveBatch,
+        ProcurementReceiveBatchCapitalAllocation,
+    )
+    tenant_id = agreement.tenant_id
+    batches = (
+        ProcurementReceiveBatch.objects
+        .filter(tenant_id=tenant_id, procurement__agreement=agreement, is_reversal=False)
+        .exclude(reversal_batches__isnull=False)
+    )
+    agreed: dict[int, Decimal] = {}
+    actual: dict[int, Decimal] = {}
+    for batch in batches:
+        rows = list(ProcurementReceiveBatchCapitalAllocation.objects.filter(batch=batch))
+        required = sum((Decimal(str(r.amount_contract_currency)) for r in rows), Decimal('0'))
+        for r in rows:
+            ag = (Decimal(str(r.capital_share)) * required).quantize(_CENTS)
+            agreed[r.partner_id] = agreed.get(r.partner_id, Decimal('0')) + ag
+            actual[r.partner_id] = actual.get(r.partner_id, Decimal('0')) + Decimal(str(r.amount_contract_currency))
+
+    # Settlements are currently recorded against per-batch advances; sum them by
+    # the debtor partner (re-keying to (agreement, partner) is a later slice).
+    settled: dict[int, Decimal] = {}
+    for s in CapitalAdvanceSettlement.objects.filter(
+        tenant_id=tenant_id, advance__agreement=agreement,
+    ).select_related('advance'):
+        pid = s.advance.debtor_id
+        settled[pid] = settled.get(pid, Decimal('0')) + Decimal(str(s.amount))
+
+    positions: dict[int, dict] = {}
+    for pid in set(agreed) | set(actual):
+        a = agreed.get(pid, Decimal('0')).quantize(_CENTS)
+        ac = actual.get(pid, Decimal('0')).quantize(_CENTS)
+        st = settled.get(pid, Decimal('0')).quantize(_CENTS)
+        positions[pid] = {
+            'agreed': a, 'actual': ac, 'settled': st,
+            'net': (a - ac - st).quantize(_CENTS),
+        }
+    return positions
+
+
 def _recompute_status(advance: CapitalAdvance) -> None:
     outstanding = advance.outstanding_balance
     if outstanding <= 0:
