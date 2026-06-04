@@ -142,7 +142,7 @@ def settle_capital_advance(
         if source == CapitalAdvanceSettlement.Source.CASH:
             _settle_cash(
                 tenant_id=tenant_id, advance=advance, agreement=agreement,
-                amount=amount, functional=functional, when=when,
+                amount=amount, when=when,
             )
         elif source == CapitalAdvanceSettlement.Source.FROM_PROFIT:
             pending = undistributed_profit_uzs(
@@ -168,43 +168,19 @@ def settle_capital_advance(
         return advance
 
 
-def _settle_cash(*, tenant_id, advance, agreement, amount, functional, when) -> None:
-    """Debtor brings cash into the pool (equity up); creditor's principal is
-    returned out of the pool (equity down). Net pool cash flat."""
-    pool = agreement.capital_account
-    if pool is None:
-        raise ValueError('Agreement has no capital pool account.')
+def _settle_cash(*, tenant_id, advance, agreement, amount, when) -> None:
+    """Model B: settling with cash IS the debtor finally contributing the capital
+    they owed. Recorded as a real agreement contribution (cash into the pool +
+    debtor equity + AgreementContribution row, so the agreement's derived balances
+    stay reconciled with the physical pool). The creditor recovers its
+    over-contribution separately via a withdrawal. Money flows through the
+    agreement (Rule #13)."""
+    from apps.partnerships.workspace_support import add_agreement_contribution
 
-    create_cash_entry(
-        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
-        amount=amount, date=when,
-        source_ref_type='capital_advance_settlement', source_ref_id=advance.id,
-    )
-    create_cash_entry(
-        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
-        amount=amount, date=when,
-        source_ref_type='capital_advance_settlement', source_ref_id=advance.id,
-    )
-
-    debtor_equity = _equity_account_code(
-        role=_partner_role(agreement, advance.debtor_id), legal_mode=agreement.legal_mode)
-    creditor_equity = _equity_account_code(
-        role=_partner_role(agreement, advance.creditor_id), legal_mode=agreement.legal_mode)
-
-    # Equity moves from creditor (over-contributed, returned) to debtor (capital
-    # completed). Pool linked 1300 nets to zero (cash IN then OUT), so it is omitted.
-    create_journal_entry(
-        tenant_id=tenant_id,
-        operation_type='advance_settle',
-        operation_id=advance.id,
-        lines=[
-            {'account_code': creditor_equity, 'debit': functional, 'credit': Decimal('0'),
-             'description': f'Advance #{advance.id} settled (creditor return)'},
-            {'account_code': debtor_equity, 'debit': Decimal('0'), 'credit': functional,
-             'description': f'Advance #{advance.id} settled (debtor capital completed)'},
-        ],
-        description=f'Capital advance #{advance.id} cash settlement',
-        date=when,
+    add_agreement_contribution(
+        tenant_id=tenant_id, agreement_id=agreement.id, partner_id=advance.debtor_id,
+        amount=amount, currency=advance.currency, date=when,
+        notes=f'Погашение долга по авансу #{advance.id}',
     )
 
 
@@ -241,10 +217,12 @@ def auto_settle_advances_from_profit(
 
 
 def _settle_from_profit(*, tenant_id, advance, agreement, amount, functional, when, from_account_id) -> None:
-    """E15: the debtor's accrued profit repays the creditor. Profit becomes the
-    debtor's capital (DR 3200 / CR debtor capital), and the creditor's fronted
-    principal is returned in cash from operating funds (DR creditor equity /
-    CR cash). The debtor's profit_pending drops (DIVIDEND_PAID). Principal-only."""
+    """Model B: the debtor reinvests their accrued profit as capital. The profit
+    cash moves operating → agreement pool (DR 1300 / CR operating cash), and the
+    debtor's retained-earnings share converts to their capital (DR 3200 / CR
+    debtor capital). The cash stays in the pool; the creditor recovers their
+    over-contribution separately via a withdrawal. profit_pending drops
+    (DIVIDEND_PAID). Principal-only."""
     from apps.finance.models import CashAccount
     from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
 
@@ -253,6 +231,9 @@ def _settle_from_profit(*, tenant_id, advance, agreement, amount, functional, wh
     if str(advance.currency).upper() != 'UZS':
         raise ValueError('FROM_PROFIT settlement is supported only for UZS agreements for now.')
 
+    pool = agreement.capital_account
+    if pool is None:
+        raise ValueError('Agreement has no capital pool account.')
     account = CashAccount.objects.select_for_update().get(pk=from_account_id, tenant_id=tenant_id)
     if not account.linked_account_id:
         raise ValueError('Source account has no linked GL account.')
@@ -261,24 +242,27 @@ def _settle_from_profit(*, tenant_id, advance, agreement, amount, functional, wh
 
     debtor_capital = _equity_account_code(
         role=_partner_role(agreement, advance.debtor_id), legal_mode=agreement.legal_mode)
-    creditor_equity = _equity_account_code(
-        role=_partner_role(agreement, advance.creditor_id), legal_mode=agreement.legal_mode)
 
+    # Cash relocation operating → pool.
     create_cash_entry(
         tenant_id=tenant_id, account=account, direction=CashEntry.Direction.OUT,
+        amount=amount, date=when,
+        source_ref_type='advance_from_profit', source_ref_id=advance.id)
+    create_cash_entry(
+        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
         amount=amount, date=when,
         source_ref_type='advance_from_profit', source_ref_id=advance.id)
     create_journal_entry(
         tenant_id=tenant_id, operation_type='advance_settle', operation_id=advance.id,
         lines=[
+            {'account_code': pool.linked_account.code, 'debit': functional, 'credit': Decimal('0'),
+             'description': f'Advance #{advance.id}: profit moved into pool'},
+            {'account_code': account.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+             'description': f'Advance #{advance.id}: profit cash out of operating'},
             {'account_code': '3200', 'debit': functional, 'credit': Decimal('0'),
              'description': f'Advance #{advance.id}: debtor profit consumed'},
             {'account_code': debtor_capital, 'debit': Decimal('0'), 'credit': functional,
              'description': f'Advance #{advance.id}: debtor capital completed'},
-            {'account_code': creditor_equity, 'debit': functional, 'credit': Decimal('0'),
-             'description': f'Advance #{advance.id}: creditor return'},
-            {'account_code': account.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
-             'description': f'Advance #{advance.id}: creditor return (cash)'},
         ],
         description=f'Capital advance #{advance.id} settled from profit', date=when)
 
@@ -288,6 +272,16 @@ def _settle_from_profit(*, tenant_id, advance, agreement, amount, functional, wh
         ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID,
         amount=amount, currency=advance.currency,
         source_ref=f'advance_from_profit:{advance.id}', date=when)
+
+    # Reconciliation: the reinvested profit is the debtor's capital contribution,
+    # so the agreement's derived balances stay in sync with the physical pool.
+    from apps.partnerships.models import AgreementConfirmationStatus, AgreementContribution
+    AgreementContribution.objects.create(
+        tenant_id=tenant_id, agreement=agreement, partner_id=advance.debtor_id,
+        amount=amount, currency=advance.currency, fx_rate=Decimal('1'), date=when,
+        confirmation_status=AgreementConfirmationStatus.CONFIRMED,
+        notes=f'Погашение долга по авансу #{advance.id} (из прибыли)',
+    )
 
 
 def cancel_advances_for_batch(*, tenant_id: int, batch_id: int, when=None) -> int:
@@ -314,17 +308,14 @@ def cancel_advances_for_batch(*, tenant_id: int, batch_id: int, when=None) -> in
 
 
 def _refund_cash_settlement(*, tenant_id, advance, agreement, amount, when) -> None:
-    """Inverse of _settle_cash: debtor's equity back down, creditor's back up,
-    cash returned to the debtor. Append-only reversing postings."""
+    """Inverse of _settle_cash (Model B): take the debtor's deposit back OUT of
+    the pool and undo their capital completion (DR debtor equity / CR 1300).
+    Append-only reversing postings."""
     pool = agreement.capital_account
     fx = resolve_fx_rate_snapshot_details(
         tenant_id=tenant_id, operation_currency=advance.currency, operation_at=when)
     functional = (Decimal(str(amount)) * Decimal(str(fx.rate))).quantize(_CENTS)
 
-    create_cash_entry(
-        tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
-        amount=amount, date=when,
-        source_ref_type='advance_settle_reversal', source_ref_id=advance.id)
     create_cash_entry(
         tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
         amount=amount, date=when,
@@ -332,14 +323,12 @@ def _refund_cash_settlement(*, tenant_id, advance, agreement, amount, when) -> N
 
     debtor_equity = _equity_account_code(
         role=_partner_role(agreement, advance.debtor_id), legal_mode=agreement.legal_mode)
-    creditor_equity = _equity_account_code(
-        role=_partner_role(agreement, advance.creditor_id), legal_mode=agreement.legal_mode)
     create_journal_entry(
         tenant_id=tenant_id, operation_type='advance_settle', operation_id=advance.id,
         lines=[
             {'account_code': debtor_equity, 'debit': functional, 'credit': Decimal('0'),
              'description': f'Advance #{advance.id} settlement reversed'},
-            {'account_code': creditor_equity, 'debit': Decimal('0'), 'credit': functional,
+            {'account_code': pool.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
              'description': f'Advance #{advance.id} settlement reversed'},
         ],
         description=f'Capital advance #{advance.id} settlement reversal', date=when)

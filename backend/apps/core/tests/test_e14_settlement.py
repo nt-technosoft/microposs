@@ -124,11 +124,12 @@ class CashSettlementGLTests(TestCase):
             amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.CASH,
         )
 
-        # Equity converges to the AGREED shares (investor 70, operator 30).
+        # Model B: debtor's capital completes (66 -> 70); creditor untouched
+        # (still 34 — recovers its over-contribution via a separate withdrawal).
         self.assertEqual(get_account_balance(biz, '3100'), Decimal('70.00'))
-        self.assertEqual(get_account_balance(biz, '3000'), Decimal('30.00'))
-        # Pool cash nets flat (debtor in, creditor out).
-        self.assertEqual(CashAccount.objects.get(pk=pool.id).balance, pool_before)
+        self.assertEqual(get_account_balance(biz, '3000'), Decimal('34.00'))
+        # The settlement cash lands in the pool (available capital), not flat.
+        self.assertEqual(CashAccount.objects.get(pk=pool.id).balance, pool_before + Decimal('4.00'))
         # Every journal entry stays balanced.
         for entry in JournalEntry.objects.filter(tenant_id=biz):
             lines = JournalLine.objects.filter(journal_entry=entry)
@@ -177,12 +178,13 @@ class FromProfitSettlementTests(TestCase):
 
         adv.refresh_from_db()
         self.assertEqual(adv.status, CapitalAdvance.Status.SETTLED)
-        # Creditor returned from operating cash.
+        # Model B: profit cash leaves operating and lands in the agreement pool.
         self.assertEqual(CashAccount.objects.get(pk=ctx['cash_account'].id).balance,
                          cash_before - Decimal('4.00'))
-        # Equity moves toward agreed: debtor capital +4, creditor capital -4.
+        # Debtor's capital completes (+4); creditor is untouched (recovers via
+        # a separate withdrawal, not at settlement).
         self.assertEqual(get_account_balance(biz, '3100'), e_debtor_before + Decimal('4.00'))
-        self.assertEqual(get_account_balance(biz, '3000'), e_creditor_before - Decimal('4.00'))
+        self.assertEqual(get_account_balance(biz, '3000'), e_creditor_before)
         # Debtor's profit consumed.
         self.assertTrue(PartnerLedgerEntry.objects.filter(
             ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID).exists())
