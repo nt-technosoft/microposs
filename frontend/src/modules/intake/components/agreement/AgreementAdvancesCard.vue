@@ -19,6 +19,16 @@ const EPS = 0.01
 function net(row: CapitalPositionRow): number {
   return Number(row.net) || 0
 }
+function owed(row: CapitalPositionRow): number {
+  return Number(row.owed) || 0
+}
+function withdrawable(row: CapitalPositionRow): number {
+  return Number(row.withdrawable) || 0
+}
+// Surplus that exists but is tied up in inventory until debtors top up.
+function locked(row: CapitalPositionRow): number {
+  return Math.max(0, -net(row) - withdrawable(row))
+}
 
 // Only sides with a non-zero net matter. Debtors (owe the pool) first.
 const rows = computed(() =>
@@ -27,7 +37,7 @@ const rows = computed(() =>
     .sort((a, b) => net(b) - net(a)),
 )
 
-const hasOwing = computed(() => rows.value.some((r) => net(r) > EPS))
+const hasOwing = computed(() => rows.value.some((r) => owed(r) > EPS))
 </script>
 
 <template>
@@ -57,7 +67,10 @@ const hasOwing = computed(() => rows.value.some((r) => net(r) > EPS))
           <div class="min-w-0">
             <span class="block truncate font-medium text-foreground">{{ row.partner_name }}</span>
             <span class="mt-0.5 block text-xs text-muted-foreground">
-              {{ net(row) > 0 ? 'должен пулу договора' : 'пул договора должен — можно вернуть' }}
+              {{ net(row) > 0 ? 'должен довнести в пул' : 'переплатил — можно вернуть' }}
+            </span>
+            <span v-if="net(row) < 0 && locked(row) > 0.01" class="mt-0.5 block text-xs text-muted-foreground">
+              ещё {{ formatPrice(locked(row), row.currency) }} — после погашения другой стороной
             </span>
           </div>
           <div class="flex items-center gap-3">
@@ -65,7 +78,7 @@ const hasOwing = computed(() => rows.value.some((r) => net(r) > EPS))
               class="text-sm font-semibold tabular-nums"
               :class="net(row) > 0 ? 'text-warning' : 'text-green-700'"
             >
-              {{ formatPrice(Math.abs(net(row)), row.currency) }}
+              {{ formatPrice(net(row) > 0 ? owed(row) : withdrawable(row), row.currency) }}
             </span>
             <Button v-if="net(row) > 0" size="sm" type="button" @click="emit('settle', row)">
               Погасить

@@ -941,10 +941,11 @@ export interface CapitalPositionRow {
   partner_id: number
   partner_name: string
   role: string
-  agreed: string
-  actual: string
-  settled: string
+  deployed: string
+  paid_in: string
   net: string
+  owed: string
+  withdrawable: string
   currency: string
 }
 

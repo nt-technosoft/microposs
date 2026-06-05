@@ -31,7 +31,7 @@ const fromAccountId = ref<number | null>(null)
 const isSaving = ref(false)
 const error = ref<string | null>(null)
 
-const outstanding = computed(() => Math.max(0, Number(props.position?.net ?? 0) || 0))
+const outstanding = computed(() => Math.max(0, Number(props.position?.owed ?? 0) || 0))
 const currency = computed(() => props.position?.currency ?? 'UZS')
 const amountValue = computed(() => Number.parseFloat(String(amount.value).replace(',', '.')) || 0)
 
@@ -42,7 +42,7 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen && props.position) {
-      amount.value = props.position.net
+      amount.value = props.position.owed
       source.value = 'CASH'
       fromAccountId.value = eligibleAccounts.value[0]?.id ?? null
       error.value = null

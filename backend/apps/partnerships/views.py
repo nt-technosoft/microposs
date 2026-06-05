@@ -260,10 +260,11 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'partner_id': partner_id,
                 'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
                 'role': member.role if member else '',
-                'agreed': str(pos['agreed']),
-                'actual': str(pos['actual']),
-                'settled': str(pos['settled']),
+                'deployed': str(pos['deployed']),
+                'paid_in': str(pos['paid_in']),
                 'net': str(pos['net']),
+                'owed': str(pos['owed']),
+                'withdrawable': str(pos['withdrawable']),
                 'currency': agreement.currency,
             })
         rows.sort(key=lambda r: r['partner_id'])

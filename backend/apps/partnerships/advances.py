@@ -103,26 +103,25 @@ def settle_partner_capital(
     with transaction.atomic():
         agreement = InvestmentAgreement.objects.select_for_update().get(pk=agreement_id, tenant_id=tenant_id)
 
-        if client_request_id is not None:
-            existing = CapitalAdvanceSettlement.objects.filter(
-                tenant_id=tenant_id, client_request_id=client_request_id).first()
-            if existing is not None:
-                return partner_capital_positions(agreement).get(partner_id)
-
         if amount <= 0:
             raise ValueError('Settlement amount must be positive.')
-        net = (partner_capital_positions(agreement).get(partner_id) or {}).get('net', Decimal('0'))
-        if net <= 0:
+        owed = (partner_capital_positions(agreement).get(partner_id) or {}).get('owed', Decimal('0'))
+        if owed <= 0:
             raise ValueError('This partner has no outstanding capital owed to the pool.')
-        if amount - net > _CENTS:
-            raise ValueError(f'Settlement {amount} exceeds the partner\'s outstanding {net}.')
+        if amount - owed > _CENTS:
+            raise ValueError(f'Settlement {amount} exceeds the partner\'s outstanding {owed}.')
 
+        # Settling IS contributing: the partner pays the owed capital into the
+        # pool, which raises their paid-in and lowers their net automatically
+        # (no separate settlement record). CASH = new money; FROM_PROFIT = their
+        # profit reinvested as capital.
         currency = str(agreement.currency or 'UZS').upper()
         if source == CapitalAdvanceSettlement.Source.CASH:
             from apps.partnerships.workspace_support import add_agreement_contribution
             add_agreement_contribution(
                 tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id,
                 amount=amount, currency=currency, date=when,
+                client_request_id=str(client_request_id) if client_request_id else None,
                 notes='Погашение капитального долга (довнос в пул)')
         elif source == CapitalAdvanceSettlement.Source.FROM_PROFIT:
             functional = (amount * _agreement_fx_rate(tenant_id, currency, when)).quantize(_CENTS)
@@ -137,11 +136,6 @@ def settle_partner_capital(
         else:
             raise ValueError(f'Unknown settlement source: {source}.')
 
-        CapitalAdvanceSettlement.objects.create(
-            tenant_id=tenant_id, agreement=agreement, partner_id=partner_id,
-            amount=amount, source=source,
-            source_ref=f'agreement:{agreement_id}:partner:{partner_id}',
-            client_request_id=client_request_id)
         return partner_capital_positions(agreement).get(partner_id)
 
 
@@ -207,49 +201,59 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
 
 
 def partner_capital_positions(agreement) -> dict:
-    """E14 (participant↔pool): net capital position per partner vs the agreement
-    pool, DERIVED from the immutable receive snapshots + settlements. Nets across
-    all receives; reversed batches are excluded.
+    """E14 (participant↔pool, unified): each partner's capital position vs the
+    agreement pool, DERIVED entirely from facts — no separate "settlement" concept
+    (settling IS contributing). For each partner:
 
-    Per partner: {agreed, actual, settled, net}. net > 0 → the partner owes the
-    pool (under-contributed vs agreed). net < 0 → the pool owes the partner
-    (over-contributed — withdrawable). Under FACTUAL the agreed share equals the
-    actual, so net is ~0 and nobody owes."""
+      deployed = Σ (agreed ownership share × deployed receive cost)  [from snapshots]
+      paid_in  = Σ contributions − Σ withdrawals                     [actual cash in]
+      net      = deployed − paid_in
+        net > 0 → owes the pool (must contribute `net` more)
+        net < 0 → over-contributed (claim on the pool)
+
+    `withdrawable` = how much an over-contributor can actually take out NOW,
+    bounded by the pool's free cash (overpaid money tied up in inventory becomes
+    withdrawable only once debtors top up). Reversed batches are excluded. A
+    fresh agreement (no receives) → everything 0, nothing owed/withdrawable."""
     from .models import (
         ProcurementReceiveBatch,
         ProcurementReceiveBatchCapitalAllocation,
     )
     tenant_id = agreement.tenant_id
+    currency = str(agreement.currency or 'UZS').upper()
+
     batches = (
         ProcurementReceiveBatch.objects
         .filter(tenant_id=tenant_id, procurement__agreement=agreement, is_reversal=False)
         .exclude(reversal_batches__isnull=False)
     )
-    agreed: dict[int, Decimal] = {}
-    actual: dict[int, Decimal] = {}
+    deployed: dict[int, Decimal] = {}
     for batch in batches:
         rows = list(ProcurementReceiveBatchCapitalAllocation.objects.filter(batch=batch))
         required = sum((Decimal(str(r.amount_contract_currency)) for r in rows), Decimal('0'))
         for r in rows:
-            ag = (Decimal(str(r.capital_share)) * required).quantize(_CENTS)
-            agreed[r.partner_id] = agreed.get(r.partner_id, Decimal('0')) + ag
-            actual[r.partner_id] = actual.get(r.partner_id, Decimal('0')) + Decimal(str(r.amount_contract_currency))
+            share = (Decimal(str(r.capital_share)) * required).quantize(_CENTS)
+            deployed[r.partner_id] = deployed.get(r.partner_id, Decimal('0')) + share
 
-    # Settlements are keyed by (agreement, partner).
-    settled: dict[int, Decimal] = {}
-    for s in CapitalAdvanceSettlement.objects.filter(tenant_id=tenant_id, agreement=agreement):
-        if s.partner_id is None:
-            continue
-        settled[s.partner_id] = settled.get(s.partner_id, Decimal('0')) + Decimal(str(s.amount))
+    paid_in: dict[int, Decimal] = {}
+    for c in agreement.contributions.filter(currency=currency):
+        paid_in[c.partner_id] = paid_in.get(c.partner_id, Decimal('0')) + Decimal(str(c.amount))
+    for w in agreement.withdrawals.filter(currency=currency):
+        paid_in[w.partner_id] = paid_in.get(w.partner_id, Decimal('0')) - Decimal(str(w.amount))
+
+    total_paid = sum(paid_in.values(), Decimal('0'))
+    total_deployed = sum(deployed.values(), Decimal('0'))
+    pool_free = max(Decimal('0'), (total_paid - total_deployed).quantize(_CENTS))
 
     positions: dict[int, dict] = {}
-    for pid in set(agreed) | set(actual):
-        a = agreed.get(pid, Decimal('0')).quantize(_CENTS)
-        ac = actual.get(pid, Decimal('0')).quantize(_CENTS)
-        st = settled.get(pid, Decimal('0')).quantize(_CENTS)
+    for pid in set(deployed) | set(paid_in):
+        d = deployed.get(pid, Decimal('0')).quantize(_CENTS)
+        p = paid_in.get(pid, Decimal('0')).quantize(_CENTS)
+        net = (d - p).quantize(_CENTS)
+        withdrawable = min(-net, pool_free).quantize(_CENTS) if net < 0 else Decimal('0.00')
         positions[pid] = {
-            'agreed': a, 'actual': ac, 'settled': st,
-            'net': (a - ac - st).quantize(_CENTS),
+            'deployed': d, 'paid_in': p, 'net': net,
+            'owed': max(Decimal('0.00'), net), 'withdrawable': max(Decimal('0.00'), withdrawable),
         }
     return positions
 
