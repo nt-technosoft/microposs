@@ -237,19 +237,20 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
     gross_profit = total_revenue - total_cogs
 
-    # Investor share is currently derived from partner ledger accruals.
-    from apps.partnerships.models import PartnerLedgerEntry
-    accrued_profit = PartnerLedgerEntry.objects.filter(
-        tenant_id=tenant_id,
-        entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-        date__range=(day_start, day_end),
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-    reversed_profit = PartnerLedgerEntry.objects.filter(
-        tenant_id=tenant_id,
-        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
-        date__range=(day_start, day_end),
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-    investor_share = accrued_profit - reversed_profit
+    # E17 T-1.5: the daily provisional partner profit is derived from venture
+    # realization events (single source of truth), not the legacy ledger triad.
+    from apps.partnerships.models import ProcurementSaleRealization
+    provisional_rows = (
+        ProcurementSaleRealization.objects
+        .filter(tenant_id=tenant_id, created_at__range=(day_start, day_end))
+        .values('event_type')
+        .annotate(total=Sum('provisional_profit_uzs'))
+    )
+    provisional = {row['event_type']: row['total'] or Decimal('0') for row in provisional_rows}
+    investor_share = (
+        provisional.get(ProcurementSaleRealization.EventType.REALIZATION, Decimal('0'))
+        - provisional.get(ProcurementSaleRealization.EventType.REVERSAL, Decimal('0'))
+    )
 
     net_business_profit = gross_profit - investor_share - writeoffs - operational_expenses
 

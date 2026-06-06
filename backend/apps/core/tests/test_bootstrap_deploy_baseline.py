@@ -65,7 +65,10 @@ class BootstrapDeployBaselineTests(APITestCase):
         dashboard = self.client.get('/api/v1/investors/dashboard/')
         self.assertEqual(dashboard.status_code, status.HTTP_200_OK)
         self.assertNotEqual(dashboard.data['capital_net'], '0.00')
-        self.assertNotEqual(dashboard.data['profit_pending_payout'], '0.00')
+        # E17: the dashboard sources profit from the venture model. The baseline
+        # sale produces a non-zero net provisional entitlement (profit_accrued);
+        # it is not yet payable (profit_pending_payout) without a settlement.
+        self.assertNotEqual(dashboard.data['profit_accrued'], '0.00')
 
         procurements = self.client.get('/api/v1/investors/procurements/')
         self.assertEqual(procurements.status_code, status.HTTP_200_OK)

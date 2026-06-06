@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.partnerships.models import PartnerLedgerEntry
 from apps.partnerships.venture import create_venture_settlement, procurement_venture_positions
 from apps.risk.services import build_writeoff_preview, create_writeoff
 from apps.sales.models import SalePayment
@@ -44,17 +43,10 @@ class WriteoffFinmodelTests(TestCase):
             negligence=True,
         )
 
-        loss_entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__procurement_id=procurement.id,
-                entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
-            ).order_by('ledger__partner_id')
-        )
         self.assertFalse(risk_event.affects_investor)
-        self.assertEqual(len(loss_entries), 1)
-        self.assertEqual(loss_entries[0].ledger.partner_id, ctx['operator'].id)
-        self.assertEqual(loss_entries[0].amount, lot.landed_cost_per_unit.quantize(Decimal('0.01')))
 
+        # E17: a negligence writeoff records partner loss only as a venture
+        # realization (partner-liability), not a legacy LOSS_INCURRED ledger row.
         positions = procurement_venture_positions(procurement=procurement)
         self.assertEqual(
             positions[ctx['operator'].id]['loss_uzs'],

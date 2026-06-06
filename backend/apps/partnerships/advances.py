@@ -31,7 +31,6 @@ from .models import (
     InvestmentAgreement,
     PartnerLedgerEntry,
     Procurement,
-    ProcurementPartnerLedger,
 )
 
 _CENTS = Decimal('0.01')
@@ -54,36 +53,22 @@ def _partner_role(agreement: InvestmentAgreement, partner_id: int) -> str:
 
 
 def undistributed_profit_uzs(*, tenant_id: int, agreement_id: int, partner_id: int) -> Decimal:
-    """Debtor's accrued-but-not-yet-paid-out profit (functional UZS) across all
-    procurement ledgers of the agreement: Σ PROFIT_ACCRUED − PROFIT_REVERSED
-    − LOSS_INCURRED − DIVIDEND_PAID, floored at zero."""
-    from django.db.models import Sum
+    """Partner's venture profit available to consume (functional UZS), summed
+    across the agreement's procurements.
 
-    procurement_ids = list(
-        Procurement.objects.filter(tenant_id=tenant_id, agreement_id=agreement_id)
-        .values_list('id', flat=True)
-    )
-    ledger_ids = list(
-        ProcurementPartnerLedger.objects.filter(
-            tenant_id=tenant_id, partner_id=partner_id, procurement_id__in=procurement_ids,
-        ).values_list('id', flat=True)
-    )
-    if not ledger_ids:
-        return Decimal('0.00')
-    rows = (
-        PartnerLedgerEntry.objects.filter(ledger_id__in=ledger_ids)
-        .values('entry_type')
-        .annotate(total=Sum('functional_amount_uzs'))
-    )
-    totals = {r['entry_type']: (r['total'] or Decimal('0')) for r in rows}
-    ET = PartnerLedgerEntry.EntryType
-    pending = (
-        totals.get(ET.PROFIT_ACCRUED, Decimal('0'))
-        - totals.get(ET.PROFIT_REVERSED, Decimal('0'))
-        - totals.get(ET.LOSS_INCURRED, Decimal('0'))
-        - totals.get(ET.DIVIDEND_PAID, Decimal('0'))
-    )
-    return max(Decimal('0.00'), Decimal(pending).quantize(_CENTS))
+    E17 T-1: sourced from venture positions, not the legacy PartnerLedgerEntry
+    profit triad. Venture profit is unavailable before a constructive/final
+    settlement, so this is 0 until the venture is settled — which is the correct
+    "no profit withdrawal before capital preservation" behaviour."""
+    from .venture import procurement_venture_positions
+
+    total = Decimal('0.00')
+    procurements = Procurement.objects.filter(tenant_id=tenant_id, agreement_id=agreement_id)
+    for procurement in procurements:
+        row = procurement_venture_positions(procurement=procurement).get(partner_id)
+        if row:
+            total += Decimal(str(row.get('provisional_profit_available_uzs', '0')))
+    return max(Decimal('0.00'), total.quantize(_CENTS))
 
 
 def settle_partner_capital(
@@ -277,6 +262,13 @@ def partner_capital_positions(agreement) -> dict:
             for key, value in venture_uzs.get(pid, {}).items()
         }
         positions[pid] = {
+            # E17 T-1.7: native pool-capital amounts (deployed/paid_in/net/owed/
+            # withdrawable) are in `currency` (the agreement currency); the
+            # venture buckets carry an explicit `_uzs` suffix and are functional
+            # UZS. The two units must never be summed together — `currency` makes
+            # the native leg self-describing so non-UZS agreements can't silently
+            # mix scales.
+            'currency': currency,
             'deployed': d, 'paid_in': p, 'net': net,
             'owed': max(Decimal('0.00'), net), 'withdrawable': max(Decimal('0.00'), withdrawable),
             # E16: these functional UZS buckets describe sold-capital/proceeds

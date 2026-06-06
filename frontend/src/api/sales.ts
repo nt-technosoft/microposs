@@ -131,6 +131,9 @@ export interface SaleExplanationPartnerSplit {
   role: 'INVESTOR' | 'OPERATOR' | 'UNKNOWN'
   capital_share: string | null
   profit_share: string | null
+  capital_recovered?: string
+  provisional_profit?: string
+  loss?: string
   profit_amount: string
 }
 
@@ -209,13 +212,14 @@ export interface SaleExplanationJournalEntry {
   lines: SaleExplanationJournalLine[]
 }
 
-export interface SaleExplanationLedgerEntry {
+export interface SaleExplanationRealizationEntry {
   id: number
   date: string
-  entry_type: string
-  amount: string
-  currency: string
-  functional_amount_uzs: string
+  event_type: 'REALIZATION' | 'REVERSAL' | 'LOSS' | string
+  capital_recovered_uzs: string
+  provisional_profit_uzs: string
+  loss_uzs: string
+  is_partner_liability: boolean
   source_ref: string
   partner_id: number
   partner_name: string
@@ -258,7 +262,7 @@ export interface SaleExplanation {
   cash_entries: SaleExplanationCashEntry[]
   receivable_entries: SaleExplanationReceivableEntry[]
   journal_entries: SaleExplanationJournalEntry[]
-  ledger_entries: SaleExplanationLedgerEntry[]
+  realization_entries: SaleExplanationRealizationEntry[]
   lines: SaleExplanationLine[]
 }
 

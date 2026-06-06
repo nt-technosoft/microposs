@@ -72,6 +72,32 @@ def _finalize_ledger_totals(totals: dict) -> dict:
     return totals
 
 
+def _venture_partner_profit(*, tenant_id: int, partner_id: int, procurement_ids: list[int]):
+    """Partner's venture profit/loss across the given procurements (functional
+    UZS): (net provisional profit entitlement, loss, profit available to pay).
+    Available profit is 0 until a venture settlement exists — the venture model
+    forbids profit withdrawal before capital preservation is fixed."""
+    from .models import Procurement
+    from .venture import procurement_venture_positions
+
+    profit = _ZERO
+    loss = _ZERO
+    available = _ZERO
+    if not procurement_ids:
+        return profit, loss, available
+    procurements = Procurement.objects.filter(
+        tenant_id=tenant_id, id__in=set(procurement_ids),
+    )
+    for procurement in procurements:
+        row = procurement_venture_positions(procurement=procurement).get(partner_id)
+        if not row:
+            continue
+        profit += Decimal(str(row.get('provisional_profit_uzs', '0')))
+        loss += Decimal(str(row.get('loss_uzs', '0')))
+        available += Decimal(str(row.get('provisional_profit_available_uzs', '0')))
+    return _q(profit), _q(loss), _q(available)
+
+
 def get_or_create_ledger(
     *,
     procurement_id: int,
@@ -123,6 +149,13 @@ def get_partner_aggregate(
     """
     Compute partner ledger summary across all procurements.
     Returns UZS functional totals plus per-currency breakdown.
+
+    E17 T-1.6: PartnerLedgerEntry now records only physical/audit money events
+    (CAPITAL_IN/OUT, DIVIDEND_PAID). The profit triad (profit_accrued/
+    profit_reversed/losses_incurred) is no longer written, so those fields are
+    always 0 here. Partner profit/loss truth lives in the venture model
+    (procurement_venture_positions); do not derive distributable profit from
+    this aggregate.
     """
     from .models import PartnerLedgerEntry, ProcurementPartnerLedger
 
@@ -132,7 +165,8 @@ def get_partner_aggregate(
     )
     if procurement_id is not None:
         ledger_qs = ledger_qs.filter(procurement_id=procurement_id)
-    ledger_ids = ledger_qs.values_list('id', flat=True)
+    ledger_ids = list(ledger_qs.values_list('id', flat=True))
+    procurement_ids = list(ledger_qs.values_list('procurement_id', flat=True))
 
     functional_rows = (
         PartnerLedgerEntry.objects
@@ -146,6 +180,18 @@ def get_partner_aggregate(
         if key:
             functional_uzs[key] = _q(row['total'] or _ZERO)
     functional_uzs = _finalize_ledger_totals(functional_uzs)
+
+    # E17 T-1.2/T-1.6: capital_in/out and dividends_paid stay physical (ledger),
+    # but partner profit/loss truth is the venture model. Override the profit
+    # fields from venture positions across the partner's procurements; profit is
+    # only payable (pending) after a constructive/final venture settlement.
+    venture_profit, venture_loss, venture_available = _venture_partner_profit(
+        tenant_id=tenant_id, partner_id=partner_id, procurement_ids=procurement_ids,
+    )
+    functional_uzs['profit_accrued'] = venture_profit
+    functional_uzs['profit_reversed'] = _ZERO
+    functional_uzs['losses_incurred'] = venture_loss
+    functional_uzs['profit_pending_payout'] = venture_available
 
     currency_rows = (
         PartnerLedgerEntry.objects

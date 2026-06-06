@@ -2779,14 +2779,37 @@ def get_agreement_profitability_detail(
                 pending_prepaid_by_partner.get(partner_id, Decimal('0.00')) + share_amount
             )
 
+    # E17 T-1.2/T-1.3: partner profit/capital economics come from the venture
+    # model (single source of truth), aggregated across the agreement's
+    # procurements in functional UZS. The legacy PartnerLedgerEntry profit triad
+    # (profit_accrued/reversed/losses_incurred) is no longer written, so it
+    # stays at zero here and is kept only as a physical/audit echo.
+    from apps.partnerships.venture import procurement_venture_positions
+
+    _venture_keys = (
+        'capital_recovered_uzs',
+        'capital_return_available_uzs',
+        'provisional_profit_uzs',
+        'provisional_profit_available_uzs',
+        'loss_uzs',
+        'negative_position_uzs',
+    )
+    venture_by_partner: dict[int, dict[str, Decimal]] = {}
+    for procurement in procurements:
+        for partner_id, pos in procurement_venture_positions(procurement=procurement).items():
+            target = venture_by_partner.setdefault(
+                partner_id, {key: Decimal('0.00') for key in _venture_keys},
+            )
+            for key in _venture_keys:
+                target[key] += Decimal(str(pos.get(key, '0.00')))
+
     serialized_partners = []
     for row in partner_rows.values():
-        profit_pending = (
-            row['profit_accrued']
-            - row['profit_reversed']
-            - row['losses_incurred']
-            - row['dividends_paid']
+        venture = venture_by_partner.get(
+            row['partner_id'], {key: Decimal('0.00') for key in _venture_keys},
         )
+        for key in _venture_keys:
+            row[f'venture_{key}'] = _money(venture[key])
         row['allocated_functional_uzs'] = allocated_by_partner.get(row['partner_id'], Decimal('0.00'))
         row['returned_functional_uzs'] = returned_by_partner.get(row['partner_id'], Decimal('0.00'))
         row['pending_prepaid_cost_estimate_uzs'] = pending_prepaid_by_partner.get(row['partner_id'], Decimal('0.00'))
@@ -2796,7 +2819,8 @@ def get_agreement_profitability_detail(
             - row['agreement_allocated']
             + row['agreement_returned']
         )
-        row['profit_pending_payout'] = max(Decimal('0.00'), profit_pending)
+        # Authoritative payable profit = venture profit available after settlement.
+        row['profit_pending_payout'] = _money(venture['provisional_profit_available_uzs'])
         row['display'] = {
             **display_context.meta(),
             'amounts': display_context.values(row, [
@@ -2810,6 +2834,12 @@ def get_agreement_profitability_detail(
                 'losses_incurred',
                 'dividends_paid',
                 'profit_pending_payout',
+                'venture_capital_recovered_uzs',
+                'venture_capital_return_available_uzs',
+                'venture_provisional_profit_uzs',
+                'venture_provisional_profit_available_uzs',
+                'venture_loss_uzs',
+                'venture_negative_position_uzs',
             ]),
         }
         for key, value in list(row.items()):

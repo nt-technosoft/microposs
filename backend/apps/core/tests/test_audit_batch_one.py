@@ -155,13 +155,24 @@ class AuditBatchOneTests(APITestCase):
         self.auth_investor()
         investor_dashboard = self.client.get('/api/v1/investors/dashboard/')
         self.assertEqual(investor_dashboard.status_code, status.HTTP_200_OK)
+        # E17: the investor dashboard now sources profit from the venture model.
+        # Net provisional entitlement (profit_accrued) matches the venture split,
+        # but nothing is payable (profit_pending_payout) before a settlement.
         self.assertEqual(
-            Decimal(investor_dashboard.data['profit_pending_payout']),
+            Decimal(investor_dashboard.data['profit_accrued']),
             investor_profit,
         )
+        self.assertEqual(
+            Decimal(investor_dashboard.data['profit_pending_payout']),
+            Decimal('0.00'),
+        )
 
-        operator_profit = Decimal(str(operator_aggregate['profit_pending_payout']))
-        self.assertEqual(investor_profit + operator_profit, gross_profit)
+        operator_entitlement = Decimal(str(operator_aggregate['profit_accrued']))
+        self.assertEqual(investor_profit + operator_entitlement, gross_profit)
+        self.assertEqual(
+            Decimal(str(operator_aggregate['profit_pending_payout'])),
+            Decimal('0.00'),
+        )
 
     def test_sale_without_explicit_account_binds_to_default_cash_account(self):
         seed_received_procurement(self.ctx)

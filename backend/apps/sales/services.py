@@ -16,10 +16,7 @@ from apps.core.exceptions import (
     PricingModeViolationError,
 )
 from apps.finance.fx_rates import resolve_fx_rate_snapshot, resolve_fx_rate_snapshot_details
-from apps.partnerships.formulas import (
-    calculate_lot_profit_distribution,
-    distribute_loss_by_capital_from_snapshot,
-)
+from apps.partnerships.formulas import calculate_lot_profit_distribution
 from apps.sales.currency import functional_amount_uzs, money
 
 from .models import (
@@ -235,11 +232,7 @@ def create_sale(
     )
     from apps.inventory.services import allocate_lot
     from apps.inventory.models import LotStock, StockMovement
-    from apps.partnerships.models import PartnerLedgerEntry
     from apps.partnerships.venture import record_sale_line_realization
-    from apps.partnerships.workspace_support import (
-        get_or_create_ledger, append_ledger_entry,
-    )
     from apps.sales.models import SalePayment
     from apps.catalog.models import ProductVariant
 
@@ -352,7 +345,6 @@ def create_sale(
 
                 unit_landed_cost = Decimal(str(lot.landed_cost_per_unit))
                 unit_purchase = Decimal(str(lot.unit_purchase_price))
-                gross_line_profit = (unit_price - unit_landed_cost) * alloc_qty
 
                 profit_snapshot = calculate_profit_distribution(
                     lot=lot,
@@ -420,34 +412,12 @@ def create_sale(
                 total_amount += unit_price * alloc_qty
                 total_cogs += unit_landed_cost * alloc_qty
 
+                # E17 T-1.5: partner profit/capital economics are recorded only
+                # as venture realization events (single source of truth). The
+                # legacy PROFIT_ACCRUED ledger write is intentionally gone — it
+                # split per-line gross profit by profit_share and ignored later
+                # losses, overstating distributable profit.
                 record_sale_line_realization(sale_line=sale_line)
-
-                # PartnerLedger: PROFIT_ACCRUED per partner.
-                procurement_id = None
-                if lot.procurement_item_id:
-                    procurement_id = lot.procurement_item.procurement_id
-                if procurement_id and gross_line_profit > 0:
-                    for partner_id_str, amount_str in profit_snapshot.items():
-                        try:
-                            partner_id = int(partner_id_str)
-                        except (TypeError, ValueError):
-                            continue
-                        amount = Decimal(str(amount_str))
-                        if amount <= 0:
-                            continue
-                        ledger = get_or_create_ledger(
-                            procurement_id=procurement_id,
-                            partner_id=partner_id,
-                            tenant_id=tenant_id,
-                        )
-                        append_ledger_entry(
-                            ledger=ledger,
-                            entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-                            amount=amount,
-                            currency='UZS',
-                            source_ref=f'sale_line:{sale_line.pk}',
-                            date=date,
-                        )
 
         # SalePayments
         payment_functional_total = Decimal('0')
@@ -1088,9 +1058,7 @@ def process_return(
     Invariant: Σ ReturnLine.qty per sale_line ≤ SaleLine.qty (including prior returns).
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
-    from apps.partnerships.models import PartnerLedgerEntry
     from apps.partnerships.venture import record_sale_line_return_realization
-    from apps.partnerships.workspace_support import append_ledger_entry, get_or_create_ledger
     from apps.finance.services import create_journal_entry
 
     if date is None:
@@ -1161,41 +1129,13 @@ def process_return(
             )
 
             lot = sale_line.lot
-            qty_ratio = Decimal(qty) / Decimal(sale_line.quantity)
             line_refund = sale_line.unit_price * qty
             line_loss = sale_line.unit_landed_cost * qty
             total_refund += line_refund
 
-            # Proportional PROFIT_REVERSED per partner
-            distribution = sale_line.profit_distribution_snapshot or {}
-            contract_snapshot = lot.contract_snapshot or {}
-            procurement_id = None
-            if lot.procurement_item_id:
-                procurement_id = lot.procurement_item.procurement_id
-
-            if procurement_id and distribution:
-                for partner_id_str, profit_str in distribution.items():
-                    try:
-                        partner_id = int(partner_id_str)
-                    except (TypeError, ValueError):
-                        continue
-                    profit_amount = Decimal(str(profit_str))
-                    reversed_amount = (profit_amount * qty_ratio).quantize(Decimal('0.01'))
-                    if reversed_amount <= 0:
-                        continue
-                    ledger = get_or_create_ledger(
-                        procurement_id=procurement_id,
-                        partner_id=partner_id,
-                        tenant_id=tenant_id,
-                    )
-                    append_ledger_entry(
-                        ledger=ledger,
-                        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
-                        amount=reversed_amount,
-                        currency='UZS',
-                        source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
-                        date=date,
-                    )
+            # E17 T-1.5: returns reverse partner economics only through venture
+            # realization events (see record_sale_line_return_realization below).
+            # The legacy PROFIT_REVERSED / LOSS_INCURRED ledger writes are gone.
 
             if resolution == Return.Resolution.RESTOCK:
                 record_sale_line_return_realization(
@@ -1248,33 +1188,6 @@ def process_return(
                     quantity_initial=models.F('quantity_initial') - qty,
                 )
                 total_loss += line_loss
-
-                if procurement_id:
-                    loss_distribution = distribute_loss_by_capital_from_snapshot(
-                        contract_snapshot=contract_snapshot,
-                        loss_amount=line_loss,
-                    )
-                    for partner_id_str, loss_str in loss_distribution.items():
-                        try:
-                            partner_id = int(partner_id_str)
-                        except (TypeError, ValueError):
-                            continue
-                        loss_share = Decimal(str(loss_str))
-                        if loss_share <= 0:
-                            continue
-                        ledger = get_or_create_ledger(
-                            procurement_id=procurement_id,
-                            partner_id=partner_id,
-                            tenant_id=tenant_id,
-                        )
-                        append_ledger_entry(
-                            ledger=ledger,
-                            entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
-                            amount=loss_share,
-                            currency='UZS',
-                            source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
-                            date=date,
-                        )
 
         if total_restock_cogs > 0:
             create_journal_entry(

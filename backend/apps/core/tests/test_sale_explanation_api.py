@@ -64,7 +64,7 @@ class SaleExplanationApiTests(APITestCase):
         self.assertEqual(len(response.data['cash_entries']), 1)
         self.assertEqual(len(response.data['receivable_entries']), 1)
         self.assertEqual(len(response.data['journal_entries']), 3)
-        self.assertEqual(len(response.data['ledger_entries']), 2)
+        self.assertEqual(len(response.data['realization_entries']), 2)
         self.assertEqual(len(response.data['lines']), 1)
 
         line = response.data['lines'][0]

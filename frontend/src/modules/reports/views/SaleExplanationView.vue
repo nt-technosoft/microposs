@@ -142,16 +142,28 @@ function receivableEntryLabel(entryType: string): string {
   return labels[entryType] ?? entryType
 }
 
-function partnerLedgerEntryLabel(entryType: string): string {
+function partnerRealizationEntryLabel(entryType: string): string {
   const labels: Record<string, string> = {
-    CAPITAL_IN: t('domain.ledgerType.CAPITAL_IN'),
-    CAPITAL_OUT: t('domain.ledgerType.CAPITAL_OUT'),
-    PROFIT_ACCRUED: t('domain.ledgerType.PROFIT_ACCRUED'),
-    PROFIT_REVERSED: t('domain.ledgerType.PROFIT_REVERSED'),
-    DIVIDEND_PAID: t('domain.ledgerType.DIVIDEND_PAID'),
-    LOSS_INCURRED: t('domain.ledgerType.LOSS_INCURRED'),
+    REALIZATION: 'Реализация продажи',
+    REVERSAL: 'Сторно реализации',
+    LOSS: 'Убыток / списание',
   }
   return labels[entryType] ?? entryType
+}
+
+function realizationEntryTrace(entry: SaleExplanation['realization_entries'][number]): string {
+  const parts = [
+    Number(entry.capital_recovered_uzs || 0) !== 0
+      ? `капитал ${formatAmount(entry.capital_recovered_uzs, 'UZS')}`
+      : '',
+    Number(entry.provisional_profit_uzs || 0) !== 0
+      ? `прибыль ${formatAmount(entry.provisional_profit_uzs, 'UZS')}`
+      : '',
+    Number(entry.loss_uzs || 0) !== 0
+      ? `убыток ${formatAmount(entry.loss_uzs, 'UZS')}`
+      : '',
+  ].filter(Boolean)
+  return parts.length ? parts.join(' · ') : formatAmount('0', 'UZS')
 }
 
 function partnerRoleLabel(role: string): string {
@@ -420,15 +432,15 @@ onMounted(load)
             <Landmark :size="18" :stroke-width="2" class="section-icon" />
           </div>
 
-          <div v-if="explanation.ledger_entries.length > 0" class="trace-subsection">
+          <div v-if="explanation.realization_entries.length > 0" class="trace-subsection">
             <p class="subsection-title">{{ t('reports.saleAudit.partnershipAccounting') }}</p>
             <div class="stack stack--tight">
-              <div v-for="entry in explanation.ledger_entries" :key="entry.id" class="row-card">
+              <div v-for="entry in explanation.realization_entries" :key="entry.id" class="row-card">
                 <div>
                   <strong>{{ entry.partner_name }} · {{ partnerRoleLabel(entry.partner_role) }}</strong>
-                  <p class="muted">{{ partnerLedgerEntryLabel(entry.entry_type) }} · {{ sourceRefLabel(entry.source_ref) }}</p>
+                  <p class="muted">{{ partnerRealizationEntryLabel(entry.event_type) }} · {{ sourceRefLabel(entry.source_ref) }}</p>
                 </div>
-                <strong class="mono">{{ formatAmount(entry.amount, entry.currency) }}</strong>
+                <strong class="mono">{{ realizationEntryTrace(entry) }}</strong>
               </div>
             </div>
           </div>

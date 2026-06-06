@@ -12,6 +12,7 @@ wired; this module pins the behavioral guards and status machine.
 
 import uuid
 from decimal import Decimal
+from unittest import skip
 
 from django.test import TestCase
 
@@ -149,6 +150,12 @@ class FromProfitSettlementTests(TestCase):
                 from_account_id=ctx['cash_account'].id,
             )
 
+    @skip(
+        'E17 Phase 2: CapitalAdvance FROM_PROFIT settlement is being retired. '
+        'undistributed_profit_uzs now reads the venture model (profit unavailable '
+        'before settlement), so manual PROFIT_ACCRUED no longer funds settlement. '
+        'This test is migrated/removed when the advance workflow is retired (T-2.x).'
+    )
     def test_from_profit_settles_via_debtor_profit_and_returns_creditor(self):
         from apps.finance.services import get_account_balance, record_owner_contribution
         from apps.finance.models import CashAccount

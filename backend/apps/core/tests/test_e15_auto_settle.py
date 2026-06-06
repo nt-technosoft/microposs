@@ -6,6 +6,7 @@ profit closes the debt first (oldest first), the remainder stays theirs.
 """
 
 from decimal import Decimal
+from unittest import skip
 
 from django.test import TestCase
 
@@ -22,6 +23,12 @@ from ._helpers import build_tenant
 from .test_e14_capital_advances import _build_funded, _receive
 
 
+@skip(
+    'E17 Phase 2: CapitalAdvance FROM_PROFIT auto-settle is being retired. '
+    'undistributed_profit_uzs now reads the venture model (profit unavailable '
+    'before settlement), so manually accrued PROFIT_ACCRUED no longer funds '
+    'auto-settlement. Migrated/removed when the advance workflow is retired (T-2.x).'
+)
 class AutoSettleFromProfitTests(TestCase):
     def test_accrued_profit_closes_from_profit_advance_first(self):
         ctx = build_tenant()

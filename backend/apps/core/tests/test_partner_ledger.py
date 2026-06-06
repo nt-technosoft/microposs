@@ -79,44 +79,22 @@ class PartnerLedgerAggregateTests(TestCase):
         self.assertEqual(investor['dividends_paid'], Decimal('0.00'))
         self.assertEqual(operator['dividends_paid'], Decimal('0.00'))
 
-        self.assertEqual(investor['profit_pending_payout'], investor_profit)
-        self.assertEqual(operator['profit_pending_payout'], operator_profit)
-        self.assertGreater(investor['profit_pending_payout'], Decimal('0'))
-        self.assertGreater(operator['profit_pending_payout'], Decimal('0'))
+        # E17: venture profit is not payable before a venture settlement.
+        self.assertEqual(investor['profit_pending_payout'], Decimal('0.00'))
+        self.assertEqual(operator['profit_pending_payout'], Decimal('0.00'))
 
-        investor_entries = list(
+        # E17 T-1.5/T-1.6: the PartnerLedgerEntry profit triad is no longer
+        # written; the ledger holds only physical events (capital/dividends).
+        triad = {
+            PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+            PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
+            PartnerLedgerEntry.EntryType.LOSS_INCURRED,
+        }
+        self.assertFalse(
             PartnerLedgerEntry.objects.filter(
-                ledger__partner_id=ctx['investor'].id,
                 ledger__tenant_id=ctx['business'].id,
-            )
-        )
-        operator_entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__partner_id=ctx['operator'].id,
-                ledger__tenant_id=ctx['business'].id,
-            )
-        )
-        self.assertEqual(
-            sum(
-                (
-                    entry.amount
-                    for entry in investor_entries
-                    if entry.entry_type == PartnerLedgerEntry.EntryType.PROFIT_ACCRUED
-                ),
-                Decimal('0.00'),
-            ),
-            investor_profit,
-        )
-        self.assertEqual(
-            sum(
-                (
-                    entry.amount
-                    for entry in operator_entries
-                    if entry.entry_type == PartnerLedgerEntry.EntryType.PROFIT_ACCRUED
-                ),
-                Decimal('0.00'),
-            ),
-            operator_profit,
+                entry_type__in=triad,
+            ).exists()
         )
 
         self.assertEqual(

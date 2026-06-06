@@ -1,10 +1,11 @@
 from decimal import Decimal
 
+from django.db.models import Sum
 from django.test import TestCase
 
 from apps.finance.models import CashEntry, JournalEntry
 from apps.inventory.models import Lot, StockDisposal, StockMovement
-from apps.partnerships.models import PartnerLedgerEntry, ProcurementSaleRealization
+from apps.partnerships.models import ProcurementSaleRealization
 from apps.partnerships.venture import procurement_venture_positions
 from apps.sales.models import Return, SalePayment
 from apps.sales.services import create_sale, process_return
@@ -47,31 +48,11 @@ class ReturnsShariahTests(TestCase):
         )
 
         lot.refresh_from_db()
-        reversed_entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__procurement_id=procurement.id,
-                entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
-            ).order_by('ledger__partner_id')
-        )
 
         self.assertEqual(lot.stocks.get(warehouse=ctx['store']).quantity_remaining, 46)
         self.assertTrue(lot.is_active)
 
         sale_line = sale.lines.get()
-        qty_ratio = Decimal('1') / Decimal(sale_line.quantity)
-        expected_reversed = {
-            ctx['investor'].id: (
-                Decimal(str(sale_line.profit_distribution_snapshot[str(ctx['investor'].id)]))
-                * qty_ratio
-            ).quantize(Decimal('0.01')),
-            ctx['operator'].id: (
-                Decimal(str(sale_line.profit_distribution_snapshot[str(ctx['operator'].id)]))
-                * qty_ratio
-            ).quantize(Decimal('0.01')),
-        }
-        actual_reversed = {entry.ledger.partner_id: entry.amount for entry in reversed_entries}
-        self.assertEqual(actual_reversed, expected_reversed)
-
         reversal_rows = ProcurementSaleRealization.objects.filter(
             sale_line=sale_line,
             event_type=ProcurementSaleRealization.EventType.REVERSAL,
@@ -126,12 +107,6 @@ class ReturnsShariahTests(TestCase):
 
         lot.refresh_from_db()
         disposal = StockDisposal.objects.get(return_ref__sale=sale)
-        loss_entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__procurement_id=procurement.id,
-                entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
-            ).order_by('ledger__partner_id')
-        )
 
         self.assertEqual(lot.stocks.get(warehouse=ctx['store']).quantity_remaining, 45)
         self.assertEqual(lot.quantity_initial, 49)
@@ -141,23 +116,13 @@ class ReturnsShariahTests(TestCase):
         expected_loss_amount = (sale_line.unit_landed_cost * Decimal('1')).quantize(Decimal('0.01'))
         self.assertEqual(disposal.loss_amount, expected_loss_amount)
 
-        partners = {
-            item['role']: item
-            for item in lot.contract_snapshot['partners']
-        }
-        expected_losses = {
-            ctx['investor'].id: (
-                expected_loss_amount
-                * Decimal(str(partners['INVESTOR']['capital_share']))
-            ).quantize(Decimal('0.01')),
-            ctx['operator'].id: (
-                expected_loss_amount
-                * Decimal(str(partners['OPERATOR']['capital_share']))
-            ).quantize(Decimal('0.01')),
-        }
-        actual_losses = {entry.ledger.partner_id: entry.amount for entry in loss_entries}
-        self.assertEqual(actual_losses, expected_losses)
-        self.assertEqual(sum(actual_losses.values()), expected_loss_amount)
+        # E17: the disposed-return loss is recorded as a venture realization
+        # reversal (loss by capital share), not a legacy LOSS_INCURRED ledger row.
+        disposed_loss = ProcurementSaleRealization.objects.filter(
+            sale_line=sale_line,
+            event_type=ProcurementSaleRealization.EventType.REVERSAL,
+        ).aggregate(total=Sum('loss_uzs'))['total'] or Decimal('0')
+        self.assertEqual(disposed_loss, expected_loss_amount)
 
         positions = procurement_venture_positions(procurement=procurement)
         self.assertEqual(
