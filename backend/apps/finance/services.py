@@ -2054,6 +2054,8 @@ def get_procurement_profitability_rows(
     from apps.partnerships.models import Procurement
     from apps.sales.models import Sale, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
+    from apps.partnerships.models import ProcurementSaleRealization
+    from apps.partnerships.venture import procurement_venture_positions
 
     display_context = resolve_report_currency_context(
         tenant_id=tenant_id,
@@ -2116,6 +2118,14 @@ def get_procurement_profitability_rows(
         for stock in remaining_stock
         if stock.lot.procurement_item_id
     }
+    realization_qs = ProcurementSaleRealization.objects.filter(tenant_id=tenant_id)
+    if date_from:
+        realization_qs = realization_qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        realization_qs = realization_qs.filter(created_at__date__lte=date_to)
+    procurement_ids |= set(realization_qs.values_list('procurement_id', flat=True))
+    if procurement_id:
+        procurement_ids = {pid for pid in procurement_ids if pid == procurement_id}
 
     procurements = (
         Procurement.objects
@@ -2156,6 +2166,12 @@ def get_procurement_profitability_rows(
                 'projected_gross_profit': Decimal('0.00'),
                 'projected_investor_profit': Decimal('0.00'),
                 'projected_business_profit': Decimal('0.00'),
+                'venture_deployed_uzs': Decimal('0.00'),
+                'venture_capital_recovered_uzs': Decimal('0.00'),
+                'venture_capital_return_available_uzs': Decimal('0.00'),
+                'venture_provisional_profit_available_uzs': Decimal('0.00'),
+                'venture_loss_uzs': Decimal('0.00'),
+                'venture_negative_position_uzs': Decimal('0.00'),
             }
             rows[procurement_id] = row
         return row
@@ -2217,6 +2233,33 @@ def get_procurement_profitability_rows(
         row['projected_business_profit'] = _money(
             row['projected_gross_profit'] - row['projected_investor_profit']
         )
+        procurement = procurement_map.get(row['procurement_id'])
+        if procurement is not None:
+            venture_positions = procurement_venture_positions(procurement=procurement)
+            row['venture_deployed_uzs'] = _money(sum(
+                (Decimal(str(pos.get('deployed_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_recovered_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_recovered_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_return_available_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_return_available_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_provisional_profit_available_uzs'] = _money(sum(
+                (Decimal(str(pos.get('provisional_profit_available_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_loss_uzs'] = _money(sum(
+                (Decimal(str(pos.get('loss_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_negative_position_uzs'] = _money(sum(
+                (Decimal(str(pos.get('negative_position_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
         result.append(_attach_display(row, display_context))
 
     result.sort(

@@ -236,6 +236,7 @@ def create_sale(
     from apps.inventory.services import allocate_lot
     from apps.inventory.models import LotStock, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
+    from apps.partnerships.venture import record_sale_line_realization
     from apps.partnerships.workspace_support import (
         get_or_create_ledger, append_ledger_entry,
     )
@@ -418,6 +419,8 @@ def create_sale(
 
                 total_amount += unit_price * alloc_qty
                 total_cogs += unit_landed_cost * alloc_qty
+
+                record_sale_line_realization(sale_line=sale_line)
 
                 # PartnerLedger: PROFIT_ACCRUED per partner.
                 procurement_id = None
@@ -1086,6 +1089,7 @@ def process_return(
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
     from apps.partnerships.models import PartnerLedgerEntry
+    from apps.partnerships.venture import record_sale_line_return_realization
     from apps.partnerships.workspace_support import append_ledger_entry, get_or_create_ledger
     from apps.finance.services import create_journal_entry
 
@@ -1194,6 +1198,12 @@ def process_return(
                     )
 
             if resolution == Return.Resolution.RESTOCK:
+                record_sale_line_return_realization(
+                    sale_line=sale_line,
+                    quantity=qty,
+                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                    disposed=False,
+                )
                 stock, _ = LotStock.objects.select_for_update().get_or_create(
                     tenant_id=tenant_id,
                     lot=lot,
@@ -1218,6 +1228,12 @@ def process_return(
                 total_restock_cogs += line_loss
 
             else:  # DISPOSE
+                record_sale_line_return_realization(
+                    sale_line=sale_line,
+                    quantity=qty,
+                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                    disposed=True,
+                )
                 StockDisposal.objects.create(
                     tenant_id=tenant_id,
                     lot=lot,

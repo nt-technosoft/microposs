@@ -290,6 +290,71 @@ class AtReceiptCombinedActionTests(TestCase):
         }
         self.assertEqual(sum(alloc_amounts.values()), total_uzs)
 
+    def test_partnership_at_receipt_second_partial_receive_uses_remaining_agreement_capital(self):
+        """PARTNERSHIP × AT_RECEIPT derives later receive snapshots from remaining pool balances."""
+        proc = self._build_partnership_at_receipt_procurement(
+            self.ctx,
+            total_uzs='200',
+            qty=10,
+            unit_price='10',
+        )
+        proc = dispatch_workspace_action(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [
+                {
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': Decimal('10'),
+                    'unit_purchase_price': Decimal('10'),
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                },
+                {
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': Decimal('10'),
+                    'unit_purchase_price': Decimal('10'),
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                },
+            ]}},
+        )
+        first_item, second_item = list(proc.items.order_by('id'))[:2]
+
+        first_batch = receive_workspace_batch(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            payload={
+                'warehouse_id': self.ctx['store'].id,
+                'item_ids': [first_item.id],
+                'capital_allocations': [
+                    {'partner_id': self.ctx['investor'].id, 'amount': Decimal('100'), 'currency': 'UZS'},
+                    {'partner_id': self.ctx['operator'].id, 'amount': Decimal('0'), 'currency': 'UZS'},
+                ],
+            },
+        )
+        second_batch = receive_workspace_batch(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            payload={
+                'warehouse_id': self.ctx['store'].id,
+                'item_ids': [second_item.id],
+            },
+        )
+
+        first_allocs = {
+            row.partner_id: row.amount_contract_currency
+            for row in ProcurementReceiveBatchCapitalAllocation.objects.filter(batch=first_batch)
+        }
+        second_allocs = {
+            row.partner_id: row.amount_contract_currency
+            for row in ProcurementReceiveBatchCapitalAllocation.objects.filter(batch=second_batch)
+        }
+        self.assertEqual(first_allocs[self.ctx['investor'].id], Decimal('100.00'))
+        self.assertEqual(first_allocs[self.ctx['operator'].id], Decimal('0.00'))
+        self.assertEqual(second_allocs[self.ctx['investor'].id], Decimal('40.00'))
+        self.assertEqual(second_allocs[self.ctx['operator'].id], Decimal('60.00'))
+
     def test_partnership_at_receipt_insufficient_capital_rejected(self):
         """PARTNERSHIP × AT_RECEIPT with explicit allocation exceeding pool → ValueError."""
         proc = self._build_partnership_at_receipt_procurement(self.ctx)

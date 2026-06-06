@@ -30,13 +30,16 @@ import {
   fetchInvestmentAgreement,
   fetchCapitalPositions,
   fetchAgreementProfitSummary,
+  fetchProcurementVentureSummary,
   type AgreementAllocationPreview,
   type AgreementProfitRow,
   type CapitalPositionRow,
   type InvestmentAgreementDetail,
+  type ProcurementVentureSummary,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
+import AgreementRecoveredCapitalCard from '@/modules/intake/components/agreement/AgreementRecoveredCapitalCard.vue'
 import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
 import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
 import { formatPrice } from '@/utils/currency'
@@ -57,6 +60,7 @@ const error = ref('')
 const positions = ref<CapitalPositionRow[]>([])
 const hasInterparty = computed(() => positions.value.some((p) => Math.abs(Number(p.net) || 0) > 0.01))
 const profitRows = ref<AgreementProfitRow[]>([])
+const ventureSummaries = ref<ProcurementVentureSummary[]>([])
 const operatingAccounts = ref<CashAccountRecord[]>([])
 const settleOpen = ref(false)
 const activePosition = ref<CapitalPositionRow | null>(null)
@@ -69,6 +73,7 @@ const withdrawalPartnerId = ref<number | null>(null)
 const withdrawalAmount = ref('')
 const withdrawalCurrency = ref<'USD' | 'UZS'>('USD')
 const savingWithdrawal = ref(false)
+const savingRecoveredCapital = ref(false)
 const withdrawalError = ref('')
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
@@ -78,6 +83,17 @@ const {
   error: latestUsdRateError,
   load: loadLatestUsdRate,
 } = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
+
+interface RecoveredCapitalRow {
+  key: string
+  procurementId: number
+  partnerId: number
+  partnerName: string
+  role: string
+  availableUzs: number
+  recoveredUzs: number
+  returnedUzs: number
+}
 
 const agreementId = computed(() => Number(route.params.id))
 const activeProcurements = computed(() => (agreement.value?.procurements ?? []).filter((item) => item.status === 'OPEN' || item.status === 'PARTIALLY_RECEIVED'))
@@ -124,6 +140,22 @@ const partyRows = computed(() => {
     }
   })
 })
+const recoveredCapitalRows = computed<RecoveredCapitalRow[]>(() =>
+  ventureSummaries.value.flatMap((summary) =>
+    summary.positions
+      .filter((row) => Number(row.capital_return_available_uzs || 0) > 0.01)
+      .map((row) => ({
+        key: `${summary.procurement_id}-${row.partner_id}`,
+        procurementId: summary.procurement_id,
+        partnerId: row.partner_id,
+        partnerName: row.partner_name,
+        role: row.role,
+        availableUzs: Number(row.capital_return_available_uzs || 0),
+        recoveredUzs: Number(row.capital_recovered_uzs || 0),
+        returnedUzs: Number(row.capital_returned_uzs || 0),
+      })),
+  ),
+)
 const availableByPartnerCurrency = computed<Record<number, Record<string, number>>>(() => {
   const rows: Record<number, Record<string, number>> = {}
   const add = (partnerId: number, currency: string, amount: number) => {
@@ -263,6 +295,34 @@ async function saveWithdrawal(): Promise<void> {
   }
 }
 
+async function returnRecoveredCapital(payload: {
+  row: RecoveredCapitalRow
+  amount: string
+  currency: 'UZS' | 'USD'
+  fxRate: string
+  accountId: number
+}): Promise<void> {
+  if (!agreement.value) return
+  savingRecoveredCapital.value = true
+  try {
+    await addAgreementWithdrawal(agreement.value.id, {
+      partner_id: payload.row.partnerId,
+      procurement_id: payload.row.procurementId,
+      from_account_id: payload.accountId,
+      amount: payload.amount,
+      currency: payload.currency,
+      fx_rate: payload.fxRate,
+      reason: `Возврат восстановленного капитала по приходу #${payload.row.procurementId}`,
+    })
+    toast.success(t('procurements.withdrawalAdded'))
+    await load()
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, t('procurements.withdrawalAddFailed')))
+  } finally {
+    savingRecoveredCapital.value = false
+  }
+}
+
 async function loadAdvances(): Promise<void> {
   try {
     const [pos, profit, accounts] = await Promise.all([
@@ -273,6 +333,10 @@ async function loadAdvances(): Promise<void> {
     positions.value = pos
     profitRows.value = profit
     operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
+    const procurementIds = agreement.value?.procurements.map((procurement) => procurement.id) ?? []
+    ventureSummaries.value = procurementIds.length
+      ? await Promise.all(procurementIds.map((id) => fetchProcurementVentureSummary(id)))
+      : []
   } catch {
     // positions/distributions are supplementary — keep the page usable if they fail
   }
@@ -396,6 +460,14 @@ onMounted(async () => {
 
         <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
         <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" />
+
+        <AgreementRecoveredCapitalCard
+          :rows="recoveredCapitalRows"
+          :accounts="operatingAccounts"
+          :usd-rate="latestUsdRate"
+          :saving="savingRecoveredCapital"
+          @return-capital="returnRecoveredCapital"
+        />
 
         <!-- Распределение прибыли — только когда есть что распределять -->
         <div v-if="profitRows.length" class="flex flex-wrap items-center gap-2">

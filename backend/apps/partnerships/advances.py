@@ -245,15 +245,45 @@ def partner_capital_positions(agreement) -> dict:
     total_deployed = sum(deployed.values(), Decimal('0'))
     pool_free = max(Decimal('0'), (total_paid - total_deployed).quantize(_CENTS))
 
+    venture_uzs: dict[int, dict[str, Decimal]] = {}
+    for procurement in agreement.procurements.all():
+        from .venture import procurement_venture_positions
+        for partner_id, row in procurement_venture_positions(procurement=procurement).items():
+            target = venture_uzs.setdefault(partner_id, {
+                'deployed_uzs': Decimal('0.00'),
+                'capital_recovered_uzs': Decimal('0.00'),
+                'remaining_inventory_capital_uzs': Decimal('0.00'),
+                'liability_capital_recovered_uzs': Decimal('0.00'),
+                'provisional_profit_uzs': Decimal('0.00'),
+                'loss_uzs': Decimal('0.00'),
+                'partner_liability_loss_uzs': Decimal('0.00'),
+                'capital_returned_uzs': Decimal('0.00'),
+                'dividends_paid_uzs': Decimal('0.00'),
+                'capital_return_available_uzs': Decimal('0.00'),
+                'provisional_profit_available_uzs': Decimal('0.00'),
+                'negative_position_uzs': Decimal('0.00'),
+            })
+            for key in target:
+                target[key] += Decimal(str(row.get(key, Decimal('0.00'))))
+
     positions: dict[int, dict] = {}
     for pid in set(deployed) | set(paid_in):
         d = deployed.get(pid, Decimal('0')).quantize(_CENTS)
         p = paid_in.get(pid, Decimal('0')).quantize(_CENTS)
         net = (d - p).quantize(_CENTS)
         withdrawable = min(-net, pool_free).quantize(_CENTS) if net < 0 else Decimal('0.00')
+        venture = {
+            key: value.quantize(_CENTS)
+            for key, value in venture_uzs.get(pid, {}).items()
+        }
         positions[pid] = {
             'deployed': d, 'paid_in': p, 'net': net,
             'owed': max(Decimal('0.00'), net), 'withdrawable': max(Decimal('0.00'), withdrawable),
+            # E16: these functional UZS buckets describe sold-capital/proceeds
+            # economics. They are informational here; pool withdrawals still
+            # require physical pool cash until an explicit recovered-proceeds
+            # transfer/payout source is used.
+            **venture,
         }
     return positions
 

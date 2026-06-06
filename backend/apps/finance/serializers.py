@@ -201,6 +201,12 @@ class ProductProfitabilitySerializer(serializers.Serializer):
     projected_gross_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_investor_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
     projected_business_profit = serializers.DecimalField(max_digits=20, decimal_places=2)
+    venture_deployed_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    venture_capital_recovered_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    venture_capital_return_available_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    venture_provisional_profit_available_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    venture_loss_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    venture_negative_position_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
     display = serializers.DictField(required=False)
 
 

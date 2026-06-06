@@ -126,4 +126,10 @@ REPORT_AMOUNT_KEYS = [
     'projected_business_profit',
     'received_landed_cost',
     'pending_prepaid_cost',
+    'venture_deployed_uzs',
+    'venture_capital_recovered_uzs',
+    'venture_capital_return_available_uzs',
+    'venture_provisional_profit_available_uzs',
+    'venture_loss_uzs',
+    'venture_negative_position_uzs',
 ]

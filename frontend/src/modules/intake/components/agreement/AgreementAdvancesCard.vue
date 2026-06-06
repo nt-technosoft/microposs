@@ -38,6 +38,29 @@ const rows = computed(() =>
 )
 
 const hasOwing = computed(() => rows.value.some((r) => owed(r) > EPS))
+const ventureTotals = computed(() => props.positions.reduce((acc, row) => {
+  acc.capitalRecovered += Number(row.capital_recovered_uzs ?? 0) || 0
+  acc.remainingCapital += Number(row.remaining_inventory_capital_uzs ?? 0) || 0
+  acc.provisionalProfit += Number(row.provisional_profit_uzs ?? 0) || 0
+  acc.loss += Number(row.loss_uzs ?? 0) || 0
+  acc.capitalAvailable += Number(row.capital_return_available_uzs ?? 0) || 0
+  acc.profitAvailable += Number(row.provisional_profit_available_uzs ?? 0) || 0
+  acc.negative += Number(row.negative_position_uzs ?? 0) || 0
+  return acc
+}, {
+  capitalRecovered: 0,
+  remainingCapital: 0,
+  provisionalProfit: 0,
+  loss: 0,
+  capitalAvailable: 0,
+  profitAvailable: 0,
+  negative: 0,
+}))
+const hasVentureFacts = computed(() =>
+  ventureTotals.value.capitalRecovered > EPS
+  || ventureTotals.value.provisionalProfit > EPS
+  || ventureTotals.value.loss > EPS,
+)
 </script>
 
 <template>
@@ -91,6 +114,37 @@ const hasOwing = computed(() => rows.value.some((r) => owed(r) > EPS))
         Погашение довносит капитал должника в пул договора (деньгами или из его прибыли).
         Переплату другая сторона забирает отдельно — через «Возврат капитала».
       </p>
+
+      <div v-if="hasVentureFacts" class="rounded-xl border border-border bg-muted/30 p-3">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <p class="text-sm font-medium text-foreground">Реализация по продажам</p>
+          <span v-if="ventureTotals.negative > EPS" class="text-xs font-medium text-destructive">
+            минус {{ formatPrice(ventureTotals.negative, 'UZS') }}
+          </span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+          <div>
+            <span class="block text-muted-foreground">Восстановлено капитала</span>
+            <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.capitalRecovered, 'UZS') }}</span>
+          </div>
+          <div>
+            <span class="block text-muted-foreground">Капитал к возврату</span>
+            <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.capitalAvailable, 'UZS') }}</span>
+          </div>
+          <div>
+            <span class="block text-muted-foreground">Предв. прибыль</span>
+            <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.profitAvailable, 'UZS') }}</span>
+          </div>
+          <div>
+            <span class="block text-muted-foreground">Убытки</span>
+            <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.loss, 'UZS') }}</span>
+          </div>
+          <div class="sm:col-span-2">
+            <span class="block text-muted-foreground">Остаток в товаре</span>
+            <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.remainingCapital, 'UZS') }}</span>
+          </div>
+        </div>
+      </div>
     </CardContent>
   </Card>
 </template>

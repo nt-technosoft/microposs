@@ -293,6 +293,9 @@ function partnerWeight(partner: Partner): number {
 function receiveAvailable(partnerId: number, currency: string): number {
   const inv = investment.value
   if (!inv) return 0
+  if (isAtReceipt.value) {
+    return Math.max(0, parseFloat(inv.available_by_partner?.[String(partnerId)]?.[currency] ?? '0') || 0)
+  }
   let available = 0
   for (const allocation of inv.allocations) {
     if (allocation.partner_id !== partnerId || allocation.currency !== currency) continue
@@ -300,9 +303,18 @@ function receiveAvailable(partnerId: number, currency: string): number {
     available += allocation.direction === 'TO_PROCUREMENT' ? amount : -amount
   }
   for (const batch of props.procurement.documents.receive_batches) {
-    const snapshot = batch.capital_snapshot as { partners?: Array<{ partner_id: number; capital_amount_contract_currency?: string }> } | null
+    const snapshot = batch.capital_snapshot as {
+      partners?: Array<{
+        partner_id: number
+        capital_amount_contract_currency?: string
+        capital_amount?: string
+      }>
+    } | null
     for (const partner of snapshot?.partners ?? []) {
-      if (partner.partner_id === partnerId) available -= parseFloat(partner.capital_amount_contract_currency ?? '0') || 0
+      if (partner.partner_id === partnerId) {
+        const consumed = partner.capital_amount_contract_currency ?? partner.capital_amount ?? '0'
+        available -= parseFloat(consumed) || 0
+      }
     }
   }
   return Math.max(0, available)
@@ -763,6 +775,7 @@ function setReceiptMode(mode: 'full' | 'partial'): void {
             <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
               <div class="min-w-0">
                 <span class="block truncate text-sm text-foreground">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? ('#' + alloc.partnerId) }}</span>
+                <small class="block text-xs text-neutral-400">доступно {{ fmtAmount(receiveAvailable(alloc.partnerId, alloc.currency)) }} {{ alloc.currency }}</small>
                 <small v-if="alloc.isCorrected" class="text-xs text-warning">↓ по доступному</small>
               </div>
               <input

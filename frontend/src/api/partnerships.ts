@@ -426,6 +426,8 @@ export interface ProcurementDetail {
     }>
     withdrawals: Array<{
       id: number
+      procurement?: number | null
+      paid_from_account?: number | null
       partner: number | null
       partner_name: string | null
       partner_role: string | null
@@ -650,6 +652,8 @@ export interface ProcurementContributionPayload {
 
 export interface ProcurementWithdrawalPayload {
   partner_id?: number | null
+  procurement_id?: number | null
+  from_account_id?: number | null
   amount: string | number
   currency?: string
   fx_rate?: string | number
@@ -746,6 +750,8 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
   }>
   withdrawals: Array<{
     id: number
+    procurement: number | null
+    paid_from_account: number | null
     partner: number
     partner_name: string
     partner_role: string
@@ -946,7 +952,85 @@ export interface CapitalPositionRow {
   net: string
   owed: string
   withdrawable: string
+  deployed_uzs?: string
+  capital_recovered_uzs?: string
+  remaining_inventory_capital_uzs?: string
+  liability_capital_recovered_uzs?: string
+  provisional_profit_uzs?: string
+  loss_uzs?: string
+  partner_liability_loss_uzs?: string
+  capital_returned_uzs?: string
+  dividends_paid_uzs?: string
+  capital_return_available_uzs?: string
+  provisional_profit_available_uzs?: string
+  negative_position_uzs?: string
   currency: string
+}
+
+export interface ProcurementVenturePosition {
+  partner_id: number
+  partner_name: string
+  role: string
+  deployed_uzs: string
+  capital_recovered_uzs: string
+  remaining_inventory_capital_uzs: string
+  liability_capital_recovered_uzs: string
+  provisional_profit_uzs: string
+  loss_uzs: string
+  partner_liability_loss_uzs: string
+  capital_returned_uzs: string
+  dividends_paid_uzs: string
+  capital_return_available_uzs: string
+  provisional_profit_available_uzs: string
+  negative_position_uzs: string
+}
+
+export interface ProcurementVentureSummary {
+  procurement_id: number
+  agreement_id: number | null
+  currency: 'UZS' | string
+  positions: ProcurementVenturePosition[]
+  totals: Omit<ProcurementVenturePosition, 'partner_id' | 'partner_name' | 'role'>
+  blocking_reasons?: string[]
+}
+
+export interface AgreementVentureSummary {
+  agreement_id: number
+  currency: 'UZS' | string
+  positions: ProcurementVenturePosition[]
+  procurements: Array<{
+    procurement_id: number
+    status: string
+    capital_return_available_uzs: string
+    blocking_reasons: string[]
+  }>
+}
+
+export interface AgreementPayoutPreview {
+  allowed: boolean
+  payout_type: 'CAPITAL_RETURN' | 'PROFIT' | string
+  partner_id: number | null
+  procurement_id: number | null
+  amount: string
+  currency: string
+  fx_rate: string
+  fx_rate_source: string
+  fx_rate_date: string | null
+  functional_amount_uzs: string
+  available_uzs: string
+  blocking_reasons: string[]
+}
+
+export interface ProcurementVentureSettlement {
+  id: number
+  procurement_id: number
+  settlement_type: 'CONSTRUCTIVE' | 'FINAL'
+  settled_at: string
+  inventory_value_uzs: string
+  reserve_uzs: string
+  totals: Record<string, string>
+  partner_positions: Record<string, Record<string, string>>
+  notes: string
 }
 
 export interface SettlePartnerCapitalPayload {
@@ -1075,6 +1159,56 @@ export async function fetchProcurements(params?: {
 
 export async function fetchProcurement(id: number): Promise<ProcurementDetail> {
   const { data } = await api.get<ProcurementDetail>(`/api/v1/partnerships/procurements/${id}/`)
+  return data
+}
+
+export async function fetchProcurementVentureSummary(id: number): Promise<ProcurementVentureSummary> {
+  const { data } = await api.get<ProcurementVentureSummary>(
+    `/api/v1/partnerships/procurements/${id}/venture-summary/`,
+  )
+  return data
+}
+
+export async function fetchAgreementVentureSummary(id: number): Promise<AgreementVentureSummary> {
+  const { data } = await api.get<AgreementVentureSummary>(
+    `/api/v1/partnerships/agreements/${id}/venture-summary/`,
+  )
+  return data
+}
+
+export async function previewAgreementPayout(
+  id: number,
+  payload: {
+    partner_id: number
+    procurement_id?: number | null
+    payout_type: 'CAPITAL_RETURN' | 'PROFIT'
+    amount: string | number
+    currency?: string
+    fx_rate?: string | number
+    from_account_id?: number | null
+  },
+): Promise<AgreementPayoutPreview> {
+  const { data } = await api.post<AgreementPayoutPreview>(
+    `/api/v1/partnerships/agreements/${id}/payout-preview/`,
+    payload,
+  )
+  return data
+}
+
+export async function createProcurementVentureSettlement(
+  id: number,
+  payload: {
+    settlement_type: 'CONSTRUCTIVE' | 'FINAL'
+    inventory_value_uzs?: string
+    reserve_uzs?: string
+    notes?: string
+    client_request_id?: string
+  },
+): Promise<ProcurementVentureSettlement> {
+  const { data } = await api.post<ProcurementVentureSettlement>(
+    `/api/v1/partnerships/procurements/${id}/venture-settlements/`,
+    payload,
+  )
   return data
 }
 

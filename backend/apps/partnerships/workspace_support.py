@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.services import publish_event
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
+from apps.finance.models import CashAccount
 from apps.partnerships.formulas import profit_shares_from_capital
 from apps.partnerships.procurement_cost import procurement_cost_by_currency
 
@@ -337,6 +338,8 @@ def add_agreement_withdrawal(
     agreement_id: int,
     partner_id: int,
     amount: Decimal,
+    procurement_id: int | None = None,
+    from_account_id: int | None = None,
     currency: str = 'UZS',
     fx_rate: Decimal = Decimal('1'),
     date=None,
@@ -378,21 +381,42 @@ def add_agreement_withdrawal(
             raise ValueError('Cannot withdraw from closed agreement.')
         if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
             raise ValueError('Selected partner is not part of this agreement.')
+        procurement = None
+        if procurement_id is not None:
+            procurement = Procurement.objects.get(
+                pk=procurement_id,
+                tenant_id=tenant_id,
+                agreement=agreement,
+            )
 
-        available = _agreement_partner_available(
-            agreement=agreement,
-            partner_id=partner_id,
-            currency=currency,
-        )
-        if available < amount:
+        functional = money(amount * Decimal(str(fx_rate)))
+        recovered_return = procurement is not None and from_account_id is not None
+        if recovered_return:
+            from .venture import procurement_venture_positions
+            venture_position = procurement_venture_positions(procurement=procurement).get(partner_id, {})
+            if money(venture_position.get('negative_position_uzs', ZERO)) > ZERO:
+                raise ValueError('Есть отрицательная позиция партнёра; сначала погасите её.')
+            available = money(venture_position.get('capital_return_available_uzs', ZERO))
+            requested_available_basis = functional
+        else:
+            available = _agreement_partner_available(
+                agreement=agreement,
+                partner_id=partner_id,
+                currency=currency,
+            )
+            requested_available_basis = amount
+        if available < requested_available_basis:
             raise ValueError(
                 f'Нельзя вернуть {money(amount)} {currency}: '
-                f'у выбранной стороны доступно только {money(available)} {currency}.'
+                f'у выбранной стороны доступно только {money(available)} '
+                f'{"UZS" if recovered_return else currency}.'
             )
 
         withdrawal = AgreementWithdrawal.objects.create(
             tenant_id=tenant_id,
             agreement=agreement,
+            procurement=procurement,
+            paid_from_account_id=from_account_id,
             partner_id=partner_id,
             amount=amount,
             currency=currency,
@@ -408,41 +432,72 @@ def add_agreement_withdrawal(
             client_request_id=client_request_id,
         )
 
-        # E15: capital return is PHYSICAL — draw the cash out of the agreement
-        # pool and book the equity reduction (DR partner equity / CR 1300). The
-        # leftover capital physically sits in the pool, so the return must move
-        # real cash and keep pool.balance reconciled (no more ledger-only drift).
-        pool = get_or_create_agreement_capital_account(tenant_id=tenant_id, agreement=agreement)
-        if str(pool.currency).upper() != currency:
-            raise ValueError(
-                f'Возврат капитала в {currency} не поддержан: пул договора ведётся в '
-                f'{pool.currency}. Мультивалютный возврат — отдельная задача.'
-            )
-        if Decimal(str(pool.balance)) < amount:
-            raise ValueError(
-                f'Недостаточно средств в пуле договора: доступно {money(pool.balance)} {currency}.'
-            )
         from apps.finance.models import CashEntry
         from apps.finance.services import create_cash_entry, create_journal_entry
 
         role = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id).role
         equity_code = _capital_equity_account_code(role=role, legal_mode=agreement.legal_mode)
-        functional = money(amount * Decimal(str(fx_rate)))
-        create_cash_entry(
-            tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
-            amount=amount, date=date,
-            source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
-        )
-        create_journal_entry(
-            tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
-            lines=[
-                {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
-                 'description': f'Возврат капитала #{withdrawal.pk}'},
-                {'account_code': pool.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
-                 'description': f'Возврат капитала #{withdrawal.pk}'},
-            ],
-            description=f'Возврат капитала #{withdrawal.pk}', date=date,
-        )
+        if recovered_return:
+            source_account = CashAccount.objects.select_for_update().get(
+                pk=from_account_id,
+                tenant_id=tenant_id,
+                is_active=True,
+            )
+            if str(source_account.currency).upper() != currency:
+                raise ValueError(
+                    f'Возврат в {currency} должен списываться из кассы {currency}. '
+                    f'Сначала сделайте явную конвертацию, если деньги лежат в {source_account.currency}.'
+                )
+            if Decimal(str(source_account.balance)) < amount:
+                raise ValueError(
+                    f'Недостаточно средств в кассе: доступно {money(source_account.balance)} {currency}.'
+                )
+            if not source_account.linked_account_id:
+                raise ValueError('Source cash account has no linked GL account.')
+            create_cash_entry(
+                tenant_id=tenant_id, account=source_account, direction=CashEntry.Direction.OUT,
+                amount=amount, date=date,
+                source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
+            )
+            create_journal_entry(
+                tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
+                lines=[
+                    {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
+                     'description': f'Возврат восстановленного капитала #{withdrawal.pk}'},
+                    {'account_code': source_account.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+                     'description': f'Возврат восстановленного капитала #{withdrawal.pk}'},
+                ],
+                description=f'Возврат восстановленного капитала #{withdrawal.pk}', date=date,
+            )
+        else:
+            # E15: capital return is PHYSICAL — draw the cash out of the
+            # agreement pool and book the equity reduction (DR partner equity /
+            # CR 1300).
+            pool = get_or_create_agreement_capital_account(tenant_id=tenant_id, agreement=agreement)
+            if str(pool.currency).upper() != currency:
+                raise ValueError(
+                    f'Возврат капитала в {currency} не поддержан: пул договора ведётся в '
+                    f'{pool.currency}. Мультивалютный возврат — отдельная задача.'
+                )
+            if Decimal(str(pool.balance)) < amount:
+                raise ValueError(
+                    f'Недостаточно средств в пуле договора: доступно {money(pool.balance)} {currency}.'
+                )
+            create_cash_entry(
+                tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.OUT,
+                amount=amount, date=date,
+                source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
+            )
+            create_journal_entry(
+                tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
+                lines=[
+                    {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
+                     'description': f'Возврат капитала #{withdrawal.pk}'},
+                    {'account_code': pool.linked_account.code, 'debit': Decimal('0'), 'credit': functional,
+                     'description': f'Возврат капитала #{withdrawal.pk}'},
+                ],
+                description=f'Возврат капитала #{withdrawal.pk}', date=date,
+            )
 
         record_agreement_event(
             tenant_id=tenant_id,

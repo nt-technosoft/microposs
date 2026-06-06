@@ -546,9 +546,192 @@ class Command(BaseCommand):
         plan: dict,
         variants: dict,
     ):
-        # TODO E07 Phase D: rewrite using InvestmentAgreement + ProcurementWorkspace API.
-        # Legacy services (open_procurement, add_contribution, etc.) removed in E08 T-1.4.
-        raise NotImplementedError('Excel audit procurement replay requires E07 Phase D rewrite.')
+        from apps.core.models import Business
+        from apps.inventory.models import Warehouse
+        from apps.partnerships.models import ProcurementExpense
+        from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
+
+        business = Business.objects.get(pk=tenant_id)
+        owner_id = business.owner_id
+        purchase_rows = plan['purchase_rows']
+        purchase_units = self._purchase_unit_prices(
+            scenario=scenario,
+            purchase_rows=purchase_rows,
+            plan=plan,
+        )
+        received_at = _parse_dt(purchase_rows[0].get('MAHSULOT OMBORGA YETIB KELGAN SANA'))
+        contribution_date = _parse_dt(plan['capital_rows'][0].get('SANA')) if plan['capital_rows'] else received_at
+        contribution_fx = _dec(plan['capital_rows'][0].get('KURS'), DEFAULT_DEMO_USD_UZS_RATE) if plan['capital_rows'] else DEFAULT_DEMO_USD_UZS_RATE
+        customs_fx = _dec(plan['customs_rows'][0].get('KURS'), DEFAULT_DEMO_USD_UZS_RATE) if plan['customs_rows'] else DEFAULT_DEMO_USD_UZS_RATE
+        capital_by_name = self._capital_by_name(plan['capital_rows'])
+
+        procurement = create_workspace(
+            tenant_id=tenant_id,
+            funding_source='PARTNERSHIP',
+            primary_currency='USD',
+            supplier_id=supplier_id,
+            notes=f'Excel workflow {scenario.key}',
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'supplier_id': supplier_id,
+                'mudaraba_ratio': str(_ratio(
+                    CONTRACT_INVESTOR_PROFIT_SHARE
+                    / (CONTRACT_INVESTOR_CAPITAL_USD / CONTRACT_PLANNED_TOTAL_USD)
+                )),
+                'planned_budget': str(CONTRACT_PLANNED_TOTAL_USD),
+                'currency': 'USD',
+                'reconciliation_mode': 'FACTUAL',
+                'default_advance_repayment_mode': 'LUMP',
+                'notes': f'Excel workflow agreement {scenario.key}',
+                'partners': [
+                    {
+                        'partner_id': investor.id,
+                        'role': 'INVESTOR',
+                        'planned_capital_share': str(CONTRACT_INVESTOR_CAPITAL_USD),
+                        'profit_share': str(CONTRACT_INVESTOR_PROFIT_SHARE),
+                    },
+                    {
+                        'partner_id': operator.id,
+                        'role': 'OPERATOR',
+                        'planned_capital_share': str(CONTRACT_OPERATOR_CAPITAL_USD),
+                        'profit_share': str(CONTRACT_OPERATOR_PROFIT_SHARE),
+                    },
+                ],
+            }},
+            user_id=owner_id,
+        )
+        procurement.refresh_from_db()
+
+        for partner, amount in (
+            (investor, capital_by_name['USTOZ']),
+            (operator, capital_by_name['BEKZOD AKA']),
+        ):
+            procurement = dispatch_workspace_action(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner.id,
+                    'amount': str(_money(amount)),
+                    'currency': 'USD',
+                    'fx_rate': str(contribution_fx),
+                    'date': contribution_date.date().isoformat(),
+                    'notes': f'Excel capital contribution {scenario.key}',
+                }},
+                user_id=owner_id,
+            )
+
+        item_payloads = [
+            {
+                'product_variant_id': variants[str(row['MAHSULOT']).strip()].id,
+                'quantity': str(_dec(row.get('SONI'))),
+                'unit_purchase_price': str(purchase_units[str(row['MAHSULOT']).strip()]),
+                'currency': 'USD',
+                'fx_rate': str(_dec(row.get('KURS'), DEFAULT_DEMO_USD_UZS_RATE)),
+            }
+            for row in purchase_rows
+        ]
+        item_payloads.append({
+            'product_variant_id': variants[IN_TRANSIT_PRODUCT].id,
+            'quantity': str(IN_TRANSIT_QTY),
+            'unit_purchase_price': str(_unit(IN_TRANSIT_TOTAL_USD / IN_TRANSIT_QTY)),
+            'currency': 'USD',
+            'fx_rate': str(customs_fx),
+        })
+        procurement = dispatch_workspace_action(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': item_payloads}},
+            user_id=owner_id,
+        )
+        procurement.refresh_from_db()
+
+        received_item_ids = list(
+            procurement.items
+            .exclude(product_variant=variants[IN_TRANSIT_PRODUCT])
+            .order_by('id')
+            .values_list('id', flat=True)
+        )
+        expense_ids: list[int] = []
+        if scenario.use_targeted_customs and plan['customs_total'] > 0:
+            procurement = dispatch_workspace_action(
+                tenant_id=tenant_id,
+                procurement=procurement,
+                action='UPDATE_EXPENSES',
+                payload={'payload': {'expenses': [{
+                    'expense_type': ProcurementExpense.ExpenseType.CUSTOMS,
+                    'amount': str(plan['customs_total']),
+                    'currency': 'USD',
+                    'fx_rate': str(customs_fx),
+                    'allocation_method': ProcurementExpense.AllocationMethod.BY_VALUE,
+                    'target_item_ids': received_item_ids,
+                    'notes': 'Excel customs expense targeted to received goods',
+                }]}},
+                user_id=owner_id,
+            )
+            procurement.refresh_from_db()
+            expense_ids = list(procurement.expenses.order_by('id').values_list('id', flat=True))
+
+        terms_total = (
+            plan['base_received_total'] + plan['customs_total'] + IN_TRANSIT_TOTAL_USD
+            if scenario.use_targeted_customs
+            else plan['landed_received_total'] + IN_TRANSIT_TOTAL_USD
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            action='UPDATE_SETTLEMENT',
+            payload={'payload': {
+                'type': 'PREPAID',
+                'currency_of_obligation': 'USD',
+                'fx_rate_at_obligation': str(customs_fx),
+                'total_amount_due': str(_money(terms_total)),
+                'notes': 'Excel prepaid supplier settlement',
+            }},
+            user_id=owner_id,
+        )
+
+        paid_amount = _money(plan['base_received_total'] + plan['customs_total']) if scenario.use_targeted_customs else _money(plan['landed_received_total'])
+        investor_amount = min(_money(capital_by_name['USTOZ']), paid_amount)
+        operator_amount = _money(paid_amount - investor_amount)
+        allocations = [
+            {'partner_id': investor.id, 'amount': str(investor_amount), 'currency': 'USD', 'fx_rate': str(contribution_fx)},
+            {'partner_id': operator.id, 'amount': str(operator_amount), 'currency': 'USD', 'fx_rate': str(contribution_fx)},
+        ]
+        procurement = dispatch_workspace_action(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {
+                'item_ids': received_item_ids,
+                'expense_ids': expense_ids,
+                'allocations': allocations,
+                'date': received_at.date().isoformat(),
+                'notes': 'Excel prepaid capital allocation for received goods',
+            }},
+            user_id=owner_id,
+        )
+
+        storage = Warehouse.objects.get(tenant_id=tenant_id, name='Основной склад')
+        procurement = dispatch_workspace_action(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': storage.id,
+                'item_ids': received_item_ids,
+                'capital_allocations': allocations,
+                'received_at': received_at.isoformat(),
+            }},
+            user_id=owner_id,
+        )
+        procurement.refresh_from_db()
+        return procurement
 
     def _capital_by_name(self, rows: list[dict]) -> dict[str, Decimal]:
         result = {'USTOZ': Decimal('0'), 'BEKZOD AKA': Decimal('0')}

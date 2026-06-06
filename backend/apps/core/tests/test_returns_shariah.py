@@ -4,7 +4,8 @@ from django.test import TestCase
 
 from apps.finance.models import CashEntry, JournalEntry
 from apps.inventory.models import Lot, StockDisposal, StockMovement
-from apps.partnerships.models import PartnerLedgerEntry
+from apps.partnerships.models import PartnerLedgerEntry, ProcurementSaleRealization
+from apps.partnerships.venture import procurement_venture_positions
 from apps.sales.models import Return, SalePayment
 from apps.sales.services import create_sale, process_return
 
@@ -70,6 +71,25 @@ class ReturnsShariahTests(TestCase):
         }
         actual_reversed = {entry.ledger.partner_id: entry.amount for entry in reversed_entries}
         self.assertEqual(actual_reversed, expected_reversed)
+
+        reversal_rows = ProcurementSaleRealization.objects.filter(
+            sale_line=sale_line,
+            event_type=ProcurementSaleRealization.EventType.REVERSAL,
+        )
+        self.assertEqual(reversal_rows.count(), 2)
+        positions = procurement_venture_positions(procurement=procurement)
+        self.assertEqual(
+            positions[ctx['investor'].id]['capital_recovered_uzs'],
+            Decimal('369600.00'),
+        )
+        self.assertEqual(
+            positions[ctx['investor'].id]['provisional_profit_uzs'],
+            Decimal('172800.00'),
+        )
+        self.assertEqual(
+            positions[ctx['investor'].id]['provisional_profit_available_uzs'],
+            Decimal('0'),
+        )
 
     def test_dispose_return_records_loss_by_capital_share(self):
         ctx = build_tenant()
@@ -138,6 +158,24 @@ class ReturnsShariahTests(TestCase):
         actual_losses = {entry.ledger.partner_id: entry.amount for entry in loss_entries}
         self.assertEqual(actual_losses, expected_losses)
         self.assertEqual(sum(actual_losses.values()), expected_loss_amount)
+
+        positions = procurement_venture_positions(procurement=procurement)
+        self.assertEqual(
+            positions[ctx['investor'].id]['capital_recovered_uzs'],
+            Decimal('369600.00'),
+        )
+        self.assertEqual(
+            positions[ctx['investor'].id]['loss_uzs'],
+            Decimal('92400.00'),
+        )
+        self.assertEqual(
+            positions[ctx['investor'].id]['provisional_profit_uzs'],
+            Decimal('120000.00'),
+        )
+        self.assertEqual(
+            positions[ctx['investor'].id]['provisional_profit_available_uzs'],
+            Decimal('0'),
+        )
 
     def test_cash_return_without_customer_updates_stock_cash_journal_and_status(self):
         ctx = build_tenant()

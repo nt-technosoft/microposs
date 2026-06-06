@@ -37,6 +37,8 @@
 | **E13** | ⚠️ Mixed-currency procurement (затраты в разных валютах в одном приходе) | ⏸️ BLOCKED | 0% | E11, E12 + verified приход | [→](./roadmap/E13-multicurrency-procurement.md) |
 | **E14** | Сверка внесённого и договорного капитала (межпартнёрские авансы) | 🟡 IN_PROGRESS | 95% | E11, E12 | [→](./roadmap/E14-capital-reconciliation-advances.md) |
 | **E15** | Partner Distributions & Capital Return (исходящие партнёрские деньги) | 🟡 IN_PROGRESS | 90% | E11, E12, E14 | [→](./roadmap/E15-partner-distributions-capital-return.md) |
+| **E16** | Procurement Venture Settlement & Partner Proceeds | 🟡 IN_PROGRESS | 95% | E07, E11, E12, E14, E15 | [→](./roadmap/E16-procurement-venture-settlement.md) |
+| **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | 🟡 IN_PROGRESS | 0% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
 
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
@@ -53,9 +55,12 @@ Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) 
 Tailwind v4 + shadcn-vue; редизайн screen-by-screen, старт с детальной
 страницы прихода. Фаза 0 — выровнять источник правды (tokens.css → DESIGN.md).
 
-**Активный P0 (backend):** E03 — Real Value Reporting (Net Asset View).
-Разблокирован завершением E09 Wave B. E09 остаётся в IN_REVIEW (golden-path
-верификация 8 комбинаций матрицы, Phase 3 returnability намеренно deferred).
+**Активный P0 (backend):** E17 — Production Lifecycle Readiness. E16 закрыл
+экономическое ядро venture-settlement, но перед первым клиентом нужно убрать
+швы: один источник правды, retire active CapitalAdvance workflow, close
+procurement/agreement, locks после закрытия, idempotent returns, UI-действия и
+Excel replay. E03 временно ждёт E16/E17, потому что real value reporting должен
+читать уже правильные buckets и закрытый lifecycle.
 
 **Предыдущий P0 (2026-05-19 — 2026-05-21):** E09 — Procurement Completeness.
 Wave A (backend, 8 slices) + Wave B (frontend rebuild, 14 slices) завершены.
@@ -85,6 +90,11 @@ E07 + E08 (DONE 2026-05-19) ──→ E09 (Procurement Completeness) ──→ E
 
 E10 идёт параллельным frontend-треком: не блокирует backend-последовательность,
 переводит экраны на единый визуальный язык начиная с приходов.
+
+E17 — production-readiness слой поверх E16. Это не новая математика, а закрытие
+рисковых швов перед пилотным клиентом: нельзя оставлять два источника прибыли,
+legacy-взаиморасчёты рядом с net-position, незакрываемые приходы/договоры и
+операции без idempotency.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации

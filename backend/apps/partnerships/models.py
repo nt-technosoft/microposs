@@ -911,6 +911,22 @@ class AgreementWithdrawal(TenantModel):
         on_delete=models.CASCADE,
         related_name='withdrawals',
     )
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='capital_withdrawals',
+        help_text='E16: procurement-venture this capital return is attributed to.',
+    )
+    paid_from_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_capital_withdrawals',
+        help_text='E16: operating cash source when returning recovered proceeds directly.',
+    )
     partner = models.ForeignKey(
         'core.Partner',
         on_delete=models.PROTECT,
@@ -1188,6 +1204,150 @@ class PartnerLedgerEntry(TenantModel):
 
     def delete(self, *args, **kwargs):
         raise ValueError('PartnerLedgerEntry is append-only. Physical delete forbidden.')
+
+
+class ProcurementSaleRealization(TenantModel):
+    """Append-only partner-level realization for one partnership sale slice.
+
+    A sale line converts inventory into proceeds. This event records the
+    partner economics of that conversion, but it is not final profit settlement:
+    final entitlement is determined by a venture settlement snapshot.
+    """
+
+    class EventType(models.TextChoices):
+        REALIZATION = 'REALIZATION', 'Реализация'
+        REVERSAL = 'REVERSAL', 'Сторно реализации'
+        LOSS = 'LOSS', 'Убыток без продажи'
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='sale_realizations',
+    )
+    sale_line = models.ForeignKey(
+        'sales.SaleLine',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='partnership_realizations',
+    )
+    lot = models.ForeignKey(
+        'inventory.Lot',
+        on_delete=models.PROTECT,
+        related_name='partnership_realizations',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='procurement_sale_realizations',
+    )
+    role = models.CharField(max_length=20, blank=True, default='')
+    event_type = models.CharField(
+        max_length=16,
+        choices=EventType.choices,
+        default=EventType.REALIZATION,
+    )
+    quantity = models.DecimalField(max_digits=14, decimal_places=3)
+    sale_proceeds_currency = models.CharField(max_length=3, default='UZS')
+    sale_proceeds_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    sale_fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    cost_basis_currency = models.CharField(max_length=3, default='UZS')
+    cost_basis_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    cost_fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    sale_proceeds_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    cost_basis_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    cost_basis_at_sale_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_share = models.DecimalField(max_digits=8, decimal_places=6)
+    profit_share = models.DecimalField(max_digits=8, decimal_places=6)
+    capital_recovered_currency = models.CharField(max_length=3, default='UZS')
+    capital_recovered_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    profit_currency = models.CharField(max_length=3, default='UZS')
+    profit_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    loss_currency = models.CharField(max_length=3, default='UZS')
+    loss_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    fx_gain_loss_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    is_partner_liability = models.BooleanField(
+        default=False,
+        help_text='True when loss is assigned as partner liability, not ordinary venture loss.',
+    )
+    capital_recovered_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    provisional_profit_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    loss_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    source_ref = models.CharField(max_length=100, blank=True, default='')
+    reversal_of = models.ForeignKey(
+        'self',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='reversal_events',
+    )
+
+    class Meta:
+        db_table = 'partnerships_procurement_sale_realization'
+        indexes = [
+            models.Index(fields=['procurement', 'partner'], name='psr_proc_partner_idx'),
+            models.Index(fields=['sale_line'], name='psr_line_idx'),
+            models.Index(fields=['tenant', 'event_type'], name='psr_event_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sale_line', 'partner', 'event_type'],
+                condition=models.Q(event_type='REALIZATION'),
+                name='uq_sale_realization_line_partner',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementSaleRealization is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementSaleRealization is append-only.')
+
+
+class ProcurementVentureSettlement(TenantModel):
+    """Constructive/final settlement snapshot for one procurement venture."""
+
+    class SettlementType(models.TextChoices):
+        CONSTRUCTIVE = 'CONSTRUCTIVE', 'Конструктивная ликвидация'
+        FINAL = 'FINAL', 'Финальная ликвидация'
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='venture_settlements',
+    )
+    settlement_type = models.CharField(max_length=16, choices=SettlementType.choices)
+    settled_at = models.DateTimeField()
+    inventory_value_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    reserve_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    totals = models.JSONField(default=dict, blank=True)
+    partner_positions = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_procurement_venture_settlement'
+        indexes = [
+            models.Index(fields=['procurement', 'settled_at'], name='pvs_proc_idx'),
+            models.Index(fields=['tenant', 'settlement_type'], name='pvs_type_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_procurement_venture_settlement_idempotent',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementVentureSettlement is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementVentureSettlement is append-only.')
 
 
 class DividendPayment(TenantModel):

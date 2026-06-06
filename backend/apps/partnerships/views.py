@@ -142,6 +142,8 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 tenant_id=request.tenant_id,
                 agreement_id=agreement.id,
                 partner_id=serializer.validated_data['partner_id'],
+                procurement_id=serializer.validated_data.get('procurement_id'),
+                from_account_id=serializer.validated_data.get('from_account_id'),
                 amount=serializer.validated_data['amount'],
                 currency=serializer.validated_data['currency'],
                 fx_rate=serializer.validated_data.get('fx_rate'),
@@ -195,6 +197,8 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     def profit_summary(self, request, pk=None):
         """Per-partner, per-procurement undistributed profit (UZS) — payable rows
         for the dividend sheet. Only rows with pending > 0."""
+        from .venture import procurement_venture_positions
+
         agreement = self.get_object()
         procurements = list(Procurement.objects.filter(
             tenant_id=request.tenant_id, agreement=agreement,
@@ -202,9 +206,21 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
         rows = []
         for proc in procurements:
+            venture_positions = procurement_venture_positions(procurement=proc)
+            has_venture_facts = any(
+                Decimal(str(pos.get('capital_recovered_uzs', '0.00'))) != 0
+                or Decimal(str(pos.get('provisional_profit_uzs', '0.00'))) != 0
+                or Decimal(str(pos.get('loss_uzs', '0.00'))) != 0
+                for pos in venture_positions.values()
+            )
             for partner_id, member in members.items():
-                agg = get_partner_aggregate(partner_id, request.tenant_id, proc.id)
-                pending = agg.get('profit_pending_payout') or Decimal('0')
+                if has_venture_facts:
+                    pending = venture_positions.get(partner_id, {}).get(
+                        'provisional_profit_available_uzs', Decimal('0'),
+                    )
+                else:
+                    agg = get_partner_aggregate(partner_id, request.tenant_id, proc.id)
+                    pending = agg.get('profit_pending_payout') or Decimal('0')
                 if pending and Decimal(pending) > 0:
                     rows.append({
                         'procurement_id': proc.id,
@@ -214,6 +230,161 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                         'pending': str(pending),
                     })
         return Response(rows)
+
+    @action(detail=True, methods=['get'], url_path='venture-summary')
+    def venture_summary(self, request, pk=None):
+        """E16 agreement-level partner proceeds summary across linked procurements."""
+        from .venture import procurement_venture_positions, venture_blocking_reasons
+
+        agreement = self.get_object()
+        members = {
+            member.partner_id: member
+            for member in agreement.partners.select_related('partner').all()
+        }
+        totals: dict[int, dict[str, Decimal]] = {
+            partner_id: {
+                'deployed_uzs': Decimal('0.00'),
+                'capital_recovered_uzs': Decimal('0.00'),
+                'remaining_inventory_capital_uzs': Decimal('0.00'),
+                'liability_capital_recovered_uzs': Decimal('0.00'),
+                'provisional_profit_uzs': Decimal('0.00'),
+                'loss_uzs': Decimal('0.00'),
+                'partner_liability_loss_uzs': Decimal('0.00'),
+                'capital_returned_uzs': Decimal('0.00'),
+                'dividends_paid_uzs': Decimal('0.00'),
+                'capital_return_available_uzs': Decimal('0.00'),
+                'provisional_profit_available_uzs': Decimal('0.00'),
+                'negative_position_uzs': Decimal('0.00'),
+            }
+            for partner_id in members
+        }
+        procurement_rows = []
+        for procurement in Procurement.objects.filter(tenant_id=request.tenant_id, agreement=agreement):
+            positions = procurement_venture_positions(procurement=procurement)
+            procurement_total = Decimal('0.00')
+            for partner_id, pos in positions.items():
+                target = totals.setdefault(partner_id, {
+                    'deployed_uzs': Decimal('0.00'),
+                    'capital_recovered_uzs': Decimal('0.00'),
+                    'remaining_inventory_capital_uzs': Decimal('0.00'),
+                    'liability_capital_recovered_uzs': Decimal('0.00'),
+                    'provisional_profit_uzs': Decimal('0.00'),
+                    'loss_uzs': Decimal('0.00'),
+                    'partner_liability_loss_uzs': Decimal('0.00'),
+                    'capital_returned_uzs': Decimal('0.00'),
+                    'dividends_paid_uzs': Decimal('0.00'),
+                    'capital_return_available_uzs': Decimal('0.00'),
+                    'provisional_profit_available_uzs': Decimal('0.00'),
+                    'negative_position_uzs': Decimal('0.00'),
+                })
+                for key in target:
+                    target[key] += Decimal(str(pos.get(key, '0.00')))
+                procurement_total += Decimal(str(pos.get('capital_return_available_uzs', '0.00')))
+            procurement_rows.append({
+                'procurement_id': procurement.id,
+                'status': procurement.status,
+                'capital_return_available_uzs': str(procurement_total.quantize(Decimal('0.01'))),
+                'blocking_reasons': venture_blocking_reasons(procurement=procurement),
+            })
+        rows = []
+        for partner_id, values in totals.items():
+            member = members.get(partner_id)
+            rows.append({
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+                **{key: str(value.quantize(Decimal('0.01'))) for key, value in values.items()},
+            })
+        rows.sort(key=lambda item: item['partner_id'])
+        return Response({
+            'agreement_id': agreement.id,
+            'currency': 'UZS',
+            'positions': rows,
+            'procurements': procurement_rows,
+        })
+
+    @action(detail=True, methods=['post'], url_path='payout-preview')
+    def payout_preview(self, request, pk=None):
+        """E16 preview for capital/profit payouts with blocking reasons."""
+        from apps.finance.models import CashAccount
+        from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
+        from .venture import procurement_venture_positions
+
+        agreement = self.get_object()
+        partner_id = int(request.data.get('partner_id') or 0)
+        procurement_id = request.data.get('procurement_id')
+        payout_type = str(request.data.get('payout_type') or 'CAPITAL_RETURN').upper()
+        amount = Decimal(str(request.data.get('amount') or '0')).quantize(Decimal('0.01'))
+        currency = str(request.data.get('currency') or 'UZS').upper()
+        from_account_id = request.data.get('from_account_id')
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=request.tenant_id,
+            operation_currency=currency,
+            operation_at=None,
+            fx_rate_snapshot=request.data.get('fx_rate'),
+        )
+        functional = (amount * Decimal(str(fx_snapshot.rate))).quantize(Decimal('0.01'))
+        reasons = []
+        available = Decimal('0.00')
+
+        procurement = None
+        position = {}
+        if procurement_id:
+            procurement = Procurement.objects.filter(
+                tenant_id=request.tenant_id,
+                agreement=agreement,
+                pk=procurement_id,
+            ).first()
+            if procurement is None:
+                reasons.append('Приход не найден в этом договоре.')
+            else:
+                position = procurement_venture_positions(procurement=procurement).get(partner_id, {})
+                if payout_type == 'PROFIT':
+                    available = Decimal(str(position.get('provisional_profit_available_uzs', '0.00')))
+                else:
+                    available = Decimal(str(position.get('capital_return_available_uzs', '0.00')))
+                if Decimal(str(position.get('negative_position_uzs', '0.00'))) > 0:
+                    reasons.append('Есть отрицательная позиция партнёра; сначала погасите её.')
+        else:
+            positions = partner_capital_positions(agreement)
+            if payout_type == 'PROFIT':
+                reasons.append('Выплата прибыли требует выбрать конкретный приход.')
+            else:
+                available = Decimal(str(positions.get(partner_id, {}).get('withdrawable', '0.00')))
+
+        if partner_id <= 0:
+            reasons.append('Выберите участника договора.')
+        if amount <= 0:
+            reasons.append('Укажите сумму выплаты.')
+        if amount > 0 and available < functional:
+            reasons.append(f'Доступно только {available.quantize(Decimal("0.01"))} UZS.')
+        if from_account_id:
+            account = CashAccount.objects.filter(
+                tenant_id=request.tenant_id,
+                pk=from_account_id,
+                is_active=True,
+            ).first()
+            if account is None:
+                reasons.append('Касса не найдена.')
+            elif str(account.currency).upper() != currency:
+                reasons.append('Для выплаты в другой валюте сначала сделайте явную конвертацию.')
+            elif Decimal(str(account.balance)) < amount:
+                reasons.append(f'В кассе доступно только {account.balance} {currency}.')
+
+        return Response({
+            'allowed': not reasons,
+            'payout_type': payout_type,
+            'partner_id': partner_id or None,
+            'procurement_id': int(procurement_id) if procurement_id else None,
+            'amount': str(amount),
+            'currency': currency,
+            'fx_rate': str(fx_snapshot.rate),
+            'fx_rate_source': fx_snapshot.source,
+            'fx_rate_date': fx_snapshot.rate_date,
+            'functional_amount_uzs': str(functional),
+            'available_uzs': str(available.quantize(Decimal('0.01'))),
+            'blocking_reasons': reasons,
+        })
 
     @action(detail=True, methods=['get'], url_path='advances')
     def advances(self, request, pk=None):
@@ -265,6 +436,18 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'net': str(pos['net']),
                 'owed': str(pos['owed']),
                 'withdrawable': str(pos['withdrawable']),
+                'deployed_uzs': str(pos.get('deployed_uzs', '0.00')),
+                'capital_recovered_uzs': str(pos.get('capital_recovered_uzs', '0.00')),
+                'remaining_inventory_capital_uzs': str(pos.get('remaining_inventory_capital_uzs', '0.00')),
+                'liability_capital_recovered_uzs': str(pos.get('liability_capital_recovered_uzs', '0.00')),
+                'provisional_profit_uzs': str(pos.get('provisional_profit_uzs', '0.00')),
+                'loss_uzs': str(pos.get('loss_uzs', '0.00')),
+                'partner_liability_loss_uzs': str(pos.get('partner_liability_loss_uzs', '0.00')),
+                'capital_returned_uzs': str(pos.get('capital_returned_uzs', '0.00')),
+                'dividends_paid_uzs': str(pos.get('dividends_paid_uzs', '0.00')),
+                'capital_return_available_uzs': str(pos.get('capital_return_available_uzs', '0.00')),
+                'provisional_profit_available_uzs': str(pos.get('provisional_profit_available_uzs', '0.00')),
+                'negative_position_uzs': str(pos.get('negative_position_uzs', '0.00')),
                 'currency': agreement.currency,
             })
         rows.sort(key=lambda r: r['partner_id'])
@@ -294,7 +477,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     ordering = ['-opened_at']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan'):
+        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan', 'venture_summary'):
             return [IsWarehouse()]
         return [IsOwner()]
 
@@ -321,6 +504,86 @@ class ProcurementViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         return Response(build_workspace_payload(self.get_object()))
+
+    @action(detail=True, methods=['get'], url_path='venture-summary')
+    def venture_summary(self, request, pk=None):
+        """E16: current procurement-venture economic buckets in functional UZS."""
+        from .venture import procurement_venture_positions, venture_blocking_reasons
+
+        procurement = self.get_object()
+        positions = procurement_venture_positions(procurement=procurement)
+        members = {}
+        if procurement.agreement_id:
+            members = {
+                member.partner_id: member
+                for member in procurement.agreement.partners.select_related('partner').all()
+            }
+        rows = []
+        totals = {
+            'deployed_uzs': Decimal('0.00'),
+            'capital_recovered_uzs': Decimal('0.00'),
+            'remaining_inventory_capital_uzs': Decimal('0.00'),
+            'liability_capital_recovered_uzs': Decimal('0.00'),
+            'provisional_profit_uzs': Decimal('0.00'),
+            'loss_uzs': Decimal('0.00'),
+            'partner_liability_loss_uzs': Decimal('0.00'),
+            'capital_returned_uzs': Decimal('0.00'),
+            'dividends_paid_uzs': Decimal('0.00'),
+            'capital_return_available_uzs': Decimal('0.00'),
+            'provisional_profit_available_uzs': Decimal('0.00'),
+            'negative_position_uzs': Decimal('0.00'),
+        }
+        for partner_id, pos in positions.items():
+            member = members.get(partner_id)
+            row = {
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+            }
+            for key in totals:
+                value = Decimal(str(pos.get(key, '0.00'))).quantize(Decimal('0.01'))
+                row[key] = str(value)
+                totals[key] += value
+            rows.append(row)
+        rows.sort(key=lambda item: item['partner_id'])
+        return Response({
+            'procurement_id': procurement.id,
+            'agreement_id': procurement.agreement_id,
+            'currency': 'UZS',
+            'positions': rows,
+            'totals': {key: str(value.quantize(Decimal('0.01'))) for key, value in totals.items()},
+            'blocking_reasons': venture_blocking_reasons(procurement=procurement),
+        })
+
+    @action(detail=True, methods=['post'], url_path='venture-settlements')
+    def venture_settlements(self, request, pk=None):
+        """E16: create constructive/final procurement venture settlement."""
+        from .venture import create_venture_settlement
+
+        procurement = self.get_object()
+        try:
+            settlement = create_venture_settlement(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                settlement_type=request.data.get('settlement_type', 'CONSTRUCTIVE'),
+                inventory_value_uzs=request.data.get('inventory_value_uzs', '0'),
+                reserve_uzs=request.data.get('reserve_uzs', '0'),
+                notes=request.data.get('notes', ''),
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response({
+            'id': settlement.id,
+            'procurement_id': settlement.procurement_id,
+            'settlement_type': settlement.settlement_type,
+            'settled_at': settlement.settled_at,
+            'inventory_value_uzs': str(settlement.inventory_value_uzs),
+            'reserve_uzs': str(settlement.reserve_uzs),
+            'totals': settlement.totals,
+            'partner_positions': settlement.partner_positions,
+            'notes': settlement.notes,
+        }, status=status.HTTP_201_CREATED)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

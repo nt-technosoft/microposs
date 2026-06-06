@@ -219,15 +219,32 @@ def pay_dividend(
         )
         totals = {row['entry_type']: row['total'] or _ZERO for row in agg}
 
-        profit_net = (
-            totals.get('PROFIT_ACCRUED', _ZERO)
-            - totals.get('PROFIT_REVERSED', _ZERO)
-            - totals.get('LOSS_INCURRED', _ZERO)
-        )
-        already_paid = totals.get('DIVIDEND_PAID', _ZERO)
-        pending = max(_ZERO, profit_net - already_paid)
-
         payment_functional_uzs = _functional_uzs(amount, currency, fx_snapshot.rate)
+        from .models import Procurement
+        procurement = Procurement.objects.get(pk=procurement_id, tenant_id=tenant_id)
+        if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            from .venture import procurement_venture_positions
+            venture_row = procurement_venture_positions(procurement=procurement).get(partner_id, {})
+            has_venture_facts = any(
+                Decimal(str(venture_row.get(key, _ZERO))) != 0
+                for key in ('capital_recovered_uzs', 'provisional_profit_uzs', 'loss_uzs')
+            )
+            pending = (
+                Decimal(str(venture_row.get('provisional_profit_available_uzs', _ZERO)))
+                if has_venture_facts
+                else None
+            )
+        else:
+            pending = None
+        if pending is None:
+            profit_net = (
+                totals.get('PROFIT_ACCRUED', _ZERO)
+                - totals.get('PROFIT_REVERSED', _ZERO)
+                - totals.get('LOSS_INCURRED', _ZERO)
+            )
+            already_paid = totals.get('DIVIDEND_PAID', _ZERO)
+            pending = max(_ZERO, profit_net - already_paid)
+
         if payment_functional_uzs > pending:
             raise ValueError(
                 f'Dividend amount {payment_functional_uzs} UZS exceeds pending payout {pending} UZS '

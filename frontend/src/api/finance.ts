@@ -197,6 +197,12 @@ export interface ProcurementProfitabilityRow {
   }>
   pending_paid_items_count?: number
   draft_items_count?: number
+  venture_deployed_uzs?: string
+  venture_capital_recovered_uzs?: string
+  venture_capital_return_available_uzs?: string
+  venture_provisional_profit_available_uzs?: string
+  venture_loss_uzs?: string
+  venture_negative_position_uzs?: string
 }
 
 export interface ProcurementProfitabilityDetailItem {

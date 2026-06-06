@@ -221,6 +221,14 @@ def create_writeoff(
                     currency='UZS',
                     source_ref=f'writeoff:{risk_event.pk}',
                 )
+            from apps.partnerships.venture import record_lot_loss_realization
+            record_lot_loss_realization(
+                lot=lot,
+                quantity=quantity,
+                loss_distribution=loss_distribution,
+                source_ref=f'writeoff:{risk_event.pk}',
+                is_partner_liability=negligence,
+            )
 
         # Journal entry (bookkeeping)
         from apps.finance.services import create_journal_entry

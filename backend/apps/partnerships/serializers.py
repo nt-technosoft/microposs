@@ -271,7 +271,7 @@ class AgreementWithdrawalSerializer(serializers.ModelSerializer):
     class Meta:
         model = AgreementWithdrawal
         fields = [
-            'id', 'partner', 'partner_name', 'partner_role',
+            'id', 'procurement', 'paid_from_account', 'partner', 'partner_name', 'partner_role',
             'amount', 'currency', 'fx_rate', 'date',
             'source', 'confirmation_status', 'created_by',
             'created_by_name', 'actor_partner', 'actor_partner_name',
@@ -872,6 +872,8 @@ class AgreementContributionCreateSerializer(serializers.Serializer):
 
 class AgreementWithdrawalCreateSerializer(serializers.Serializer):
     partner_id = serializers.IntegerField(required=False, allow_null=True)
+    procurement_id = serializers.IntegerField(required=False, allow_null=True)
+    from_account_id = serializers.IntegerField(required=False, allow_null=True)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)

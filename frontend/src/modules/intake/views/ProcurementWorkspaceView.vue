@@ -19,6 +19,12 @@ import WorkspaceSupplierPickerSheet from '@/modules/intake/components/workspace/
 import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet.vue'
 import ProcurementCancelDialog from '@/modules/intake/components/workspace/ProcurementCancelDialog.vue'
 import ReverseReceiveBatchDialog from '@/modules/intake/components/workspace/ReverseReceiveBatchDialog.vue'
+import ProcurementVentureSettlementCard from '@/modules/intake/components/workspace/ProcurementVentureSettlementCard.vue'
+import {
+  createProcurementVentureSettlement,
+  fetchProcurementVentureSummary,
+  type ProcurementVentureSummary,
+} from '@/api/partnerships'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +37,8 @@ const amendSheetOpen = ref(false)
 const amendTarget = ref<'items' | 'expenses'>('items')
 const cancelDialogOpen = ref(false)
 const reverseDialogOpen = ref(false)
+const ventureSummary = ref<ProcurementVentureSummary | null>(null)
+const savingVentureSettlement = ref(false)
 
 const paymentError = ref<string | null>(null)
 const lastPaymentCashAccountId = ref<number | null>(null)
@@ -81,6 +89,7 @@ async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
   if (id) {
     await store.load(id)
+    await loadVentureSummary(id)
   } else {
     const mode = route.query.mode as string | undefined
     const agreementId = route.query.agreement ? Number(route.query.agreement) : undefined
@@ -89,6 +98,18 @@ async function ensureWorkspace(): Promise<void> {
       ...(agreementId ? { agreement_id: agreementId } : {}),
     })
     await router.replace({ name: 'procurement-detail', params: { id: draftId } })
+  }
+}
+
+async function loadVentureSummary(id = procurement.value?.id ?? null): Promise<void> {
+  if (!id) {
+    ventureSummary.value = null
+    return
+  }
+  try {
+    ventureSummary.value = await fetchProcurementVentureSummary(Number(id))
+  } catch {
+    ventureSummary.value = null
   }
 }
 
@@ -165,6 +186,25 @@ async function onDeleteItem(itemId: number): Promise<void> {
 
 async function onSplitItem(payload: { item_id: number; quantity: number }): Promise<void> {
   await dispatch('SPLIT_ITEM', payload)
+}
+
+async function onVentureSettle(type: 'CONSTRUCTIVE' | 'FINAL'): Promise<void> {
+  if (!procurement.value) return
+  savingVentureSettlement.value = true
+  try {
+    await createProcurementVentureSettlement(procurement.value.id, {
+      settlement_type: type,
+      inventory_value_uzs: '0',
+      reserve_uzs: '0',
+    })
+    toast.success(type === 'FINAL' ? 'Финальная сверка сохранена' : 'Конструктивная сверка сохранена')
+    await Promise.all([store.load(procurement.value.id), loadVentureSummary(procurement.value.id)])
+  } catch (err) {
+    const detail = (err as any)?.response?.data?.detail
+    toast.error(detail ?? (err instanceof Error ? err.message : 'Не удалось сохранить сверку'))
+  } finally {
+    savingVentureSettlement.value = false
+  }
 }
 
 onMounted(ensureWorkspace)
@@ -260,6 +300,14 @@ onBeforeUnmount(() => store.$reset())
               <ProcurementCardReceive
                 :procurement="procurement"
                 @dispatch="(k, p) => dispatch(k, p)"
+              />
+            </section>
+
+            <section v-if="ventureSummary" class="scroll-mt-16">
+              <ProcurementVentureSettlementCard
+                :summary="ventureSummary"
+                :saving="savingVentureSettlement"
+                @settle="onVentureSettle"
               />
             </section>
 
