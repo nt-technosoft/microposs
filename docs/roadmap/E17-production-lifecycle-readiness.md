@@ -1,7 +1,7 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** 0%
+**Прогресс:** ~17% (Фаза 1 done; demo happy-path стабилизирован: c02b980, afc4aae, 060fb22)
 **Зависит от:** E16
 **Блокирует:** first-client pilot, Excel replay, E03, E06
 
@@ -168,7 +168,15 @@ close_agreement (сумма венчуров + сверка пула).
 
 ## План реализации
 
-### Фаза 1 — Proof & Source-of-Truth Cutover
+> **Рекомендуемый порядок (зависимости), уточнён аудитом 2026-06-07:**
+> Фаза 1 ✅ → Фаза 2 → **Фаза 4 (conservation invariant + idempotency + N+1)** →
+> **Фаза 3 (close)** → Фаза 5 (UI) → Фаза 6 (replay).
+> Причина: conservation invariant — это **гейт закрытия** (close разрешён только при
+> |residual| = 0). Значит инвариант строится РАНЬШЕ close, иначе close какое-то время
+> закрывал бы венчур без доказательства сохранения денег — это и есть тот компромисс,
+> которого мы избегаем. Idempotency и N+1 из Фазы 4 независимы и делаются заодно.
+
+### Фаза 1 — Proof & Source-of-Truth Cutover — ✅ ВЫПОЛНЕНО (коммит c02b980, аудит зелёный)
 
 Доказать рассинхрон старых и новых источников, затем перевести читателей на venture-модель.
 Не удалять старые таблицы механически, но убрать их из активного расчёта партнёрской прибыли.
@@ -201,20 +209,18 @@ blocking reasons, final settlement, negative positions и read-only lock.
 
 ## Задачи (чек-лист)
 
-### Фаза 1 — Source of truth
-- [ ] T-1.1 Написать proof-test: старый `PartnerLedgerEntry` vs venture positions расходятся на
-  смешанном прибыль/убыток венчуре.
-- [ ] T-1.2 Перевести investor dashboard/detail на venture buckets.
-- [ ] T-1.3 Перевести finance reports / profitability rows на venture buckets.
-- [ ] T-1.4 Перевести sale explanations на venture realization.
-- [ ] T-1.5 Прекратить писать `PROFIT_ACCRUED`, `PROFIT_REVERSED`, `LOSS_INCURRED` как активный
+### Фаза 1 — Source of truth — ✅ ВЫПОЛНЕНО (c02b980, аудит зелёный)
+- [x] T-1.1 Написать proof-test: старый `PartnerLedgerEntry` vs venture positions расходятся на
+  смешанном прибыль/убыток венчуре. (test_e17_lifecycle: legacy 540k vs venture 380k, overstatement 160k)
+- [x] T-1.2 Перевести investor dashboard/detail на venture buckets. (get_partner_aggregate venture-backed)
+- [x] T-1.3 Перевести finance reports / profitability rows на venture buckets.
+- [x] T-1.4 Перевести sale explanations на venture realization. (+ фронт SaleExplanationView → realization_entries)
+- [x] T-1.5 Прекратить писать `PROFIT_ACCRUED`, `PROFIT_REVERSED`, `LOSS_INCURRED` как активный
   источник партнёрской экономики для новых E16-flow.
-- [ ] T-1.6 Оставить `PartnerLedgerEntry` только для physical/audit событий, где это реально
+- [x] T-1.6 Оставить `PartnerLedgerEntry` только для physical/audit событий, где это реально
   нужно.
-- [ ] T-1.7 (F4) Очистить контракт `partner_capital_positions`: не смешивать в одном объекте
-  суммы в валюте договора (`deployed/paid_in`) и UZS venture-бакеты. Либо всё в одной валюте
-  с явным `currency`, либо нативные и UZS-поля разнесены суффиксами и не складываются. Это
-  латентная мультивалютная мина для не-UZS договоров, а не косметика.
+- [x] T-1.7 (F4) Очистить контракт `partner_capital_positions`: нативные суммы с явным `currency`,
+  функциональные — суффикс `_uzs`, не складываются. (закрыто)
 
 ### Фаза 2 — CapitalAdvance cleanup
 - [ ] T-2.1 Остановить автоматическое `CapitalAdvance.objects.create(...)` на receive.
