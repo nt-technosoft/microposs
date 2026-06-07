@@ -383,7 +383,7 @@ class Command(BaseCommand):
             used.add(username)
             return user
 
-        owner = create_user('owner', 'owner@local.dev', 'Owner123!', groups['owner'], superuser=True)
+        owner = create_user('owner', 'owner@local.dev', 'Owner123!', groups['owner'])
         cashier = create_user('cashier', 'cashier@local.dev', 'Cashier123!', groups['cashier'])
         warehouse_user = create_user('warehouse', 'warehouse@local.dev', 'Warehouse123!', groups['warehouse'])
         business = Business.objects.create(owner=owner, name='Sherik Demo Excel', currency='UZS', is_active=True)
@@ -507,7 +507,51 @@ class Command(BaseCommand):
             discount_reason_id=ctx['discount_reason'].id,
             sheets=sale_sheets,
         )
+        self._stage_demo_shop_stock(ctx=ctx, variants=variants)
         self.stdout.write(self.style.SUCCESS(f'  {deal_id}: applied'))
+
+    def _stage_demo_shop_stock(self, *, ctx: dict, variants: dict, max_products: int = 8) -> None:
+        """Leave a small real shop balance for live POS demos after Excel replay sales."""
+        from apps.inventory.models import LotStock
+        from apps.inventory.services import transfer_lot_stock
+
+        storage = ctx['warehouses']['ASOSIY']
+        shop = ctx['warehouses']['DOKON']
+        staged = 0
+        seen_variant_ids = set()
+        ordered_variants = sorted(
+            {variant.id: variant for variant in variants.values()}.values(),
+            key=lambda variant: variant.id,
+            reverse=True,
+        )
+        for variant in ordered_variants:
+            if variant.id in seen_variant_ids:
+                continue
+            seen_variant_ids.add(variant.id)
+            stock = (
+                LotStock.objects
+                .filter(
+                    tenant_id=ctx['tenant_id'],
+                    warehouse=storage,
+                    lot__product_variant=variant,
+                    quantity_remaining__gt=0,
+                )
+                .select_related('lot')
+                .order_by('lot__received_at', 'lot__id')
+                .first()
+            )
+            if not stock:
+                continue
+            transfer_lot_stock(
+                tenant_id=ctx['tenant_id'],
+                lot=stock.lot,
+                from_warehouse=storage,
+                to_warehouse=shop,
+                quantity=1,
+            )
+            staged += 1
+            if staged >= max_products:
+                break
 
     def _create_products(self, *, ctx: dict, deal_id: str, sheets: dict) -> dict:
         from apps.catalog.services import create_product_with_variants

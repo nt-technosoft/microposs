@@ -19,10 +19,18 @@ const loading = ref(false)
 const error = ref('')
 
 const totals = computed(() => agreements.value.reduce((acc, item) => {
-  acc.budget += Number.parseFloat(item.planned_budget || '0') || 0
+  const currency = item.currency || 'UZS'
+  acc.budgetByCurrency[currency] = (acc.budgetByCurrency[currency] ?? 0) + (Number.parseFloat(item.planned_budget || '0') || 0)
   acc.open += item.status === 'OPEN' || item.status === 'ACTIVE' ? 1 : 0
   return acc
-}, { budget: 0, open: 0 }))
+}, { budgetByCurrency: {} as Record<string, number>, open: 0 }))
+
+const plannedBudgetLabel = computed(() => {
+  const parts = Object.entries(totals.value.budgetByCurrency)
+    .filter(([, amount]) => Math.abs(amount) > 0.000001)
+    .map(([currency, amount]) => formatPrice(amount, currency))
+  return parts.length ? parts.join(' · ') : formatPrice(0, 'UZS')
+})
 
 function balanceLabel(item: InvestmentAgreementListItem): string {
   const parts = Object.entries(item.balances || {})
@@ -100,7 +108,7 @@ onMounted(load)
         </div>
         <div class="rounded-2xl border border-border bg-background p-4">
           <p class="text-xs text-muted-foreground">{{ t('procurements.plannedBudget') }}</p>
-          <p class="mt-1 text-xl font-semibold tabular-nums text-foreground">{{ formatPrice(totals.budget, 'USD') }}</p>
+          <p class="mt-1 text-xl font-semibold tabular-nums text-foreground">{{ plannedBudgetLabel }}</p>
         </div>
       </div>
 
