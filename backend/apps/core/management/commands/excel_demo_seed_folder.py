@@ -681,7 +681,6 @@ class Command(BaseCommand):
                 'planned_budget': str(purchase_total),
                 'currency': purchase_currency,
                 'reconciliation_mode': 'FACTUAL',
-                'default_advance_repayment_mode': 'LUMP',
                 'notes': f'Excel demo agreement {deal_id}',
                 'partners': partners_payload,
             }},

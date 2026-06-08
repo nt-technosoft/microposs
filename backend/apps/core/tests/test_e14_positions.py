@@ -12,14 +12,11 @@ from django.test import TestCase
 
 from apps.partnerships.advances import (
     partner_capital_positions,
-    settle_capital_advance,
     settle_partner_capital,
 )
 from apps.partnerships.models import (
-    CapitalAdvance,
     CapitalAdvanceSettlement,
     InvestmentAgreement,
-    ProcurementReceiveBatch,
 )
 
 from ._helpers import build_tenant
@@ -49,27 +46,6 @@ class PartnerCapitalPositionsTests(TestCase):
         # inventory until the investor tops up, so withdrawable is 0 for now.
         self.assertEqual(op['net'], Decimal('-4.00'))
         self.assertEqual(op['withdrawable'], Decimal('0.00'))
-
-    def test_settlement_reduces_net(self):
-        ctx = build_tenant()
-        procurement = _build_funded(
-            ctx, planned=(Decimal('70'), Decimal('30')),
-            profit=(Decimal('0.35'), Decimal('0.65')),
-            contributions=(Decimal('66'), Decimal('34')),
-        )
-        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
-        agreement = InvestmentAgreement.objects.get(pk=procurement.agreement_id)
-        batch = ProcurementReceiveBatch.objects.get(procurement=procurement, is_reversal=False)
-        adv = CapitalAdvance.objects.get(batch=batch)
-
-        settle_capital_advance(
-            tenant_id=ctx['business'].id, advance_id=adv.id,
-            amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.CASH)
-
-        pos = partner_capital_positions(agreement)
-        # Investor's debt is now fully settled → net 0.
-        self.assertEqual(pos[ctx['investor'].id]['net'], Decimal('0.00'))
-
 
 class UnifiedSettleEqualsTopUpTests(TestCase):
     def test_plain_contribution_reduces_debt_and_frees_creditor(self):

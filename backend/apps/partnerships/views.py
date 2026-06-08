@@ -5,14 +5,12 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 
-from .models import CapitalAdvance, DividendPayment, InvestmentAgreement, Procurement
+from .models import DividendPayment, InvestmentAgreement, Procurement
 from .serializers import (
     AgreementAllocationCreateSerializer,
     AgreementAllocationSerializer,
     AgreementContributionSerializer,
     AgreementWithdrawalSerializer,
-    CapitalAdvanceSerializer,
-    CapitalAdvanceSettleSerializer,
     SettlePartnerCapitalSerializer,
     AgreementContributionCreateSerializer,
     AgreementWithdrawalCreateSerializer,
@@ -35,7 +33,7 @@ from .agreement_services import (
     get_partner_aggregate,
     pay_dividend,
 )
-from .advances import partner_capital_positions, settle_capital_advance, settle_partner_capital
+from .advances import partner_capital_positions, settle_partner_capital
 from .workspace_support import (
     add_agreement_contribution,
     add_agreement_withdrawal,
@@ -103,7 +101,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 currency=data.get('currency', 'UZS'),
                 notes=data.get('notes', ''),
                 reconciliation_mode=data.get('reconciliation_mode') or 'FACTUAL',
-                default_advance_repayment_mode=data.get('default_advance_repayment_mode') or 'LUMP',
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
                 created_by_id=request.user.id if request.user.is_authenticated else None,
                 partners=[dict(partner) for partner in data.get('partners', [])],
@@ -385,38 +382,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             'available_uzs': str(available.quantize(Decimal('0.01'))),
             'blocking_reasons': reasons,
         })
-
-    @action(detail=True, methods=['get'], url_path='advances')
-    def advances(self, request, pk=None):
-        agreement = self.get_object()
-        qs = CapitalAdvance.objects.filter(
-            tenant_id=request.tenant_id, agreement=agreement,
-        ).order_by('id')
-        return Response(CapitalAdvanceSerializer(qs, many=True).data)
-
-    @action(detail=True, methods=['post'], url_path='settle-advance')
-    def settle_advance(self, request, pk=None):
-        agreement = self.get_object()
-        serializer = CapitalAdvanceSettleSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        advance = CapitalAdvance.objects.filter(
-            tenant_id=request.tenant_id, agreement=agreement,
-            pk=serializer.validated_data['advance_id'],
-        ).first()
-        if advance is None:
-            raise ValidationError({'advance_id': 'Advance not found in this agreement.'})
-        try:
-            result = settle_capital_advance(
-                tenant_id=request.tenant_id,
-                advance_id=advance.id,
-                amount=serializer.validated_data['amount'],
-                source=serializer.validated_data['source'],
-                from_account_id=serializer.validated_data.get('from_account_id'),
-                client_request_id=serializer.validated_data.get('client_request_id'),
-            )
-        except (ValueError, NotImplementedError) as error:
-            raise ValidationError({'detail': str(error)}) from error
-        return Response(CapitalAdvanceSerializer(result).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='capital-positions')
     def capital_positions(self, request, pk=None):

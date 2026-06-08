@@ -111,14 +111,12 @@ def create_investment_agreement(
     source: str = AgreementActionSource.BUSINESS_RECORDED,
     confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
     reconciliation_mode: str = InvestmentAgreement.ReconciliationMode.FACTUAL,
-    default_advance_repayment_mode: str = InvestmentAgreement.AdvanceRepaymentMode.LUMP,
     partners: list[dict],
 ) -> InvestmentAgreement:
     if opened_at is None:
         opened_at = timezone.now()
     currency = str(currency or 'UZS').upper()
     reconciliation_mode = str(reconciliation_mode or 'FACTUAL').upper()
-    default_advance_repayment_mode = str(default_advance_repayment_mode or 'LUMP').upper()
     mudaraba_ratio = Decimal(str(mudaraba_ratio))
     planned_budget = money(planned_budget)
     _validate_investment_agreement_payload(
@@ -147,7 +145,6 @@ def create_investment_agreement(
             currency=currency,
             notes=notes,
             reconciliation_mode=reconciliation_mode,
-            default_advance_repayment_mode=default_advance_repayment_mode,
             client_request_id=client_request_id,
         )
         get_or_create_agreement_capital_account(tenant_id=tenant_id, agreement=agreement)

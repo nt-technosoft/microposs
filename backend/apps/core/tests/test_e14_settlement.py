@@ -1,118 +1,97 @@
 """
-E14 — CapitalAdvance settlement service.
+E14/E17 — partner net-capital settlement (participant ↔ agreement pool).
 
-settle_capital_advance appends an append-only CapitalAdvanceSettlement,
-moves real money (CASH) or routes the debtor's undistributed profit
-(FROM_PROFIT), and recomputes status. Principal-only; never below zero;
-idempotent on client_request_id.
-
-GL/cash-movement assertions are added once the pool-funding helpers are
-wired; this module pins the behavioral guards and status machine.
+`settle_partner_capital` settles a partner's net capital shortfall vs the pool:
+CASH (the partner contributes the owed capital into the pool) or FROM_PROFIT
+(their undistributed venture profit is reinvested as capital). The agreed-vs-
+actual gap is read from the net position, not a CapitalAdvance entity (E17).
 """
 
-import uuid
 from decimal import Decimal
-from unittest import skip
 
 from django.test import TestCase
 
-from apps.partnerships.advances import settle_capital_advance
-from apps.partnerships.models import CapitalAdvance, CapitalAdvanceSettlement
-from apps.partnerships.models import ProcurementReceiveBatch
+from apps.partnerships.advances import partner_capital_positions, settle_partner_capital
+from apps.partnerships.models import CapitalAdvanceSettlement
 
 from ._helpers import build_tenant
 from .test_e14_capital_advances import _build_funded, _receive
 
 
-def _make_advance(ctx, *, repayment_mode='LUMP'):
-    """Path-2 receive where investor under-funds 66 vs agreed 70 → advance of 4
-    (debtor=investor, creditor=operator)."""
+def _make_shortfall(ctx):
+    """Path-2 receive where the investor under-funds 66 vs agreed 70 → the
+    investor's net position owes the pool 4 (operator over-contributed 4)."""
     procurement = _build_funded(
         ctx, planned=(Decimal('70'), Decimal('30')),
         profit=(Decimal('0.35'), Decimal('0.65')),
         contributions=(Decimal('66'), Decimal('34')),
     )
     _receive(ctx, procurement, share_basis='AGREED',
-             allocations=(Decimal('66'), Decimal('34')), repayment_mode=repayment_mode)
-    batch = ProcurementReceiveBatch.objects.get(procurement=procurement)
-    return CapitalAdvance.objects.get(batch=batch)
+             allocations=(Decimal('66'), Decimal('34')))
+    return procurement
+
+
+def _owed(ctx, agreement, partner_key='investor'):
+    return partner_capital_positions(agreement)[ctx[partner_key].id]['owed']
 
 
 class CashSettlementTests(TestCase):
-    def test_full_cash_settlement_marks_settled(self):
+    def test_full_cash_settlement_clears_owed(self):
         ctx = build_tenant()
-        adv = _make_advance(ctx)
-        settle_capital_advance(
-            tenant_id=ctx['business'].id, advance_id=adv.id,
-            amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.CASH,
+        agreement = _make_shortfall(ctx).agreement
+        self.assertEqual(_owed(ctx, agreement), Decimal('4.00'))
+        settle_partner_capital(
+            tenant_id=ctx['business'].id, agreement_id=agreement.id,
+            partner_id=ctx['investor'].id, amount=Decimal('4.00'),
+            source=CapitalAdvanceSettlement.Source.CASH,
         )
-        adv.refresh_from_db()
-        self.assertEqual(adv.outstanding_balance, Decimal('0.00'))
-        self.assertEqual(adv.status, CapitalAdvance.Status.SETTLED)
-        self.assertEqual(adv.settlements.count(), 1)
+        self.assertEqual(_owed(ctx, agreement), Decimal('0.00'))
 
     def test_partial_then_full(self):
         ctx = build_tenant()
-        adv = _make_advance(ctx)
-        settle_capital_advance(
-            tenant_id=ctx['business'].id, advance_id=adv.id,
-            amount=Decimal('1.50'), source=CapitalAdvanceSettlement.Source.CASH,
+        agreement = _make_shortfall(ctx).agreement
+        settle_partner_capital(
+            tenant_id=ctx['business'].id, agreement_id=agreement.id,
+            partner_id=ctx['investor'].id, amount=Decimal('1.50'),
+            source=CapitalAdvanceSettlement.Source.CASH,
         )
-        adv.refresh_from_db()
-        self.assertEqual(adv.outstanding_balance, Decimal('2.50'))
-        self.assertEqual(adv.status, CapitalAdvance.Status.PARTIAL)
-
-        settle_capital_advance(
-            tenant_id=ctx['business'].id, advance_id=adv.id,
-            amount=Decimal('2.50'), source=CapitalAdvanceSettlement.Source.CASH,
+        self.assertEqual(_owed(ctx, agreement), Decimal('2.50'))
+        settle_partner_capital(
+            tenant_id=ctx['business'].id, agreement_id=agreement.id,
+            partner_id=ctx['investor'].id, amount=Decimal('2.50'),
+            source=CapitalAdvanceSettlement.Source.CASH,
         )
-        adv.refresh_from_db()
-        self.assertEqual(adv.outstanding_balance, Decimal('0.00'))
-        self.assertEqual(adv.status, CapitalAdvance.Status.SETTLED)
+        self.assertEqual(_owed(ctx, agreement), Decimal('0.00'))
 
     def test_overpayment_rejected(self):
         ctx = build_tenant()
-        adv = _make_advance(ctx)
+        agreement = _make_shortfall(ctx).agreement
         with self.assertRaises(ValueError):
-            settle_capital_advance(
-                tenant_id=ctx['business'].id, advance_id=adv.id,
-                amount=Decimal('5.00'), source=CapitalAdvanceSettlement.Source.CASH,
+            settle_partner_capital(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['investor'].id, amount=Decimal('5.00'),
+                source=CapitalAdvanceSettlement.Source.CASH,
             )
 
     def test_nonpositive_rejected(self):
         ctx = build_tenant()
-        adv = _make_advance(ctx)
+        agreement = _make_shortfall(ctx).agreement
         with self.assertRaises(ValueError):
-            settle_capital_advance(
-                tenant_id=ctx['business'].id, advance_id=adv.id,
-                amount=Decimal('0'), source=CapitalAdvanceSettlement.Source.CASH,
+            settle_partner_capital(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['investor'].id, amount=Decimal('0'),
+                source=CapitalAdvanceSettlement.Source.CASH,
             )
-
-    def test_idempotent_on_client_request_id(self):
-        ctx = build_tenant()
-        adv = _make_advance(ctx)
-        rid = uuid.uuid4()
-        for _ in range(2):
-            settle_capital_advance(
-                tenant_id=ctx['business'].id, advance_id=adv.id,
-                amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.CASH,
-                client_request_id=rid,
-            )
-        adv.refresh_from_db()
-        self.assertEqual(adv.settlements.count(), 1)
-        self.assertEqual(adv.outstanding_balance, Decimal('0.00'))
 
 
 class CashSettlementGLTests(TestCase):
-    def test_full_settlement_trues_equity_to_agreed_and_pool_net_flat(self):
+    def test_full_settlement_trues_equity_to_agreed_and_lands_in_pool(self):
         from apps.finance.services import get_account_balance
-        from apps.partnerships.models import InvestmentAgreement
         from apps.finance.models import CashAccount, JournalEntry, JournalLine
 
         ctx = build_tenant()
-        adv = _make_advance(ctx)
+        agreement = _make_shortfall(ctx).agreement
         biz = ctx['business'].id
-        agreement = InvestmentAgreement.objects.get(pk=adv.agreement_id)
         pool = CashAccount.objects.get(pk=agreement.capital_account_id)
         pool_before = pool.balance
 
@@ -120,78 +99,35 @@ class CashSettlementGLTests(TestCase):
         self.assertEqual(get_account_balance(biz, '3100'), Decimal('66.00'))
         self.assertEqual(get_account_balance(biz, '3000'), Decimal('34.00'))
 
-        settle_capital_advance(
-            tenant_id=biz, advance_id=adv.id,
-            amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.CASH,
+        settle_partner_capital(
+            tenant_id=biz, agreement_id=agreement.id,
+            partner_id=ctx['investor'].id, amount=Decimal('4.00'),
+            source=CapitalAdvanceSettlement.Source.CASH,
         )
 
-        # Model B: debtor's capital completes (66 -> 70); creditor untouched
+        # The debtor's capital completes (66 -> 70); the creditor is untouched
         # (still 34 — recovers its over-contribution via a separate withdrawal).
         self.assertEqual(get_account_balance(biz, '3100'), Decimal('70.00'))
         self.assertEqual(get_account_balance(biz, '3000'), Decimal('34.00'))
-        # The settlement cash lands in the pool (available capital), not flat.
+        # The settlement cash lands in the pool (available capital).
         self.assertEqual(CashAccount.objects.get(pk=pool.id).balance, pool_before + Decimal('4.00'))
         # Every journal entry stays balanced.
         for entry in JournalEntry.objects.filter(tenant_id=biz):
             lines = JournalLine.objects.filter(journal_entry=entry)
-            self.assertEqual(sum((l.debit for l in lines), Decimal('0')),
-                             sum((l.credit for l in lines), Decimal('0')))
+            self.assertEqual(sum((line.debit for line in lines), Decimal('0')),
+                             sum((line.credit for line in lines), Decimal('0')))
 
 
 class FromProfitSettlementTests(TestCase):
     def test_from_profit_rejected_when_no_undistributed_profit(self):
         ctx = build_tenant()
-        adv = _make_advance(ctx)
-        # No sales yet → no accrued profit for the debtor → cannot settle from profit.
+        agreement = _make_shortfall(ctx).agreement
+        # No settled venture profit → undistributed profit is 0 → cannot settle
+        # the shortfall from profit.
         with self.assertRaises(ValueError):
-            settle_capital_advance(
-                tenant_id=ctx['business'].id, advance_id=adv.id,
-                amount=Decimal('4.00'), source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            settle_partner_capital(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['investor'].id, amount=Decimal('4.00'),
+                source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
                 from_account_id=ctx['cash_account'].id,
             )
-
-    @skip(
-        'E17 Phase 2: CapitalAdvance FROM_PROFIT settlement is being retired. '
-        'undistributed_profit_uzs now reads the venture model (profit unavailable '
-        'before settlement), so manual PROFIT_ACCRUED no longer funds settlement. '
-        'This test is migrated/removed when the advance workflow is retired (T-2.x).'
-    )
-    def test_from_profit_settles_via_debtor_profit_and_returns_creditor(self):
-        from apps.finance.services import get_account_balance, record_owner_contribution
-        from apps.finance.models import CashAccount
-        from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
-        from apps.partnerships.models import PartnerLedgerEntry, ProcurementReceiveBatch
-
-        ctx = build_tenant()
-        biz = ctx['business'].id
-        adv = _make_advance(ctx)
-        procurement_id = ProcurementReceiveBatch.objects.get(pk=adv.batch_id).procurement_id
-
-        # Debtor (investor) accrues profit; operating cash holds sales proceeds.
-        ledger = get_or_create_ledger(procurement_id=procurement_id, partner_id=adv.debtor_id, tenant_id=biz)
-        append_ledger_entry(ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-                            amount=Decimal('10'), currency='UZS')
-        record_owner_contribution(tenant_id=biz, amount=Decimal('500'), currency='UZS',
-                                  to_account_id=ctx['cash_account'].id)
-        cash_before = CashAccount.objects.get(pk=ctx['cash_account'].id).balance
-        e_debtor_before = get_account_balance(biz, '3100')
-        e_creditor_before = get_account_balance(biz, '3000')
-
-        settle_capital_advance(
-            tenant_id=biz, advance_id=adv.id, amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
-            from_account_id=ctx['cash_account'].id,
-        )
-
-        adv.refresh_from_db()
-        self.assertEqual(adv.status, CapitalAdvance.Status.SETTLED)
-        # Model B: profit cash leaves operating and lands in the agreement pool.
-        self.assertEqual(CashAccount.objects.get(pk=ctx['cash_account'].id).balance,
-                         cash_before - Decimal('4.00'))
-        # Debtor's capital completes (+4); creditor is untouched (recovers via
-        # a separate withdrawal, not at settlement).
-        self.assertEqual(get_account_balance(biz, '3100'), e_debtor_before + Decimal('4.00'))
-        self.assertEqual(get_account_balance(biz, '3000'), e_creditor_before)
-        # Debtor's profit consumed.
-        self.assertTrue(PartnerLedgerEntry.objects.filter(
-            ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID).exists())

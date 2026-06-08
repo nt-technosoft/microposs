@@ -8,7 +8,6 @@ from .models import (
     AgreementEvent,
     AgreementPartner,
     AgreementWithdrawal,
-    CapitalAdvance,
     CapitalAdvanceSettlement,
     CapitalCommitment,
     InvestmentAgreement,
@@ -203,32 +202,6 @@ class CapitalCommitmentSerializer(serializers.ModelSerializer):
         return user.get_full_name() or user.get_username()
 
 
-class CapitalAdvanceSerializer(serializers.ModelSerializer):
-    """E14/E15: inter-partner advance, with derived balances for the agreement card."""
-    debtor_name = serializers.CharField(source='debtor.display_name', read_only=True)
-    creditor_name = serializers.CharField(source='creditor.display_name', read_only=True, default='')
-    outstanding_balance = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
-    settled_amount = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
-
-    class Meta:
-        model = CapitalAdvance
-        fields = [
-            'id', 'agreement', 'batch', 'debtor', 'debtor_name', 'creditor', 'creditor_name',
-            'principal', 'currency', 'repayment_mode', 'status',
-            'outstanding_balance', 'settled_amount',
-        ]
-
-
-class CapitalAdvanceSettleSerializer(serializers.Serializer):
-    """Settle an advance: CASH (debtor pays in) or FROM_PROFIT (debtor profit routes
-    to the creditor). from_account_id is the source operating account for FROM_PROFIT."""
-    advance_id = serializers.IntegerField()
-    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
-    source = serializers.ChoiceField(choices=CapitalAdvanceSettlement.Source.choices)
-    from_account_id = serializers.IntegerField(required=False, allow_null=True)
-    client_request_id = serializers.UUIDField(required=False, allow_null=True)
-
-
 class SettlePartnerCapitalSerializer(serializers.Serializer):
     """B (participant↔pool): settle a partner's net capital shortfall vs the pool."""
     partner_id = serializers.IntegerField()
@@ -401,7 +374,7 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'mudaraba_ratio', 'loss_rule', 'planned_budget', 'currency',
-            'reconciliation_mode', 'default_advance_repayment_mode',
+            'reconciliation_mode',
             'balances', 'notes', 'client_request_id', 'partners',
             'commitments', 'contributions', 'withdrawals', 'allocations',
             'events', 'procurements', 'participant_totals', 'history',
@@ -686,8 +659,6 @@ class InvestmentAgreementCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     reconciliation_mode = serializers.ChoiceField(
         choices=InvestmentAgreement.ReconciliationMode.choices, required=False)
-    default_advance_repayment_mode = serializers.ChoiceField(
-        choices=InvestmentAgreement.AdvanceRepaymentMode.choices, required=False)
     partners = ContractPartnerInputSerializer(many=True, required=False)
 
     def validate(self, attrs):

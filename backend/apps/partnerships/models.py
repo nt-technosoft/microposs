@@ -50,10 +50,6 @@ class InvestmentAgreement(TenantModel):
         FACTUAL = 'FACTUAL', 'Динамический пересчёт по факту'
         AGREED = 'AGREED', 'Держим договорные доли (разницу — в долг)'
 
-    class AdvanceRepaymentMode(models.TextChoices):
-        LUMP = 'LUMP', 'Единым платежом'
-        FROM_PROFIT = 'FROM_PROFIT', 'Из прибыли'
-
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     legal_mode = models.CharField(
         max_length=20,
@@ -82,19 +78,15 @@ class InvestmentAgreement(TenantModel):
         default='BY_CAPITAL',
     )
     # E14: reconciliation policy chosen at creation. FACTUAL = legacy dynamic
-    # recalc; AGREED = hold agreed shares, funding gap becomes an inter-partner
-    # advance. Default FACTUAL keeps existing agreements/behaviour; new agreements
-    # created via the UI default to AGREED (product default). Editable later but
-    # only affects FUTURE receives (past lot snapshots are immutable, rule #14).
+    # recalc; AGREED = hold agreed shares, the funding gap is read as each
+    # partner's net capital position (E17). Default FACTUAL keeps existing
+    # agreements/behaviour; new agreements created via the UI default to AGREED
+    # (product default). Editable later but only affects FUTURE receives (past lot
+    # snapshots are immutable, rule #14).
     reconciliation_mode = models.CharField(
         max_length=16,
         choices=ReconciliationMode.choices,
         default=ReconciliationMode.FACTUAL,
-    )
-    default_advance_repayment_mode = models.CharField(
-        max_length=16,
-        choices=AdvanceRepaymentMode.choices,
-        default=AdvanceRepaymentMode.LUMP,
     )
     planned_budget = models.DecimalField(max_digits=14, decimal_places=2)
     currency = models.CharField(max_length=3, default='UZS')

@@ -35,7 +35,6 @@ const notes = ref('')
 // E14: reconciliation policy is fixed here, at agreement creation. AGREED (Путь 2)
 // is the product default; the receive only reflects this choice later.
 const reconciliationMode = ref<'AGREED' | 'FACTUAL'>('AGREED')
-const repaymentMode = ref<'LUMP' | 'FROM_PROFIT'>('LUMP')
 const saving = ref(false)
 const isLoading = ref(false)
 const error = ref('')
@@ -171,8 +170,6 @@ async function submit(): Promise<void> {
       currency: currency.value,
       notes: notes.value,
       reconciliation_mode: reconciliationMode.value,
-      default_advance_repayment_mode:
-        reconciliationMode.value === 'AGREED' ? repaymentMode.value : 'LUMP',
     })
     toast.success('Инвестдоговор создан')
     emit('created', agreement)
@@ -306,7 +303,7 @@ onMounted(loadPartners)
             @click="reconciliationMode = 'AGREED'"
           >
             <span class="block text-sm font-semibold text-foreground">Держим договорные доли</span>
-            <span class="mt-1 block text-xs text-muted-foreground">Разницу фиксируем как долг между сторонами.</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Разницу показываем как капитальную позицию партнёра (долг/переплата).</span>
           </button>
           <button
             type="button"
@@ -318,28 +315,6 @@ onMounted(loadPartners)
             <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Без долга.</span>
           </button>
         </div>
-        <!-- Единым платежом доступно всегда; из прибыли — дополнительная опция -->
-        <button
-          v-if="reconciliationMode === 'AGREED'"
-          type="button"
-          class="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition hover:bg-muted/40"
-          @click="repaymentMode = repaymentMode === 'FROM_PROFIT' ? 'LUMP' : 'FROM_PROFIT'"
-        >
-          <span class="min-w-0">
-            <span class="block text-sm font-medium text-foreground">Разрешить гасить долг из прибыли</span>
-            <span class="mt-0.5 block text-xs text-muted-foreground">Единым платежом долг можно закрыть всегда; из прибыли — дополнительно.</span>
-          </span>
-          <span
-            class="relative h-6 w-10 shrink-0 rounded-full transition-colors"
-            :class="repaymentMode === 'FROM_PROFIT' ? 'bg-primary' : 'bg-muted-foreground/30'"
-            aria-hidden="true"
-          >
-            <span
-              class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-all"
-              :class="repaymentMode === 'FROM_PROFIT' ? 'left-[18px]' : 'left-0.5'"
-            />
-          </span>
-        </button>
       </CardContent>
     </Card>
 

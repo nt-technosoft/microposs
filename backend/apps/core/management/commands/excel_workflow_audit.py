@@ -585,7 +585,6 @@ class Command(BaseCommand):
                 'planned_budget': str(CONTRACT_PLANNED_TOTAL_USD),
                 'currency': 'USD',
                 'reconciliation_mode': 'FACTUAL',
-                'default_advance_repayment_mode': 'LUMP',
                 'notes': f'Excel workflow agreement {scenario.key}',
                 'partners': [
                     {

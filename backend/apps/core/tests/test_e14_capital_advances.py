@@ -1,20 +1,21 @@
 """
-E14 — Contributed-vs-agreed capital reconciliation (inter-partner advances).
+E14/E17 — Contributed-vs-agreed capital reconciliation (net capital positions).
 
 Path 2 (share_basis='AGREED') pins the agreed capital/profit shares on the
-immutable batch snapshot even when actual contributions differ, and records the
-per-partner funding gap as a CapitalAdvance (debtor owes, creditor covered).
+immutable batch snapshot even when actual contributions differ; the per-partner
+funding gap is read as the partner's net capital position vs the pool (owed /
+withdrawable) — NOT reified as a CapitalAdvance (E17 retired that).
 Path 1 (share_basis='FACTUAL', the backward-compatible default) is unchanged:
-shares follow actual cash, no advances.
+shares follow actual cash, no gap.
 """
 
 from decimal import Decimal
 
 from django.test import TestCase
 
+from apps.partnerships.advances import partner_capital_positions
 from apps.partnerships.models import (
     CapitalAdvance,
-    InvestmentAgreement,
     Procurement,
     ProcurementReceiveBatch,
     ProcurementReceiveBatchCapitalAllocation,
@@ -25,7 +26,7 @@ from ._helpers import build_tenant
 
 
 def _build_funded(ctx, *, planned, profit, contributions, required_units=10, unit_price=10,
-                  reconciliation_mode='AGREED', repayment_mode='LUMP'):
+                  reconciliation_mode='AGREED'):
     """Agreement (planned capital + profit shares) funded by `contributions`,
     items worth required_units*unit_price, capital allocated to the procurement.
     The reconciliation path is fixed on the agreement at creation (E14)."""
@@ -42,7 +43,6 @@ def _build_funded(ctx, *, planned, profit, contributions, required_units=10, uni
             'planned_budget': Decimal(str(required_units * unit_price)),
             'currency': 'UZS',
             'reconciliation_mode': reconciliation_mode,
-            'default_advance_repayment_mode': repayment_mode,
             'partners': [
                 {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
                  'planned_capital_share': planned[0], 'profit_share': profit[0]},
@@ -80,10 +80,10 @@ def _build_funded(ctx, *, planned, profit, contributions, required_units=10, uni
     return procurement
 
 
-def _receive(ctx, procurement, *, share_basis='AGREED', allocations, repayment_mode='LUMP'):
-    # E14: share_basis/repayment_mode now come from the agreement (set at creation),
-    # not the receive payload. These kwargs are kept for caller compatibility but the
-    # receive no longer chooses the path — it reflects the agreement's reconciliation_mode.
+def _receive(ctx, procurement, *, share_basis='AGREED', allocations):
+    # E14: share_basis now comes from the agreement (set at creation), not the
+    # receive payload. The kwarg is kept for caller compatibility but the receive
+    # no longer chooses the path — it reflects the agreement's reconciliation_mode.
     item = procurement.items.get()
     return dispatch_workspace_action(
         tenant_id=ctx['business'].id, procurement=procurement, action='RECEIVE_BATCH',
@@ -99,9 +99,9 @@ def _receive(ctx, procurement, *, share_basis='AGREED', allocations, repayment_m
 
 
 class Path2AgreedTests(TestCase):
-    def test_agreed_pins_shares_and_creates_advance(self):
+    def test_agreed_pins_shares_and_records_net_position(self):
         ctx = build_tenant()
-        # Agreed 70/30 capital, 40/60 profit. Investor under-funds (66 vs 70).
+        # Agreed 70/30 capital, 35/65 profit. Investor under-funds (66 vs 70).
         procurement = _build_funded(
             ctx, planned=(Decimal('70'), Decimal('30')),
             profit=(Decimal('0.35'), Decimal('0.65')),
@@ -125,18 +125,18 @@ class Path2AgreedTests(TestCase):
         self.assertEqual(inv_alloc.amount_contract_currency, Decimal('66.00'))
         self.assertEqual(op_alloc.amount_contract_currency, Decimal('34.00'))
 
-        # One advance: investor (under by 4) owes operator (over by 4).
-        advances = list(CapitalAdvance.objects.filter(batch=batch))
-        self.assertEqual(len(advances), 1)
-        adv = advances[0]
-        self.assertEqual(adv.debtor_id, ctx['investor'].id)
-        self.assertEqual(adv.creditor_id, ctx['operator'].id)
-        self.assertEqual(adv.principal, Decimal('4.00'))
-        self.assertEqual(adv.outstanding_balance, Decimal('4.00'))
-        self.assertEqual(adv.status, CapitalAdvance.Status.OUTSTANDING)
-        self.assertEqual(adv.repayment_mode, CapitalAdvance.RepaymentMode.LUMP)
+        # E17: the gap is the partner's net capital position vs the pool — no
+        # CapitalAdvance is created. Investor under by 4 (owes the pool); operator
+        # over by 4, but the surplus is tied up in inventory (pool free = 0) so it
+        # is not withdrawable until the debtor tops up.
+        self.assertEqual(CapitalAdvance.objects.filter(batch=batch).count(), 0)
+        positions = partner_capital_positions(procurement.agreement)
+        self.assertEqual(positions[ctx['investor'].id]['net'], Decimal('4.00'))
+        self.assertEqual(positions[ctx['investor'].id]['owed'], Decimal('4.00'))
+        self.assertEqual(positions[ctx['operator'].id]['net'], Decimal('-4.00'))
+        self.assertEqual(positions[ctx['operator'].id]['withdrawable'], Decimal('0.00'))
 
-    def test_perfect_funding_creates_no_advance(self):
+    def test_perfect_funding_has_no_outstanding_position(self):
         ctx = build_tenant()
         procurement = _build_funded(
             ctx, planned=(Decimal('70'), Decimal('30')),
@@ -147,10 +147,13 @@ class Path2AgreedTests(TestCase):
                  allocations=(Decimal('70'), Decimal('30')))
         batch = ProcurementReceiveBatch.objects.get(procurement=procurement)
         self.assertEqual(CapitalAdvance.objects.filter(batch=batch).count(), 0)
+        positions = partner_capital_positions(procurement.agreement)
+        self.assertEqual(positions[ctx['investor'].id]['net'], Decimal('0.00'))
+        self.assertEqual(positions[ctx['operator'].id]['net'], Decimal('0.00'))
 
 
 class Path1FactualUnchangedTests(TestCase):
-    def test_factual_default_derives_shares_and_makes_no_advance(self):
+    def test_factual_default_derives_shares_and_has_no_gap(self):
         ctx = build_tenant()
         procurement = _build_funded(
             ctx, planned=(Decimal('70'), Decimal('30')),
@@ -162,6 +165,9 @@ class Path1FactualUnchangedTests(TestCase):
         batch = ProcurementReceiveBatch.objects.get(procurement=procurement)
         inv_alloc = ProcurementReceiveBatchCapitalAllocation.objects.get(
             batch=batch, partner_id=ctx['investor'].id)
-        # Shares follow ACTUAL cash (66/34 → 0.66/0.34), no advance.
+        # Shares follow ACTUAL cash (66/34 → 0.66/0.34); deployed == paid, no gap.
         self.assertEqual(inv_alloc.capital_share, Decimal('0.660000'))
         self.assertEqual(CapitalAdvance.objects.filter(batch=batch).count(), 0)
+        positions = partner_capital_positions(procurement.agreement)
+        self.assertEqual(positions[ctx['investor'].id]['net'], Decimal('0.00'))
+        self.assertEqual(positions[ctx['operator'].id]['net'], Decimal('0.00'))

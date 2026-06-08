@@ -202,7 +202,6 @@ export interface ProcurementWorkspacePayload {
       opened_at: string
       legal_mode: string | null
       reconciliation_mode: 'FACTUAL' | 'AGREED'
-      default_advance_repayment_mode: 'LUMP' | 'FROM_PROFIT'
       currency: string
       planned_budget: string
       pool: {
@@ -698,7 +697,6 @@ export interface InvestmentAgreementListItem {
 export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
   loss_rule: string
   reconciliation_mode: 'FACTUAL' | 'AGREED'
-  default_advance_repayment_mode: 'LUMP' | 'FROM_PROFIT'
   client_request_id: string | null
   partners: Array<{
     id: number
@@ -841,7 +839,6 @@ export interface InvestmentAgreementCreatePayload {
   currency?: string
   notes?: string
   reconciliation_mode?: 'FACTUAL' | 'AGREED'
-  default_advance_repayment_mode?: 'LUMP' | 'FROM_PROFIT'
   partners?: AgreementPartnerPayload[]
 }
 
@@ -866,7 +863,6 @@ export interface ProcurementContractPayload {
   planned_budget: string
   currency: string
   reconciliation_mode?: 'FACTUAL' | 'AGREED'
-  default_advance_repayment_mode?: 'LUMP' | 'FROM_PROFIT'
   partners: Array<{
     partner_id: number
     role: string
@@ -917,30 +913,6 @@ export interface ProcurementUpsertPayload {
     amount: string | number
     currency?: string
   }>
-}
-
-export interface CapitalAdvanceRecord {
-  id: number
-  agreement: number
-  batch: number
-  debtor: number
-  debtor_name: string
-  creditor: number | null
-  creditor_name: string
-  principal: string
-  currency: string
-  repayment_mode: 'LUMP' | 'FROM_PROFIT'
-  status: 'OUTSTANDING' | 'PARTIAL' | 'SETTLED' | 'CANCELLED'
-  outstanding_balance: string
-  settled_amount: string
-}
-
-export interface AdvanceSettlePayload {
-  advance_id: number
-  amount: string
-  source: 'CASH' | 'FROM_PROFIT'
-  from_account_id?: number | null
-  client_request_id?: string
 }
 
 export interface CapitalPositionRow {
@@ -1055,22 +1027,6 @@ export async function settlePartnerCapital(
     payload,
   )
   return Array.isArray(data) ? data : (data as { results?: CapitalPositionRow[] }).results ?? []
-}
-
-export async function fetchAgreementAdvances(id: number): Promise<CapitalAdvanceRecord[]> {
-  const { data } = await api.get<CapitalAdvanceRecord[]>(`/api/v1/partnerships/agreements/${id}/advances/`)
-  return Array.isArray(data) ? data : (data as { results?: CapitalAdvanceRecord[] }).results ?? []
-}
-
-export async function settleAgreementAdvance(
-  id: number,
-  payload: AdvanceSettlePayload,
-): Promise<CapitalAdvanceRecord> {
-  const { data } = await api.post<CapitalAdvanceRecord>(
-    `/api/v1/partnerships/agreements/${id}/settle-advance/`,
-    payload,
-  )
-  return data
 }
 
 export interface AgreementProfitRow {

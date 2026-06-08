@@ -28,7 +28,6 @@ from .models import (
     AgreementConfirmationStatus,
     AgreementContribution,
     AgreementPartner,
-    CapitalAdvance,
     InvestmentAgreement,
     PartnerLedgerEntry,
     Procurement,
@@ -692,11 +691,11 @@ def reverse_workspace_receive_batch(
 
         _sync_procurement_status_after_reversal(procurement, received_at)
 
-        # E14: reversal is only reachable while the batch is fully unsold (sales
-        # block it above), so the whole funding event unwinds — cancel any
-        # inter-partner advances and refund prior cash settlements.
-        from apps.partnerships.advances import cancel_advances_for_batch
-        cancel_advances_for_batch(tenant_id=tenant_id, batch_id=batch.pk, when=received_at)
+        # E17: reversal is only reachable while the batch is fully unsold (sales
+        # block it above), so the whole funding event unwinds. The agreed-vs-paid
+        # gap is no longer reified as a CapitalAdvance, so there is nothing to
+        # cancel — the net capital position recomputes from the remaining
+        # (non-reversed) batches automatically.
 
         publish_event(
             event_type='receive_batch.reversed',
@@ -1325,7 +1324,6 @@ def create_and_link_workspace_agreement(
         currency=payload.get('currency', 'UZS'),
         notes=payload.get('notes', ''),
         reconciliation_mode=payload.get('reconciliation_mode') or 'FACTUAL',
-        default_advance_repayment_mode=payload.get('default_advance_repayment_mode') or 'LUMP',
         client_request_id=client_request_id,
         created_by_id=user_id,
         partners=payload.get('partners') or [],
@@ -2338,17 +2336,14 @@ def receive_workspace_batch(
 
         contract_snapshot: dict = {}
         capital_rows: list[dict] = []
-        capital_advances: list[dict] = []
-        # E14: the reconciliation path (AGREED = hold agreed shares + advance;
-        # FACTUAL = dynamic recalc) is fixed on the AGREEMENT at creation — the
-        # receive only reflects it, it does not re-choose. Read from the agreement.
+        # E14/E17: the reconciliation path (AGREED = hold agreed shares, gap shows
+        # as a net capital position; FACTUAL = dynamic recalc) is fixed on the
+        # AGREEMENT at creation — the receive only reflects it, it does not
+        # re-choose. Read from the agreement.
         share_basis = 'FACTUAL'
-        advance_repayment_mode = 'LUMP'
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
             _agreement_for_basis = _require_workspace_agreement(locked)
             share_basis = str(_agreement_for_basis.reconciliation_mode or 'FACTUAL').upper()
-            advance_repayment_mode = str(
-                _agreement_for_basis.default_advance_repayment_mode or 'LUMP').upper()
             # E12: fund the receive out of the capital pools, per obligation
             # currency (base direct; non-base via FIFO cost-basis). The returned
             # base cost drives shares — honest acquisition cost, not market rate.
@@ -2386,7 +2381,7 @@ def receive_workspace_batch(
                     received_at=received_at,
                     required_base=required_base,
                 )
-            contract_snapshot, capital_rows, capital_advances = _resolve_workspace_capital_snapshot(
+            contract_snapshot, capital_rows = _resolve_workspace_capital_snapshot(
                 tenant_id=tenant_id,
                 procurement=locked,
                 required_uzs=total_inventory_uzs,
@@ -2415,21 +2410,11 @@ def receive_workspace_batch(
                 profit_share=row['profit_share'],
             )
 
-        # E14: Path-2 (AGREED) funding gap → inter-partner advances. The advance
-        # entity is the source of truth for the obligation; shares stay pinned to
-        # the agreed snapshot above and never move (Rule #14). GL equity stays at
-        # actual contributions — the advance reconciles agreed ownership vs paid.
-        for adv in capital_advances:
-            CapitalAdvance.objects.create(
-                tenant_id=tenant_id,
-                agreement_id=locked.agreement_id,
-                batch=batch,
-                debtor_id=adv['debtor'],
-                creditor_id=adv['creditor'],
-                principal=adv['principal'],
-                currency=contract_snapshot.get('contract_currency', 'UZS'),
-                repayment_mode=advance_repayment_mode,
-            )
+        # E17 T-2.1: the AGREED funding gap (agreed shares vs actual cash) is no
+        # longer reified as a CapitalAdvance. Shares stay pinned to the agreed
+        # snapshot (Rule #14); the gap is read as the partner's net capital
+        # position (partner_capital_positions: owed / withdrawable) and settled
+        # via settle-partner-capital. Single source of truth = net position.
 
         from apps.inventory.models import Lot, LotStock, StockMovement
 
@@ -3148,7 +3133,6 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         'opened_at': agreement.opened_at.isoformat(),
         'legal_mode': agreement.legal_mode,
         'reconciliation_mode': agreement.reconciliation_mode,
-        'default_advance_repayment_mode': agreement.default_advance_repayment_mode,
         'currency': agreement.currency,
         'planned_budget': str(agreement.planned_budget),
         'pool': ({
@@ -3895,19 +3879,18 @@ def _resolve_workspace_capital_snapshot(
     received_at,
     required_base: Decimal | None = None,
     share_basis: str = 'FACTUAL',
-) -> tuple[dict, list[dict], list[dict]]:
-    """E14: `share_basis` selects how lot ownership is fixed.
+) -> tuple[dict, list[dict]]:
+    """E14/E17: `share_basis` selects how lot ownership is fixed.
 
     - 'FACTUAL' (Path 1, default): capital_share derived from the actual cash
-      each partner allocated; profit via profit_shares_from_capital. No advances.
+      each partner allocated; profit via profit_shares_from_capital.
     - 'AGREED' (Path 2): capital_share/profit_share pinned to the agreed
-      AgreementPartner shares regardless of actual cash; the per-partner gap
-      (agreed − actual) becomes a CapitalAdvance (debtor owes, creditor covered).
-      `amount_contract_currency` still records the ACTUAL cash (keeps pool /
-      availability accounting honest); the advance bridges to the agreed share.
+      AgreementPartner shares regardless of actual cash. `amount_contract_currency`
+      still records the ACTUAL cash (keeps pool / availability accounting honest);
+      the per-partner gap (agreed − actual) is read as a net capital position
+      (partner_capital_positions: owed / withdrawable), not a CapitalAdvance.
 
-    Returns (contract_snapshot, capital_rows, advances). `advances` is always
-    empty under FACTUAL."""
+    Returns (contract_snapshot, capital_rows)."""
     agreement = _require_workspace_agreement(procurement)
     currency = str(agreement.currency or 'UZS').upper()
     # E12: when the receive was funded from currency sub-pools, the base-currency
@@ -3961,7 +3944,7 @@ def _resolve_workspace_capital_snapshot(
 
     basis = str(share_basis or 'FACTUAL').upper()
 
-    # Agreed capital ratio per partner (used by AGREED basis and advances).
+    # Agreed capital ratio per partner (used by AGREED basis).
     planned_total = sum((Decimal(str(m.planned_capital_share)) for m in members), Decimal('0'))
 
     partners_meta = []
@@ -4008,59 +3991,13 @@ def _resolve_workspace_capital_snapshot(
             'profit_share': profit_share,
         })
 
-    advances: list[dict] = []
-    if basis == 'AGREED' and planned_total > 0:
-        advances = _compute_capital_advances(
-            members=members, amounts=amounts, required=required, planned_total=planned_total,
-        )
-
     return {
         'agreement_id': agreement.id,
         'contract_currency': currency,
         'mudaraba_ratio': str(agreement.mudaraba_ratio),
         'loss_rule': agreement.loss_rule,
         'partners': snapshot_partners,
-    }, rows, advances
-
-
-def _compute_capital_advances(
-    *, members: list, amounts: dict[int, Decimal], required: Decimal, planned_total: Decimal,
-) -> list[dict]:
-    """Pair under-contributors (debtors) to over-contributors (creditors) pro-rata.
-
-    delta_i = agreed_amount_i − actual_amount_i. Σ delta == 0 (the batch is fully
-    funded), so Σ shortfalls == Σ surpluses. Returns one spec per (debtor, creditor)
-    pair: {debtor, creditor, principal}."""
-    cents = Decimal('0.01')
-    debtors: list[list] = []   # [partner_id, remaining_shortfall]
-    creditors: list[list] = []  # [partner_id, remaining_surplus]
-    for member in members:
-        agreed = (required * Decimal(str(member.planned_capital_share)) / planned_total).quantize(cents)
-        actual = amounts.get(member.partner_id, Decimal('0')).quantize(cents)
-        delta = (agreed - actual).quantize(cents)
-        if delta > 0:
-            debtors.append([member.partner_id, delta])
-        elif delta < 0:
-            creditors.append([member.partner_id, -delta])
-
-    advances: list[dict] = []
-    ci = 0
-    for debtor in debtors:
-        debtor_id, owed = debtor
-        while owed > 0 and ci < len(creditors):
-            creditor_id, avail = creditors[ci]
-            take = min(owed, avail)
-            if take > 0:
-                advances.append({
-                    'debtor': debtor_id, 'creditor': creditor_id, 'principal': take,
-                })
-            owed = (owed - take).quantize(cents)
-            avail = (avail - take).quantize(cents)
-            creditors[ci][1] = avail
-            if avail <= 0:
-                ci += 1
-        debtor[1] = owed
-    return advances
+    }, rows
 
 
 def _amount_uzs_to_currency(*, tenant_id: int, amount_uzs: Decimal, currency: str, received_at) -> Decimal:

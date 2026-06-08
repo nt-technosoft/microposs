@@ -1,7 +1,7 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~17% (Фаза 1 done; demo happy-path стабилизирован: c02b980, afc4aae, 060fb22)
+**Прогресс:** ~33% (Фазы 1–2 done)
 **Зависит от:** E16
 **Блокирует:** first-client pilot, Excel replay, E03, E06
 
@@ -222,13 +222,16 @@ blocking reasons, final settlement, negative positions и read-only lock.
 - [x] T-1.7 (F4) Очистить контракт `partner_capital_positions`: нативные суммы с явным `currency`,
   функциональные — суффикс `_uzs`, не складываются. (закрыто)
 
-### Фаза 2 — CapitalAdvance cleanup
-- [ ] T-2.1 Остановить автоматическое `CapitalAdvance.objects.create(...)` на receive.
-- [ ] T-2.2 Перенести UI взаиморасчётов на net-position model без legacy advance endpoints.
-- [ ] T-2.3 Убрать или read-only спрятать `advances/settle-advance` из активного UI/API workflow.
-- [ ] T-2.4 Проверить E14 тесты и переписать их на целевую модель, а не на legacy entity.
-- [ ] T-2.5 Найти и убрать всех READER'ов `CapitalAdvance` в guard'ах/расчётах позиций/
-  payout-проверках/отчётах. Цель: `CapitalAdvance` не участвует ни в одном денежном решении.
+### Фаза 2 — CapitalAdvance cleanup — ✅ ВЫПОЛНЕНО (аудит зелёный)
+- [x] T-2.1 Остановить автоматическое `CapitalAdvance.objects.create(...)` на receive.
+- [x] T-2.2 Перенести UI взаиморасчётов на net-position model без legacy advance endpoints.
+  (фронт уже был на `fetchCapitalPositions`/`settlePartnerCapital`; удалён мёртвый advance-api)
+- [x] T-2.3 Убрать `advances/settle-advance` из активного UI/API workflow (endpoints+сериализаторы сняты).
+- [x] T-2.4 E14/E15 тесты переписаны на net-position; retired-фича (FROM_PROFIT auto-settle) удалена.
+- [x] T-2.5 Все READER'ы `CapitalAdvance` убраны из денежных путей. `partner_capital_positions`
+  считает gap из batch-allocations+contributions+venture; CapitalAdvance остался только как
+  модель/таблица (история), мёртвые сервис-функции удалены. Решение: `default_advance_repayment_mode`
+  удалён (поле+enum+миграция 0025).
 
 ### Фаза 3 — Close lifecycle
 - [ ] T-3.1 Добавить backend service `close_procurement_venture`.
