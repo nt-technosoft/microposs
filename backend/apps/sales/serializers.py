@@ -472,3 +472,4 @@ class ReturnCreateSerializer(serializers.Serializer):
     lines = ReturnInputLineSerializer(many=True, required=False, default=list)
     refund_payments = ReturnRefundPaymentSerializer(many=True, required=False, default=list)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)

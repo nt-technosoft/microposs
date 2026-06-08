@@ -1036,19 +1036,20 @@ def process_return(
     date=None,
     refund: dict | None = None,
     refund_payments: list[dict] | None = None,
+    client_request_id=None,
 ) -> Return:
     """
     Process a return for a completed sale with shariah-correct partner impact.
 
     resolution RESTOCK:
       - LotStock at sale.location += qty, reactivate Lot.
-      - PROFIT_REVERSED per partner, proportional to returned qty.
+      - Venture realization reversed proportionally (append-only REVERSAL events).
 
     resolution DISPOSE:
       - StockDisposal record (reason=DAMAGED_RETURN).
       - Lot.quantity_initial -= qty (goods never return to stock).
-      - PROFIT_REVERSED per partner (proportional to returned qty).
-      - LOSS_INCURRED per partner distributed by capital_share from contract_snapshot.
+      - Venture realization reversed + damaged-return loss by capital share, all as
+        append-only REVERSAL events (single source of truth = venture model).
 
     Monetary refund:
       If `refund_payments` is provided, each item creates SalePayment(role=REFUND),
@@ -1078,6 +1079,15 @@ def process_return(
         }]
 
     with transaction.atomic():
+        # E17 T-4.1: idempotent on client_request_id — a repeat submit returns the
+        # existing Return without creating a second one or re-moving any money.
+        if client_request_id:
+            existing = Return.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
         sale = Sale.objects.select_for_update().get(pk=sale.pk, tenant_id=tenant_id)
         if sale.status not in (
             Sale.SaleStatus.COMPLETED,
@@ -1093,6 +1103,7 @@ def process_return(
             reason=reason,
             date=date,
             notes=notes,
+            client_request_id=str(client_request_id) if client_request_id else None,
         )
 
         total_refund = Decimal('0')

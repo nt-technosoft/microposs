@@ -219,6 +219,7 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
                 tenant_id=request.tenant_id,
                 notes=data.get('notes', ''),
                 refund_payments=[dict(payment) for payment in data.get('refund_payments', [])],
+                client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error

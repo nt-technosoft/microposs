@@ -4,6 +4,7 @@ E16 treats each partnership procurement as an economic venture. Sale lines creat
 realization events; final entitlement is later determined by venture settlement.
 """
 
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from django.db import models, transaction
@@ -157,7 +158,7 @@ def _profile_key_from_rows(rows) -> tuple:
     )
 
 
-def _net_profit_entitlements(procurement: Procurement) -> dict[int, Decimal]:
+def _net_profit_entitlements(procurement: Procurement, groups=None) -> dict[int, Decimal]:
     """Net realized P&L by immutable share profile, then split net.
 
     This is the core sharia/venture rule: profitable and losing sale slices from
@@ -165,9 +166,11 @@ def _net_profit_entitlements(procurement: Procurement) -> dict[int, Decimal]:
     by profit shares. Negative net remains capital loss by capital shares.
     """
 
+    if groups is None:
+        groups = _realization_groups(procurement)
     profiles: dict[tuple, Decimal] = {}
     profile_rows: dict[tuple, list[ProcurementSaleRealization]] = {}
-    for rows in _realization_groups(procurement).values():
+    for rows in groups.values():
         if rows[0].event_type == ProcurementSaleRealization.EventType.LOSS and rows[0].is_partner_liability:
             continue
         profile_source = _group_profile_source(rows)
@@ -205,13 +208,14 @@ def _net_profit_entitlements(procurement: Procurement) -> dict[int, Decimal]:
     return entitlements
 
 
-def _realization_groups(procurement: Procurement) -> dict[tuple, list[ProcurementSaleRealization]]:
-    events = (
-        ProcurementSaleRealization.objects
-        .filter(tenant_id=procurement.tenant_id, procurement=procurement)
-        .select_related('partner')
-        .order_by('sale_line_id', 'source_ref', 'id')
-    )
+def _realization_groups(procurement: Procurement, events=None) -> dict[tuple, list[ProcurementSaleRealization]]:
+    if events is None:
+        events = (
+            ProcurementSaleRealization.objects
+            .filter(tenant_id=procurement.tenant_id, procurement=procurement)
+            .select_related('partner')
+            .order_by('sale_line_id', 'source_ref', 'id')
+        )
     grouped: dict[tuple, list[ProcurementSaleRealization]] = {}
     for event in events:
         if event.event_type == ProcurementSaleRealization.EventType.LOSS:
@@ -226,7 +230,7 @@ def _group_profile_source(rows: list[ProcurementSaleRealization]) -> list[Procur
     return [row for row in rows if row.event_type != ProcurementSaleRealization.EventType.REVERSAL] or rows
 
 
-def _net_capital_loss_entitlements(procurement: Procurement) -> dict[int, dict[str, Decimal]]:
+def _net_capital_loss_entitlements(procurement: Procurement, groups=None) -> dict[int, dict[str, Decimal]]:
     """Settlement capital/loss true-up by share profile.
 
     Interim recovered capital stays conservative and per-sale. Once a
@@ -237,10 +241,12 @@ def _net_capital_loss_entitlements(procurement: Procurement) -> dict[int, dict[s
     partner, not venture market loss.
     """
 
+    if groups is None:
+        groups = _realization_groups(procurement)
     profile_totals: dict[tuple, dict[str, Decimal]] = {}
     profile_rows: dict[tuple, list[ProcurementSaleRealization]] = {}
 
-    for rows in _realization_groups(procurement).values():
+    for rows in groups.values():
         if not rows:
             continue
         if rows[0].event_type == ProcurementSaleRealization.EventType.LOSS and rows[0].is_partner_liability:
@@ -303,11 +309,13 @@ def _net_capital_loss_entitlements(procurement: Procurement) -> dict[int, dict[s
     return entitlements
 
 
-def _liability_capital_recovery_entitlements(procurement: Procurement) -> dict[int, Decimal]:
+def _liability_capital_recovery_entitlements(procurement: Procurement, groups=None) -> dict[int, Decimal]:
     """Capital restored to non-liable partners by partner-liability losses."""
 
+    if groups is None:
+        groups = _realization_groups(procurement)
     entitlements: dict[int, Decimal] = {}
-    for rows in _realization_groups(procurement).values():
+    for rows in groups.values():
         if not rows:
             continue
         first = rows[0]
@@ -716,9 +724,12 @@ def procurement_venture_positions(
             r['provisional_profit_uzs'] += _money(item['provisional_profit'])
             r['loss_uzs'] += _money(item['loss'])
 
+    # E17 T-4.7: compute realization groups once and thread them into every
+    # netting helper below, instead of re-querying per helper.
+    groups = _realization_groups(procurement)
     for r in positions.values():
         r['provisional_profit_uzs'] = _ZERO
-    net_profit_entitlements = _net_profit_entitlements(procurement)
+    net_profit_entitlements = _net_profit_entitlements(procurement, groups)
     for partner_id, amount in net_profit_entitlements.items():
         row(partner_id)['provisional_profit_uzs'] = _money(amount)
 
@@ -747,7 +758,7 @@ def procurement_venture_positions(
 
     has_settlement = include_settlement_profit or procurement.venture_settlements.exists()
     if has_settlement:
-        net_capital_loss = _net_capital_loss_entitlements(procurement)
+        net_capital_loss = _net_capital_loss_entitlements(procurement, groups)
         for r in positions.values():
             r['capital_recovered_uzs'] = _ZERO
             r['loss_uzs'] = _money(r['partner_liability_loss_uzs'])
@@ -756,7 +767,7 @@ def procurement_venture_positions(
             partner_row['capital_recovered_uzs'] += _money(values.get('capital_recovered_uzs'))
             partner_row['loss_uzs'] += _money(values.get('loss_uzs'))
 
-        for partner_id, amount in _liability_capital_recovery_entitlements(procurement).items():
+        for partner_id, amount in _liability_capital_recovery_entitlements(procurement, groups).items():
             partner_row = row(partner_id)
             recovered = _money(amount)
             partner_row['liability_capital_recovered_uzs'] += recovered
@@ -839,6 +850,16 @@ def create_venture_settlement(
             ).exists()
             if has_active_lots:
                 raise ValueError('Final venture settlement requires all procurement stock to be sold or reversed.')
+            # E17 T-4.5: safety lock — a FINAL settlement (the basis for close) is
+            # forbidden while the conservation invariant does not net to zero in
+            # every pocket and currency. We block and surface the residual; we do
+            # not adjust the numbers to make it close.
+            report = venture_conservation(procurement=procurement)
+            if not report.is_balanced():
+                raise ValueError(
+                    'Conservation invariant violated — final settlement blocked. '
+                    f'Residuals: {report.breakdown()}'
+                )
         elif settlement_type != ProcurementVentureSettlement.SettlementType.CONSTRUCTIVE:
             raise ValueError(f'Unknown venture settlement type: {settlement_type}.')
 
@@ -865,3 +886,199 @@ def create_venture_settlement(
             notes=notes,
             client_request_id=client_request_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# E17 Phase 4 — Conservation invariant (safety-critical close/settlement gate)
+# ---------------------------------------------------------------------------
+#
+# "Money is neither created nor destroyed." The venture's value lives in three
+# pockets and EACH must net to ~0 INDEPENDENTLY, per currency — a single master
+# sum is forbidden because pocket +X / pocket -X would falsely cancel and hide a
+# real leak. Derived from first principles (per-slice realization fields), the
+# matrix only CONFIRMS it:
+#
+#   per realization slice:  cost_at_sale = recovered + loss ; proceeds = recovered + profit ;
+#                           cost_at_sale = cost_hist + fx_gain
+#
+#   Pocket CAPITAL    (UZS): deployed + Σfx = Σrecovered + Σloss + remaining + PLR
+#   Pocket PROCEEDS   (UZS): Σproceeds      = Σrecovered + Σprofit
+#   Pocket DISTRIBUTION(UZS): Σ_partner(positions) = venture aggregate (no money lost in the split)
+#
+# Functional UZS residuals are expected to be EXACTLY 0 (Decimal); native-currency
+# residuals may carry sub-cent rounding ONLY from FX division (native = uzs / fx).
+# A softer ε is a leak to fix, not to tolerate.
+
+_EPS = Decimal('0.01')
+
+
+@dataclass
+class ConservationReport:
+    """Per-pocket × per-currency conservation residuals for a venture (or an
+    aggregate of ventures — reports compose via ``merge``)."""
+
+    pockets: dict[str, dict[str, dict[str, Decimal]]] = field(default_factory=dict)
+
+    POCKETS = ('capital', 'proceeds', 'distribution')
+
+    def _bucket(self, pocket: str, currency: str) -> dict[str, Decimal]:
+        return self.pockets.setdefault(pocket, {}).setdefault(currency, {})
+
+    def add(self, pocket: str, currency: str, component: str, amount) -> None:
+        bucket = self._bucket(pocket, currency)
+        bucket[component] = _money(bucket.get(component, _ZERO) + Decimal(str(amount)))
+
+    def residual(self, pocket: str, currency: str) -> Decimal:
+        """sources − sinks for one pocket/currency. Component names prefixed with
+        '-' are sinks; everything else is a source."""
+        total = _ZERO
+        for component, amount in self._bucket(pocket, currency).items():
+            if component == 'residual':
+                continue
+            total += -amount if component.startswith('-') else amount
+        return _money(total)
+
+    def residuals(self) -> dict[tuple[str, str], Decimal]:
+        out: dict[tuple[str, str], Decimal] = {}
+        for pocket, by_ccy in self.pockets.items():
+            for currency in by_ccy:
+                out[(pocket, currency)] = self.residual(pocket, currency)
+        return out
+
+    def imbalances(self, eps: Decimal = _EPS) -> list[tuple[str, str, Decimal]]:
+        return [
+            (pocket, currency, residual)
+            for (pocket, currency), residual in self.residuals().items()
+            if abs(residual) > eps
+        ]
+
+    def is_balanced(self, eps: Decimal = _EPS) -> bool:
+        return not self.imbalances(eps)
+
+    def breakdown(self, eps: Decimal = _EPS) -> str:
+        lines = []
+        for pocket, currency, residual in self.imbalances(eps):
+            comps = ', '.join(
+                f'{name}={value}' for name, value in sorted(self._bucket(pocket, currency).items())
+            )
+            lines.append(f'{pocket}/{currency}: residual={residual} ({comps})')
+        return '; '.join(lines)
+
+    def merge(self, other: 'ConservationReport') -> None:
+        for pocket, by_ccy in other.pockets.items():
+            for currency, comps in by_ccy.items():
+                for component, amount in comps.items():
+                    if component == 'residual':
+                        continue
+                    self.add(pocket, currency, component, amount)
+
+
+def _sign(event) -> Decimal:
+    return Decimal('-1') if event.event_type == ProcurementSaleRealization.EventType.REVERSAL else Decimal('1')
+
+
+def venture_conservation(*, procurement: Procurement) -> ConservationReport:
+    """Conservation report for one procurement venture, built ONLY from append-only
+    events (realizations, batches, stock, ledger, withdrawals). No manual inputs."""
+
+    report = ConservationReport()
+
+    # Per-partner fields (recovered/profit/loss/fx) are split by share and SUM to
+    # the slice total; per-slice fields (proceeds/cost_basis) are stored FULL on
+    # every partner row, so they are counted ONCE per slice via _realization_groups.
+    deployed_uzs = _ZERO
+    batches = (
+        ProcurementReceiveBatch.objects
+        .filter(tenant_id=procurement.tenant_id, procurement=procurement, is_reversal=False)
+        .exclude(reversal_batches__isnull=False)
+    )
+    for batch in batches:
+        deployed_uzs += _money(batch.total_inventory_uzs)
+    remaining_uzs = _money(sum(_remaining_inventory_capital_entitlements(procurement).values(), _ZERO))
+
+    report.add('capital', 'UZS', 'deployed', deployed_uzs)
+    report.add('capital', 'UZS', '-remaining_inventory', remaining_uzs)
+
+    # Native capital pocket uses deployed/remaining in the cost currency (via the
+    # immutable buy FX — no FX drift natively): deployed = recovered + loss +
+    # remaining + PLR. cost_basis is NOT used because a DISPOSE reverses the sold
+    # cost while booking the same unit as loss (the deployed view avoids that).
+    cost_buy_fx: dict[str, Decimal] = {}
+
+    groups = _realization_groups(procurement)  # E17 T-4.7: query once, reuse below
+    for rows in groups.values():
+        first = rows[0]
+        sgn = _sign(first)
+        is_liability_loss = (
+            first.event_type == ProcurementSaleRealization.EventType.LOSS and first.is_partner_liability
+        )
+        # per-partner sums for this slice
+        recovered_uzs = _money(sum((r.capital_recovered_uzs for r in rows), _ZERO))
+        profit_uzs = _money(sum((r.provisional_profit_uzs for r in rows), _ZERO))
+        loss_uzs = _money(sum((r.loss_uzs for r in rows), _ZERO))
+        fx_uzs = _money(sum((r.fx_gain_loss_uzs for r in rows), _ZERO))
+        recovered_native = _money(sum((r.capital_recovered_amount for r in rows), _ZERO))
+        profit_native = _money(sum((r.profit_amount for r in rows), _ZERO))
+        loss_native = _money(sum((r.loss_amount for r in rows), _ZERO))
+
+        # ---- Pocket CAPITAL (UZS): deployed + Σfx = Σrecovered + Σloss + remaining + PLR
+        report.add('capital', 'UZS', '-recovered', sgn * recovered_uzs)
+        report.add('capital', 'UZS', 'fx_gain', sgn * fx_uzs)
+        report.add('capital', 'UZS', '-partner_liability' if is_liability_loss else '-loss', loss_uzs)
+
+        # ---- Pocket PROCEEDS (UZS): Σproceeds = Σrecovered + Σprofit (proceeds once per slice)
+        report.add('proceeds', 'UZS', 'proceeds', sgn * _money(first.sale_proceeds_uzs))
+        report.add('proceeds', 'UZS', '-recovered', sgn * recovered_uzs)
+        report.add('proceeds', 'UZS', '-profit', sgn * profit_uzs)
+
+        # ---- Native legs (sub-cent FX-division ε tolerated) ----
+        cost_ccy = str(first.cost_basis_currency or 'UZS').upper()
+        sale_ccy = str(first.sale_proceeds_currency or 'UZS').upper()
+        if cost_ccy != 'UZS':
+            # capital in cost currency: deployed = recovered + loss + remaining + PLR
+            report.add('capital', cost_ccy, '-recovered', sgn * recovered_native)
+            report.add('capital', cost_ccy, '-partner_liability' if is_liability_loss else '-loss', loss_native)
+            if cost_ccy not in cost_buy_fx and _money(first.cost_basis_amount) > 0:
+                cost_buy_fx[cost_ccy] = _money(first.cost_basis_uzs) / _money(first.cost_basis_amount)
+        if sale_ccy != 'UZS' and sale_ccy == cost_ccy:
+            # proceeds close natively only when sale and cost share a currency;
+            # cross-currency proceeds are bridged by FX and covered by the UZS pocket.
+            report.add('proceeds', sale_ccy, 'proceeds', sgn * _money(first.sale_proceeds_amount))
+            report.add('proceeds', sale_ccy, '-recovered', sgn * recovered_native)
+            report.add('proceeds', sale_ccy, '-profit', sgn * profit_native)
+
+    # Deployed/remaining in the cost currency. Supported for a single non-UZS
+    # cost currency (mixed-currency procurement is E13, blocked); with one cost
+    # currency the whole deployed/remaining maps to it via the buy FX.
+    if len(cost_buy_fx) == 1:
+        ((cost_ccy, buy_fx),) = cost_buy_fx.items()
+        if buy_fx > 0:
+            report.add('capital', cost_ccy, 'deployed', _money(deployed_uzs / buy_fx))
+            report.add('capital', cost_ccy, '-remaining_inventory', _money(remaining_uzs / buy_fx))
+
+    # ---- Pocket DISTRIBUTION (functional UZS): per-partner positions sum to venture aggregate
+    positions = procurement_venture_positions(procurement=procurement)
+    sum_recovered = _money(sum((row['capital_recovered_uzs'] for row in positions.values()), _ZERO))
+    sum_profit = _money(sum((row['provisional_profit_uzs'] for row in positions.values()), _ZERO))
+    sum_deployed = _money(sum((row['deployed_uzs'] for row in positions.values()), _ZERO))
+    report.add('distribution', 'UZS', 'deployed_total', deployed_uzs)
+    report.add('distribution', 'UZS', '-deployed_partners', sum_deployed)
+
+    has_settlement = procurement.venture_settlements.exists()
+    if has_settlement:
+        net_cap = _net_capital_loss_entitlements(procurement, groups)
+        venture_recovered = _money(sum((v['capital_recovered_uzs'] for v in net_cap.values()), _ZERO))
+        venture_recovered += _money(sum(_liability_capital_recovery_entitlements(procurement, groups).values(), _ZERO))
+    else:
+        venture_recovered = _money(sum(
+            (_sign(rows[0]) * _money(sum((r.capital_recovered_uzs for r in rows), _ZERO))
+             for rows in groups.values()),
+            _ZERO,
+        ))
+    venture_profit = _money(sum(_net_profit_entitlements(procurement, groups).values(), _ZERO))
+    report.add('distribution', 'UZS', 'recovered_venture', venture_recovered)
+    report.add('distribution', 'UZS', '-recovered_partners', sum_recovered)
+    report.add('distribution', 'UZS', 'profit_venture', venture_profit)
+    report.add('distribution', 'UZS', '-profit_partners', sum_profit)
+
+    return report

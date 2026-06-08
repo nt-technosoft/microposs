@@ -334,7 +334,9 @@ class Return(TenantModel):
     """
     Return operation linked to a specific sale.
     resolution RESTOCK → goods re-enter stock (LotStock += qty).
-    resolution DISPOSE → goods are disposed (StockDisposal + LOSS_INCURRED).
+    resolution DISPOSE → goods are disposed (StockDisposal + venture loss realization).
+    Idempotent on client_request_id: a repeat submit returns the existing Return
+    without creating a second one (E17 T-4.1).
     """
 
     class Resolution(models.TextChoices):
@@ -367,6 +369,7 @@ class Return(TenantModel):
     )
     date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = 'sales_return'

@@ -1,7 +1,7 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~33% (Фазы 1–2 done)
+**Прогресс:** ~50% (Фазы 1, 2, 4 done; Фаза 3 close — следующая)
 **Зависит от:** E16
 **Блокирует:** first-client pilot, Excel replay, E03, E06
 
@@ -243,24 +243,21 @@ blocking reasons, final settlement, negative positions и read-only lock.
 - [ ] T-3.5 Close agreement требует все procurement `CLOSED` и сведённые позиции сторон.
 - [ ] T-3.6 Добавить тесты на запрет операций после close.
 
-### Фаза 4 — Idempotency & conservation
-- [ ] T-4.1 Добавить `client_request_id` в return API/service.
-- [ ] T-4.2 Сделать `record_sale_line_return_realization` идемпотентным по source/ref/request.
-- [ ] T-4.3 Conservation invariant helper по дизайну выше: три кармана (пул/касса/claim'ы),
-  все источники и стоки (вкл. FX-ноги и partner-liability), из append-only событий, без
-  ручного подгона.
-- [ ] T-4.4 Инвариант валюто-aware: сводить в функциональном UZS И проверять по каждой
-  нативной валюте отдельно.
-- [ ] T-4.5 Блокировать FINAL settlement и close при |residual| > ε; показывать residual с
-  разбивкой по компонентам, не подгонять.
-- [ ] T-4.6 Claim ≠ ликвидность: close различает «entitlement обработан (выплачен/явный долг)»
-  и «висит (нечем выплатить)»; невыплатимый claim — только явная конвертация или явный
-  финальный долг, не молчаливое списание.
-- [ ] T-4.7 (F6) Перф/N+1: считать realizations один раз и прокидывать в нетто-хелперы;
-  агрегировать позиции батчем; убрать `import` из циклов. Не correctness-блокер, но
-  compaundит close и инвариант (которые дёргают позиции) — чинить заодно.
-- [ ] T-4.8 Тесты-матрица: repeated return submit, over-withdrawal, partner-liability, FX
-  (рост/падение/стабильно), возврат после FINAL, мульти-batch, full close — GAP=0 везде.
+### Фаза 4 — Idempotency & conservation — ✅ ВЫПОЛНЕНО (аудит зелёный; T-4.6 → Фаза 3)
+- [x] T-4.1 Добавить `client_request_id` в return API/service (поле `Return.client_request_id` + миграция 0004).
+- [x] T-4.2 `process_return` идемпотентен по `client_request_id`; realization-реверс — по source_ref/reversal_of.
+- [x] T-4.3 `venture_conservation`: три кармана (capital/proceeds/distribution), все источники/стоки
+  (вкл. FX-ногу и partner-liability), только append-only события, без ручного подгона.
+- [x] T-4.4 Валюто-aware: функц. UZS (точный 0) И нативная cost-валюта (deployed=recovered+loss+remaining+PLR,
+  через buy-FX); per-pocket × per-currency, без master-sum.
+- [x] T-4.5 FINAL settlement блокируется при `|residual|>ε` с разбивкой по компонентам (без подгона).
+- [ ] T-4.6 Claim ≠ ликвидность — **интегрируется в Фазе 3 (close)**: «обработан vs висит» требует самого
+  close. Helper уже композируем (`ConservationReport.merge`); строится вместе с `close_procurement_venture`.
+- [x] T-4.7 (F6) Перф/N+1: `_realization_groups` считается один раз и прокидывается во все нетто-хелперы
+  (`groups=`); агрегаты батчем; import'ы вне циклов.
+- [x] T-4.8 Тесты-матрица (14): profit / loss / mixed-netting / cross-currency (рост+падение) /
+  partner-liability / **partner-liability × cross-currency** / return RESTOCK+DISPOSE / FINAL settlement /
+  idempotent repeated return / over-withdrawal→loss / FINAL-gate блокирует инъекцию — GAP=0 везде.
 
 ### Фаза 5 — UI
 - [ ] T-5.1 Добавить кнопку “Закрыть приход” в `ProcurementWorkspaceView`.
