@@ -129,6 +129,12 @@ def create_writeoff(
             tenant_id=tenant_id,
         )
 
+        # E17 T-3.3: no economy-changing op on a closed procurement venture.
+        _procurement = getattr(getattr(lot, 'procurement_item', None), 'procurement', None)
+        if _procurement is not None:
+            from apps.partnerships.venture import assert_procurement_open
+            assert_procurement_open(_procurement)
+
         stock = LotStock.objects.select_for_update().get(
             tenant_id=tenant_id,
             lot=lot,

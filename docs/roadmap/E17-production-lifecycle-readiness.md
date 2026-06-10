@@ -1,7 +1,7 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~50% (Фазы 1, 2, 4 done; Фаза 3 close — следующая)
+**Прогресс:** ~67% (Фазы 1–4 done; остались 5 UI, 6 Excel replay)
 **Зависит от:** E16
 **Блокирует:** first-client pilot, Excel replay, E03, E06
 
@@ -233,15 +233,17 @@ blocking reasons, final settlement, negative positions и read-only lock.
   модель/таблица (история), мёртвые сервис-функции удалены. Решение: `default_advance_repayment_mode`
   удалён (поле+enum+миграция 0025).
 
-### Фаза 3 — Close lifecycle
-- [ ] T-3.1 Добавить backend service `close_procurement_venture`.
-- [ ] T-3.2 Close procurement требует `FINAL settlement`, отсутствие active lots и отсутствие
-  blocking reasons.
-- [ ] T-3.3 После `CLOSED` запретить продажи/возвраты/списания/выплаты/корректировки, которые
-  меняют экономику прихода.
-- [ ] T-3.4 Добавить backend service `close_investment_agreement`.
-- [ ] T-3.5 Close agreement требует все procurement `CLOSED` и сведённые позиции сторон.
-- [ ] T-3.6 Добавить тесты на запрет операций после close.
+### Фаза 3 — Close lifecycle — ✅ ВЫПОЛНЕНО (аудит зелёный)
+- [x] T-3.1 `close_procurement_venture` + `procurement_close_blocking_reasons` (идемпотентно, переход через `.update()`).
+- [x] T-3.2 Гейты close procurement: FINAL settlement / нет active lots / нет negative position /
+  conservation residual=0 (переиспользует `venture_conservation`) / нет висящих claim'ов (T-4.6).
+- [x] T-3.3 Read-only lock `assert_procurement_open` в settlement/writeoff/dividend/withdrawal/return;
+  sale заблокирован by-construction.
+- [x] T-3.4 `close_investment_agreement` + `agreement_close_blocking_reasons` (read-only после close).
+- [x] T-3.5 Гейты close agreement: все приходы CLOSED / net-позиции=0 / пул сведён (валюто-aware) /
+  нет висящих claim'ов / `ConservationReport.merge` по венчурам = 0.
+- [x] T-3.6 18 тестов: каждый гейт блокирует инъекцию (нет FINAL / активный лот / neg position /
+  residual≠0 / висящий claim / net≠0 / пул не сведён), read-only после close, happy full close, идемпотентность.
 
 ### Фаза 4 — Idempotency & conservation — ✅ ВЫПОЛНЕНО (аудит зелёный; T-4.6 → Фаза 3)
 - [x] T-4.1 Добавить `client_request_id` в return API/service (поле `Return.client_request_id` + миграция 0004).
@@ -251,8 +253,8 @@ blocking reasons, final settlement, negative positions и read-only lock.
 - [x] T-4.4 Валюто-aware: функц. UZS (точный 0) И нативная cost-валюта (deployed=recovered+loss+remaining+PLR,
   через buy-FX); per-pocket × per-currency, без master-sum.
 - [x] T-4.5 FINAL settlement блокируется при `|residual|>ε` с разбивкой по компонентам (без подгона).
-- [ ] T-4.6 Claim ≠ ликвидность — **интегрируется в Фазе 3 (close)**: «обработан vs висит» требует самого
-  close. Helper уже композируем (`ConservationReport.merge`); строится вместе с `close_procurement_venture`.
+- [x] T-4.6 Claim ≠ ликвидность — реализован в Фазе 3 close: висящий claim (available capital|profit>0,
+  не выплачен/не зафиксирован) блокирует close с понятной причиной (выплатить / sarf / явный долг).
 - [x] T-4.7 (F6) Перф/N+1: `_realization_groups` считается один раз и прокидывается во все нетто-хелперы
   (`groups=`); агрегаты батчем; import'ы вне циклов.
 - [x] T-4.8 Тесты-матрица (14): profit / loss / mixed-netting / cross-currency (рост+падение) /
@@ -280,6 +282,12 @@ blocking reasons, final settlement, negative positions и read-only lock.
 
 ## Решённые вопросы (история)
 
+- ✓ 2026-06-09 (Фаза 3): двойной счёт в `partner_capital_positions` — recovered-capital возвраты
+  (E16, из операционной кассы) вычитались из пулового `paid_in` И учитывались в venture-позиции,
+  раздувая `net` в ложное «должен пулу». Решение (вариант аудита (a), корень): пуловый `paid_in`
+  вычитает только возвраты, физически ушедшие ИЗ ПУЛА — дискриминатор = аккаунт `CashEntry`
+  (пул vs операционная касса), не поле `paid_from_account` (у пуловых возвратов ненадёжно).
+  Снимает T-1.7-мину; `net`/`owed`/`withdrawable` и UI перестали врать; гейт close `net==0` корректен.
 - ✓ 2026-06-06: целевой источник партнёрской экономики — venture model, не старый
   per-transaction `PartnerLedgerEntry`.
 - ✓ 2026-06-06: новые взаиморасчёты не строим вокруг `CapitalAdvance`; используем net-position.

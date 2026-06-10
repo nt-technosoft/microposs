@@ -221,8 +221,30 @@ def partner_capital_positions(agreement) -> dict:
     paid_in: dict[int, Decimal] = {}
     for c in agreement.contributions.filter(currency=currency):
         paid_in[c.partner_id] = paid_in.get(c.partner_id, Decimal('0')) + Decimal(str(c.amount))
-    for w in agreement.withdrawals.filter(currency=currency):
-        paid_in[w.partner_id] = paid_in.get(w.partner_id, Decimal('0')) - Decimal(str(w.amount))
+    # E17 fix: only POOL withdrawals (cash physically out of the agreement pool)
+    # reduce pool paid-in. E16 recovered-capital returns leave the OPERATING cash
+    # and are a venture distribution already counted in the venture position
+    # (capital_returned_uzs); counting them here too double-counted the same return
+    # and falsely inflated net into "owes the pool". The physical source of truth
+    # is the withdrawal's CashEntry account (pool vs operating) — matching the
+    # three-pockets model of the conservation invariant.
+    agreement_withdrawals = list(agreement.withdrawals.filter(currency=currency))
+    pool_account_id = agreement.capital_account_id
+    pool_withdrawal_ids: set[int] = set()
+    if pool_account_id and agreement_withdrawals:
+        from apps.finance.models import CashEntry
+        pool_withdrawal_ids = set(
+            CashEntry.objects.filter(
+                tenant_id=tenant_id,
+                source_ref_type='agreement_withdrawal',
+                source_ref_id__in=[w.id for w in agreement_withdrawals],
+                account_id=pool_account_id,
+                direction=CashEntry.Direction.OUT,
+            ).values_list('source_ref_id', flat=True)
+        )
+    for w in agreement_withdrawals:
+        if w.id in pool_withdrawal_ids:
+            paid_in[w.partner_id] = paid_in.get(w.partner_id, Decimal('0')) - Decimal(str(w.amount))
 
     total_paid = sum(paid_in.values(), Decimal('0'))
     total_deployed = sum(deployed.values(), Decimal('0'))

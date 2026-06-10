@@ -267,7 +267,9 @@ def pay_dividend(
 
         payment_functional_uzs = _functional_uzs(amount, currency, fx_snapshot.rate)
         from .models import Procurement
+        from .venture import assert_procurement_open
         procurement = Procurement.objects.get(pk=procurement_id, tenant_id=tenant_id)
+        assert_procurement_open(procurement)
         if procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
             from .venture import procurement_venture_positions
             venture_row = procurement_venture_positions(procurement=procurement).get(partner_id, {})
@@ -372,3 +374,149 @@ def pay_dividend(
         )
 
     return payment
+
+
+# ---------------------------------------------------------------------------
+# E17 Phase 3 — investment agreement close lifecycle & read-only lock
+# ---------------------------------------------------------------------------
+
+_EPS = Decimal('0.01')
+
+
+def agreement_pool_reconciliation_residual(agreement) -> Decimal:
+    """Pool reconciliation (agreement currency): pool.balance must equal
+    Σ contributions − Σ pool-funded receives − Σ pool capital returns.
+    Returns balance − expected (0 = reconciled). Recovered-capital returns leave
+    the operating cash, not the pool, so they are excluded (matching the net fix)."""
+    from apps.finance.models import CashEntry, Payment
+    from .models import AgreementWithdrawal
+
+    pool = agreement.capital_account
+    if pool is None:
+        return _ZERO
+    tenant_id = agreement.tenant_id
+    ccy = str(agreement.currency or 'UZS').upper()
+
+    contrib = sum(
+        (Decimal(str(c.amount)) for c in agreement.contributions.filter(currency=ccy)),
+        _ZERO,
+    )
+    deployed = sum(
+        (Decimal(str(p.amount)) for p in Payment.objects.filter(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            source_id=pool.pk,
+            currency=ccy,
+            status=Payment.Status.POSTED,
+            reversed_payment__isnull=True,
+        )),
+        _ZERO,
+    )
+    withdrawals = list(agreement.withdrawals.filter(currency=ccy))
+    pool_return_ids = set(
+        CashEntry.objects.filter(
+            tenant_id=tenant_id,
+            source_ref_type='agreement_withdrawal',
+            source_ref_id__in=[w.id for w in withdrawals],
+            account_id=pool.pk,
+            direction=CashEntry.Direction.OUT,
+        ).values_list('source_ref_id', flat=True)
+    ) if withdrawals else set()
+    pool_returns = sum(
+        (Decimal(str(w.amount)) for w in withdrawals if w.id in pool_return_ids),
+        _ZERO,
+    )
+    expected = _q(contrib - deployed - pool_returns)
+    return _q(Decimal(str(pool.balance)) - expected)
+
+
+def agreement_close_blocking_reasons(*, agreement) -> list[str]:
+    """Reasons an investment agreement cannot be closed yet (empty = closeable).
+
+    Gates: every partnership procurement CLOSED; all partner net positions = 0
+    (settled vs the pool); the pool reconciles to its domain records; no hanging
+    claims; and the conservation invariant nets to zero across all ventures."""
+    from .advances import partner_capital_positions
+    from .models import Procurement
+    from .venture import ConservationReport, venture_conservation
+
+    reasons: list[str] = []
+
+    procurements = list(Procurement.objects.filter(
+        tenant_id=agreement.tenant_id, agreement=agreement,
+        funding_source=Procurement.FundingSource.PARTNERSHIP,
+    ))
+    open_procs = [
+        p for p in procurements
+        if p.status not in (Procurement.Status.CLOSED, Procurement.Status.CANCELLED)
+    ]
+    if open_procs:
+        reasons.append(
+            'Не все приходы договора закрыты: '
+            + ', '.join(f'#{p.id} ({p.status})' for p in open_procs) + '.'
+        )
+
+    positions = partner_capital_positions(agreement)
+    for partner_id, pos in positions.items():
+        net = _q(Decimal(str(pos.get('net', _ZERO))))
+        if abs(net) > _EPS:
+            reasons.append(
+                f'Нетто-позиция партнёра {partner_id} не сведена (net={net} '
+                f'{agreement.currency}); сначала сведите взаиморасчёты.'
+            )
+
+    residual = agreement_pool_reconciliation_residual(agreement)
+    if abs(residual) > _EPS:
+        reasons.append(
+            f'Капитал-пул договора не сведён (residual={residual} {agreement.currency}).'
+        )
+
+    merged = ConservationReport()
+    for procurement in procurements:
+        merged.merge(venture_conservation(procurement=procurement))
+    if not merged.is_balanced():
+        reasons.append(
+            f'Нарушен инвариант сохранения денег по венчурам: {merged.breakdown()}.'
+        )
+
+    return reasons
+
+
+def close_investment_agreement(*, tenant_id: int, agreement_id: int, client_request_id=None):
+    """Close an investment agreement once every gate passes. Idempotent: an
+    already-closed agreement is returned unchanged. After CLOSED the agreement is
+    read-only."""
+    from django.utils import timezone
+    from .models import InvestmentAgreement
+
+    with transaction.atomic():
+        agreement = InvestmentAgreement.objects.select_for_update().get(pk=agreement_id, tenant_id=tenant_id)
+        if agreement.status == InvestmentAgreement.Status.CLOSED:
+            return agreement
+
+        reasons = agreement_close_blocking_reasons(agreement=agreement)
+        if reasons:
+            raise ValueError('Нельзя закрыть договор: ' + ' '.join(reasons))
+
+        InvestmentAgreement.objects.filter(pk=agreement_id, tenant_id=tenant_id).update(
+            status=InvestmentAgreement.Status.CLOSED,
+            closed_at=timezone.now(),
+        )
+        agreement.refresh_from_db()
+        publish_event(
+            event_type='investment_agreement.closed',
+            payload={'agreement_id': agreement_id},
+            tenant_id=tenant_id,
+        )
+        return agreement
+
+
+def assert_agreement_open(agreement) -> None:
+    """Read-only lock: after CLOSED, operations changing agreement economics
+    (contributions, allocations, new procurements) are forbidden (T-3.5)."""
+    from .models import InvestmentAgreement
+    if getattr(agreement, 'status', None) == InvestmentAgreement.Status.CLOSED:
+        raise ValueError(
+            'Договор закрыт (CLOSED): операции, меняющие его экономику '
+            '(взносы, аллокации, новые приходы), запрещены.'
+        )

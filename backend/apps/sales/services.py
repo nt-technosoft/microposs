@@ -1095,6 +1095,16 @@ def process_return(
         ):
             raise ValueError('Возврат можно оформить только по завершённой продаже.')
 
+        # E17 T-3.3: a closed procurement venture is read-only — no returns.
+        from apps.partnerships.venture import assert_procurement_open
+        for rl_data in return_lines:
+            line = SaleLine.objects.select_related('lot__procurement_item__procurement').get(
+                pk=rl_data['sale_line_id'], sale=sale, tenant_id=tenant_id,
+            )
+            procurement = getattr(getattr(line.lot, 'procurement_item', None), 'procurement', None)
+            if procurement is not None:
+                assert_procurement_open(procurement)
+
         return_doc = Return.objects.create(
             tenant_id=tenant_id,
             sale=sale,

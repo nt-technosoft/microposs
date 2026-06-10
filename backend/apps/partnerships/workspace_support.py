@@ -376,6 +376,9 @@ def add_agreement_withdrawal(
         )
         if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
             raise ValueError('Cannot withdraw from closed agreement.')
+        if procurement_id is not None:
+            from .venture import assert_procurement_open
+            assert_procurement_open(Procurement.objects.get(pk=procurement_id, tenant_id=tenant_id))
         if not AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).exists():
             raise ValueError('Selected partner is not part of this agreement.')
         procurement = None

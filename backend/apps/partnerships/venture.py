@@ -841,6 +841,7 @@ def create_venture_settlement(
                 return existing
 
         procurement = Procurement.objects.select_for_update().get(pk=procurement_id, tenant_id=tenant_id)
+        assert_procurement_open(procurement)
         if settlement_type == ProcurementVentureSettlement.SettlementType.FINAL:
             has_active_lots = Lot.objects.filter(
                 tenant_id=tenant_id,
@@ -1082,3 +1083,99 @@ def venture_conservation(*, procurement: Procurement) -> ConservationReport:
     report.add('distribution', 'UZS', '-profit_partners', sum_profit)
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# E17 Phase 3 — procurement venture close lifecycle & read-only lock
+# ---------------------------------------------------------------------------
+
+
+def procurement_close_blocking_reasons(*, procurement: Procurement) -> list[str]:
+    """Reasons a procurement venture cannot be closed yet (empty = closeable).
+
+    Gates: FINAL settlement exists; no active lots; no negative positions; the
+    conservation invariant nets to zero in every pocket/currency (T-4.5); and no
+    entitlement is left hanging — available capital/profit must be paid out, FX-
+    converted (sarf), or fixed as an explicit final debt, never silently dropped
+    (T-4.6).
+    """
+    from apps.inventory.models import Lot
+
+    reasons: list[str] = []
+
+    has_final = procurement.venture_settlements.filter(
+        settlement_type=ProcurementVentureSettlement.SettlementType.FINAL,
+    ).exists()
+    if not has_final:
+        reasons.append('Нет финальной сверки (FINAL settlement) по этому приходу.')
+
+    if Lot.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement_item__procurement=procurement,
+        is_active=True,
+        reversed=False,
+    ).exists():
+        reasons.append('По этому приходу ещё есть нераспроданный товар.')
+
+    positions = procurement_venture_positions(procurement=procurement)
+    if any(_money(row.get('negative_position_uzs', _ZERO)) > _ZERO for row in positions.values()):
+        reasons.append('Есть отрицательные позиции партнёров; сначала погасите их.')
+
+    # Claim ≠ liquidity (T-4.6): nothing may be left available-but-unpaid.
+    for partner_id, row in positions.items():
+        cap = _money(row.get('capital_return_available_uzs', _ZERO))
+        profit = _money(row.get('provisional_profit_available_uzs', _ZERO))
+        if cap > _ZERO or profit > _ZERO:
+            reasons.append(
+                f'У партнёра {partner_id} есть невыплаченный капитал/прибыль '
+                f'(капитал {cap} UZS, прибыль {profit} UZS): выплатите, при несовпадении '
+                f'валюты конвертируйте (sarf), либо зафиксируйте как явный финальный долг.'
+            )
+
+    report = venture_conservation(procurement=procurement)
+    if not report.is_balanced():
+        reasons.append(f'Нарушен инвариант сохранения денег (residual): {report.breakdown()}.')
+
+    return reasons
+
+
+def close_procurement_venture(*, tenant_id: int, procurement_id: int, client_request_id=None) -> Procurement:
+    """Close a partnership procurement venture once every gate passes. Idempotent:
+    an already-closed venture is returned unchanged. Uses an explicit lifecycle
+    transition (queryset update) because a RECEIVED procurement is immutable to
+    save(); the close is append-only at the event level."""
+    from django.utils import timezone
+    from apps.core.services import publish_event
+
+    with transaction.atomic():
+        procurement = Procurement.objects.select_for_update().get(pk=procurement_id, tenant_id=tenant_id)
+        if procurement.status == Procurement.Status.CLOSED:
+            return procurement
+        if procurement.funding_source != Procurement.FundingSource.PARTNERSHIP:
+            raise ValueError('Закрытие венчура применимо только к партнёрским приходам.')
+
+        reasons = procurement_close_blocking_reasons(procurement=procurement)
+        if reasons:
+            raise ValueError('Нельзя закрыть приход: ' + ' '.join(reasons))
+
+        Procurement.objects.filter(pk=procurement_id, tenant_id=tenant_id).update(
+            status=Procurement.Status.CLOSED,
+            closed_at=timezone.now(),
+        )
+        procurement.refresh_from_db()
+        publish_event(
+            event_type='procurement.venture_closed',
+            payload={'procurement_id': procurement_id},
+            tenant_id=tenant_id,
+        )
+        return procurement
+
+
+def assert_procurement_open(procurement: Procurement) -> None:
+    """Read-only lock: after CLOSED, any operation that would change the
+    procurement venture economics is forbidden (T-3.3)."""
+    if getattr(procurement, 'status', None) == Procurement.Status.CLOSED:
+        raise ValueError(
+            'Приход закрыт (CLOSED): операции, меняющие экономику прихода '
+            '(продажи/возвраты/списания/выплаты/сверка), запрещены.'
+        )
