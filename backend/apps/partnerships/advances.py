@@ -189,10 +189,15 @@ def partner_capital_positions(agreement) -> dict:
     (settling IS contributing). For each partner:
 
       deployed = Σ (agreed ownership share × deployed receive cost)  [from snapshots]
-      paid_in  = Σ contributions − Σ withdrawals                     [actual cash in]
+      paid_in  = Σ contributions − Σ POOL withdrawals                [actual pool cash in]
       net      = deployed − paid_in
         net > 0 → owes the pool (must contribute `net` more)
         net < 0 → over-contributed (claim on the pool)
+
+    Only withdrawals whose cash physically left the POOL reduce paid_in. E16
+    recovered-capital returns leave the OPERATING cash (a venture distribution,
+    counted in the venture position), so they do NOT touch the pool net —
+    discriminated by the withdrawal's CashEntry account (pool vs operating).
 
     `withdrawable` = how much an over-contributor can actually take out NOW,
     bounded by the pool's free cash (overpaid money tied up in inventory becomes
