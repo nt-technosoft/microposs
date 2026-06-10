@@ -262,6 +262,9 @@ blocking reasons, final settlement, negative positions и read-only lock.
   idempotent repeated return / over-withdrawal→loss / FINAL-gate блокирует инъекцию — GAP=0 везде.
 
 ### Фаза 5 — UI
+- [x] 5a (backend close API): REST `close` + `close-preview` на procurement/agreement
+  (идемпотентно, blocking → HTTP 400 с причинами); `venture_blocking_reasons` заменён на
+  `*_close_blocking_reasons` и удалён. Гейты считаются только на бэке — фронт отображает. (аудит зелёный)
 - [ ] T-5.1 Добавить кнопку “Закрыть приход” в `ProcurementWorkspaceView`.
 - [ ] T-5.2 Показать blocking reasons человеческим языком.
 - [ ] T-5.3 Добавить действие “Погасить долг” для negative position.

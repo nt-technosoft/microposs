@@ -793,25 +793,6 @@ def _json_money_map(values: dict[str, Decimal]) -> dict[str, str]:
     return {key: str(_money(value)) for key, value in values.items()}
 
 
-def venture_blocking_reasons(*, procurement: Procurement) -> list[str]:
-    """Reasons why the procurement venture should not be closed yet."""
-
-    from apps.inventory.models import Lot
-
-    reasons: list[str] = []
-    if Lot.objects.filter(
-        tenant_id=procurement.tenant_id,
-        procurement_item__procurement=procurement,
-        is_active=True,
-        reversed=False,
-    ).exists():
-        reasons.append('По этому приходу ещё есть нераспроданный товар.')
-    positions = procurement_venture_positions(procurement=procurement)
-    if any(_money(row.get('negative_position_uzs', _ZERO)) > _ZERO for row in positions.values()):
-        reasons.append('Есть отрицательные позиции партнёров.')
-    return reasons
-
-
 def create_venture_settlement(
     *,
     tenant_id: int,

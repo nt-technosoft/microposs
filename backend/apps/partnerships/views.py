@@ -231,7 +231,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16 agreement-level partner proceeds summary across linked procurements."""
-        from .venture import procurement_venture_positions, venture_blocking_reasons
+        from .venture import procurement_close_blocking_reasons, procurement_venture_positions
 
         agreement = self.get_object()
         members = {
@@ -281,7 +281,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'procurement_id': procurement.id,
                 'status': procurement.status,
                 'capital_return_available_uzs': str(procurement_total.quantize(Decimal('0.01'))),
-                'blocking_reasons': venture_blocking_reasons(procurement=procurement),
+                'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
             })
         rows = []
         for partner_id, values in totals.items():
@@ -298,6 +298,53 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             'currency': 'UZS',
             'positions': rows,
             'procurements': procurement_rows,
+        })
+
+    @action(detail=True, methods=['get'], url_path='close-preview')
+    def close_preview(self, request, pk=None):
+        """E17: why the agreement can / cannot be closed (read-only)."""
+        from .agreement_services import agreement_close_blocking_reasons
+
+        agreement = self.get_object()
+        reasons = agreement_close_blocking_reasons(agreement=agreement)
+        return Response({
+            'agreement_id': agreement.id,
+            'status': agreement.status,
+            'closeable': not reasons,
+            'blocking_reasons': reasons,
+        })
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        """E17: close the investment agreement once every gate passes. Idempotent;
+        blocking reasons surface as HTTP 400."""
+        from .agreement_services import agreement_close_blocking_reasons, close_investment_agreement
+
+        agreement = self.get_object()
+        if agreement.status == InvestmentAgreement.Status.CLOSED:
+            return Response({
+                'agreement_id': agreement.id,
+                'status': agreement.status,
+                'closed_at': agreement.closed_at,
+            })
+        try:
+            closed = close_investment_agreement(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement.id,
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            return Response(
+                {
+                    'detail': str(error),
+                    'blocking_reasons': agreement_close_blocking_reasons(agreement=agreement),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({
+            'agreement_id': closed.id,
+            'status': closed.status,
+            'closed_at': closed.closed_at,
         })
 
     @action(detail=True, methods=['post'], url_path='payout-preview')
@@ -442,7 +489,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     ordering = ['-opened_at']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan', 'venture_summary'):
+        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan', 'venture_summary', 'close_preview'):
             return [IsWarehouse()]
         return [IsOwner()]
 
@@ -473,7 +520,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16: current procurement-venture economic buckets in functional UZS."""
-        from .venture import procurement_venture_positions, venture_blocking_reasons
+        from .venture import procurement_close_blocking_reasons, procurement_venture_positions
 
         procurement = self.get_object()
         positions = procurement_venture_positions(procurement=procurement)
@@ -517,8 +564,47 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             'currency': 'UZS',
             'positions': rows,
             'totals': {key: str(value.quantize(Decimal('0.01'))) for key, value in totals.items()},
-            'blocking_reasons': venture_blocking_reasons(procurement=procurement),
+            'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
         })
+
+    @action(detail=True, methods=['get'], url_path='close-preview')
+    def close_preview(self, request, pk=None):
+        """E17: why the procurement venture can / cannot be closed (read-only)."""
+        from .venture import procurement_close_blocking_reasons
+
+        procurement = self.get_object()
+        reasons = procurement_close_blocking_reasons(procurement=procurement)
+        return Response({
+            'procurement_id': procurement.id,
+            'status': procurement.status,
+            'closeable': not reasons,
+            'blocking_reasons': reasons,
+        })
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        """E17: close the procurement venture once every gate passes. Idempotent;
+        blocking reasons surface as HTTP 400 so the UI shows what to fix first."""
+        from .venture import close_procurement_venture, procurement_close_blocking_reasons
+
+        procurement = self.get_object()
+        if procurement.status == Procurement.Status.CLOSED:
+            return Response(build_workspace_payload(procurement))
+        try:
+            closed = close_procurement_venture(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            return Response(
+                {
+                    'detail': str(error),
+                    'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(build_workspace_payload(closed))
 
     @action(detail=True, methods=['post'], url_path='venture-settlements')
     def venture_settlements(self, request, pk=None):
