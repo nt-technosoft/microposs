@@ -482,6 +482,32 @@ def agreement_close_blocking_reasons(*, agreement) -> list[str]:
     return reasons
 
 
+def agreement_close_state(*, agreement) -> dict:
+    """Derived close read-model for the UI (gates stay on the backend).
+
+      show_close — every partnership procurement is already CLOSED (the venture
+        side is done; only the agreement-level reconciliation/close remains), and
+        the agreement is not yet closed.
+      closeable — every gate passes; blocking_reasons — remaining steps."""
+    from .models import InvestmentAgreement, Procurement
+
+    reasons = agreement_close_blocking_reasons(agreement=agreement)
+    procurements = list(Procurement.objects.filter(
+        tenant_id=agreement.tenant_id, agreement=agreement,
+        funding_source=Procurement.FundingSource.PARTNERSHIP,
+    ))
+    all_done = bool(procurements) and all(
+        p.status in (Procurement.Status.CLOSED, Procurement.Status.CANCELLED)
+        for p in procurements
+    )
+    show_close = all_done and agreement.status != InvestmentAgreement.Status.CLOSED
+    return {
+        'show_close': show_close,
+        'closeable': not reasons,
+        'blocking_reasons': reasons,
+    }
+
+
 def close_investment_agreement(*, tenant_id: int, agreement_id: int, client_request_id=None):
     """Close an investment agreement once every gate passes. Idempotent: an
     already-closed agreement is returned unchanged. After CLOSED the agreement is

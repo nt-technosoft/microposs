@@ -302,16 +302,15 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='close-preview')
     def close_preview(self, request, pk=None):
-        """E17: why the agreement can / cannot be closed (read-only)."""
-        from .agreement_services import agreement_close_blocking_reasons
+        """E17: derived close read-model — show_close (all procurements closed),
+        closeable, and the remaining steps. Gates live on the backend."""
+        from .agreement_services import agreement_close_state
 
         agreement = self.get_object()
-        reasons = agreement_close_blocking_reasons(agreement=agreement)
         return Response({
             'agreement_id': agreement.id,
             'status': agreement.status,
-            'closeable': not reasons,
-            'blocking_reasons': reasons,
+            **agreement_close_state(agreement=agreement),
         })
 
     @action(detail=True, methods=['post'], url_path='close')
@@ -569,16 +568,15 @@ class ProcurementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='close-preview')
     def close_preview(self, request, pk=None):
-        """E17: why the procurement venture can / cannot be closed (read-only)."""
-        from .venture import procurement_close_blocking_reasons
+        """E17: derived close read-model — show_close (wind-down reached),
+        closeable, and the remaining steps. Gates live on the backend."""
+        from .venture import procurement_close_state
 
         procurement = self.get_object()
-        reasons = procurement_close_blocking_reasons(procurement=procurement)
         return Response({
             'procurement_id': procurement.id,
             'status': procurement.status,
-            'closeable': not reasons,
-            'blocking_reasons': reasons,
+            **procurement_close_state(procurement=procurement),
         })
 
     @action(detail=True, methods=['post'], url_path='close')

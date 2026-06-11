@@ -264,7 +264,10 @@ blocking reasons, final settlement, negative positions и read-only lock.
 ### Фаза 5 — UI
 - [x] 5a (backend close API): REST `close` + `close-preview` на procurement/agreement
   (идемпотентно, blocking → HTTP 400 с причинами); `venture_blocking_reasons` заменён на
-  `*_close_blocking_reasons` и удалён. Гейты считаются только на бэке — фронт отображает. (аудит зелёный)
+  `*_close_blocking_reasons` и удалён. `close-preview` отдаёт derived read-model
+  `{show_close, closeable, blocking_reasons}` (wind-down по «нет активных лотов»/FINAL, не
+  constructive; считается одной функцией с гейтами, без хранимой стадии). Гейты только на
+  бэке — фронт отображает. (аудит зелёный)
 - [ ] T-5.1 Добавить кнопку “Закрыть приход” в `ProcurementWorkspaceView`.
 - [ ] T-5.2 Показать blocking reasons человеческим языком.
 - [ ] T-5.3 Добавить действие “Погасить долг” для negative position.

@@ -1120,6 +1120,42 @@ def procurement_close_blocking_reasons(*, procurement: Procurement) -> list[str]
     return reasons
 
 
+def procurement_close_state(*, procurement: Procurement) -> dict:
+    """Derived close read-model for the UI (single source — gates stay on the
+    backend, the frontend only displays).
+
+      show_close — the venture has entered wind-down, so "close" is now the
+        relevant next action. Anchored on END-OF-LIFE facts: a fully received
+        partnership procurement with NO active lots, or a FINAL settlement.
+        A CONSTRUCTIVE settlement does NOT trigger it (it can be a mid-life
+        checkpoint), so the close affordance never surfaces prematurely.
+      closeable — every gate passes (blocking_reasons empty).
+      blocking_reasons — the remaining steps to close (human-readable)."""
+    from apps.inventory.models import Lot
+
+    reasons = procurement_close_blocking_reasons(procurement=procurement)
+    is_partnership = procurement.funding_source == Procurement.FundingSource.PARTNERSHIP
+    has_active_lots = Lot.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement_item__procurement=procurement,
+        is_active=True,
+        reversed=False,
+    ).exists()
+    has_final = procurement.venture_settlements.filter(
+        settlement_type=ProcurementVentureSettlement.SettlementType.FINAL,
+    ).exists()
+    show_close = (
+        is_partnership
+        and procurement.status == Procurement.Status.RECEIVED
+        and (not has_active_lots or has_final)
+    )
+    return {
+        'show_close': show_close,
+        'closeable': not reasons,
+        'blocking_reasons': reasons,
+    }
+
+
 def close_procurement_venture(*, tenant_id: int, procurement_id: int, client_request_id=None) -> Procurement:
     """Close a partnership procurement venture once every gate passes. Idempotent:
     an already-closed venture is returned unchanged. Uses an explicit lifecycle
