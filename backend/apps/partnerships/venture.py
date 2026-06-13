@@ -685,6 +685,10 @@ def procurement_venture_positions(
             'capital_return_available_uzs': _ZERO,
             'provisional_profit_available_uzs': _ZERO,
             'negative_position_uzs': _ZERO,
+            'negative_liability_uzs': _ZERO,
+            'negative_capital_uzs': _ZERO,
+            'negative_dividend_uzs': _ZERO,
+            'debt_repaid_uzs': _ZERO,
         })
 
     for batch in batches:
@@ -717,7 +721,6 @@ def procurement_venture_positions(
         elif item['event_type'] == ProcurementSaleRealization.EventType.LOSS:
             liability_loss = _money(item.get('liability_loss'))
             r['partner_liability_loss_uzs'] += liability_loss
-            r['negative_position_uzs'] += liability_loss
             r['loss_uzs'] += _money(item['loss'])
         else:
             r['capital_recovered_uzs'] += _money(item['capital_recovered'])
@@ -756,6 +759,22 @@ def procurement_venture_positions(
             Decimal(str(withdrawal.amount)) * Decimal(str(withdrawal.fx_rate or 1)),
         )
 
+    # E17 T-5.3: partner venture-debt repayments (append-only), per component.
+    from .models import ProcurementPartnerVentureDebtRepayment
+    repaid_by_partner: dict[int, dict] = {
+        rec['partner_id']: rec
+        for rec in (
+            ProcurementPartnerVentureDebtRepayment.objects
+            .filter(tenant_id=procurement.tenant_id, procurement=procurement)
+            .values('partner_id')
+            .annotate(
+                liability=Sum('repaid_liability_uzs'),
+                capital=Sum('repaid_capital_uzs'),
+                dividend=Sum('repaid_dividend_uzs'),
+            )
+        )
+    }
+
     has_settlement = include_settlement_profit or procurement.venture_settlements.exists()
     if has_settlement:
         net_capital_loss = _net_capital_loss_entitlements(procurement, groups)
@@ -779,12 +798,26 @@ def procurement_venture_positions(
     for partner_id, amount in remaining_capital.items():
         row(partner_id)['remaining_inventory_capital_uzs'] = _money(amount)
 
-    for r in positions.values():
-        capital_delta = _money(r['capital_recovered_uzs'] - r['capital_returned_uzs'])
+    for partner_id, r in positions.items():
+        repaid = repaid_by_partner.get(partner_id, {})
+        repaid_liability = _money(repaid.get('liability'))
+        repaid_capital = _money(repaid.get('capital'))
+        repaid_dividend = _money(repaid.get('dividend'))
+
+        capital_delta = _money(r['capital_recovered_uzs'] - r['capital_returned_uzs'] + repaid_capital)
         r['capital_return_available_uzs'] = max(_ZERO, capital_delta)
-        profit_delta = _money(r['provisional_profit_uzs'] - r['dividends_paid_uzs'])
+        profit_delta = _money(r['provisional_profit_uzs'] - r['dividends_paid_uzs'] + repaid_dividend)
         r['provisional_profit_available_uzs'] = max(_ZERO, profit_delta) if has_settlement else _ZERO
-        r['negative_position_uzs'] += max(_ZERO, -capital_delta) + max(_ZERO, -profit_delta)
+
+        # E17 T-5.3: negative position is component-aware; repayments (waterfall)
+        # reduce each component. Originals are never mutated.
+        r['negative_liability_uzs'] = max(_ZERO, _money(r['partner_liability_loss_uzs'] - repaid_liability))
+        r['negative_capital_uzs'] = max(_ZERO, -capital_delta)
+        r['negative_dividend_uzs'] = max(_ZERO, -profit_delta)
+        r['debt_repaid_uzs'] = _money(repaid_liability + repaid_capital + repaid_dividend)
+        r['negative_position_uzs'] = _money(
+            r['negative_liability_uzs'] + r['negative_capital_uzs'] + r['negative_dividend_uzs'],
+        )
 
     return positions
 
@@ -1189,3 +1222,139 @@ def assert_procurement_open(procurement: Procurement) -> None:
             'Приход закрыт (CLOSED): операции, меняющие экономику прихода '
             '(продажи/возвраты/списания/выплаты/сверка), запрещены.'
         )
+
+
+def repay_partner_venture_debt(
+    *,
+    tenant_id: int,
+    procurement_id: int,
+    partner_id: int,
+    amount,
+    currency: str = 'UZS',
+    paid_to_account_id: int,
+    fx_rate=None,
+    client_request_id=None,
+    date=None,
+) -> 'ProcurementPartnerVentureDebtRepayment':
+    """E17 T-5.3: repay a partner's negative venture position with real cash.
+
+    The debtor brings cash into operating cash (CashEntry IN). The amount is
+    allocated by waterfall — liability → over-returned capital → over-paid
+    dividend — and credited component-correct: liability → 5100 (loss restored),
+    over-capital → role equity (3100/3110/3000), over-dividend → 3200. Append-only;
+    originals are never touched; the position folds `repaid_*` to cut
+    negative_position; the cash now funds the counterparty's claim. Idempotent on
+    client_request_id; blocked after close."""
+    from django.utils import timezone
+    from apps.finance.models import CashAccount, CashEntry
+    from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
+    from apps.finance.services import create_cash_entry, create_journal_entry
+    from .advances import _equity_account_code
+    from .models import (
+        AgreementPartner,
+        ProcurementPartnerVentureDebtRepayment,
+    )
+
+    amount = _money(amount)
+    currency = str(currency or 'UZS').upper()
+    if date is None:
+        date = timezone.now()
+
+    with transaction.atomic():
+        if client_request_id:
+            existing = ProcurementPartnerVentureDebtRepayment.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        if amount <= _ZERO:
+            raise ValueError('Сумма погашения должна быть положительной.')
+
+        procurement = Procurement.objects.select_for_update().get(pk=procurement_id, tenant_id=tenant_id)
+        assert_procurement_open(procurement)
+        agreement = procurement.agreement
+        if agreement is None:
+            raise ValueError('Погашение долга применимо только к партнёрскому приходу.')
+
+        fx = resolve_fx_rate_snapshot_details(
+            tenant_id=tenant_id, operation_currency=currency, operation_at=date, fx_rate_snapshot=fx_rate,
+        )
+        functional = _money(amount * Decimal(str(fx.rate)))
+
+        pos = procurement_venture_positions(procurement=procurement).get(partner_id)
+        if not pos:
+            raise ValueError('У партнёра нет позиции по этому приходу.')
+        out_liability = _money(pos['negative_liability_uzs'])
+        out_capital = _money(pos['negative_capital_uzs'])
+        out_dividend = _money(pos['negative_dividend_uzs'])
+        total_out = _money(out_liability + out_capital + out_dividend)
+        if total_out <= _ZERO:
+            raise ValueError('У партнёра нет непогашенного долга перед венчуром.')
+        if functional - total_out > _CENTS:
+            raise ValueError(f'Погашение {functional} превышает долг {total_out} UZS.')
+
+        # Waterfall: liability → over-capital → over-dividend.
+        remaining = functional
+        repaid_liability = min(remaining, out_liability)
+        remaining = _money(remaining - repaid_liability)
+        repaid_capital = min(remaining, out_capital)
+        remaining = _money(remaining - repaid_capital)
+        repaid_dividend = min(remaining, out_dividend)
+
+        account = CashAccount.objects.select_for_update().get(pk=paid_to_account_id, tenant_id=tenant_id)
+        if str(account.currency).upper() != currency:
+            raise ValueError(
+                f'Погашение в {currency} должно поступать на кассу {currency}; '
+                f'сделайте явную конвертацию (sarf), если деньги в {account.currency}.'
+            )
+        if not account.linked_account_id:
+            raise ValueError('У кассы нет привязанного GL-счёта.')
+
+        role = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id).role
+        equity_code = _equity_account_code(role=role, legal_mode=agreement.legal_mode)
+
+        repayment = ProcurementPartnerVentureDebtRepayment.objects.create(
+            tenant_id=tenant_id,
+            procurement=procurement,
+            partner_id=partner_id,
+            amount=amount,
+            currency=currency,
+            fx_rate=fx.rate,
+            fx_rate_source=fx.source,
+            fx_rate_date=fx.rate_date,
+            paid_to_account=account,
+            amount_uzs=functional,
+            repaid_liability_uzs=_money(repaid_liability),
+            repaid_capital_uzs=_money(repaid_capital),
+            repaid_dividend_uzs=_money(repaid_dividend),
+            date=date,
+            client_request_id=str(client_request_id) if client_request_id else None,
+        )
+
+        create_cash_entry(
+            tenant_id=tenant_id, account=account, direction=CashEntry.Direction.IN,
+            amount=amount, date=date,
+            source_ref_type='venture_debt_repay', source_ref_id=repayment.pk,
+        )
+
+        lines = [{
+            'account_code': account.linked_account.code,
+            'debit': functional, 'credit': _ZERO,
+            'description': 'Погашение долга партнёра — приход кэша',
+        }]
+        if repaid_liability > _ZERO:
+            lines.append({'account_code': '5100', 'debit': _ZERO, 'credit': _money(repaid_liability),
+                          'description': 'Погашение долга: восстановление списания (вина)'})
+        if repaid_capital > _ZERO:
+            lines.append({'account_code': equity_code, 'debit': _ZERO, 'credit': _money(repaid_capital),
+                          'description': 'Погашение долга: возврат излишне выведенного капитала'})
+        if repaid_dividend > _ZERO:
+            lines.append({'account_code': '3200', 'debit': _ZERO, 'credit': _money(repaid_dividend),
+                          'description': 'Погашение долга: возврат излишне выплаченной прибыли'})
+        create_journal_entry(
+            tenant_id=tenant_id, operation_type='venture_debt_repay', operation_id=repayment.pk,
+            lines=lines, description=f'Погашение долга партнёра по приходу #{procurement_id}', date=date,
+        )
+
+        return repayment

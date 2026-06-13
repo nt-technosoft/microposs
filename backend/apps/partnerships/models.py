@@ -1342,6 +1342,68 @@ class ProcurementVentureSettlement(TenantModel):
         raise ImmutableRecordError('ProcurementVentureSettlement is append-only.')
 
 
+class ProcurementPartnerVentureDebtRepayment(TenantModel):
+    """E17 T-5.3: append-only repayment of a partner's negative venture position.
+
+    The debtor brings real cash into operating cash; this collects the
+    receivable. The repaid amount is split (at repayment time) across the
+    negative-position components by waterfall (liability → over-returned capital
+    → over-paid dividend) and stored here as a stable fact. Originals
+    (withdrawals/dividends/liability losses) are never mutated — the position
+    folds these `repaid_*` terms in to reduce negative_position.
+    """
+
+    procurement = models.ForeignKey(
+        Procurement,
+        on_delete=models.PROTECT,
+        related_name='debt_repayments',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='venture_debt_repayments',
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
+    paid_to_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        related_name='venture_debt_repayments',
+    )
+    amount_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    # Component breakdown (functional UZS) — waterfall allocation at repayment time.
+    repaid_liability_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    repaid_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    repaid_dividend_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_partner_venture_debt_repayment'
+        indexes = [
+            models.Index(fields=['procurement', 'partner'], name='pvdr_proc_partner_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_partner_venture_debt_repayment_idempotent',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('ProcurementPartnerVentureDebtRepayment is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('ProcurementPartnerVentureDebtRepayment is append-only.')
+
+
 class DividendPayment(TenantModel):
     """
     Actual dividend payout to a partner from procurement profit.
