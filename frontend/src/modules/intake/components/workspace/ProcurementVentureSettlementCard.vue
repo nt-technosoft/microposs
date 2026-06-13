@@ -9,6 +9,7 @@ import type { ProcurementVentureSummary } from '@/api/partnerships'
 const props = defineProps<{
   summary: ProcurementVentureSummary | null
   saving?: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,7 +23,10 @@ const hasFacts = computed(() => {
     || Number(totals.value.provisional_profit_uzs || 0) > 0
     || Number(totals.value.loss_uzs || 0) > 0
 })
-const blockingReasons = computed(() => props.summary?.blocking_reasons ?? [])
+// FINAL settlement requires the stock to be sold/reversed. Gate on the SAME
+// authoritative signal the backend uses (has_active_lots) so UI and backend never
+// diverge. Close-blocking reasons live in the dedicated close card, not here.
+const canFinal = computed(() => props.summary?.has_active_lots === false)
 </script>
 
 <template>
@@ -62,16 +66,16 @@ const blockingReasons = computed(() => props.summary?.blocking_reasons ?? [])
         </div>
       </div>
 
-      <div v-if="blockingReasons.length" class="rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-        <p v-for="reason in blockingReasons" :key="reason">{{ reason }}</p>
-      </div>
+      <p v-if="!readonly && !canFinal" class="text-xs text-muted-foreground">
+        Финальная сверка станет доступна после распродажи остатка товара.
+      </p>
 
-      <div class="grid gap-2 sm:grid-cols-2">
+      <div v-if="!readonly" class="grid gap-2 sm:grid-cols-2">
         <Button variant="outline" type="button" :disabled="saving" @click="emit('settle', 'CONSTRUCTIVE')">
           <CheckCircle2 data-icon="inline-start" />
           Конструктивная сверка
         </Button>
-        <Button type="button" :disabled="saving || blockingReasons.length > 0" @click="emit('settle', 'FINAL')">
+        <Button type="button" :disabled="saving || !canFinal" @click="emit('settle', 'FINAL')">
           <CheckCircle2 data-icon="inline-start" />
           Финальная сверка
         </Button>

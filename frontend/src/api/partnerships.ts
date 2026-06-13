@@ -963,7 +963,7 @@ export interface ProcurementVentureSummary {
   currency: 'UZS' | string
   positions: ProcurementVenturePosition[]
   totals: Omit<ProcurementVenturePosition, 'partner_id' | 'partner_name' | 'role'>
-  blocking_reasons?: string[]
+  has_active_lots?: boolean
 }
 
 export interface AgreementVentureSummary {
@@ -974,7 +974,6 @@ export interface AgreementVentureSummary {
     procurement_id: number
     status: string
     capital_return_available_uzs: string
-    blocking_reasons: string[]
   }>
 }
 
@@ -1128,6 +1127,40 @@ export async function fetchProcurementVentureSummary(id: number): Promise<Procur
 export async function fetchAgreementVentureSummary(id: number): Promise<AgreementVentureSummary> {
   const { data } = await api.get<AgreementVentureSummary>(
     `/api/v1/partnerships/agreements/${id}/venture-summary/`,
+  )
+  return data
+}
+
+// E17 close lifecycle — derived read-model (gates live on the backend).
+export interface ClosePreview {
+  status: string
+  show_close: boolean
+  closeable: boolean
+  blocking_reasons: string[]
+}
+
+export async function fetchProcurementClosePreview(id: number): Promise<ClosePreview> {
+  const { data } = await api.get<ClosePreview>(`/api/v1/partnerships/procurements/${id}/close-preview/`)
+  return data
+}
+
+export async function closeProcurement(id: number, clientRequestId?: string): Promise<unknown> {
+  const { data } = await api.post(
+    `/api/v1/partnerships/procurements/${id}/close/`,
+    clientRequestId ? { client_request_id: clientRequestId } : {},
+  )
+  return data
+}
+
+export async function fetchAgreementClosePreview(id: number): Promise<ClosePreview> {
+  const { data } = await api.get<ClosePreview>(`/api/v1/partnerships/agreements/${id}/close-preview/`)
+  return data
+}
+
+export async function closeAgreement(id: number, clientRequestId?: string): Promise<{ status: string; closed_at: string | null }> {
+  const { data } = await api.post<{ status: string; closed_at: string | null }>(
+    `/api/v1/partnerships/agreements/${id}/close/`,
+    clientRequestId ? { client_request_id: clientRequestId } : {},
   )
   return data
 }

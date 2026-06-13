@@ -25,8 +25,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   addAgreementContribution,
   addAgreementWithdrawal,
+  closeAgreement,
   createAgreementAllocations,
   fetchAgreementAllocationPreview,
+  fetchAgreementClosePreview,
   fetchInvestmentAgreement,
   fetchCapitalPositions,
   fetchAgreementProfitSummary,
@@ -34,11 +36,13 @@ import {
   type AgreementAllocationPreview,
   type AgreementProfitRow,
   type CapitalPositionRow,
+  type ClosePreview,
   type InvestmentAgreementDetail,
   type ProcurementVentureSummary,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
+import VentureCloseCard from '@/modules/intake/components/workspace/VentureCloseCard.vue'
 import AgreementRecoveredCapitalCard from '@/modules/intake/components/agreement/AgreementRecoveredCapitalCard.vue'
 import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
 import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
@@ -61,6 +65,9 @@ const positions = ref<CapitalPositionRow[]>([])
 const hasInterparty = computed(() => positions.value.some((p) => Math.abs(Number(p.net) || 0) > 0.01))
 const profitRows = ref<AgreementProfitRow[]>([])
 const ventureSummaries = ref<ProcurementVentureSummary[]>([])
+const closePreview = ref<ClosePreview | null>(null)
+const closingAgreement = ref(false)
+const isClosed = computed(() => agreement.value?.status === 'CLOSED')
 const operatingAccounts = ref<CashAccountRecord[]>([])
 const settleOpen = ref(false)
 const activePosition = ref<CapitalPositionRow | null>(null)
@@ -325,14 +332,16 @@ async function returnRecoveredCapital(payload: {
 
 async function loadAdvances(): Promise<void> {
   try {
-    const [pos, profit, accounts] = await Promise.all([
+    const [pos, profit, accounts, preview] = await Promise.all([
       fetchCapitalPositions(agreementId.value),
       fetchAgreementProfitSummary(agreementId.value),
       operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
+      fetchAgreementClosePreview(agreementId.value).catch(() => null),
     ])
     positions.value = pos
     profitRows.value = profit
     operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
+    closePreview.value = preview
     const procurementIds = agreement.value?.procurements.map((procurement) => procurement.id) ?? []
     ventureSummaries.value = procurementIds.length
       ? await Promise.all(procurementIds.map((id) => fetchProcurementVentureSummary(id)))
@@ -345,6 +354,22 @@ async function loadAdvances(): Promise<void> {
 function openSettle(position: CapitalPositionRow): void {
   activePosition.value = position
   settleOpen.value = true
+}
+
+async function onCloseAgreement(): Promise<void> {
+  closingAgreement.value = true
+  try {
+    await closeAgreement(agreementId.value)
+    toast.success('Договор закрыт')
+    await load()
+  } catch (err) {
+    const data = (err as { response?: { data?: { detail?: string; blocking_reasons?: string[] } } })?.response?.data
+    const reasons = data?.blocking_reasons ?? []
+    toast.error(reasons[0] ?? data?.detail ?? getApiErrorMessage(err, 'Не удалось закрыть договор'))
+    await loadAdvances()
+  } finally {
+    closingAgreement.value = false
+  }
 }
 
 async function onAdvanceSettled(): Promise<void> {
@@ -458,10 +483,20 @@ onMounted(async () => {
           </CardContent>
         </Card>
 
+        <!-- E17: контекстное закрытие договора (видно в wind-down / закрыт) -->
+        <VentureCloseCard
+          v-if="closePreview"
+          entity-label="договор"
+          :preview="closePreview"
+          :busy="closingAgreement"
+          @close="onCloseAgreement"
+        />
+
         <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
         <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" />
 
         <AgreementRecoveredCapitalCard
+          v-if="!isClosed"
           :rows="recoveredCapitalRows"
           :accounts="operatingAccounts"
           :usd-rate="latestUsdRate"
@@ -470,7 +505,7 @@ onMounted(async () => {
         />
 
         <!-- Распределение прибыли — только когда есть что распределять -->
-        <div v-if="profitRows.length" class="flex flex-wrap items-center gap-2">
+        <div v-if="profitRows.length && !isClosed" class="flex flex-wrap items-center gap-2">
           <Button type="button" @click="dividendOpen = true">
             <HandCoins data-icon="inline-start" />
             Распределить прибыль
@@ -519,7 +554,7 @@ onMounted(async () => {
             </CardContent>
           </Card>
 
-          <div class="grid gap-4">
+          <div v-if="!isClosed" class="grid gap-4">
             <Card class="rounded-2xl bg-background">
               <CardHeader>
                 <div class="flex items-start justify-between gap-3">
@@ -602,7 +637,7 @@ onMounted(async () => {
                   <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
                   <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
                 </div>
-                <Button variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
+                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
                   <Plus data-icon="inline-start" />
                   Новый приход
                 </Button>
@@ -634,7 +669,7 @@ onMounted(async () => {
             </CardContent>
           </Card>
 
-          <Card v-if="activeProcurements.length" class="rounded-2xl bg-background">
+          <Card v-if="activeProcurements.length && !isClosed" class="rounded-2xl bg-background">
             <CardHeader>
               <div class="flex items-start justify-between gap-3">
                 <div>

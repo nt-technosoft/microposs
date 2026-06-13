@@ -807,7 +807,6 @@ def create_venture_settlement(
     """Create an immutable constructive/final settlement snapshot."""
 
     from django.utils import timezone
-    from apps.inventory.models import Lot
 
     settlement_type = str(settlement_type).upper()
     if settled_at is None:
@@ -824,13 +823,7 @@ def create_venture_settlement(
         procurement = Procurement.objects.select_for_update().get(pk=procurement_id, tenant_id=tenant_id)
         assert_procurement_open(procurement)
         if settlement_type == ProcurementVentureSettlement.SettlementType.FINAL:
-            has_active_lots = Lot.objects.filter(
-                tenant_id=tenant_id,
-                procurement_item__procurement=procurement,
-                is_active=True,
-                reversed=False,
-            ).exists()
-            if has_active_lots:
+            if procurement_has_active_lots(procurement):
                 raise ValueError('Final venture settlement requires all procurement stock to be sold or reversed.')
             # E17 T-4.5: safety lock — a FINAL settlement (the basis for close) is
             # forbidden while the conservation invariant does not net to zero in
@@ -1071,6 +1064,20 @@ def venture_conservation(*, procurement: Procurement) -> ConservationReport:
 # ---------------------------------------------------------------------------
 
 
+def procurement_has_active_lots(procurement: Procurement) -> bool:
+    """Authoritative "stock still on hand" signal — the single source used by the
+    FINAL-settlement precondition, the close gate, and the UI (so the UI button
+    and the backend never diverge)."""
+    from apps.inventory.models import Lot
+
+    return Lot.objects.filter(
+        tenant_id=procurement.tenant_id,
+        procurement_item__procurement=procurement,
+        is_active=True,
+        reversed=False,
+    ).exists()
+
+
 def procurement_close_blocking_reasons(*, procurement: Procurement) -> list[str]:
     """Reasons a procurement venture cannot be closed yet (empty = closeable).
 
@@ -1080,8 +1087,6 @@ def procurement_close_blocking_reasons(*, procurement: Procurement) -> list[str]
     converted (sarf), or fixed as an explicit final debt, never silently dropped
     (T-4.6).
     """
-    from apps.inventory.models import Lot
-
     reasons: list[str] = []
 
     has_final = procurement.venture_settlements.filter(
@@ -1090,12 +1095,7 @@ def procurement_close_blocking_reasons(*, procurement: Procurement) -> list[str]
     if not has_final:
         reasons.append('Нет финальной сверки (FINAL settlement) по этому приходу.')
 
-    if Lot.objects.filter(
-        tenant_id=procurement.tenant_id,
-        procurement_item__procurement=procurement,
-        is_active=True,
-        reversed=False,
-    ).exists():
+    if procurement_has_active_lots(procurement):
         reasons.append('По этому приходу ещё есть нераспроданный товар.')
 
     positions = procurement_venture_positions(procurement=procurement)
@@ -1131,16 +1131,9 @@ def procurement_close_state(*, procurement: Procurement) -> dict:
         checkpoint), so the close affordance never surfaces prematurely.
       closeable — every gate passes (blocking_reasons empty).
       blocking_reasons — the remaining steps to close (human-readable)."""
-    from apps.inventory.models import Lot
-
     reasons = procurement_close_blocking_reasons(procurement=procurement)
     is_partnership = procurement.funding_source == Procurement.FundingSource.PARTNERSHIP
-    has_active_lots = Lot.objects.filter(
-        tenant_id=procurement.tenant_id,
-        procurement_item__procurement=procurement,
-        is_active=True,
-        reversed=False,
-    ).exists()
+    has_active_lots = procurement_has_active_lots(procurement)
     has_final = procurement.venture_settlements.filter(
         settlement_type=ProcurementVentureSettlement.SettlementType.FINAL,
     ).exists()

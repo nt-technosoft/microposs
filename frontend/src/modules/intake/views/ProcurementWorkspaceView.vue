@@ -20,9 +20,13 @@ import AmendmentSheet from '@/modules/intake/components/workspace/AmendmentSheet
 import ProcurementCancelDialog from '@/modules/intake/components/workspace/ProcurementCancelDialog.vue'
 import ReverseReceiveBatchDialog from '@/modules/intake/components/workspace/ReverseReceiveBatchDialog.vue'
 import ProcurementVentureSettlementCard from '@/modules/intake/components/workspace/ProcurementVentureSettlementCard.vue'
+import VentureCloseCard from '@/modules/intake/components/workspace/VentureCloseCard.vue'
 import {
+  closeProcurement,
   createProcurementVentureSettlement,
+  fetchProcurementClosePreview,
   fetchProcurementVentureSummary,
+  type ClosePreview,
   type ProcurementVentureSummary,
 } from '@/api/partnerships'
 
@@ -39,6 +43,8 @@ const cancelDialogOpen = ref(false)
 const reverseDialogOpen = ref(false)
 const ventureSummary = ref<ProcurementVentureSummary | null>(null)
 const savingVentureSettlement = ref(false)
+const closePreview = ref<ClosePreview | null>(null)
+const closingProcurement = ref(false)
 
 const paymentError = ref<string | null>(null)
 const lastPaymentCashAccountId = ref<number | null>(null)
@@ -89,7 +95,7 @@ async function ensureWorkspace(): Promise<void> {
   const id = route.params.id ? Number(route.params.id) : null
   if (id) {
     await store.load(id)
-    await loadVentureSummary(id)
+    await Promise.all([loadVentureSummary(id), loadClosePreview(id)])
   } else {
     const mode = route.query.mode as string | undefined
     const agreementId = route.query.agreement ? Number(route.query.agreement) : undefined
@@ -110,6 +116,35 @@ async function loadVentureSummary(id = procurement.value?.id ?? null): Promise<v
     ventureSummary.value = await fetchProcurementVentureSummary(Number(id))
   } catch {
     ventureSummary.value = null
+  }
+}
+
+async function loadClosePreview(id = procurement.value?.id ?? null): Promise<void> {
+  if (!id) {
+    closePreview.value = null
+    return
+  }
+  try {
+    closePreview.value = await fetchProcurementClosePreview(Number(id))
+  } catch {
+    closePreview.value = null
+  }
+}
+
+async function onCloseProcurement(): Promise<void> {
+  if (!procurement.value) return
+  closingProcurement.value = true
+  try {
+    await closeProcurement(procurement.value.id)
+    toast.success('Приход закрыт')
+    await Promise.all([store.load(procurement.value.id), loadClosePreview(procurement.value.id)])
+  } catch (err) {
+    const data = (err as any)?.response?.data
+    const reasons: string[] = data?.blocking_reasons ?? []
+    toast.error(reasons[0] ?? data?.detail ?? (err instanceof Error ? err.message : 'Не удалось закрыть приход'))
+    await loadClosePreview(procurement.value.id)
+  } finally {
+    closingProcurement.value = false
   }
 }
 
@@ -198,7 +233,11 @@ async function onVentureSettle(type: 'CONSTRUCTIVE' | 'FINAL'): Promise<void> {
       reserve_uzs: '0',
     })
     toast.success(type === 'FINAL' ? 'Финальная сверка сохранена' : 'Конструктивная сверка сохранена')
-    await Promise.all([store.load(procurement.value.id), loadVentureSummary(procurement.value.id)])
+    await Promise.all([
+      store.load(procurement.value.id),
+      loadVentureSummary(procurement.value.id),
+      loadClosePreview(procurement.value.id),
+    ])
   } catch (err) {
     const detail = (err as any)?.response?.data?.detail
     toast.error(detail ?? (err instanceof Error ? err.message : 'Не удалось сохранить сверку'))
@@ -307,7 +346,17 @@ onBeforeUnmount(() => store.$reset())
               <ProcurementVentureSettlementCard
                 :summary="ventureSummary"
                 :saving="savingVentureSettlement"
+                :readonly="procurement?.status === 'CLOSED'"
                 @settle="onVentureSettle"
+              />
+            </section>
+
+            <section v-if="closePreview" class="scroll-mt-16">
+              <VentureCloseCard
+                entity-label="приход"
+                :preview="closePreview"
+                :busy="closingProcurement"
+                @close="onCloseProcurement"
               />
             </section>
 

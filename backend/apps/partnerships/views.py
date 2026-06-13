@@ -231,7 +231,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16 agreement-level partner proceeds summary across linked procurements."""
-        from .venture import procurement_close_blocking_reasons, procurement_venture_positions
+        from .venture import procurement_venture_positions
 
         agreement = self.get_object()
         members = {
@@ -281,7 +281,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'procurement_id': procurement.id,
                 'status': procurement.status,
                 'capital_return_available_uzs': str(procurement_total.quantize(Decimal('0.01'))),
-                'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
             })
         rows = []
         for partner_id, values in totals.items():
@@ -519,7 +518,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16: current procurement-venture economic buckets in functional UZS."""
-        from .venture import procurement_close_blocking_reasons, procurement_venture_positions
+        from .venture import procurement_has_active_lots, procurement_venture_positions
 
         procurement = self.get_object()
         positions = procurement_venture_positions(procurement=procurement)
@@ -563,7 +562,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             'currency': 'UZS',
             'positions': rows,
             'totals': {key: str(value.quantize(Decimal('0.01'))) for key, value in totals.items()},
-            'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
+            'has_active_lots': procurement_has_active_lots(procurement),
         })
 
     @action(detail=True, methods=['get'], url_path='close-preview')

@@ -1,7 +1,7 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** ~67% (Фазы 1–4 done; остались 5 UI, 6 Excel replay)
+**Прогресс:** ~83% (Фазы 1–4 + 5 UI done; остаются T-5.3 negative-position repayment money-слайс и 6 Excel replay)
 **Зависит от:** E16
 **Блокирует:** first-client pilot, Excel replay, E03, E06
 
@@ -268,12 +268,18 @@ blocking reasons, final settlement, negative positions и read-only lock.
   `{show_close, closeable, blocking_reasons}` (wind-down по «нет активных лотов»/FINAL, не
   constructive; считается одной функцией с гейтами, без хранимой стадии). Гейты только на
   бэке — фронт отображает. (аудит зелёный)
-- [ ] T-5.1 Добавить кнопку “Закрыть приход” в `ProcurementWorkspaceView`.
-- [ ] T-5.2 Показать blocking reasons человеческим языком.
-- [ ] T-5.3 Добавить действие “Погасить долг” для negative position.
-- [ ] T-5.4 Добавить кнопку “Закрыть договор” в `AgreementDetail`.
-- [ ] T-5.5 После close UI становится read-only и не показывает действия, которые запрещены.
-- [ ] T-5.6 Проверить, что все backend операции E16 имеют UI entrypoint или осознанно hidden/admin.
+- [x] T-5.1 Кнопка «Закрыть приход» в `ProcurementWorkspaceView` (`VentureCloseCard`, контекстная:
+  скрыта в setup/operational; wind-down → блок+чек-лист; closeable → активна; CLOSED → итог).
+- [x] T-5.2 Blocking reasons человеческим языком — `blocking_reasons` с бэка как есть, чек-листом.
+- [ ] T-5.3 Действие «Погасить долг» для negative position — **отдельный money-слайс** (скрыто до бэка).
+- [x] T-5.4 Кнопка «Закрыть договор» в `AgreementDetail` (тот же `VentureCloseCard`).
+- [x] T-5.5 После CLOSED действия **скрыты** (settlement `:readonly`; взнос/возврат/аллокация/новый
+  приход/распределение скрыты), данные и итог остаются.
+- [x] T-5.6 Аудит UI-точек: все E16/E17-операции имеют UI-вход (sale/return/writeoff, settlement,
+  recovered-возврат, dividend, settle-partner, contribution/allocate, close прихода/договора);
+  только negative-position repayment осознанно скрыт до своего слайса.
+- Чистки: убран неиспользуемый `venture-summary.blocking_reasons`; FINAL-гейт фронта выровнен на
+  authoritative `has_active_lots` (UI и бэк не расходятся).
 
 ### Фаза 6 — Replay
 - [ ] T-6.1 Очистить базу и создать пользователей через canonical setup.
