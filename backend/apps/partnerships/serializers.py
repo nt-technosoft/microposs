@@ -394,6 +394,11 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         return ProcurementListSerializer(obj.procurements.all(), many=True, context=self.context).data
 
     def get_participant_totals(self, obj):
+        from .advances import partner_capital_positions
+        # Pool-correct positions: paid_in already excludes recovered-capital
+        # returns (same discriminator as advances.partner_capital_positions).
+        positions = partner_capital_positions(obj)
+
         rows = {
             partner.partner_id: {
                 'partner_id': partner.partner_id,
@@ -429,12 +434,13 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
                 rows[allocation.partner_id]['returned_amount'] += amount
         result = []
         for row in rows.values():
-            row['available_amount'] = (
-                row['contributed_amount']
-                - row['withdrawn_amount']
-                - row['allocated_amount']
-                + row['returned_amount']
-            )
+            pid = row['partner_id']
+            pos = positions.get(pid, {})
+            # E17 fix: use pool-correct paid_in from partner_capital_positions
+            # instead of contributed − ALL withdrawals (which wrongly included
+            # recovered-capital returns and made available_amount go negative).
+            paid_in = Decimal(str(pos.get('paid_in', Decimal('0.00'))))
+            row['available_amount'] = paid_in - row['allocated_amount'] + row['returned_amount']
             for key in ['contributed_amount', 'withdrawn_amount', 'allocated_amount', 'returned_amount', 'available_amount']:
                 row[key] = str(_money(row[key]))
             result.append(row)

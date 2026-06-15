@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   settle: [position: CapitalPositionRow]
+  withdraw: [position: CapitalPositionRow]
 }>()
 
 const EPS = 0.01
@@ -105,6 +106,9 @@ const hasVentureFacts = computed(() =>
             </span>
             <Button v-if="net(row) > 0" size="sm" type="button" @click="emit('settle', row)">
               Погасить
+            </Button>
+            <Button v-if="net(row) < 0 && withdrawable(row) > EPS" size="sm" variant="outline" type="button" @click="emit('withdraw', row)">
+              Вернуть в пул
             </Button>
           </div>
         </li>

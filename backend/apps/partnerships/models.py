@@ -139,8 +139,26 @@ class InvestmentAgreement(TenantModel):
 
         for c in self.contributions.all():
             _bump(c.currency, _D(str(c.amount)))
-        for w in self.withdrawals.all():
-            _bump(w.currency, -_D(str(w.amount)))
+        # E17: only POOL withdrawals (cash out of the agreement pool) reduce the
+        # pool free balance. Recovered-capital returns (operating cash,
+        # procurement-scoped) are a venture distribution and must NOT reduce this
+        # balance — same discriminator as partner_capital_positions in advances.py.
+        all_withdrawals = list(self.withdrawals.all())
+        pool_account_id = self.capital_account_id
+        pool_withdrawal_ids: set[int] = set()
+        if pool_account_id and all_withdrawals:
+            from apps.finance.models import CashEntry
+            pool_withdrawal_ids = set(
+                CashEntry.objects.filter(
+                    source_ref_type='agreement_withdrawal',
+                    source_ref_id__in=[w.id for w in all_withdrawals],
+                    account_id=pool_account_id,
+                    direction=CashEntry.Direction.OUT,
+                ).values_list('source_ref_id', flat=True)
+            )
+        for w in all_withdrawals:
+            if w.id in pool_withdrawal_ids:
+                _bump(w.currency, -_D(str(w.amount)))
         for a in self.allocations.all():
             amt = _D(str(a.amount))
             if a.direction == AgreementAllocation.Direction.TO_PROCUREMENT:

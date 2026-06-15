@@ -164,33 +164,23 @@ const recoveredCapitalRows = computed<RecoveredCapitalRow[]>(() =>
       })),
   ),
 )
-const availableByPartnerCurrency = computed<Record<number, Record<string, number>>>(() => {
-  const rows: Record<number, Record<string, number>> = {}
-  const add = (partnerId: number, currency: string, amount: number) => {
-    const bucket = rows[partnerId] ?? {}
-    bucket[currency] = (bucket[currency] ?? 0) + amount
-    rows[partnerId] = bucket
-  }
-  for (const contribution of agreement.value?.contributions ?? []) {
-    add(contribution.partner, contribution.currency, Number(contribution.amount || 0))
-  }
-  for (const withdrawal of agreement.value?.withdrawals ?? []) {
-    add(withdrawal.partner, withdrawal.currency, -Number(withdrawal.amount || 0))
-  }
-  for (const allocation of agreement.value?.allocations ?? []) {
-    const amount = Number(allocation.amount || 0)
-    add(
-      allocation.partner,
-      allocation.currency,
-      allocation.direction === 'TO_PROCUREMENT' ? -amount : amount,
-    )
-  }
-  return rows
-})
 const withdrawalAmountValue = computed(() => Number.parseFloat(withdrawalAmount.value || '0') || 0)
+// E17 fix: pool-correct availability sourced from capital positions (withdrawable
+// already excludes recovered-capital returns). availableByPartnerCurrency was
+// subtracting ALL withdrawals and falsely blocking valid pool returns.
 const withdrawalAvailableAmount = computed(() => {
   if (!withdrawalPartnerId.value) return 0
-  return availableByPartnerCurrency.value[withdrawalPartnerId.value]?.[withdrawalCurrency.value] ?? 0
+  const pos = positions.value.find((p) => p.partner_id === withdrawalPartnerId.value)
+  if (!pos) return 0
+  const withdrawableInPool = Number(pos.withdrawable || 0)
+  const agreementCurrency = (agreement.value?.currency || 'UZS').toUpperCase()
+  if (withdrawalCurrency.value === agreementCurrency) return withdrawableInPool
+  // USD request from UZS pool: convert at current rate
+  const rate = Number(latestUsdRate.value || 0)
+  if (withdrawalCurrency.value === 'USD' && agreementCurrency === 'UZS' && rate > 0) {
+    return withdrawableInPool / rate
+  }
+  return 0
 })
 const withdrawalAvailabilityError = computed(() => {
   if (!withdrawalPartnerId.value || withdrawalAmountValue.value <= 0) return ''
@@ -355,6 +345,15 @@ async function loadAdvances(): Promise<void> {
 function openSettle(position: CapitalPositionRow): void {
   activePosition.value = position
   settleOpen.value = true
+}
+
+// E17 Bug-2 fix: creditor's excess must return via POOL path (not recovered).
+// Pre-fill the pool withdrawal form so the operator doesn't reach for
+// AgreementRecoveredCapitalCard by mistake.
+function openPoolWithdrawal(position: CapitalPositionRow): void {
+  withdrawalPartnerId.value = position.partner_id
+  withdrawalCurrency.value = ((position.currency || agreement.value?.currency || 'UZS').toUpperCase()) as 'UZS' | 'USD'
+  withdrawalAmount.value = Number(position.withdrawable || 0).toFixed(2)
 }
 
 // E17 T-5.3: negative venture debts are per-procurement (repayment targets one
@@ -529,7 +528,7 @@ onMounted(async () => {
         />
 
         <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
-        <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" />
+        <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" @withdraw="openPoolWithdrawal" />
 
         <!-- E17 T-5.3: долги партнёров перед венчуром (по приходам) -->
         <Card v-if="ventureDebts.length && !isClosed" class="rounded-2xl bg-background">

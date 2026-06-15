@@ -860,12 +860,32 @@ def _agreement_partner_available(
     partner_id: int,
     currency: str,
 ) -> Decimal:
+    """Pool-available balance for a partner: contributions − POOL withdrawals −
+    allocated + returned. Only withdrawals whose cash physically left the
+    agreement pool account are deducted; recovered-capital returns (operating
+    cash, procurement-scoped) are a venture distribution and must NOT reduce
+    the pool available — same discriminator as partner_capital_positions."""
     currency = str(currency or 'UZS').upper()
     available = ZERO
     for contribution in agreement.contributions.filter(partner_id=partner_id, currency=currency):
         available += Decimal(str(contribution.amount))
-    for withdrawal in agreement.withdrawals.filter(partner_id=partner_id, currency=currency):
-        available -= Decimal(str(withdrawal.amount))
+    # E17: only POOL withdrawals reduce pool available
+    partner_withdrawals = list(agreement.withdrawals.filter(partner_id=partner_id, currency=currency))
+    pool_account_id = agreement.capital_account_id
+    pool_withdrawal_ids: set[int] = set()
+    if pool_account_id and partner_withdrawals:
+        from apps.finance.models import CashEntry
+        pool_withdrawal_ids = set(
+            CashEntry.objects.filter(
+                source_ref_type='agreement_withdrawal',
+                source_ref_id__in=[w.id for w in partner_withdrawals],
+                account_id=pool_account_id,
+                direction=CashEntry.Direction.OUT,
+            ).values_list('source_ref_id', flat=True)
+        )
+    for w in partner_withdrawals:
+        if w.id in pool_withdrawal_ids:
+            available -= Decimal(str(w.amount))
     for allocation in agreement.allocations.filter(partner_id=partner_id, currency=currency):
         amount = Decimal(str(allocation.amount))
         if allocation.direction == AgreementAllocation.Direction.TO_PROCUREMENT:
