@@ -17,6 +17,8 @@ class AgreementActionSource(models.TextChoices):
     BUSINESS_RECORDED = 'BUSINESS_RECORDED', 'Зафиксировано бизнесом'
     INVESTOR_SUBMITTED = 'INVESTOR_SUBMITTED', 'Отправлено инвестором'
     SYSTEM = 'SYSTEM', 'Система'
+    # E18 Phase 1: capital contribution sourced from reinvested venture profit.
+    PROFIT_REINVEST = 'PROFIT_REINVEST', 'Реинвестирование прибыли'
 
 
 class AgreementConfirmationStatus(models.TextChoices):
@@ -1162,6 +1164,8 @@ class PartnerLedgerEntry(TenantModel):
         PROFIT_ACCRUED = 'PROFIT_ACCRUED', 'Начислена прибыль'
         PROFIT_REVERSED = 'PROFIT_REVERSED', 'Сторно прибыли'
         DIVIDEND_PAID = 'DIVIDEND_PAID', 'Выплачен дивиденд'
+        # E18 Phase 1: venture profit consumed by reinvestment as pool capital.
+        PROFIT_TO_CAPITAL = 'PROFIT_TO_CAPITAL', 'Прибыль → капитал'
         LOSS_INCURRED = 'LOSS_INCURRED', 'Зафиксирован убыток'
         ADVANCE_OUT = 'ADVANCE_OUT', 'Капитальный аванс (выдан)'
         ADVANCE_REPAID = 'ADVANCE_REPAID', 'Капитальный аванс (погашен)'

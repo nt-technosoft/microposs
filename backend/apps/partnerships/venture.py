@@ -680,6 +680,7 @@ def procurement_venture_positions(
             'partner_liability_loss_uzs': _ZERO,
             'capital_returned_uzs': _ZERO,
             'dividends_paid_uzs': _ZERO,
+            'profit_to_capital_uzs': _ZERO,
             'remaining_inventory_capital_uzs': _ZERO,
             'liability_capital_recovered_uzs': _ZERO,
             'capital_return_available_uzs': _ZERO,
@@ -749,6 +750,8 @@ def procurement_venture_positions(
             r['capital_returned_uzs'] += total
         elif item['entry_type'] == PartnerLedgerEntry.EntryType.DIVIDEND_PAID:
             r['dividends_paid_uzs'] += total
+        elif item['entry_type'] == PartnerLedgerEntry.EntryType.PROFIT_TO_CAPITAL:
+            r['profit_to_capital_uzs'] += total
 
     withdrawals = AgreementWithdrawal.objects.filter(
         tenant_id=procurement.tenant_id,
@@ -806,7 +809,13 @@ def procurement_venture_positions(
 
         capital_delta = _money(r['capital_recovered_uzs'] - r['capital_returned_uzs'] + repaid_capital)
         r['capital_return_available_uzs'] = max(_ZERO, capital_delta)
-        profit_delta = _money(r['provisional_profit_uzs'] - r['dividends_paid_uzs'] + repaid_dividend)
+        # E18 Phase 1: subtract profit_to_capital_uzs explicitly (separate bucket).
+        profit_delta = _money(
+            r['provisional_profit_uzs']
+            - r['dividends_paid_uzs']
+            - r['profit_to_capital_uzs']
+            + repaid_dividend
+        )
         r['provisional_profit_available_uzs'] = max(_ZERO, profit_delta) if has_settlement else _ZERO
 
         # E17 T-5.3: negative position is component-aware; repayments (waterfall)

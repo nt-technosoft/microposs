@@ -430,6 +430,44 @@ def agreement_pool_reconciliation_residual(agreement) -> Decimal:
     return _q(Decimal(str(pool.balance)) - expected)
 
 
+def agreement_profit_reinvestment_residual(agreement) -> Decimal:
+    """Cross-table check: Σ PLR.PROFIT_TO_CAPITAL (functional UZS) must equal
+    Σ AgreementContribution.PROFIT_REINVEST for the same agreement.
+    Both tables are written together in _settle_partner_from_profit; drift means
+    a write was orphaned or incomplete.
+    Returns ledger_sum − contrib_sum (0 = reconciled). UZS agreements only."""
+    from .models import AgreementActionSource, AgreementContribution, PartnerLedgerEntry
+
+    ccy = str(agreement.currency or 'UZS').upper()
+    if ccy != 'UZS':
+        raise ValueError(
+            f'agreement_profit_reinvestment_residual: non-UZS agreement {agreement.id} '
+            f'({ccy}) — cross-check not yet supported. Surface to lead.'
+        )
+
+    ledger_sum = sum(
+        (
+            Decimal(str(e.functional_amount_uzs))
+            for e in PartnerLedgerEntry.objects.filter(
+                ledger__procurement__agreement=agreement,
+                entry_type=PartnerLedgerEntry.EntryType.PROFIT_TO_CAPITAL,
+            )
+        ),
+        _ZERO,
+    )
+    contrib_sum = sum(
+        (
+            Decimal(str(c.amount))
+            for c in AgreementContribution.objects.filter(
+                agreement=agreement,
+                source=AgreementActionSource.PROFIT_REINVEST,
+            )
+        ),
+        _ZERO,
+    )
+    return _q(ledger_sum - contrib_sum)
+
+
 def agreement_close_blocking_reasons(*, agreement) -> list[str]:
     """Reasons an investment agreement cannot be closed yet (empty = closeable).
 
@@ -470,6 +508,16 @@ def agreement_close_blocking_reasons(*, agreement) -> list[str]:
         reasons.append(
             f'Капитал-пул договора не сведён (residual={residual} {agreement.currency}).'
         )
+
+    try:
+        reinvest_residual = agreement_profit_reinvestment_residual(agreement)
+        if abs(reinvest_residual) > _EPS:
+            reasons.append(
+                f'Реинвестирование прибыли не сведено: PLR.PROFIT_TO_CAPITAL − '
+                f'contribution(PROFIT_REINVEST) = {reinvest_residual} UZS.'
+            )
+    except ValueError:
+        pass  # non-UZS agreement: skip until multi-currency reinvestment is supported
 
     merged = ConservationReport()
     for procurement in procurements:

@@ -129,12 +129,19 @@ def _agreement_fx_rate(tenant_id: int, currency: str, when) -> Decimal:
 
 
 def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, functional, when, from_account_id) -> None:
-    """Per-partner FROM_PROFIT (Model B): profit cash operating → pool, retained
-    earnings → partner capital, profit_pending drops, + contribution row so the
-    derived balance reconciles. UZS agreements only for now."""
+    """Per-partner FROM_PROFIT (Model B): venture profit cash (operating) → pool,
+    retained earnings → partner equity. GL and cash entries are unchanged from the
+    E17 design; only the domain records are now honest:
+    - PROFIT_TO_CAPITAL ledger entry (was: fake DIVIDEND_PAID)
+    - AgreementContribution with source=PROFIT_REINVEST (was: generic BUSINESS_RECORDED)
+    UZS agreements only for now."""
     from apps.finance.models import CashAccount
     from apps.partnerships.agreement_services import append_ledger_entry, get_or_create_ledger
-    from apps.partnerships.models import AgreementConfirmationStatus, AgreementContribution
+    from apps.partnerships.models import (
+        AgreementActionSource,
+        AgreementConfirmationStatus,
+        AgreementContribution,
+    )
 
     if from_account_id is None:
         raise ValueError('FROM_PROFIT settlement requires a source operating cash account.')
@@ -155,6 +162,7 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
     debtor_capital = _equity_account_code(
         role=_partner_role(agreement, partner_id), legal_mode=agreement.legal_mode)
 
+    # GL + cash entries: UNCHANGED from E17 (oracle G4 pins numbers/accounts).
     create_cash_entry(tenant_id=tenant_id, account=account, direction=CashEntry.Direction.OUT,
                       amount=amount, date=when, source_ref_type='partner_from_profit', source_ref_id=partner_id)
     create_cash_entry(tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
@@ -172,15 +180,22 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
              'description': 'Капитал партнёра достроен'},
         ],
         description='Погашение капитального долга из прибыли', date=when)
+
+    # E18 Phase 1: honest domain records (no fake dividend, no generic contribution).
     ledger = get_or_create_ledger(procurement_id=procurement.id, partner_id=partner_id, tenant_id=tenant_id)
-    append_ledger_entry(ledger=ledger, entry_type=PartnerLedgerEntry.EntryType.DIVIDEND_PAID,
-                        amount=amount, currency=agreement.currency or 'UZS',
-                        source_ref=f'partner_from_profit:{partner_id}', date=when)
+    append_ledger_entry(
+        ledger=ledger,
+        entry_type=PartnerLedgerEntry.EntryType.PROFIT_TO_CAPITAL,
+        amount=amount, currency=agreement.currency or 'UZS',
+        source_ref=f'partner_from_profit:{partner_id}', date=when,
+    )
     AgreementContribution.objects.create(
         tenant_id=tenant_id, agreement=agreement, partner_id=partner_id,
         amount=amount, currency=agreement.currency or 'UZS', fx_rate=Decimal('1'), date=when,
+        source=AgreementActionSource.PROFIT_REINVEST,
         confirmation_status=AgreementConfirmationStatus.CONFIRMED,
-        notes='Погашение капитального долга из прибыли')
+        notes='Прибыль реинвестирована в капитал пула',
+    )
 
 
 def partner_capital_positions(agreement) -> dict:
@@ -269,6 +284,7 @@ def partner_capital_positions(agreement) -> dict:
                 'partner_liability_loss_uzs': Decimal('0.00'),
                 'capital_returned_uzs': Decimal('0.00'),
                 'dividends_paid_uzs': Decimal('0.00'),
+                'profit_to_capital_uzs': Decimal('0.00'),
                 'capital_return_available_uzs': Decimal('0.00'),
                 'provisional_profit_available_uzs': Decimal('0.00'),
                 'negative_position_uzs': Decimal('0.00'),
