@@ -1152,6 +1152,19 @@ export async function closeProcurement(id: number, clientRequestId?: string): Pr
   return data
 }
 
+export interface RepayVentureDebtPayload {
+  partner_id: number
+  amount: string
+  currency?: string
+  paid_to_account_id: number
+  client_request_id?: string
+}
+
+export async function repayVentureDebt(procurementId: number, payload: RepayVentureDebtPayload): Promise<unknown> {
+  const { data } = await api.post(`/api/v1/partnerships/procurements/${procurementId}/repay-debt/`, payload)
+  return data
+}
+
 export async function fetchAgreementClosePreview(id: number): Promise<ClosePreview> {
   const { data } = await api.get<ClosePreview>(`/api/v1/partnerships/agreements/${id}/close-preview/`)
   return data

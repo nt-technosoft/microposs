@@ -45,6 +45,7 @@ import AgreementAdvancesCard from '@/modules/intake/components/agreement/Agreeme
 import VentureCloseCard from '@/modules/intake/components/workspace/VentureCloseCard.vue'
 import AgreementRecoveredCapitalCard from '@/modules/intake/components/agreement/AgreementRecoveredCapitalCard.vue'
 import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
+import RepayDebtSheet from '@/modules/intake/components/agreement/RepayDebtSheet.vue'
 import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -356,6 +357,41 @@ function openSettle(position: CapitalPositionRow): void {
   settleOpen.value = true
 }
 
+// E17 T-5.3: negative venture debts are per-procurement (repayment targets one
+// procurement), so we read them from the per-procurement venture summaries.
+interface VentureDebtRow {
+  procurement_id: number
+  partner_id: number
+  partner_name: string
+  debt_uzs: string
+}
+const ventureDebts = computed<VentureDebtRow[]>(() => {
+  const rows: VentureDebtRow[] = []
+  for (const summary of ventureSummaries.value) {
+    for (const pos of summary.positions) {
+      if ((Number(pos.negative_position_uzs) || 0) > 0.01) {
+        rows.push({
+          procurement_id: summary.procurement_id,
+          partner_id: pos.partner_id,
+          partner_name: pos.partner_name,
+          debt_uzs: pos.negative_position_uzs,
+        })
+      }
+    }
+  }
+  return rows
+})
+const repayOpen = ref(false)
+const repayTarget = ref<VentureDebtRow | null>(null)
+function openRepay(row: VentureDebtRow): void {
+  repayTarget.value = row
+  repayOpen.value = true
+}
+async function onDebtRepaid(): Promise<void> {
+  repayOpen.value = false
+  await load()
+}
+
 async function onCloseAgreement(): Promise<void> {
   closingAgreement.value = true
   try {
@@ -494,6 +530,40 @@ onMounted(async () => {
 
         <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
         <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" />
+
+        <!-- E17 T-5.3: долги партнёров перед венчуром (по приходам) -->
+        <Card v-if="ventureDebts.length && !isClosed" class="rounded-2xl bg-background">
+          <CardHeader>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle class="text-base">Долги перед венчуром</CardTitle>
+                <CardDescription class="mt-1">
+                  Отрицательная позиция партнёра: вывел больше положенного или потерял товар по вине.
+                  Закрытие прихода заблокировано, пока долг не погашен.
+                </CardDescription>
+              </div>
+              <Wallet class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </div>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-2">
+            <div
+              v-for="debt in ventureDebts"
+              :key="`${debt.procurement_id}-${debt.partner_id}`"
+              class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3"
+            >
+              <div class="min-w-0">
+                <span class="block truncate font-medium text-foreground">{{ debt.partner_name }}</span>
+                <span class="mt-0.5 block text-xs text-muted-foreground">приход #{{ debt.procurement_id }}</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-sm font-semibold tabular-nums text-destructive">
+                  {{ formatPrice(debt.debt_uzs, 'UZS') }}
+                </span>
+                <Button size="sm" type="button" @click="openRepay(debt)">Погасить долг</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <AgreementRecoveredCapitalCard
           v-if="!isClosed"
@@ -742,6 +812,14 @@ onMounted(async () => {
       :accounts="operatingAccounts"
       @close="dividendOpen = false"
       @paid="onDividendPaid"
+    />
+
+    <RepayDebtSheet
+      :open="repayOpen"
+      :target="repayTarget"
+      :accounts="operatingAccounts"
+      @close="repayOpen = false"
+      @repaid="onDebtRepaid"
     />
   </main>
 </template>

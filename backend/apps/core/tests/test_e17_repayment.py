@@ -11,6 +11,8 @@ import uuid
 from decimal import Decimal
 
 from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from apps.finance.models import CashAccount, JournalEntry, JournalLine
 from apps.partnerships.agreement_services import pay_dividend
@@ -246,3 +248,70 @@ class CrossCurrencyRepaymentTests(TestCase):
         debit, credit, credits = _credits_by_account(ctx['business'].id, repayment.pk)
         self.assertEqual(debit, credit)
         _assert_conservation_balanced(self, procurement, 'cross-currency')
+
+
+class RepayDebtApiTests(APITestCase):
+    def setUp(self):
+        ctx = build_tenant()
+        self.ctx = ctx
+        self.client.force_authenticate(user=ctx['owner'])
+        procurement, _ = seed_received_procurement(ctx)
+        self.procurement = procurement
+        session = open_session(ctx)
+        _sell(ctx, session, quantity=5, unit_price='240000.00')
+        create_venture_settlement(
+            tenant_id=ctx['business'].id, procurement_id=procurement.id,
+            settlement_type=ProcurementVentureSettlement.SettlementType.CONSTRUCTIVE,
+        )
+        pay_dividend(
+            partner_id=ctx['investor'].id, procurement_id=procurement.id,
+            amount=Decimal('216000.00'), currency='UZS',
+            from_account_id=ctx['cash_account'].id, tenant_id=ctx['business'].id,
+        )
+        _sell(ctx, session, quantity=5, unit_price='100000.00')
+
+    def _url(self):
+        return f'/api/v1/partnerships/procurements/{self.procurement.id}/repay-debt/'
+
+    def _debt(self):
+        return _neg(self.ctx, self.procurement, 'investor')['negative_position_uzs']
+
+    def test_repay_ok(self):
+        debt = self._debt()
+        resp = self.client.post(self._url(), {
+            'partner_id': self.ctx['investor'].id, 'amount': str(debt),
+            'currency': 'UZS', 'paid_to_account_id': self.ctx['cash_account'].id,
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._debt(), Decimal('0.00'))
+
+    def test_overpay_returns_400(self):
+        debt = self._debt()
+        resp = self.client.post(self._url(), {
+            'partner_id': self.ctx['investor'].id, 'amount': str(debt + Decimal('5000.00')),
+            'currency': 'UZS', 'paid_to_account_id': self.ctx['cash_account'].id,
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_currency_mismatch_returns_400(self):
+        debt = self._debt()
+        resp = self.client.post(self._url(), {
+            'partner_id': self.ctx['investor'].id, 'amount': str(debt),
+            'currency': 'USD', 'paid_to_account_id': self.ctx['cash_account'].id,  # UZS account
+        }, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_idempotent(self):
+
+        debt = self._debt()
+        rid = str(uuid.uuid4())
+        body = {
+            'partner_id': self.ctx['investor'].id, 'amount': str(debt),
+            'currency': 'UZS', 'paid_to_account_id': self.ctx['cash_account'].id,
+            'client_request_id': rid,
+        }
+        first = self.client.post(self._url(), body, format='json')
+        second = self.client.post(self._url(), body, format='json')
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._debt(), Decimal('0.00'))

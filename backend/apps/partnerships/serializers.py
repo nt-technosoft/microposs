@@ -211,6 +211,15 @@ class SettlePartnerCapitalSerializer(serializers.Serializer):
     client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
 
+class RepayVentureDebtSerializer(serializers.Serializer):
+    """E17 T-5.3: repay a partner's negative venture position with real cash."""
+    partner_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    paid_to_account_id = serializers.IntegerField()
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+
+
 class AgreementContributionSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
     partner_role = serializers.CharField(source='partner.role', read_only=True)

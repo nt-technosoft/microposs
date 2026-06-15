@@ -603,6 +603,31 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             )
         return Response(build_workspace_payload(closed))
 
+    @action(detail=True, methods=['post'], url_path='repay-debt')
+    def repay_debt(self, request, pk=None):
+        """E17 T-5.3: repay a partner's negative venture position. Idempotent;
+        ValueError (overpay / currency mismatch / no debt / closed) → HTTP 400."""
+        from .serializers import RepayVentureDebtSerializer
+        from .venture import repay_partner_venture_debt
+
+        procurement = self.get_object()
+        serializer = RepayVentureDebtSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            repay_partner_venture_debt(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                partner_id=data['partner_id'],
+                amount=data['amount'],
+                currency=data.get('currency') or 'UZS',
+                paid_to_account_id=data['paid_to_account_id'],
+                client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(build_workspace_payload(procurement))
+
     @action(detail=True, methods=['post'], url_path='venture-settlements')
     def venture_settlements(self, request, pk=None):
         """E16: create constructive/final procurement venture settlement."""
