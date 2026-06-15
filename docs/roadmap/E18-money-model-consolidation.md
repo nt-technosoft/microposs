@@ -264,16 +264,20 @@ golden-контракт) и финализироваться здесь.
   (+ conservation вариант A: тавтологичный карман убран → честный agreement-level кросс-чек `agreement_profit_reinvestment_residual` в close-гейте.)
 
 ### Фаза 2 — Декомпозиция `workspace.py` (behavior-preserving)
-- [ ] T-2.1 (a) Зафиксировать поведение: прогон suite + характеризующие тесты на границе
+**Слайс 1 ✅ (лид-аудит PASS 2026-06-16):** import integrity ok, `makemigrations --check` чисто,
+338 passed = бейзлайн, ни один кластер не импортирует shell, payload→common без цикла.
+- [x] T-2.1 (a) Зафиксировать поведение: прогон suite + характеризующие тесты на границе
   workspace-API для непокрытых путей; задокументировать trigger-map.
-- [ ] T-2.2 (инвариант 1) `grep` всех внешних `from …workspace import` (views/serializers/4 команды/
+- [x] T-2.2 (инвариант 1) `grep` всех внешних `from …workspace import` (views/serializers/4 команды/
   ~10 тестов), развернуть многострочные импорты в плоский список → собрать **точный** набор ре-экспорта
   shell'а. Проверка: `import apps.partnerships.workspace` + сборка suite не падает.
-- [ ] T-2.3 (инвариант 2) Построить/зафиксировать межкластерный DAG; вынести хелперы с ≥2 кластерами
+- [x] T-2.3 (инвариант 2) Построить/зафиксировать межкластерный DAG; вынести хелперы с ≥2 кластерами
   в `workspace_common.py` (`_require_workspace_agreement`, `_amount_uzs_to_currency`,
   `_with_client_request_id`, `_normalize_currency`+fx-семейство, `_expense_value_uzs`,
   `_has_capital_activity`, `_has_payment_activity`, generic `_add_amount`/`_coerce_datetime`).
-- [ ] T-2.4 (b) Первый вынос — read/payload-слой → `workspace_payload.py` (`build_workspace_payload` +
+  Лид-уточнение: `_agreement_available_by_partner` — это A+B (≥2 кластера) → **остаётся в
+  `workspace_common`** (не мигрирует в funding); удаляется в Фазе 6 при переходе на read-model.
+- [x] T-2.4 (b) Первый вынос — read/payload-слой → `workspace_payload.py` (`build_workspace_payload` +
   `_*_payload` + `_display`/`_flow_*`, money-neutral); чистый перенос; suite зелёный.
 - [ ] T-2.5 (c) `workspace_funding.py` (capital snapshot/allocation/contribution/convert +
   `_agreement_available_by_partner` единственным до Ф6); сеть = equivalence-contract + suite.
@@ -442,7 +446,15 @@ unit-тестов. **Метрика чистки:** нет ответа на «�
 ## Открытые вопросы
 
 Все архитектурные/денежные развилки закрыты владельцем 2026-06-15 — см. «Решённые вопросы».
-Новых открытых вопросов нет; остаётся go/no-go по эпику целиком.
+Остаётся go/no-go по фазам.
+
+- ⚠️ **Шов functional-currency (учесть в read-model/conservation, НЕ реализовывать в E18).**
+  Функциональная валюта сейчас захардкожена `UZS` (`_uzs`-поля, литерал `'UZS'` в
+  `venture_conservation`, GL). В read-model/tag/conservation **не хардкодить функциональный
+  литерал** — параметризовать как «functional currency тенанта» (дефолт UZS), чтобы будущий
+  переход на базовую валюту бизнеса (USD-бизнес) был флипом конфига + сменой fx-резолва, а не
+  перепроектированием read-model. Сам переход — отдельный будущий эпic (см. backlog), строить при
+  появлении non-UZS-бизнеса. Связано: FROM_PROFIT non-UZS и [[E13]] mixed-currency приход.
 
 ## Решённые вопросы (история)
 
