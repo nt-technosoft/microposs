@@ -15,6 +15,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from apps.finance.fx_rates import resolve_fx_rate_snapshot
+from apps.suppliers.models import SupplierPayable
 
 from .models import (
     AgreementAllocation,
@@ -290,3 +291,55 @@ def _agreement_available_by_partner(agreement: InvestmentAgreement) -> dict[int,
             signed = -signed
         _add_amount(available, allocation.partner_id, allocation.currency, signed)
     return available
+
+
+def _receive_funding_breakdown(
+    items,
+    item_values_uzs,
+    expenses,
+    expense_allocations_uzs,
+    expense_values_uzs: dict[int, Decimal] | None = None,
+):
+    """E12: per-currency obligation of this receive batch.
+
+    Returns (native_by_ccy, func_by_ccy):
+      - func_by_ccy[ccy]   — functional UZS (Σ must equal total_inventory_uzs)
+      - native_by_ccy[ccy] — transaction-currency amount (func / line fx_rate)
+    Built line-by-line so partial receives and mixed currencies stay exact.
+    """
+    native: dict[str, Decimal] = {}
+    func: dict[str, Decimal] = {}
+
+    def _add(ccy: str, fx_rate, func_uzs: Decimal) -> None:
+        ccy = str(ccy or 'UZS').upper()
+        fx = Decimal(str(fx_rate or '1'))
+        func_uzs = Decimal(str(func_uzs))
+        native_amt = (func_uzs / fx) if fx else func_uzs
+        native[ccy] = native.get(ccy, Decimal('0')) + native_amt
+        func[ccy] = func.get(ccy, Decimal('0')) + func_uzs
+
+    for item, value_uzs in zip(items, item_values_uzs):
+        _add(item.currency, item.fx_rate, value_uzs)
+    for expense in expenses:
+        expense_value_uzs = (
+            expense_values_uzs.get(expense.id, Decimal('0.00'))
+            if expense_values_uzs is not None
+            else _expense_value_uzs(expense)
+        )
+        _add(expense.currency, expense.fx_rate, expense_value_uzs)
+
+    return native, func
+
+
+def _ensure_source_editable(procurement: Procurement) -> None:
+    if procurement.status != Procurement.Status.OPEN:
+        raise ValueError('Source can be edited only while procurement is OPEN.')
+    if procurement.receive_batches.exists():
+        raise ValueError('Source cannot be edited after receive batches exist.')
+    if _has_payment_activity(
+        procurement,
+        SupplierPayable.objects.filter(procurement=procurement),
+    ):
+        raise ValueError('Source cannot be edited after payment facts exist.')
+    if _has_capital_activity(procurement):
+        raise ValueError('Source cannot be edited after capital activity exists.')

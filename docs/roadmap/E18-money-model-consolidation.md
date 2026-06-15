@@ -279,8 +279,10 @@ golden-контракт) и финализироваться здесь.
   `workspace_common`** (не мигрирует в funding); удаляется в Фазе 6 при переходе на read-model.
 - [x] T-2.4 (b) Первый вынос — read/payload-слой → `workspace_payload.py` (`build_workspace_payload` +
   `_*_payload` + `_display`/`_flow_*`, money-neutral); чистый перенос; suite зелёный.
-- [ ] T-2.5 (c) `workspace_funding.py` (capital snapshot/allocation/contribution/convert +
-  `_agreement_available_by_partner` единственным до Ф6); сеть = equivalence-contract + suite.
+- [x] T-2.5 (c) `workspace_funding.py` (10 B-функций) ✅ лид-аудит PASS 2026-06-16: 338 passed,
+  makemigrations чисто, без shell-импортов/циклов. Call-graph поправил 3 размещения:
+  `_spend_allocated_partnership_capital`→funding (B-only), `_receive_funding_breakdown`+
+  `_ensure_source_editable`→common (≥2 кластера). `workspace.py` 4406→2693.
 - [ ] T-2.6 (c) `workspace_payment.py` (pay_costs/overpayment/supplier_payable); сеть = то же.
 - [ ] T-2.7 (c) `workspace_receive.py` (receive/reverse/funding-breakdown/pool-spend; рёбра D→B сохранены, без цикла); сеть = то же.
 - [ ] T-2.8 (c) `workspace_amendments.py` (source/lines/settlement/amend/split/cancel); сеть = то же.
