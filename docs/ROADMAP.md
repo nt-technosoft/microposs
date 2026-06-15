@@ -38,7 +38,9 @@
 | **E14** | Сверка внесённого и договорного капитала (межпартнёрские авансы) | 🟡 IN_PROGRESS | 95% | E11, E12 | [→](./roadmap/E14-capital-reconciliation-advances.md) |
 | **E15** | Partner Distributions & Capital Return (исходящие партнёрские деньги) | 🟡 IN_PROGRESS | 90% | E11, E12, E14 | [→](./roadmap/E15-partner-distributions-capital-return.md) |
 | **E16** | Procurement Venture Settlement & Partner Proceeds | 🟡 IN_PROGRESS | 95% | E07, E11, E12, E14, E15 | [→](./roadmap/E16-procurement-venture-settlement.md) |
-| **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | 🟡 IN_PROGRESS | ~90% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
+| **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | ✅ DONE | 100% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
+| **E18** | Money Model Consolidation | ⚪ NOT_STARTED | 0% | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
+| **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
 
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
@@ -95,6 +97,10 @@ E17 — production-readiness слой поверх E16. Это не новая �
 рисковых швов перед пилотным клиентом: нельзя оставлять два источника прибыли,
 legacy-взаиморасчёты рядом с net-position, незакрываемые приходы/договоры и
 операции без idempotency.
+
+E19 — параллельный ecosystem-layer трек. Он строит provider-neutral integration
+runtime и не зависит от внутренней реализации E18: gateway вызывает доменные
+команды Sherik Core, а не пишет в GL, partner read-model или domain tables.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации

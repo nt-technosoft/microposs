@@ -1,9 +1,9 @@
 # E17 — Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow
 
-**Статус:** `IN_PROGRESS`
-**Прогресс:** ~90% (Фазы 1–5 done вкл. T-5.3 repayment; остаётся UI-кнопка «Погасить долг» (follow-up) и Фаза 6 Excel replay)
+**Статус:** `DONE` (закрыт 2026-06-15)
+**Прогресс:** 100% — Фазы 1–5 done; acceptance 11/11 (S1–S11, S4 закрыт commit b62a3e1, conservation зелёный во всех). Фаза 6 (Excel-replay) закрыта как **не-применимая** — см. «Решённые вопросы».
 **Зависит от:** E16
-**Блокирует:** first-client pilot, Excel replay, E03, E06
+**Блокирует:** first-client pilot, E03, E06
 
 ---
 
@@ -286,12 +286,19 @@ blocking reasons, final settlement, negative positions и read-only lock.
 - Чистки: убран неиспользуемый `venture-summary.blocking_reasons`; FINAL-гейт фронта выровнен на
   authoritative `has_active_lots` (UI и бэк не расходятся).
 
-### Фаза 6 — Replay
-- [ ] T-6.1 Очистить базу и создать пользователей через canonical setup.
-- [ ] T-6.2 Прогнать Excel приход/продажи/возвраты через UI-like API flow.
-- [ ] T-6.3 Сверить кассы, товары, capital return, profit, negative positions.
-- [ ] T-6.4 Сделать final settlement, выплаты/погашения, close procurement/agreement.
-- [ ] T-6.5 Зафиксировать результат replay как acceptance report.
+### Фаза 6 — Replay — ❌ ЗАКРЫТА КАК НЕ-ПРИМЕНИМАЯ (2026-06-15)
+
+Excel-replay задумывался как сверка факта с Excel-данными. Но Excel — не оракул
+(в нём самом возможны ошибки), поэтому сверка с ним **не доказывает формулы**.
+Экономическая модель уже доказана сильнее: unit-сьют ассертит точные ожидаемые
+сплиты (capital/loss/FX по capital_share, profit по profit_share), conservation
+даёт точный-0 leak-proof, плюс независимые аудиторские прогоны и acceptance 11/11.
+Единственная остаточная ценность replay — **покрытие на объёме** (FIFO-нарезка,
+накопление округления, 3+ партнёра); правильный инструмент для этого —
+**property/fuzz-тест** (случайная длинная последовательность → conservation +
+реконсиляция), он вынесен в E18 Фаза 7, не в E17.
+
+- [~] T-6.1–T-6.5 — сняты: заменены property/volume-тестом в E18.
 
 ## Открытые вопросы
 
@@ -299,6 +306,16 @@ blocking reasons, final settlement, negative positions и read-only lock.
 
 ## Решённые вопросы (история)
 
+- ✓ 2026-06-15 (закрытие эпика): acceptance 11/11 (S1–S11) зелёный. Последний FAIL —
+  S4: возврат кредитора в пул отклонялся, т.к. гейт читал legacy
+  `_agreement_partner_available` (0) вместо канонического
+  `partner_capital_positions().withdrawable`. Фикс — направить гейт на канонический
+  pool-read (commit b62a3e1), + регресс-тест (дыра: сьют читал позицию, но не звал
+  withdrawal). Ре-верифицировано независимым прогоном: возврат проходит, net→0,
+  conservation 0.
+- ✓ 2026-06-15 (Фаза 6): Excel-replay закрыт как не-применимый — Excel не оракул,
+  не доказывает формулы; экономика доказана unit-сплитами + conservation + аудитом;
+  покрытие на объёме → property-тест в E18 Фаза 7. См. раздел «Фаза 6».
 - ✓ 2026-06-09 (Фаза 3): двойной счёт в `partner_capital_positions` — recovered-capital возвраты
   (E16, из операционной кассы) вычитались из пулового `paid_in` И учитывались в venture-позиции,
   раздувая `net` в ложное «должен пулу». Решение (вариант аудита (a), корень): пуловый `paid_in`
