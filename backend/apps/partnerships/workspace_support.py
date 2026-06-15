@@ -399,11 +399,17 @@ def add_agreement_withdrawal(
             available = money(venture_position.get('capital_return_available_uzs', ZERO))
             requested_available_basis = functional
         else:
-            available = _agreement_partner_available(
-                agreement=agreement,
-                partner_id=partner_id,
-                currency=currency,
-            )
+            # E17 S4: pool-withdrawal availability is the canonical pool-read —
+            # partner_capital_positions(agreement)[partner_id]['withdrawable'] —
+            # the same source views.py and settle_partner_capital use. The legacy
+            # _agreement_partner_available ignored venture debt repayments that
+            # credit the over-contributor's pool position, so a creditor's valid
+            # post-repayment return was wrongly rejected. The pool path is always
+            # in the agreement currency (enforced below), and `withdrawable` is in
+            # that same currency, so the units match.
+            from .advances import partner_capital_positions
+            positions = partner_capital_positions(agreement)
+            available = money(positions.get(partner_id, {}).get('withdrawable', ZERO))
             requested_available_basis = amount
         if available < requested_available_basis:
             raise ValueError(

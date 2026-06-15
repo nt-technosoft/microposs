@@ -83,6 +83,65 @@ class UnifiedSettleEqualsTopUpTests(TestCase):
         self.assertEqual(pos[ctx['operator'].id]['withdrawable'], Decimal('4.00'))
 
 
+class PoolWithdrawalGateTests(TestCase):
+    """E17 S4 regression: the pool-withdrawal path must validate availability
+    against the canonical pool-read (positions.withdrawable), not the legacy
+    _agreement_partner_available. Earlier the suite only *read* the position and
+    never *called* the withdrawal, so the gate mismatch went unnoticed: a
+    creditor whose surplus is genuinely withdrawable was rejected."""
+
+    def _funded_with_free_pool(self, ctx):
+        from apps.partnerships.workspace import dispatch_workspace_action
+
+        procurement = _build_funded(
+            ctx, planned=(Decimal('70'), Decimal('30')),
+            profit=(Decimal('0.35'), Decimal('0.65')),
+            contributions=(Decimal('66'), Decimal('34')),
+        )
+        _receive(ctx, procurement, allocations=(Decimal('66'), Decimal('34')))
+        agreement = InvestmentAgreement.objects.get(pk=procurement.agreement_id)
+        # Debtor tops up → pool gains 4 free cash, operator's surplus is now
+        # withdrawable.
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id, procurement=procurement,
+            action='RECORD_CAPITAL_CONTRIBUTION',
+            payload={'payload': {'partner_id': ctx['investor'].id, 'amount': Decimal('4'),
+                                 'currency': 'UZS', 'fx_rate': Decimal('1')}},
+        )
+        return agreement
+
+    def test_creditor_can_withdraw_surplus_via_pool(self):
+        from apps.partnerships.workspace_support import add_agreement_withdrawal
+
+        ctx = build_tenant()
+        agreement = self._funded_with_free_pool(ctx)
+        pos = partner_capital_positions(agreement)
+        withdrawable = pos[ctx['operator'].id]['withdrawable']
+        self.assertEqual(withdrawable, Decimal('4.00'))
+
+        # Pool path: procurement_id=None, from_account_id=None. The gate must
+        # accept the full withdrawable amount.
+        withdrawal = add_agreement_withdrawal(
+            tenant_id=ctx['business'].id, agreement_id=agreement.id,
+            partner_id=ctx['operator'].id, amount=withdrawable, currency='UZS',
+        )
+        self.assertEqual(withdrawal.amount, Decimal('4.00'))
+        # After the withdrawal the surplus is consumed.
+        pos = partner_capital_positions(agreement)
+        self.assertEqual(pos[ctx['operator'].id]['withdrawable'], Decimal('0.00'))
+
+    def test_over_withdrawable_pool_return_rejected(self):
+        from apps.partnerships.workspace_support import add_agreement_withdrawal
+
+        ctx = build_tenant()
+        agreement = self._funded_with_free_pool(ctx)
+        with self.assertRaises(ValueError):
+            add_agreement_withdrawal(
+                tenant_id=ctx['business'].id, agreement_id=agreement.id,
+                partner_id=ctx['operator'].id, amount=Decimal('5.00'), currency='UZS',
+            )
+
+
 class SettlePartnerCapitalTests(TestCase):
     def _setup(self, ctx):
         procurement = _build_funded(
