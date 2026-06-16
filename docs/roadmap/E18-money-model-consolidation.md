@@ -1,7 +1,10 @@
 # E18 — Money Model Consolidation: Dimensioned GL + Thin Provisional Layer + Single Read-Model
 
-**Статус:** `IN_PROGRESS` (Ф1 + Ф2 готовы; Ф3–8 активны — глубокий рефактор разбужен 2026-06-16)
-**Прогресс:** ~25% (Ф1 честный профит→капитал ✅, Ф2 декомпозиция workspace.py ✅; Ф3–8 спроектированы/переструктурированы)
+**Статус:** `IN_REVIEW` (Ф1–Ф8 ✅ 2026-06-16; T-5.2 settlement-true-up дропнут как опциональный)
+**Прогресс:** ~100% ядро. Денежная модель консолидирована: read-model с независимым tag-источником
+(доказано == легаси на всех realized-flows + property-based), дисплей-дивергенция S1/S4 устранена,
+мёртвый код/дубли снесены, conservation exact-0 по UZS. Остаток вне E18: ретайр `AgreementAllocation`/
+удаление 3 узлов (не дубль — pre-receive intent), split `get_partner_aggregate` (cross-app).
 **Зависит от:** E11, E12, E14, E15, E16, E17 (вся партнёрская денежная база)
 **Блокирует:** E03 (Real Value Reporting — нужен чистый read-model), масштабирование, доверие к деньгам у первого клиента
 
@@ -401,8 +404,12 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
 - [x] T-8.3 ✅ (сделано с Ф7) ε per-currency: UZS-гейты/карманы exact-0 (`agreement_services` net/pool/reinvest;
   `ConservationReport.imbalances` threshold=0 для UZS), ε только native-FX. Сьют 353 зелёный → скрытых
   sub-cent UZS-утечек нет.
-- [ ] T-8.1 Аудит сьюта: для каждого money-теста «какой реальный баг ловит?»; нет ответа → удалить/переписать.
-- [ ] T-8.2 Property-based: «любая последовательность событий → каждый карман Σ=0».
+- [x] T-8.1 ✅ Консервативный прунинг: structural count-check → экономический ассерт; канон зафиксирован
+  в `_helpers.py`. Массового удаления нет (тесты с числами/GL/conservation не тронуты).
+- [x] T-8.2 ✅ `test_e18_property_conservation.py` — 15 многошаговых сценариев (sell/return/settle/dividend/
+  writeoff/repay в разном порядке), после каждого шага: conservation UZS exact-0 + `read-model==canonical==legacy`.
+  **Поймал реальный прод-баг** (RESTOCK rebuild до `stock.save` → stale `remaining_inventory`); пофикшен
+  реордером в `process_return` (чистый перенос, ноль экономики), s04/s13/s15 усилены до полной сверки.
 
 ## Аудит `workspace.py` (приложение к Фазе 2)
 

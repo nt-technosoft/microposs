@@ -1,4 +1,15 @@
-"""Shared test fixtures for vacuum-model test suite (PR-9c)."""
+"""Shared test fixtures for vacuum-model test suite (PR-9c).
+
+Test suite canon (T-8.1 audit):
+- Tag-presence checks (assertTrue/exists) verify correct domain labelling (pocket/flow/partner).
+  They are semantic, not purely structural, but they do NOT verify amounts.
+- Amount/GL/conservation checks (assertEqual with Decimal, venture_conservation, _assert_current)
+  verify economic correctness. Both kinds are required.
+- Tests that only check structure without any numeric assertion are candidates for pruning:
+  either add an economic assert (e.g. negative_position_uzs > 0) or delete if fully covered.
+- Property-based scenarios live in test_e18_property_conservation.py; add new operation
+  types there first before writing one-off example tests.
+"""
 
 from decimal import Decimal
 from django.contrib.auth.models import Group, User

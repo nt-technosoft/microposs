@@ -1159,12 +1159,9 @@ def process_return(
             # The legacy PROFIT_REVERSED / LOSS_INCURRED ledger writes are gone.
 
             if resolution == Return.Resolution.RESTOCK:
-                record_sale_line_return_realization(
-                    sale_line=sale_line,
-                    quantity=qty,
-                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
-                    disposed=False,
-                )
+                # Stock must be updated before realization so that the
+                # rebuild_agreement_positions call inside realization sees the
+                # correct LotStock.quantity_remaining for remaining_inventory_capital_uzs.
                 stock, _ = LotStock.objects.select_for_update().get_or_create(
                     tenant_id=tenant_id,
                     lot=lot,
@@ -1185,6 +1182,12 @@ def process_return(
                     to_location=sale.location,
                     reference_type='return',
                     reference_id=return_doc.pk,
+                )
+                record_sale_line_return_realization(
+                    sale_line=sale_line,
+                    quantity=qty,
+                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                    disposed=False,
                 )
                 total_restock_cogs += line_loss
 

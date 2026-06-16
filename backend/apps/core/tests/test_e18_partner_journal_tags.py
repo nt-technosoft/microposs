@@ -164,16 +164,17 @@ class PartnerJournalLineTagForwardTests(TestCase):
         ).exists())
 
         _sell(dividend_ctx, dividend_procurement, unit_price='100000.00')
-        debt = PartnerJournalLineTag.objects.filter(
-            agreement=dividend_procurement.agreement,
-            procurement=dividend_procurement,
-        ).count()
-        self.assertGreater(debt, 0)
         from apps.partnerships.venture import procurement_venture_positions
 
         debt_amount = procurement_venture_positions(
             procurement=dividend_procurement,
         )[dividend_ctx['investor'].id]['negative_position_uzs']
+        # Economic check: after drawing full dividend then selling below cost, investor
+        # must carry a real negative position — not just a structural "some tags exist".
+        self.assertGreater(
+            debt_amount, Decimal('0'),
+            msg='Investor must have negative_position_uzs > 0 after dividend + loss sale.',
+        )
         repayment = repay_partner_venture_debt(
             tenant_id=dividend_ctx['business'].id,
             procurement_id=dividend_procurement.id,
