@@ -6,18 +6,7 @@ flows use one source of truth.
 
 from decimal import Decimal
 
-
-ZERO = Decimal('0')
-MONEY_Q = Decimal('0.01')
-RATIO_Q = Decimal('0.000001')
-
-
-def money(amount: Decimal | str | int | float) -> Decimal:
-    return Decimal(str(amount)).quantize(MONEY_Q)
-
-
-def ratio(amount: Decimal | str | int | float) -> Decimal:
-    return Decimal(str(amount)).quantize(RATIO_Q)
+from .money_utils import ZERO, money, ratio
 
 
 def profit_shares_from_capital(

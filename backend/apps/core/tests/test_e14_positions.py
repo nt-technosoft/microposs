@@ -15,7 +15,7 @@ from apps.partnerships.advances import (
     settle_partner_capital,
 )
 from apps.partnerships.models import (
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     InvestmentAgreement,
 )
 
@@ -158,7 +158,7 @@ class SettlePartnerCapitalTests(TestCase):
         settle_partner_capital(
             tenant_id=ctx['business'].id, agreement_id=agreement.id,
             partner_id=ctx['investor'].id, amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.CASH)
+            source=CapitalSettlementSource.CASH)
         pos = partner_capital_positions(agreement)
         self.assertEqual(pos[ctx['investor'].id]['net'], Decimal('0.00'))
 
@@ -169,7 +169,7 @@ class SettlePartnerCapitalTests(TestCase):
             settle_partner_capital(
                 tenant_id=ctx['business'].id, agreement_id=agreement.id,
                 partner_id=ctx['investor'].id, amount=Decimal('99.00'),
-                source=CapitalAdvanceSettlement.Source.CASH)
+                source=CapitalSettlementSource.CASH)
 
     def test_creditor_has_no_debt(self):
         ctx = build_tenant()
@@ -179,4 +179,4 @@ class SettlePartnerCapitalTests(TestCase):
             settle_partner_capital(
                 tenant_id=ctx['business'].id, agreement_id=agreement.id,
                 partner_id=ctx['operator'].id, amount=Decimal('1.00'),
-                source=CapitalAdvanceSettlement.Source.CASH)
+                source=CapitalSettlementSource.CASH)

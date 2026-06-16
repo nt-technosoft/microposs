@@ -14,7 +14,7 @@ from django.test import TestCase
 from apps.partnerships.advances import partner_capital_positions, settle_partner_capital
 from apps.partnerships.models import (
     AgreementContribution,
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     PartnerLedgerEntry,
     ProcurementVentureSettlement,
 )
@@ -51,7 +51,7 @@ class CashSettlementTests(TestCase):
         settle_partner_capital(
             tenant_id=ctx['business'].id, agreement_id=agreement.id,
             partner_id=ctx['investor'].id, amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.CASH,
+            source=CapitalSettlementSource.CASH,
         )
         self.assertEqual(_owed(ctx, agreement), Decimal('0.00'))
 
@@ -61,13 +61,13 @@ class CashSettlementTests(TestCase):
         settle_partner_capital(
             tenant_id=ctx['business'].id, agreement_id=agreement.id,
             partner_id=ctx['investor'].id, amount=Decimal('1.50'),
-            source=CapitalAdvanceSettlement.Source.CASH,
+            source=CapitalSettlementSource.CASH,
         )
         self.assertEqual(_owed(ctx, agreement), Decimal('2.50'))
         settle_partner_capital(
             tenant_id=ctx['business'].id, agreement_id=agreement.id,
             partner_id=ctx['investor'].id, amount=Decimal('2.50'),
-            source=CapitalAdvanceSettlement.Source.CASH,
+            source=CapitalSettlementSource.CASH,
         )
         self.assertEqual(_owed(ctx, agreement), Decimal('0.00'))
 
@@ -78,7 +78,7 @@ class CashSettlementTests(TestCase):
             settle_partner_capital(
                 tenant_id=ctx['business'].id, agreement_id=agreement.id,
                 partner_id=ctx['investor'].id, amount=Decimal('5.00'),
-                source=CapitalAdvanceSettlement.Source.CASH,
+                source=CapitalSettlementSource.CASH,
             )
 
     def test_nonpositive_rejected(self):
@@ -88,7 +88,7 @@ class CashSettlementTests(TestCase):
             settle_partner_capital(
                 tenant_id=ctx['business'].id, agreement_id=agreement.id,
                 partner_id=ctx['investor'].id, amount=Decimal('0'),
-                source=CapitalAdvanceSettlement.Source.CASH,
+                source=CapitalSettlementSource.CASH,
             )
 
 
@@ -110,7 +110,7 @@ class CashSettlementGLTests(TestCase):
         settle_partner_capital(
             tenant_id=biz, agreement_id=agreement.id,
             partner_id=ctx['investor'].id, amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.CASH,
+            source=CapitalSettlementSource.CASH,
         )
 
         # The debtor's capital completes (66 -> 70); the creditor is untouched
@@ -136,7 +136,7 @@ class FromProfitSettlementTests(TestCase):
             settle_partner_capital(
                 tenant_id=ctx['business'].id, agreement_id=agreement.id,
                 partner_id=ctx['investor'].id, amount=Decimal('4.00'),
-                source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+                source=CapitalSettlementSource.FROM_PROFIT,
                 from_account_id=ctx['cash_account'].id,
             )
 
@@ -190,7 +190,7 @@ class FromProfitHonestMechanismTests(TestCase):
             agreement_id=agreement.id,
             partner_id=ctx['investor'].id,
             amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            source=CapitalSettlementSource.FROM_PROFIT,
             from_account_id=ctx['cash_account'].id,
         )
 
@@ -268,7 +268,7 @@ class ProfitReinvestmentResidualTests(TestCase):
             agreement_id=agreement.id,
             partner_id=ctx['investor'].id,
             amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            source=CapitalSettlementSource.FROM_PROFIT,
             from_account_id=ctx['cash_account'].id,
         )
 

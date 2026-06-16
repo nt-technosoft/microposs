@@ -9,7 +9,7 @@ from apps.partnerships.advances import settle_partner_capital
 from apps.partnerships.advances import partner_capital_positions as legacy_partner_capital_positions
 from apps.partnerships.models import (
     AgreementAllocation,
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     InvestmentAgreement,
     PartnerJournalLineTag,
     PartnerLedgerEntry,
@@ -158,7 +158,7 @@ class PartnerPositionReadModelHookTests(TestCase):
             agreement_id=agreement.id,
             partner_id=ctx['investor'].id,
             amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            source=CapitalSettlementSource.FROM_PROFIT,
             from_account_id=ctx['cash_account'].id,
         )
         _assert_current(self, agreement)

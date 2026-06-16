@@ -4,7 +4,7 @@ from django.db import models
 
 from apps.finance.models import JournalEntry, JournalLine, Payment
 
-from .advances import _equity_account_code
+from .money_utils import equity_account_code
 from .models import (
     AgreementActionSource,
     AgreementAllocation,
@@ -22,7 +22,7 @@ from .models import (
 
 def _partner_equity_code(*, agreement: InvestmentAgreement, partner_id: int) -> str:
     member = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id)
-    return _equity_account_code(role=member.role, legal_mode=agreement.legal_mode)
+    return equity_account_code(role=member.role, legal_mode=agreement.legal_mode)
 
 
 def tag_journal_lines(

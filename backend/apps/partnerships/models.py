@@ -28,6 +28,11 @@ class AgreementConfirmationStatus(models.TextChoices):
     CANCELLED = 'CANCELLED', 'Отменено'
 
 
+class CapitalSettlementSource(models.TextChoices):
+    CASH = 'CASH', 'Деньгами (пополнение/из баланса)'
+    FROM_PROFIT = 'FROM_PROFIT', 'Из нераспределённой прибыли'
+
+
 class InvestmentAgreement(TenantModel):
     """Parent investment agreement that can fund multiple concrete procurements."""
 
@@ -795,12 +800,8 @@ class ProcurementReceiveBatchCapitalAllocation(TenantModel):
 
 
 class CapitalAdvance(TenantModel):
-    """E14: interest-free inter-partner capital advance (qard) created when a
-    Path-2 receive holds the agreed shares despite a funding gap. The debtor
-    under-contributed; the creditor (or, when null, the pool) covered the
-    shortfall. Shares are pinned at receive and never move — only this balance
-    moves, via append-only CapitalAdvanceSettlement events. Principal-only,
-    no markup: loss is borne on the agreed snapshot share, not on this debt."""
+    """Historical E14 shell. E17 stopped reifying partner capital gaps as debt;
+    live settlement reads partner_capital_positions directly."""
 
     class RepaymentMode(models.TextChoices):
         LUMP = 'LUMP', 'Единым платежом'
@@ -853,65 +854,11 @@ class CapitalAdvance(TenantModel):
 
     @property
     def settled_amount(self) -> Decimal:
-        from django.db.models import Sum
-        total = self.settlements.aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        return Decimal(total).quantize(Decimal('0.01'))
+        return Decimal('0.00')
 
     @property
     def outstanding_balance(self) -> Decimal:
         return (Decimal(self.principal) - self.settled_amount).quantize(Decimal('0.01'))
-
-
-class CapitalAdvanceSettlement(TenantModel):
-    """E14: append-only settlement event reducing a CapitalAdvance. `source`
-    records how it was paid — CASH (top-up / from balance) or FROM_PROFIT
-    (from the debtor's undistributed profit). Tело-only; never below zero."""
-
-    class Source(models.TextChoices):
-        CASH = 'CASH', 'Деньгами (пополнение/из баланса)'
-        FROM_PROFIT = 'FROM_PROFIT', 'Из нераспределённой прибыли'
-
-    # B (participant↔pool): settlements are keyed by (agreement, partner). The
-    # per-batch advance link is kept nullable for the transition / audit.
-    advance = models.ForeignKey(
-        CapitalAdvance, on_delete=models.PROTECT, related_name='settlements',
-        null=True, blank=True,
-    )
-    agreement = models.ForeignKey(
-        InvestmentAgreement, on_delete=models.PROTECT, related_name='capital_settlements',
-        null=True, blank=True,
-    )
-    partner = models.ForeignKey(
-        'core.Partner', on_delete=models.PROTECT, related_name='capital_settlements',
-        null=True, blank=True,
-    )
-    amount = models.DecimalField(max_digits=20, decimal_places=2)
-    source = models.CharField(max_length=16, choices=Source.choices)
-    date = models.DateTimeField(auto_now_add=True)
-    source_ref = models.CharField(max_length=100, blank=True, default='')
-    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
-
-    class Meta:
-        db_table = 'partnerships_capital_advance_settlement'
-        indexes = [
-            models.Index(fields=['advance']),
-            models.Index(fields=['agreement', 'partner']),
-        ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['tenant', 'client_request_id'],
-                condition=models.Q(client_request_id__isnull=False),
-                name='uq_advance_settlement_idempotent',
-            ),
-        ]
-
-    def save(self, *args, **kwargs):
-        if self.pk:
-            raise ImmutableRecordError('CapitalAdvanceSettlement is append-only.')
-        super().save(*args, **kwargs)
-
-    def delete(self, *args, **kwargs):
-        raise ImmutableRecordError('CapitalAdvanceSettlement is append-only.')
 
 
 class InvestmentContract(TenantModel):

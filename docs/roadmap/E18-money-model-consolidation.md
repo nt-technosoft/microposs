@@ -388,17 +388,21 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
 - ~~Удаление 3 узлов / ретайр AgreementAllocation~~ → **вынесено за E18** (узлы = rebuild+валидация;
   AgreementAllocation = pre-receive intent, не дубль). Отдельный анализ.
 
-### Фаза 7 — Чистка + снос оснастки
-- [ ] T-7.1 Удалить `CapitalAdvanceSettlement` (модель+enum, мёртв).
-- [ ] T-7.2 Расщепить/депрекейтнуть `get_partner_aggregate` (смешанный источник леджер+венчур).
-- [ ] T-7.3 Дедуп quantize (×5) / equity-map (×2) / operator-residue (×4) → по одному.
-- [ ] T-7.4 Удалить shadow/dual-read оснастку; дубль-скан = 0.
+### Фаза 7 — Чистка ✅ (лид-аудит PASS 2026-06-16, поведенчески-сохраняюще, 353 passed)
+- [x] T-7.1 ✅ Снесена мёртвая модель `CapitalAdvanceSettlement`; enum извлечён в `CapitalSettlementSource`;
+  drop-table миграция 0032; grep вне миграций = 0.
+- [x] T-7.2 ✅ `get_partner_aggregate` — warning-докстринг (НЕ расщеплён: активно используется в investors-app
+  → cross-app, отдельная задача).
+- [x] T-7.3 ✅ Дедуп quantize/ratio/functional/equity-map/operator-residue → один дом `money_utils.py`; дубль-скан = 0.
+- ~~T-7.4 снос shadow-оснастки~~ → **N/A:** легаси-узлы нужны rebuild'у (pool/provisional source);
+  `legacy_partner_position_rows` = регресс-страховка. Оставлены.
 
 ### Фаза 8 — Тест-режим
+- [x] T-8.3 ✅ (сделано с Ф7) ε per-currency: UZS-гейты/карманы exact-0 (`agreement_services` net/pool/reinvest;
+  `ConservationReport.imbalances` threshold=0 для UZS), ε только native-FX. Сьют 353 зелёный → скрытых
+  sub-cent UZS-утечек нет.
 - [ ] T-8.1 Аудит сьюта: для каждого money-теста «какой реальный баг ловит?»; нет ответа → удалить/переписать.
 - [ ] T-8.2 Property-based: «любая последовательность событий → каждый карман Σ=0».
-- [ ] T-8.3 Ужесточить ε: точный 0 по UZS-карманам, ε только native-FX. Вкл. close-гейт
-  `agreement_profit_reinvestment_residual` (сейчас `_EPS=0.01`, Ф1 reviewer-note 2026-06-15) → точный 0 по UZS.
 
 ## Аудит `workspace.py` (приложение к Фазе 2)
 

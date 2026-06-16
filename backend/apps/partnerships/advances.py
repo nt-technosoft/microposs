@@ -25,22 +25,14 @@ from apps.finance.services import create_cash_entry, create_journal_entry
 
 from .models import (
     AgreementPartner,
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     InvestmentAgreement,
     PartnerLedgerEntry,
     Procurement,
 )
+from .money_utils import equity_account_code
 
 _CENTS = Decimal('0.01')
-
-
-def _equity_account_code(*, role: str, legal_mode: str | None) -> str:
-    """Role-correct equity COA (mirror of workspace_support._capital_equity_account_code)."""
-    if role == AgreementPartner.Role.INVESTOR:
-        if str(legal_mode) == InvestmentAgreement.LegalMode.MUSHARAKA:
-            return '3110'
-        return '3100'
-    return '3000'
 
 
 def _partner_role(agreement: InvestmentAgreement, partner_id: int) -> str:
@@ -99,14 +91,14 @@ def settle_partner_capital(
         # (no separate settlement record). CASH = new money; FROM_PROFIT = their
         # profit reinvested as capital.
         currency = str(agreement.currency or 'UZS').upper()
-        if source == CapitalAdvanceSettlement.Source.CASH:
+        if source == CapitalSettlementSource.CASH:
             from apps.partnerships.workspace_support import add_agreement_contribution
             add_agreement_contribution(
                 tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id,
                 amount=amount, currency=currency, date=when,
                 client_request_id=str(client_request_id) if client_request_id else None,
                 notes='Погашение капитального долга (довнос в пул)')
-        elif source == CapitalAdvanceSettlement.Source.FROM_PROFIT:
+        elif source == CapitalSettlementSource.FROM_PROFIT:
             functional = (amount * _agreement_fx_rate(tenant_id, currency, when)).quantize(_CENTS)
             pending = undistributed_profit_uzs(
                 tenant_id=tenant_id, agreement_id=agreement_id, partner_id=partner_id)
@@ -161,7 +153,7 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
     procurement = agreement.procurements.first()
     if procurement is None:
         raise ValueError('Agreement has no procurement for the profit ledger.')
-    debtor_capital = _equity_account_code(
+    debtor_capital = equity_account_code(
         role=_partner_role(agreement, partner_id), legal_mode=agreement.legal_mode)
 
     # GL + cash entries: UNCHANGED from E17 (oracle G4 pins numbers/accounts).

@@ -11,7 +11,7 @@ from apps.partnerships.read_models import canonical_partner_position_rows, legac
 from apps.partnerships.models import (
     AgreementContribution,
     AgreementAllocation,
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     PartnerJournalLineTag,
     PartnerLedgerEntry,
     Procurement,
@@ -94,7 +94,7 @@ class PartnerJournalLineTagForwardTests(TestCase):
             agreement_id=agreement.id,
             partner_id=ctx['investor'].id,
             amount=Decimal('4.00'),
-            source=CapitalAdvanceSettlement.Source.FROM_PROFIT,
+            source=CapitalSettlementSource.FROM_PROFIT,
             from_account_id=ctx['cash_account'].id,
         )
         profit_entry = JournalEntry.objects.get(

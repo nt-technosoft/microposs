@@ -15,6 +15,14 @@ from .formulas import (
     distribute_loss_by_capital_from_snapshot,
     profit_shares_from_capital,
 )
+from .money_utils import (
+    MONEY_Q as _CENTS,
+    RATIO_Q as _RATIO,
+    ZERO as _ZERO,
+    equity_account_code,
+    money as _money,
+    ratio as _ratio,
+)
 from .models import (
     AgreementWithdrawal,
     PartnerLedgerEntry,
@@ -23,19 +31,6 @@ from .models import (
     ProcurementSaleRealization,
     ProcurementVentureSettlement,
 )
-
-_ZERO = Decimal('0')
-_CENTS = Decimal('0.01')
-_RATIO = Decimal('0.000001')
-
-
-def _money(value) -> Decimal:
-    return Decimal(str(value or '0')).quantize(_CENTS)
-
-
-def _ratio(value) -> Decimal:
-    return Decimal(str(value or '0')).quantize(_RATIO)
-
 
 def _native_amount_from_uzs(amount_uzs: Decimal, currency: str, fx_rate) -> Decimal:
     currency = str(currency or 'UZS').upper()
@@ -203,8 +198,7 @@ def _net_profit_entitlements(procurement: Procurement, groups=None) -> dict[int,
             entitlements[row.partner_id] = entitlements.get(row.partner_id, _ZERO) + amount
             distributed += amount
         residue = _money(net - distributed)
-        if residue and operator_id is not None:
-            entitlements[operator_id] = entitlements.get(operator_id, _ZERO) + residue
+        _add_operator_residue(entitlements, operator_id=operator_id, residue=residue)
     return entitlements
 
 
@@ -228,6 +222,27 @@ def _realization_groups(procurement: Procurement, events=None) -> dict[tuple, li
 
 def _group_profile_source(rows: list[ProcurementSaleRealization]) -> list[ProcurementSaleRealization]:
     return [row for row in rows if row.event_type != ProcurementSaleRealization.EventType.REVERSAL] or rows
+
+
+def _add_operator_residue(
+    entitlements: dict,
+    *,
+    operator_id: int | None,
+    residue: Decimal,
+    field: str | None = None,
+    defaults: dict[str, Decimal] | None = None,
+    skip_partner_ids: set[int] | None = None,
+) -> None:
+    if operator_id is None or operator_id in (skip_partner_ids or set()):
+        return
+    residue = _money(residue)
+    if not residue:
+        return
+    if field is None:
+        entitlements[operator_id] = _money(entitlements.get(operator_id, _ZERO) + residue)
+        return
+    row = entitlements.setdefault(operator_id, defaults or {})
+    row[field] = _money(row.get(field, _ZERO) + residue)
 
 
 def _net_capital_loss_entitlements(procurement: Procurement, groups=None) -> dict[int, dict[str, Decimal]]:
@@ -296,15 +311,21 @@ def _net_capital_loss_entitlements(procurement: Procurement, groups=None) -> dic
             recovered_distributed += recovered
             loss_distributed += loss
 
-        if operator_id is not None:
-            recovered_residue = _money(recovered_total - recovered_distributed)
-            loss_residue = _money(loss_total - loss_distributed)
-            operator_row = entitlements.setdefault(operator_id, {
-                'capital_recovered_uzs': _ZERO,
-                'loss_uzs': _ZERO,
-            })
-            operator_row['capital_recovered_uzs'] += recovered_residue
-            operator_row['loss_uzs'] += loss_residue
+        defaults = {'capital_recovered_uzs': _ZERO, 'loss_uzs': _ZERO}
+        _add_operator_residue(
+            entitlements,
+            operator_id=operator_id,
+            residue=_money(recovered_total - recovered_distributed),
+            field='capital_recovered_uzs',
+            defaults=defaults,
+        )
+        _add_operator_residue(
+            entitlements,
+            operator_id=operator_id,
+            residue=_money(loss_total - loss_distributed),
+            field='loss_uzs',
+            defaults=defaults,
+        )
 
     return entitlements
 
@@ -339,9 +360,12 @@ def _liability_capital_recovery_entitlements(procurement: Procurement, groups=No
             entitlements[partner_id] = _money(entitlements.get(partner_id, _ZERO) + recovered)
             distributed += recovered
 
-        residue = _money(total_loss - distributed)
-        if operator_id is not None and operator_id not in liable_partner_ids:
-            entitlements[operator_id] = _money(entitlements.get(operator_id, _ZERO) + residue)
+        _add_operator_residue(
+            entitlements,
+            operator_id=operator_id,
+            residue=_money(total_loss - distributed),
+            skip_partner_ids=liable_partner_ids,
+        )
 
     return entitlements
 
@@ -377,9 +401,11 @@ def _remaining_inventory_capital_entitlements(procurement: Procurement) -> dict[
             entitlements[partner_id] = _money(entitlements.get(partner_id, _ZERO) + share_amount)
             distributed += share_amount
 
-        if operator_id is not None:
-            residue = _money(stock_capital - distributed)
-            entitlements[operator_id] = _money(entitlements.get(operator_id, _ZERO) + residue)
+        _add_operator_residue(
+            entitlements,
+            operator_id=operator_id,
+            residue=_money(stock_capital - distributed),
+        )
 
     return entitlements
 
@@ -939,7 +965,8 @@ def create_venture_settlement(
 # residuals may carry sub-cent rounding ONLY from FX division (native = uzs / fx).
 # A softer ε is a leak to fix, not to tolerate.
 
-_EPS = Decimal('0.01')
+_NATIVE_FX_EPS = Decimal('0.01')
+_EPS = _NATIVE_FX_EPS
 
 
 @dataclass
@@ -976,11 +1003,12 @@ class ConservationReport:
         return out
 
     def imbalances(self, eps: Decimal = _EPS) -> list[tuple[str, str, Decimal]]:
-        return [
-            (pocket, currency, residual)
-            for (pocket, currency), residual in self.residuals().items()
-            if abs(residual) > eps
-        ]
+        out: list[tuple[str, str, Decimal]] = []
+        for (pocket, currency), residual in self.residuals().items():
+            threshold = _ZERO if str(currency).upper() == 'UZS' else eps
+            if abs(residual) > threshold:
+                out.append((pocket, currency, residual))
+        return out
 
     def is_balanced(self, eps: Decimal = _EPS) -> bool:
         return not self.imbalances(eps)
@@ -1271,7 +1299,6 @@ def repay_partner_venture_debt(
     from apps.finance.models import CashAccount, CashEntry
     from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
     from apps.finance.services import create_cash_entry, create_journal_entry
-    from .advances import _equity_account_code
     from .models import (
         AgreementPartner,
         ProcurementPartnerVentureDebtRepayment,
@@ -1334,7 +1361,7 @@ def repay_partner_venture_debt(
             raise ValueError('У кассы нет привязанного GL-счёта.')
 
         role = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id).role
-        equity_code = _equity_account_code(role=role, legal_mode=agreement.legal_mode)
+        equity_code = equity_account_code(role=role, legal_mode=agreement.legal_mode)
 
         repayment = ProcurementPartnerVentureDebtRepayment.objects.create(
             tenant_id=tenant_id,

@@ -8,7 +8,7 @@ from .models import (
     AgreementEvent,
     AgreementPartner,
     AgreementWithdrawal,
-    CapitalAdvanceSettlement,
+    CapitalSettlementSource,
     CapitalCommitment,
     InvestmentAgreement,
     ContractPartner,
@@ -27,18 +27,10 @@ from .models import (
     ProcurementTerms,
     ProcurementTermsAmendment,
 )
+from .money_utils import money as _money, ratio as _ratio
 from .workspace import build_workspace_payload
 from apps.core.models import Partner
 from apps.suppliers.models import PaymentSchedule
-
-
-def _money(value: Decimal) -> Decimal:
-    return Decimal(str(value)).quantize(Decimal('0.01'))
-
-
-def _ratio(value: Decimal) -> Decimal:
-    return Decimal(str(value)).quantize(Decimal('0.000001'))
-
 
 def _to_contract_currency(amount, currency: str, fx_rate, contract_currency: str) -> Decimal:
     amount_dec = Decimal(str(amount))
@@ -206,7 +198,7 @@ class SettlePartnerCapitalSerializer(serializers.Serializer):
     """B (participant↔pool): settle a partner's net capital shortfall vs the pool."""
     partner_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=20, decimal_places=2)
-    source = serializers.ChoiceField(choices=CapitalAdvanceSettlement.Source.choices)
+    source = serializers.ChoiceField(choices=CapitalSettlementSource.choices)
     from_account_id = serializers.IntegerField(required=False, allow_null=True)
     client_request_id = serializers.UUIDField(required=False, allow_null=True)
 

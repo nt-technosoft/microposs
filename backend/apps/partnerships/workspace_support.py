@@ -13,6 +13,15 @@ from apps.core.services import publish_event
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.models import CashAccount
 from apps.partnerships.formulas import profit_shares_from_capital
+from apps.partnerships.money_utils import (
+    MONEY_Q as CENT,
+    RATIO_Q,
+    ZERO,
+    equity_account_code,
+    functional_uzs,
+    money,
+    ratio,
+)
 from apps.partnerships.procurement_cost import procurement_cost_by_currency
 
 from .models import (
@@ -32,26 +41,6 @@ from .models import (
     ProcurementTermsAmendment,
     ProcurementPartnerLedger,
 )
-
-
-ZERO = Decimal('0')
-CENT = Decimal('0.01')
-RATIO_Q = Decimal('0.000001')
-
-
-def money(amount) -> Decimal:
-    return Decimal(str(amount)).quantize(CENT)
-
-
-def ratio(amount) -> Decimal:
-    return Decimal(str(amount)).quantize(RATIO_Q)
-
-
-def functional_uzs(amount: Decimal, currency: str = 'UZS', fx_rate: Decimal = Decimal('1')) -> Decimal:
-    amount = Decimal(str(amount))
-    currency = str(currency or 'UZS').upper()
-    fx_rate = Decimal(str(fx_rate or Decimal('1')))
-    return money(amount if currency == 'UZS' else amount * fx_rate)
 
 
 def get_or_create_agreement_capital_account(*, tenant_id: int, agreement: InvestmentAgreement):
@@ -80,21 +69,6 @@ def get_or_create_agreement_capital_account(*, tenant_id: int, agreement: Invest
     agreement.capital_account = account
     agreement.save(update_fields=['capital_account', 'updated_at'])
     return account
-
-
-def _capital_equity_account_code(*, role: str, legal_mode: str | None) -> str:
-    """Role-correct equity COA for an external capital contribution.
-
-    Investor capital is partnership equity (3110 Musharaka, else 3100 Mudaraba).
-    Operator capital is the business owner's own equity (3000) — the operator is
-    the owner, so it must not be booked as investor capital.
-    """
-    if role == AgreementPartner.Role.INVESTOR:
-        if str(legal_mode) == InvestmentAgreement.LegalMode.MUSHARAKA:
-            return '3110'
-        return '3100'
-    return '3000'
-
 
 def create_investment_agreement(
     *,
@@ -284,7 +258,7 @@ def add_agreement_contribution(
             partner_id=partner_id,
             contribution_id=contribution.pk,
             amount=amount,
-            equity_account_code=_capital_equity_account_code(
+            equity_account_code=equity_account_code(
                 role=member.role, legal_mode=agreement.legal_mode,
             ),
             currency=currency,
@@ -452,7 +426,7 @@ def add_agreement_withdrawal(
         from apps.finance.services import create_cash_entry, create_journal_entry
 
         role = AgreementPartner.objects.get(agreement=agreement, partner_id=partner_id).role
-        equity_code = _capital_equity_account_code(role=role, legal_mode=agreement.legal_mode)
+        equity_code = equity_account_code(role=role, legal_mode=agreement.legal_mode)
         if recovered_return:
             source_account = CashAccount.objects.select_for_update().get(
                 pk=from_account_id,

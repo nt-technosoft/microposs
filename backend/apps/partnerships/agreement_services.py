@@ -12,27 +12,7 @@ from apps.finance.models import CashAccount, CashEntry
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.services import create_cash_entry, record_journal_from_cash_entry
 from apps.core.services import publish_event
-
-
-_ZERO = Decimal('0')
-_CENT = Decimal('0.01')
-
-
-def _q(amount: Decimal) -> Decimal:
-    return Decimal(amount).quantize(_CENT)
-
-
-def _functional_uzs(
-    amount: Decimal,
-    currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
-) -> Decimal:
-    amount = Decimal(str(amount))
-    currency = str(currency or 'UZS').upper()
-    fx_rate = Decimal(str(fx_rate or Decimal('1')))
-    if currency == 'UZS':
-        return _q(amount)
-    return _q(amount * fx_rate)
+from .money_utils import MONEY_Q as _CENT, ZERO as _ZERO, functional_uzs as _functional_uzs, money as _q
 
 
 def _empty_ledger_totals() -> dict:
@@ -156,6 +136,9 @@ def get_partner_aggregate(
     always 0 here. Partner profit/loss truth lives in the venture model
     (procurement_venture_positions); do not derive distributable profit from
     this aggregate.
+
+    Deprecated for new consumers: this is a mixed ledger + venture aggregate.
+    Prefer PartnerPositionReadModel/read_models display helpers for new reads.
     """
     from .models import PartnerLedgerEntry, ProcurementPartnerLedger
 
@@ -385,9 +368,6 @@ def pay_dividend(
 # E17 Phase 3 — investment agreement close lifecycle & read-only lock
 # ---------------------------------------------------------------------------
 
-_EPS = Decimal('0.01')
-
-
 def agreement_pool_reconciliation_residual(agreement) -> Decimal:
     """Pool reconciliation (agreement currency): pool.balance must equal
     Σ contributions − Σ pool-funded receives − Σ pool capital returns.
@@ -498,21 +478,21 @@ def agreement_close_blocking_reasons(*, agreement) -> list[str]:
     positions = partner_capital_positions(agreement)
     for partner_id, pos in positions.items():
         net = _q(Decimal(str(pos.get('net', _ZERO))))
-        if abs(net) > _EPS:
+        if net != _ZERO:
             reasons.append(
                 f'Нетто-позиция партнёра {partner_id} не сведена (net={net} '
                 f'{agreement.currency}); сначала сведите взаиморасчёты.'
             )
 
     residual = agreement_pool_reconciliation_residual(agreement)
-    if abs(residual) > _EPS:
+    if residual != _ZERO:
         reasons.append(
             f'Капитал-пул договора не сведён (residual={residual} {agreement.currency}).'
         )
 
     try:
         reinvest_residual = agreement_profit_reinvestment_residual(agreement)
-        if abs(reinvest_residual) > _EPS:
+        if reinvest_residual != _ZERO:
             reasons.append(
                 f'Реинвестирование прибыли не сведено: PLR.PROFIT_TO_CAPITAL − '
                 f'contribution(PROFIT_REINVEST) = {reinvest_residual} UZS.'

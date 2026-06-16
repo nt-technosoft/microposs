@@ -6,13 +6,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import InvestmentAgreement, PartnerPositionReadModel, Procurement
+from .money_utils import money as _money
 
-_CENT = Decimal('0.01')
-_ZERO = Decimal('0.00')
-
-
-def _money(value) -> Decimal:
-    return Decimal(str(value or _ZERO)).quantize(_CENT)
+_ZERO = _money(None)
 
 
 def _empty_payload() -> dict[str, Decimal]:
