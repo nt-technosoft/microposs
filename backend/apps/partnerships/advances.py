@@ -119,6 +119,8 @@ def settle_partner_capital(
         else:
             raise ValueError(f'Unknown settlement source: {source}.')
 
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(agreement)
         return partner_capital_positions(agreement).get(partner_id)
 
 

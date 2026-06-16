@@ -355,6 +355,8 @@ def allocate_workspace_capital(
                 lifecycle_state=ProcurementExpense.LifecycleState.READY_FOR_RECEIVE,
                 updated_at=timezone.now(),
             )
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(locked_agreement)
     return created
 
 

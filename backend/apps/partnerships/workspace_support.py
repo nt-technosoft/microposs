@@ -326,6 +326,8 @@ def add_agreement_contribution(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(agreement)
     return contribution
 
 
@@ -532,6 +534,8 @@ def add_agreement_withdrawal(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(agreement)
     return withdrawal
 
 

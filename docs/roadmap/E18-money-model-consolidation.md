@@ -326,13 +326,15 @@ golden + property-based (сохранение как свойство). Ужес
 Слайсы 1–6: commits 50d506f, d9f5ba5, 430b873, 6b98b0e, 74cf7b2, + step-d. Поведение идентично
 (338=338 на каждом шаге), миграций нет, дублей нет.
 
-### Фаза 3 — Заморозка golden + read-model каркас (scaffold)
-- [ ] T-3.1 (аудитор) Заморозить **все 10** golden (G1/G5/G8/G9/G10 — прогон против закрытого E17)
-  + добавить сценарий на расхождение 3-го узла (`_agreement_available_by_partner` vs pool-read, S1/S4).
-- [ ] T-3.2 `PartnerPositionReadModel` (схема, ключ `(agreement, procurement?, partner, currency)`,
-  колонки = поля 3 узлов) + транзакционный write-hook на каждой денежной операции; интерим-источник = канон-узлы.
-- [ ] T-3.3 Инвариант `replay(events)==read-model` как тест. ⚠️ НЕ заявлять «==3 узла» здесь (тавтология).
-- [ ] T-3.4 Verify: таблица заполняется на всех golden; suite зелёный; makemigrations учтён (новая таблица).
+### Фаза 3 — Заморозка golden + read-model каркас (scaffold) ✅ (лид-аудит PASS 2026-06-16)
+- [x] T-3.1 Заморожены **все 10** golden (G1/G5/G8/G9/G10 — инвариант-сценарии, верификация=проходящий
+  тест; commit d447bec). Сценарий на расхождение 3-го узла → перенесён в Ф4-сверку (там осмыслен).
+- [x] T-3.2 ✅ `PartnerPositionReadModel` (models.py) + `rebuild_agreement_positions` (read_models.py) +
+  транзакционные write-hook'и на всех денежных мутациях; интерим-источник = канон-узлы. Reads НЕ переключены.
+- [x] T-3.3 ✅ replay-тест (`full_rebuild == incremental`) + hook-coverage (`RM == canonical` после каждой
+  мутации). Equivalence НЕ заявлен (тавтология до Ф4).
+- [x] T-3.4 ✅ suite 342 (338+4), `makemigrations --check` чисто (миграция 0028 CreateModel), reads легаси,
+  golden не тронут. Каркас инертен (поведение не изменилось).
 
 ### Фаза 4 — Tag-слой + ОСМЫСЛЕННАЯ сверка эквивалентности
 - [ ] T-4.1 partnerships-owned `PartnerJournalLineTag` (`journal_line FK→finance`,

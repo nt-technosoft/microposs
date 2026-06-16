@@ -472,6 +472,9 @@ def record_sale_line_realization(*, sale_line) -> list[ProcurementSaleRealizatio
                 loss_uzs=_money(values.get('loss', '0')),
                 source_ref=f'sale_line:{sale_line.pk}',
             ))
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
     return created
 
 
@@ -567,6 +570,9 @@ def record_sale_line_return_realization(
                 source_ref=source_ref,
                 reversal_of=original,
             ))
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
     return created
 
 
@@ -653,6 +659,9 @@ def record_lot_loss_realization(
                 loss_uzs=loss,
                 source_ref=source_ref,
             ))
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
     return created
 
 
@@ -891,7 +900,7 @@ def create_venture_settlement(
         totals['inventory_value_uzs'] = _money(inventory_value_uzs)
         totals['reserve_uzs'] = _money(reserve_uzs)
 
-        return ProcurementVentureSettlement.objects.create(
+        settlement = ProcurementVentureSettlement.objects.create(
             tenant_id=tenant_id,
             procurement=procurement,
             settlement_type=settlement_type,
@@ -903,6 +912,10 @@ def create_venture_settlement(
             notes=notes,
             client_request_id=client_request_id,
         )
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
+        return settlement
 
 
 # ---------------------------------------------------------------------------
@@ -1366,4 +1379,6 @@ def repay_partner_venture_debt(
             lines=lines, description=f'Погашение долга партнёра по приходу #{procurement_id}', date=date,
         )
 
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(agreement)
         return repayment

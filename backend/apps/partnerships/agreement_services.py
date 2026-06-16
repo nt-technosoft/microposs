@@ -372,6 +372,9 @@ def pay_dividend(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
 
     return payment
 

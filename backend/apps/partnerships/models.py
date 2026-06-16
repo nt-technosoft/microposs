@@ -174,6 +174,104 @@ class InvestmentAgreement(TenantModel):
         }
 
 
+class PartnerPositionReadModel(TenantModel):
+    """E18 Phase 3 shadow read-model for partner money positions."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='partner_position_rows',
+    )
+    procurement = models.ForeignKey(
+        'Procurement',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='partner_position_rows',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='position_read_model_rows',
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+
+    available = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    deployed = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    paid_in = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    net = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    owed = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    withdrawable = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+
+    deployed_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_recovered_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    provisional_profit_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    loss_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    partner_liability_loss_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_returned_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    dividends_paid_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    profit_to_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    remaining_inventory_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    liability_capital_recovered_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_return_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    provisional_profit_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    negative_position_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    negative_liability_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    negative_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    negative_dividend_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    debt_repaid_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+
+    computed_at = models.DateTimeField()
+
+    MONEY_FIELDS = (
+        'available',
+        'deployed',
+        'paid_in',
+        'net',
+        'owed',
+        'withdrawable',
+        'deployed_uzs',
+        'capital_recovered_uzs',
+        'provisional_profit_uzs',
+        'loss_uzs',
+        'partner_liability_loss_uzs',
+        'capital_returned_uzs',
+        'dividends_paid_uzs',
+        'profit_to_capital_uzs',
+        'remaining_inventory_capital_uzs',
+        'liability_capital_recovered_uzs',
+        'capital_return_available_uzs',
+        'provisional_profit_available_uzs',
+        'negative_position_uzs',
+        'negative_liability_uzs',
+        'negative_capital_uzs',
+        'negative_dividend_uzs',
+        'debt_repaid_uzs',
+    )
+
+    class Meta:
+        db_table = 'partnerships_partner_position_read_model'
+        indexes = [
+            models.Index(fields=['tenant', 'agreement', 'partner', 'currency'], name='pprm_agreement_idx'),
+            models.Index(fields=['tenant', 'procurement', 'partner', 'currency'], name='pprm_procurement_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'agreement', 'procurement', 'partner', 'currency'],
+                name='uq_partner_position_read_model',
+                nulls_distinct=False,
+            ),
+        ]
+
+    @property
+    def identity_key(self) -> tuple[int | None, int, str]:
+        return (self.procurement_id, self.partner_id, str(self.currency or 'UZS').upper())
+
+    @property
+    def money_payload(self) -> dict[str, Decimal]:
+        return {field: getattr(self, field) for field in self.MONEY_FIELDS}
+
+
 class AgreementPartner(TenantModel):
     """A partner participating in a parent investment agreement."""
 

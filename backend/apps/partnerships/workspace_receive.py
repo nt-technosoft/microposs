@@ -148,6 +148,9 @@ def reverse_workspace_receive_batch(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        if procurement.agreement_id:
+            rebuild_agreement_positions(procurement.agreement)
         return reversal_batch
 
 
@@ -505,6 +508,9 @@ def receive_workspace_batch(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        if locked.agreement_id:
+            rebuild_agreement_positions(locked.agreement)
         return batch
 
 
