@@ -518,6 +518,8 @@ def _return_partnership_overpayment_to_pool(
             },
             tenant_id=tenant_id,
         )
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(locked_agreement)
         return allocations
 
 

@@ -36,10 +36,10 @@ def _copy_money_fields(target: dict[str, Decimal], source: dict) -> None:
             target[field] = _money(source[field])
 
 
-def canonical_partner_position_rows(
+def legacy_partner_position_rows(
     agreement: InvestmentAgreement,
 ) -> dict[tuple[int | None, int, str], dict[str, Decimal]]:
-    """Fold the current three canonical nodes into the Phase 3 read-model shape."""
+    """Fold the legacy three canonical nodes into the read-model shape."""
     from .advances import partner_capital_positions
     from .venture import procurement_venture_positions
     from .workspace_common import _agreement_available_by_partner
@@ -80,6 +80,148 @@ def canonical_partner_position_rows(
             )
             _copy_money_fields(target, source)
 
+    return rows
+
+
+def _journal_line_amount_uzs(tag) -> Decimal:
+    line = tag.journal_line
+    return _money(Decimal(str(line.debit or _ZERO)) + Decimal(str(line.credit or _ZERO)))
+
+
+def _apply_tag_realized_venture_fields(
+    *,
+    agreement: InvestmentAgreement,
+    rows: dict[tuple[int | None, int, str], dict[str, Decimal]],
+) -> None:
+    from .models import PartnerJournalLineTag
+
+    realized_keys: set[tuple[int, int]] = set()
+    for procurement_id, partner_id, currency in list(rows.keys()):
+        if procurement_id is None or currency != 'UZS':
+            continue
+        realized_keys.add((procurement_id, partner_id))
+        target = rows[(procurement_id, partner_id, currency)]
+        target['capital_returned_uzs'] = _ZERO
+        target['dividends_paid_uzs'] = _ZERO
+        target['profit_to_capital_uzs'] = _ZERO
+        target['debt_repaid_uzs'] = _ZERO
+
+    realized: dict[tuple[int, int], dict[str, Decimal]] = {}
+
+    def bucket(procurement_id: int, partner_id: int) -> dict[str, Decimal]:
+        return realized.setdefault((procurement_id, partner_id), {
+            'capital_returned_uzs': _ZERO,
+            'dividends_paid_uzs': _ZERO,
+            'profit_to_capital_uzs': _ZERO,
+            'repaid_liability_uzs': _ZERO,
+            'repaid_capital_uzs': _ZERO,
+            'repaid_dividend_uzs': _ZERO,
+        })
+
+    tags = (
+        PartnerJournalLineTag.objects
+        .filter(
+            tenant_id=agreement.tenant_id,
+            agreement=agreement,
+            procurement__isnull=False,
+        )
+        .select_related('journal_line')
+    )
+    for tag in tags:
+        amount = _journal_line_amount_uzs(tag)
+        values = bucket(tag.procurement_id, tag.partner_id)
+        if tag.flow == PartnerJournalLineTag.Flow.DIVIDEND:
+            values['dividends_paid_uzs'] += amount
+        elif (
+            tag.flow == PartnerJournalLineTag.Flow.PROFIT_TO_CAPITAL
+            and tag.pocket == PartnerJournalLineTag.Pocket.CAPITAL
+        ):
+            values['profit_to_capital_uzs'] += amount
+        elif tag.flow in {
+            PartnerJournalLineTag.Flow.CAPITAL_RETURN,
+            PartnerJournalLineTag.Flow.OVERPAYMENT_REFUND,
+        }:
+            values['capital_returned_uzs'] += amount
+        elif tag.flow == PartnerJournalLineTag.Flow.DEBT_REPAID_LIABILITY:
+            values['repaid_liability_uzs'] += amount
+        elif tag.flow == PartnerJournalLineTag.Flow.DEBT_REPAID_CAPITAL:
+            values['repaid_capital_uzs'] += amount
+        elif tag.flow == PartnerJournalLineTag.Flow.DEBT_REPAID_DIVIDEND:
+            values['repaid_dividend_uzs'] += amount
+
+    procurements = {
+        procurement.id: procurement
+        for procurement in Procurement.objects.filter(
+            tenant_id=agreement.tenant_id,
+            agreement=agreement,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+        )
+    }
+    realized_keys.update(realized.keys())
+    for procurement_id, partner_id in realized_keys:
+        values = realized.get((procurement_id, partner_id), {
+            'capital_returned_uzs': _ZERO,
+            'dividends_paid_uzs': _ZERO,
+            'profit_to_capital_uzs': _ZERO,
+            'repaid_liability_uzs': _ZERO,
+            'repaid_capital_uzs': _ZERO,
+            'repaid_dividend_uzs': _ZERO,
+        })
+        target = _row(
+            rows,
+            procurement_id=procurement_id,
+            partner_id=partner_id,
+            currency='UZS',
+        )
+        target['capital_returned_uzs'] = _money(values['capital_returned_uzs'])
+        target['dividends_paid_uzs'] = _money(values['dividends_paid_uzs'])
+        target['profit_to_capital_uzs'] = _money(values['profit_to_capital_uzs'])
+
+        repaid_liability = _money(values['repaid_liability_uzs'])
+        repaid_capital = _money(values['repaid_capital_uzs'])
+        repaid_dividend = _money(values['repaid_dividend_uzs'])
+
+        capital_delta = _money(
+            target['capital_recovered_uzs']
+            - target['capital_returned_uzs']
+            + repaid_capital
+        )
+        profit_delta = _money(
+            target['provisional_profit_uzs']
+            - target['dividends_paid_uzs']
+            - target['profit_to_capital_uzs']
+            + repaid_dividend
+        )
+        target['capital_return_available_uzs'] = max(_ZERO, capital_delta)
+        has_settlement = bool(
+            procurements.get(procurement_id)
+            and procurements[procurement_id].venture_settlements.exists()
+        )
+        target['provisional_profit_available_uzs'] = (
+            max(_ZERO, profit_delta) if has_settlement else _ZERO
+        )
+        target['negative_liability_uzs'] = max(
+            _ZERO,
+            _money(target['partner_liability_loss_uzs'] - repaid_liability),
+        )
+        target['negative_capital_uzs'] = max(_ZERO, -capital_delta)
+        target['negative_dividend_uzs'] = max(_ZERO, -profit_delta)
+        target['debt_repaid_uzs'] = _money(
+            repaid_liability + repaid_capital + repaid_dividend,
+        )
+        target['negative_position_uzs'] = _money(
+            target['negative_liability_uzs']
+            + target['negative_capital_uzs']
+            + target['negative_dividend_uzs'],
+        )
+
+
+def canonical_partner_position_rows(
+    agreement: InvestmentAgreement,
+) -> dict[tuple[int | None, int, str], dict[str, Decimal]]:
+    """Phase 4 source: pool/provisional legacy nodes + realized venture tags."""
+    rows = legacy_partner_position_rows(agreement)
+    _apply_tag_realized_venture_fields(agreement=agreement, rows=rows)
     return rows
 
 

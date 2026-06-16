@@ -33,6 +33,7 @@ def tag_journal_lines(
     agreement: InvestmentAgreement,
     procurement: Procurement | None,
     pocket: str,
+    flow: str,
     account_codes: set[str] | tuple[str, ...] | list[str] | None = None,
     debit: bool | None = None,
     credit: bool | None = None,
@@ -57,7 +58,7 @@ def tag_journal_lines(
             agreement=agreement,
             procurement=procurement,
             pocket=pocket,
-            defaults={'deleted_at': None},
+            defaults={'flow': flow, 'deleted_at': None},
         )
         if was_created:
             created += 1
@@ -78,6 +79,7 @@ def tag_capital_contribution(*, contribution: AgreementContribution, payment: Pa
         agreement=contribution.agreement,
         procurement=None,
         pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+        flow=PartnerJournalLineTag.Flow.CONTRIBUTION,
         account_codes={pool_code},
         debit=True,
     )
@@ -89,6 +91,11 @@ def tag_capital_withdrawal(*, withdrawal: AgreementWithdrawal, journal_entry: Jo
         if withdrawal.return_kind == AgreementWithdrawal.ReturnKind.FROM_POOL
         else PartnerJournalLineTag.Pocket.PROCEEDS
     )
+    flow = (
+        PartnerJournalLineTag.Flow.POOL_RETURN
+        if withdrawal.return_kind == AgreementWithdrawal.ReturnKind.FROM_POOL
+        else PartnerJournalLineTag.Flow.CAPITAL_RETURN
+    )
     return tag_journal_lines(
         tenant_id=withdrawal.tenant_id,
         journal_entry=journal_entry,
@@ -96,6 +103,7 @@ def tag_capital_withdrawal(*, withdrawal: AgreementWithdrawal, journal_entry: Jo
         agreement=withdrawal.agreement,
         procurement=withdrawal.procurement,
         pocket=pocket,
+        flow=flow,
         account_codes={_partner_equity_code(agreement=withdrawal.agreement, partner_id=withdrawal.partner_id)},
         debit=True,
     )
@@ -109,6 +117,7 @@ def tag_dividend_payment(*, dividend: DividendPayment, journal_entry: JournalEnt
         agreement=dividend.procurement.agreement,
         procurement=dividend.procurement,
         pocket=PartnerJournalLineTag.Pocket.DISTRIBUTION,
+        flow=PartnerJournalLineTag.Flow.DIVIDEND,
         account_codes={'3200'},
         debit=True,
     )
@@ -129,6 +138,7 @@ def tag_profit_to_capital(
         agreement=agreement,
         procurement=procurement,
         pocket=PartnerJournalLineTag.Pocket.DISTRIBUTION,
+        flow=PartnerJournalLineTag.Flow.PROFIT_TO_CAPITAL,
         account_codes={'3200'},
         debit=True,
     )
@@ -139,6 +149,7 @@ def tag_profit_to_capital(
         agreement=agreement,
         procurement=procurement,
         pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+        flow=PartnerJournalLineTag.Flow.PROFIT_TO_CAPITAL,
         account_codes={_partner_equity_code(agreement=agreement, partner_id=partner_id)},
         credit=True,
     )
@@ -154,7 +165,7 @@ def tag_venture_debt_repayment(
     if agreement is None:
         return 0
     created = 0
-    if repayment.repaid_liability_uzs or repayment.repaid_capital_uzs:
+    if repayment.repaid_liability_uzs:
         created += tag_journal_lines(
             tenant_id=repayment.tenant_id,
             journal_entry=journal_entry,
@@ -162,7 +173,20 @@ def tag_venture_debt_repayment(
             agreement=agreement,
             procurement=repayment.procurement,
             pocket=PartnerJournalLineTag.Pocket.CAPITAL,
-            account_codes={'5100', _partner_equity_code(agreement=agreement, partner_id=repayment.partner_id)},
+            flow=PartnerJournalLineTag.Flow.DEBT_REPAID_LIABILITY,
+            account_codes={'5100'},
+            credit=True,
+        )
+    if repayment.repaid_capital_uzs:
+        created += tag_journal_lines(
+            tenant_id=repayment.tenant_id,
+            journal_entry=journal_entry,
+            partner_id=repayment.partner_id,
+            agreement=agreement,
+            procurement=repayment.procurement,
+            pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+            flow=PartnerJournalLineTag.Flow.DEBT_REPAID_CAPITAL,
+            account_codes={_partner_equity_code(agreement=agreement, partner_id=repayment.partner_id)},
             credit=True,
         )
     if repayment.repaid_dividend_uzs:
@@ -173,6 +197,7 @@ def tag_venture_debt_repayment(
             agreement=agreement,
             procurement=repayment.procurement,
             pocket=PartnerJournalLineTag.Pocket.DISTRIBUTION,
+            flow=PartnerJournalLineTag.Flow.DEBT_REPAID_DIVIDEND,
             account_codes={'3200'},
             credit=True,
         )
@@ -199,6 +224,7 @@ def tag_overpayment_refund(
         agreement=agreement,
         procurement=procurement,
         pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+        flow=PartnerJournalLineTag.Flow.OVERPAYMENT_REFUND,
         account_codes={pool_code},
         debit=True,
     )

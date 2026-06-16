@@ -7,6 +7,7 @@ from apps.finance.models import JournalEntry, Payment
 from apps.partnerships.advances import settle_partner_capital
 from apps.partnerships.agreement_services import pay_dividend
 from apps.partnerships.journal_tags import backfill_partner_journal_line_tags
+from apps.partnerships.read_models import canonical_partner_position_rows, legacy_partner_position_rows
 from apps.partnerships.models import (
     AgreementContribution,
     AgreementAllocation,
@@ -78,6 +79,7 @@ class PartnerJournalLineTagForwardTests(TestCase):
             agreement=agreement,
             procurement__isnull=True,
             pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+            flow=PartnerJournalLineTag.Flow.CONTRIBUTION,
         )
         self.assertTrue(contribution_tags.exists())
         self.assertTrue(all(tag.journal_line_id for tag in contribution_tags))
@@ -104,6 +106,10 @@ class PartnerJournalLineTagForwardTests(TestCase):
             set(_tags_for_entry(profit_entry).values_list('pocket', flat=True)),
             {PartnerJournalLineTag.Pocket.CAPITAL, PartnerJournalLineTag.Pocket.DISTRIBUTION},
         )
+        self.assertEqual(
+            set(_tags_for_entry(profit_entry).values_list('flow', flat=True)),
+            {PartnerJournalLineTag.Flow.PROFIT_TO_CAPITAL},
+        )
 
         withdrawal = add_agreement_withdrawal(
             tenant_id=ctx['business'].id,
@@ -124,6 +130,7 @@ class PartnerJournalLineTagForwardTests(TestCase):
             agreement=agreement,
             procurement=procurement,
             pocket=PartnerJournalLineTag.Pocket.PROCEEDS,
+            flow=PartnerJournalLineTag.Flow.CAPITAL_RETURN,
         ).exists())
 
     def test_dividend_and_repay_write_tags(self):
@@ -153,6 +160,7 @@ class PartnerJournalLineTagForwardTests(TestCase):
             agreement=dividend_procurement.agreement,
             procurement=dividend_procurement,
             pocket=PartnerJournalLineTag.Pocket.DISTRIBUTION,
+            flow=PartnerJournalLineTag.Flow.DIVIDEND,
         ).exists())
 
         _sell(dividend_ctx, dividend_procurement, unit_price='100000.00')
@@ -183,6 +191,13 @@ class PartnerJournalLineTagForwardTests(TestCase):
             partner=dividend_ctx['investor'],
             agreement=dividend_procurement.agreement,
             procurement=dividend_procurement,
+        ).exists())
+        self.assertTrue(_tags_for_entry(repay_entry).filter(
+            flow__in={
+                PartnerJournalLineTag.Flow.DEBT_REPAID_LIABILITY,
+                PartnerJournalLineTag.Flow.DEBT_REPAID_CAPITAL,
+                PartnerJournalLineTag.Flow.DEBT_REPAID_DIVIDEND,
+            },
         ).exists())
 
     def test_overpayment_refund_writes_capital_tag_without_deploy_tags(self):
@@ -301,7 +316,13 @@ class PartnerJournalLineTagForwardTests(TestCase):
             agreement=procurement.agreement,
             procurement=procurement,
             pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+            flow=PartnerJournalLineTag.Flow.OVERPAYMENT_REFUND,
         ).exists())
+        tag_rows = canonical_partner_position_rows(procurement.agreement)
+        legacy_rows = legacy_partner_position_rows(procurement.agreement)
+        key = (procurement.id, ctx['investor'].id, 'UZS')
+        self.assertEqual(tag_rows[key], legacy_rows[key])
+        self.assertEqual(tag_rows[key]['capital_returned_uzs'], Decimal('20.00'))
 
 
 class PartnerJournalLineTagBackfillTests(TestCase):

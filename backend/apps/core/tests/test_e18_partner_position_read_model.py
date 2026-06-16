@@ -4,20 +4,25 @@ from django.test import TestCase
 
 from apps.partnerships.advances import settle_partner_capital
 from apps.partnerships.models import (
+    AgreementAllocation,
     CapitalAdvanceSettlement,
     InvestmentAgreement,
+    PartnerJournalLineTag,
+    PartnerLedgerEntry,
+    Procurement,
     PartnerPositionReadModel,
     ProcurementVentureSettlement,
 )
 from apps.partnerships.read_models import (
     canonical_partner_position_rows,
+    legacy_partner_position_rows,
     rebuild_agreement_positions,
 )
 from apps.partnerships.venture import (
     create_venture_settlement,
     repay_partner_venture_debt,
 )
-from apps.partnerships.workspace import dispatch_workspace_action
+from apps.partnerships.workspace import apply_items_amendment, create_workspace, dispatch_workspace_action
 from apps.partnerships.workspace_support import add_agreement_withdrawal
 from apps.sales.models import SalePayment
 from apps.sales.services import create_sale
@@ -43,8 +48,17 @@ def _canonical_snapshot(agreement):
     }
 
 
+def _legacy_snapshot(agreement):
+    return {
+        key: payload
+        for key, payload in legacy_partner_position_rows(agreement).items()
+    }
+
+
 def _assert_current(test, agreement):
-    test.assertEqual(_read_model_snapshot(agreement), _canonical_snapshot(agreement))
+    canonical = _canonical_snapshot(agreement)
+    test.assertEqual(canonical, _legacy_snapshot(agreement))
+    test.assertEqual(_read_model_snapshot(agreement), canonical)
 
 
 class PartnerPositionReadModelHookTests(TestCase):
@@ -205,6 +219,111 @@ class PartnerPositionReadModelHookTests(TestCase):
             paid_to_account_id=repay_ctx['cash_account'].id,
         )
         _assert_current(self, repayment_agreement)
+
+    def test_overpayment_refund_hook_and_tag_equivalence(self):
+        ctx = build_tenant()
+        procurement = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': Decimal('0.5'),
+                'planned_budget': Decimal('150'),
+                'currency': 'UZS',
+                'partners': [
+                    {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
+                     'planned_capital_share': Decimal('100'), 'profit_share': Decimal('0.333333')},
+                    {'partner_id': ctx['operator'].id, 'role': 'OPERATOR',
+                     'planned_capital_share': Decimal('50'), 'profit_share': Decimal('0.666667')},
+                ],
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }]}},
+        )
+        for partner_id, amount in (
+            (ctx['investor'].id, Decimal('100')),
+            (ctx['operator'].id, Decimal('50')),
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': Decimal('1'),
+                }},
+            )
+
+        item = procurement.items.get()
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('80'), 'currency': 'UZS'},
+                {'partner_id': ctx['operator'].id, 'amount': Decimal('20'), 'currency': 'UZS'},
+            ], 'item_ids': [item.id]}},
+        )
+        apply_items_amendment(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            new_items_payload=[{
+                'id': item.id,
+                'product_variant_id': item.product_variant_id,
+                'quantity': Decimal('8'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            reason='supplier removed two units after prepayment',
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RESOLVE_OVERPAYMENT',
+            payload={'payload': {'amount': Decimal('20'), 'currency': 'UZS'}},
+        )
+
+        allocation = AgreementAllocation.objects.get(
+            tenant=ctx['business'],
+            procurement=procurement,
+            direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+            amount=Decimal('20.00'),
+        )
+        self.assertTrue(PartnerLedgerEntry.objects.filter(
+            ledger__procurement=procurement,
+            ledger__partner=ctx['investor'],
+            entry_type=PartnerLedgerEntry.EntryType.CAPITAL_OUT,
+            source_ref=f'allocation:{allocation.id}',
+        ).exists())
+        self.assertTrue(PartnerJournalLineTag.objects.filter(
+            agreement=procurement.agreement,
+            procurement=procurement,
+            partner=ctx['investor'],
+            flow=PartnerJournalLineTag.Flow.OVERPAYMENT_REFUND,
+        ).exists())
+
+        key = (procurement.id, ctx['investor'].id, 'UZS')
+        self.assertEqual(_canonical_snapshot(procurement.agreement)[key]['capital_returned_uzs'], Decimal('20.00'))
+        self.assertEqual(_legacy_snapshot(procurement.agreement)[key]['capital_returned_uzs'], Decimal('20.00'))
+        _assert_current(self, procurement.agreement)
 
 
 class PartnerPositionReadModelReplayTests(TestCase):

@@ -345,11 +345,14 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
   debt-repay). **`deploy` НЕ тегируется** (лид-правка: `deployed` — провизорное из `ReceiveBatchCapitalAllocation`,
   агрегированная 1100-строка не несёт per-partner суммы → был бы over-count).
 - [x] T-4.3 ✅ Best-effort idempotent backfill по однозначному `source_ref`.
-- [ ] T-4.4 (слайс 4c) read-model realized-источник → теги (`GROUP BY` tag + join), провизорное из таблиц.
-  ⚠️ Перед/вместе с реконструкцией `paid_in`: Ф5 `return_kind` (тег withdrawal должен различать пуловый
-  возврат vs recovered-из-выручки, иначе вернётся double-count S4).
-- [ ] T-4.5 (слайс 4c) **Доказательство:** `read-model == легаси-3-узла` поле-в-поле на всех 10 golden
-  + conservation точный 0 UZS + GL/`JournalLine` не изменились. **Обязательный независимый money sign-off.**
+- [x] T-4.4 ✅ (слайс 4c-ii) read-model realized **венчур-UZS** поля → теги (`GROUP BY partner,flow`,
+  + `flow`-размерность на теге, миграция 0031); пуловые (валюта договора) и провизорные — из таблиц
+  (валюто-корректно). Ф5 `return_kind` лёг раньше (разблокировал честный `paid_in`).
+- [x] T-4.5 ✅ (слайс 4c-ii) **Доказательство (лид-аудит PASS + независимый sign-off APPROVE 2026-06-16):**
+  `canonical(tag-sourced) == legacy-3-узла` поле-в-поле на всех realized-flows (вкл. overpayment-refund,
+  capital_returned=20.00 нетривиально); независимость подтверждена (venture.py — ноль ссылок на теги);
+  цепочка `table==rebuild==canonical==legacy`; reads НЕ переключены; 351 passed; conservation легаси не изменён.
+  Пойман и починен реальный баг: overpayment-refund не имел rebuild-хука.
 
 ### Фаза 5 — Явные типы + честный true-up
 - [x] T-5.1 ✅ лид-аудит PASS 2026-06-16 (поведенчески-сохраняющий, 349=347+2): `return_kind`

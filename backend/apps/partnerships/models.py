@@ -264,6 +264,18 @@ class PartnerJournalLineTag(TenantModel):
         PROCEEDS = 'PROCEEDS', 'Proceeds'
         DISTRIBUTION = 'DISTRIBUTION', 'Distribution'
 
+    class Flow(models.TextChoices):
+        CONTRIBUTION = 'CONTRIBUTION', 'Contribution'
+        POOL_RETURN = 'POOL_RETURN', 'Pool return'
+        PROCEEDS_RETURN = 'PROCEEDS_RETURN', 'Proceeds return'
+        DIVIDEND = 'DIVIDEND', 'Dividend'
+        PROFIT_TO_CAPITAL = 'PROFIT_TO_CAPITAL', 'Profit to capital'
+        CAPITAL_RETURN = 'CAPITAL_RETURN', 'Capital return'
+        OVERPAYMENT_REFUND = 'OVERPAYMENT_REFUND', 'Overpayment refund'
+        DEBT_REPAID_LIABILITY = 'DEBT_REPAID_LIABILITY', 'Debt repaid liability'
+        DEBT_REPAID_CAPITAL = 'DEBT_REPAID_CAPITAL', 'Debt repaid capital'
+        DEBT_REPAID_DIVIDEND = 'DEBT_REPAID_DIVIDEND', 'Debt repaid dividend'
+
     journal_line = models.ForeignKey(
         'finance.JournalLine',
         on_delete=models.CASCADE,
@@ -287,6 +299,7 @@ class PartnerJournalLineTag(TenantModel):
         related_name='journal_line_tags',
     )
     pocket = models.CharField(max_length=16, choices=Pocket.choices)
+    flow = models.CharField(max_length=32, choices=Flow.choices, default=Flow.CONTRIBUTION)
 
     class Meta:
         db_table = 'partnerships_partner_journal_line_tag'
