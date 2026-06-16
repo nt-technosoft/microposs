@@ -249,13 +249,27 @@ read-model питается из **независимого** источника
 (3 места). Net-пересчёт на settlement → честные `SETTLEMENT_TRUEUP`-события вместо live-перетирания.
 Verify: golden + conservation точный 0 UZS; история показывает реальные события.
 
-### Фаза 6 — Переключение чтений + снос параллельных источников капитала
-Позиции, conservation, close-гейты, сериализаторы читают единый read-model. Удалить 3 live-узла
-(`partner_capital_positions`/`procurement_venture_positions`-live + `_agreement_available_by_partner`).
-**Дополнительно (вскрыто аудитом):** ретайрить `AgreementAllocation`-как-капитал-истину — «available»
-выводится из канонической пуловой математики (contrib − deployed − returns), а не из параллельной
-`AgreementAllocation`-бухгалтерии (двойной учёт с `ReceiveBatchCapitalAllocation`). Verify: API
-байт-в-байт; close-гейты идентичны; conservation из слоёв = 0.
+### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано 2026-06-16)
+> **Реструктуризация после focused-паса.** Прежняя формулировка («удалить 3 узла» + «ретайр
+> AgreementAllocation») переамбициозна и частично неверна — см. ниже.
+
+**Делаем:**
+- **Дисплей-reads → материализованная таблица.** Read-model уже несёт все нужные поля (pool+venture+
+  `available`). Дисплей-сайты: `serializers.py:400` (get_participant_totals), `views.py:391/435`
+  (partner_capital_positions), `views.py:206/260/383/524` (procurement_venture_positions),
+  `workspace_payload.py:667` (_agreement_available). Это убирает дисплей-передеривание = поверхность S1/S4.
+- **Полнота хуков (prereq):** аудит ВСЕХ денежных мутаций → у каждой есть `rebuild`-hook (баг overpayment
+  в 4c-ii показал, что дыры бывают). Проверка байт-в-байт (дисплей-из-таблицы == дисплей-из-легаси) сама
+  ловит пропущенный хук.
+- Verify: API байт-в-байт (read-model==легаси доказан в Ф4); close-гейты идентичны; suite зелёный.
+
+**НЕ делаем (вынесено за E18 / descoped):**
+- Валидация-/гейт-reads (`workspace_funding` allocation-валидация, close-гейты) — **остаются на живых
+  узлах** (нужна транзакционная свежесть; S4-гейт уже на каноне).
+- 3 узла **НЕ удаляем** — остаются rebuild-внутренним источником + валидацией записи.
+- **`AgreementAllocation`-ретайр — отдельный анализ вне E18:** это **не** чистый дубль
+  `ReceiveBatchCapitalAllocation`, а **намерение до приёмки** (pre-receive intent) vs **факт на приёмке** —
+  разные стадии жизненного цикла. Нельзя просто снести.
 
 ### Фаза 7 — Снос мёртвого/дублей + удаление оснастки
 Удалить `CapitalAdvanceSettlement` (модель+enum, мёртв); расщепить/депрекейтнуть
@@ -364,13 +378,14 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
   оптимизация, НЕ блокирует 4c; провизор в 4c берётся из `ProcurementSaleRealization` с live-неттингом).
 - [ ] T-5.3 Verify: conservation точный 0 UZS; honest history (закроется с T-5.2).
 
-### Фаза 6 — Переключение чтений + снос параллельных источников капитала
-- [ ] T-6.1 Позиции/conservation/close-гейты/сериализаторы → read-model.
-- [ ] T-6.2 Удалить 3 live-узла (`procurement_venture_positions`/`partner_capital_positions`-live +
-  `_agreement_available_by_partner`).
-- [ ] T-6.3 Ретайрить `AgreementAllocation`-как-капитал-истину: «available» из канон-пуловой математики
-  (contrib − deployed − returns), не из параллельной allocation-бухгалтерии.
-- [ ] T-6.4 Verify: API байт-в-байт, close-гейты идентичны, conservation из слоёв = 0.
+### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано)
+- [ ] T-6.1 Полнота хуков: аудит ВСЕХ денежных мутаций → у каждой есть `rebuild`-hook; добить пропуски.
+- [ ] T-6.2 Дисплей-reads → материализованная таблица: `serializers.py:400`, `views.py:391/435/206/260/383/524`,
+  `workspace_payload.py:667`. Валидация-/гейт-reads — НЕ трогаем (живые узлы, транзакц. свежесть).
+- [ ] T-6.3 Verify: API **байт-в-байт** (дисплей-из-таблицы == дисплей-из-легаси, ловит stale-хук);
+  close-гейты идентичны; suite зелёный. **Независимый money sign-off.**
+- ~~Удаление 3 узлов / ретайр AgreementAllocation~~ → **вынесено за E18** (узлы = rebuild+валидация;
+  AgreementAllocation = pre-receive intent, не дубль). Отдельный анализ.
 
 ### Фаза 7 — Чистка + снос оснастки
 - [ ] T-7.1 Удалить `CapitalAdvanceSettlement` (модель+enum, мёртв).
