@@ -364,26 +364,6 @@ def _terms_status_for_paid_amount(total_amount_due: Decimal, paid_amount: Decima
     return ProcurementTerms.Status.OPEN
 
 
-def _payment_amount_for_terms(
-    *,
-    amount: Decimal,
-    currency: str,
-    fx_rate,
-    terms: ProcurementTerms,
-) -> Decimal:
-    amount = Decimal(str(amount or 0))
-    payment_currency = str(currency or 'UZS').upper()
-    obligation_currency = str(terms.currency_of_obligation or 'UZS').upper()
-    if payment_currency == obligation_currency:
-        return amount.quantize(Decimal('0.01'))
-
-    rate = Decimal(str(fx_rate or terms.fx_rate_at_obligation or 1))
-    amount_uzs = amount if payment_currency == 'UZS' else amount * rate
-    if obligation_currency == 'UZS':
-        return amount_uzs.quantize(Decimal('0.01'))
-    return (amount_uzs / Decimal(str(terms.fx_rate_at_obligation or 1))).quantize(Decimal('0.01'))
-
-
 def _allowed_action_keys(policy, terms) -> list[str]:
     actions = [ACTION_MAP.get(action, action) for action in policy.allowed_actions]
     if policy.normalized_funding_source == Procurement.FundingSource.PARTNERSHIP:

@@ -296,14 +296,19 @@ golden-контракт) и финализироваться здесь.
   без shell-импортов/циклов, дубль-скан без новых дублей. Кластер E (source/lines/settlement/amend/
   split/cancel + upsert/draft-семейство) вынесен. **Shell 4406→557 строк** (диспетчер + create/queryset +
   ре-экспорты + 2 shadow-def и 1 dead для step-d).
-- [ ] T-2.9 (d) **Отдельным коммитом** удалить доказанно-мёртвый код (`_draft_cost_total_uzs`,
-  `_payment_amount_for_terms`) **+ 2 shadow-def в `workspace.py`** (`_pre_allocate_at_receipt_partnership_capital`,
-  `_resolve_workspace_capital_snapshot` — дубли funding со слайса 2, ноль вызовов; сохранить
-  import-из-funding для re-export) — после переносов, не вместе с move. Сверить дубль-сканом = 0.
-- [ ] T-2.10 (инвариант 3 + e) После каждого шага: дословность (`@transaction.atomic`/publish_event/
-  декораторы) сохранена; те же сценарии + trigger-map → доказать идентичность; ни один кластер не импортирует shell.
-- [ ] T-2.11 Acceptance: `makemigrations --check` чисто; полный suite зелёный; ноль изменений
-  в числах/GL/conservation; `workspace.py` заметно меньше + новые модули по границам.
+- [x] T-2.9 (d) ✅ лид-аудит PASS 2026-06-16: отдельным коммитом удалены `_draft_cost_total_uzs`,
+  `_payment_amount_for_terms` + 2 shadow-def (`_pre_allocate…`, `_resolve_workspace_capital_snapshot`;
+  канон остался в funding, import-для-re-export сохранён) + 5 осиротевших импортов. **Дубль-скан = 0**,
+  re-export цел, 338 passed. `workspace.py` 557→343 строк.
+- [x] T-2.10 (инвариант 3 + e) ✅ дословность сохранена (ноль stray-логики во всех слайсах),
+  ни один кластер не импортирует shell, межкластерный DAG ацикличен на каждом шаге.
+- [x] T-2.11 Acceptance ✅ `makemigrations --check` чисто; полный suite 338 passed (== бейзлайн);
+  ноль изменений чисел/GL/conservation; `workspace.py` 4406→343 строк + 6 модулей по границам
+  (`workspace_payload/funding/payment/receive/amendments/common`).
+
+**Фаза 2 ЗАВЕРШЕНА ✅ (лид-аудит PASS 2026-06-16, сантехническая, без независимого sign-off).**
+Слайсы 1–6: commits 50d506f, d9f5ba5, 430b873, 6b98b0e, 74cf7b2, + step-d. Поведение идентично
+(338=338 на каждом шаге), миграций нет, дублей нет.
 
 ### Фаза 3 — Золотой контракт + shadow read-model
 - [ ] T-3.1 Состыковать golden-контракт с аудиторской сессией (входы/эталоны/residual).
