@@ -39,7 +39,7 @@
 | **E15** | Partner Distributions & Capital Return (исходящие партнёрские деньги) | 🟡 IN_PROGRESS | 90% | E11, E12, E14 | [→](./roadmap/E15-partner-distributions-capital-return.md) |
 | **E16** | Procurement Venture Settlement & Partner Proceeds | 🟡 IN_PROGRESS | 95% | E07, E11, E12, E14, E15 | [→](./roadmap/E16-procurement-venture-settlement.md) |
 | **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | ✅ DONE | 100% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
-| **E18** | Money Model Consolidation | ⚪ NOT_STARTED | 0% | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
+| **E18** | Money Model Consolidation | 🔵 IN_REVIEW | ~100% core | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
 
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
@@ -57,12 +57,16 @@ Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) 
 Tailwind v4 + shadcn-vue; редизайн screen-by-screen, старт с детальной
 страницы прихода. Фаза 0 — выровнять источник правды (tokens.css → DESIGN.md).
 
-**Активный P0 (backend):** E17 — Production Lifecycle Readiness. E16 закрыл
-экономическое ядро venture-settlement, но перед первым клиентом нужно убрать
-швы: один источник правды, retire active CapitalAdvance workflow, close
-procurement/agreement, locks после закрытия, idempotent returns, UI-действия и
-Excel replay. E03 временно ждёт E16/E17, потому что real value reporting должен
-читать уже правильные buckets и закрытый lifecycle.
+**Backend P0 — ЗАКРЫТО (2026-06-16):** E17 (Production Lifecycle Readiness,
+acceptance 11/11) → **E18 (Money Model Consolidation, Ф1–Ф8 IN_REVIEW)**. E18
+консолидировал денежную модель: единый материализованный `PartnerPositionReadModel`
+с независимым tag-источником (доказано == легаси байт-в-байт + property-based),
+дисплей-дивергенция S1/S4 устранена, conservation exact-0 по UZS, мёртвый код/дубли
+снесены. Всё на ветке `vacuum-rework-claude` (не в main), backend-сьют 368 зелёный;
+ждёт UI-верификацию. **Следующий backend P0 — E03 (Real Value Reporting)**: теперь
+есть чистый read-model, на который ему опираться. Вынесено за E18 (отдельные задачи):
+ретайр `AgreementAllocation` (не дубль), split `get_partner_aggregate` (cross-app),
+functional-currency (UZS захардкожен → будущий эпик под не-UZS бизнес).
 
 **Предыдущий P0 (2026-05-19 — 2026-05-21):** E09 — Procurement Completeness.
 Wave A (backend, 8 slices) + Wave B (frontend rebuild, 14 slices) завершены.
