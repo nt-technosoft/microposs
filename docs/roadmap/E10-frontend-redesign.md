@@ -154,3 +154,13 @@ IA-first shape (mobile + desktop) → per-block rebuild → verify. Это
   К приёмке / Просрочено) вместо vanity-счётчиков (кол-во в списке, all-time
   сумма). Деньги по валютам без fx; считается по всему списку, не по фильтру.
   Тренды/период — это работа дашборда, не шапки списка.
+
+## Frontend-баги (E18 UI-аудит, 2026-06-16)
+
+Все — **пред-существующие** (E18 фронт не трогал, API байт-идентичен; см. money-architecture-audit). Surfaced UI-аудитом E18. Чинить отдельным frontend-fix слайсом, проверка **без UI** (Vitest component/unit + backend pytest где слой бэкенда).
+
+- [ ] **FB-1 (high) — крэш `ProcurementProfitabilityView`.** `procurementDetail.value?.balance.X` без `?.` после `.balance` (стр. **32 И 33** — `participant_totals` и `history`). `balance` undefined для не-партнёрских/без-договора приходов → крэш «Cannot read … participant_totals». Фикс: `?.balance?.X ?? []` + осмысленный empty-state. Verify: component-тест (mount без `balance` → не падает).
+- [ ] **FB-2 (high) — `/reports/agreements` показывает UZS как `$` и с `-`.** `formatPrice` через `Intl` рисует `$` только при currency='USD'; `balanceLabel` берёт валюту из ключа `balances`-словаря. Гипотеза: backend-отчёт кладёт ключ 'USD' на UZS-сумму. **Определить слой** (backend report serializer vs frontend read) и чинить там. Минус — возможно корректный дефицит, проблема в валюте. Verify: backend-тест (отчёт UZS-договора отдаёт UZS) или unit-тест `balanceLabel`.
+- [ ] **FB-3 (low) — лейбл «Предв. прибыль».** Поле = `provisional_profit_available` (остаток к выплате), после payout = 0 → выглядит как «прибыль исчезла». Переименовать лейбл/i18n («Доступная прибыль»/«К выплате»). Verify: i18n + текст-тест.
+- [ ] **FB-4 (med) — статус «Частично» при приёмке 10/10.** Вероятно payment/terms-статус показан вместо receive-статуса. Определить слой, развести receive-complete vs payment-partial. Verify: тест на полностью-принятый/частично-оплаченный приход.
+- [ ] **FB-5 (low) — дефолт «Main Card · 0 UZS» в «Капитал от продаж».** Селектор счёта авто-выбирает 0-баланс. Дефолт → операционная касса с балансом или без авто-выбора. Verify: component-тест на дефолт-выбор.
