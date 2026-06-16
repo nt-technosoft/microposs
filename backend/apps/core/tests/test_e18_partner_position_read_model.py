@@ -124,6 +124,29 @@ class PartnerPositionReadModelHookTests(TestCase):
         )
         _assert_current(self, agreement)
 
+    def test_pool_conversion_keeps_read_model_current(self):
+        ctx = build_tenant()
+        procurement = _build_funded(
+            ctx,
+            planned=(Decimal('100'), Decimal('50')),
+            profit=(Decimal('0.333333'), Decimal('0.666667')),
+            contributions=(Decimal('100'), Decimal('50')),
+        )
+        agreement = InvestmentAgreement.objects.get(pk=procurement.agreement_id)
+        _assert_current(self, agreement)
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='CONVERT_CAPITAL_POOL',
+            payload={'payload': {
+                'from_amount': Decimal('60.00'),
+                'to_currency': 'USD',
+                'rate': Decimal('0.00008'),
+            }},
+        )
+        _assert_current(self, agreement)
+
     def test_withdrawal_repay_and_profit_to_capital_hooks(self):
         ctx = build_tenant()
         procurement = _build_shortfall_with_profit(ctx)
