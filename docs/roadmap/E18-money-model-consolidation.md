@@ -292,7 +292,10 @@ golden-контракт) и финализироваться здесь.
   `_resolve_workspace_capital_snapshot`. Call-graph добавил receive-only `_check_prepaid_coverage`/
   `_receivable_line_states`; `_landed_expense_allocations` остаётся в common (A+D). `workspace.py` 85k→52k байт.
   ⚠️ Вскрыто: 2 shadow-def в shell со слайса 2 (дубли funding) — мёртвые, в T-2.9.
-- [ ] T-2.8 (c) `workspace_amendments.py` (source/lines/settlement/amend/split/cancel); сеть = то же.
+- [x] T-2.8 (c) `workspace_amendments.py` ✅ лид-аудит PASS 2026-06-16: 338 passed, makemigrations чисто,
+  без shell-импортов/циклов, дубль-скан без новых дублей. Кластер E (source/lines/settlement/amend/
+  split/cancel + upsert/draft-семейство) вынесен. **Shell 4406→557 строк** (диспетчер + create/queryset +
+  ре-экспорты + 2 shadow-def и 1 dead для step-d).
 - [ ] T-2.9 (d) **Отдельным коммитом** удалить доказанно-мёртвый код (`_draft_cost_total_uzs`,
   `_payment_amount_for_terms`) **+ 2 shadow-def в `workspace.py`** (`_pre_allocate_at_receipt_partnership_capital`,
   `_resolve_workspace_capital_snapshot` — дубли funding со слайса 2, ноль вызовов; сохранить
