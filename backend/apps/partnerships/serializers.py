@@ -394,10 +394,8 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         return ProcurementListSerializer(obj.procurements.all(), many=True, context=self.context).data
 
     def get_participant_totals(self, obj):
-        from .advances import partner_capital_positions
-        # Pool-correct positions: paid_in already excludes recovered-capital
-        # returns via AgreementWithdrawal.return_kind.
-        positions = partner_capital_positions(obj)
+        from .read_models import read_positions
+        positions = read_positions(obj)
 
         rows = {
             partner.partner_id: {
@@ -436,7 +434,7 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         for row in rows.values():
             pid = row['partner_id']
             pos = positions.get(pid, {})
-            # E17 fix: use pool-correct paid_in from partner_capital_positions
+            # E17/E18: use pool-correct paid_in from the materialized read-model
             # instead of contributed − ALL withdrawals (which wrongly included
             # recovered-capital returns and made available_amount go negative).
             paid_in = Decimal(str(pos.get('paid_in', Decimal('0.00'))))

@@ -225,6 +225,52 @@ def canonical_partner_position_rows(
     return rows
 
 
+def read_positions(agreement: InvestmentAgreement) -> dict[int, dict[str, Decimal]]:
+    """Display read for agreement-level partner positions from materialized rows."""
+    rows = (
+        PartnerPositionReadModel.objects
+        .filter(
+            tenant_id=agreement.tenant_id,
+            agreement=agreement,
+            procurement__isnull=True,
+            currency=str(agreement.currency or 'UZS').upper(),
+        )
+    )
+    return {row.partner_id: row.money_payload for row in rows}
+
+
+def read_venture_positions(procurement: Procurement) -> dict[int, dict[str, Decimal]]:
+    """Display read for procurement venture positions from materialized rows."""
+    if not procurement.agreement_id:
+        return {}
+    rows = (
+        PartnerPositionReadModel.objects
+        .filter(
+            tenant_id=procurement.tenant_id,
+            agreement_id=procurement.agreement_id,
+            procurement=procurement,
+            currency='UZS',
+        )
+    )
+    return {row.partner_id: row.money_payload for row in rows}
+
+
+def read_available_by_partner(agreement: InvestmentAgreement) -> dict[int, dict[str, Decimal]]:
+    """Display read for agreement free capital by partner/currency."""
+    rows = (
+        PartnerPositionReadModel.objects
+        .filter(
+            tenant_id=agreement.tenant_id,
+            agreement=agreement,
+            procurement__isnull=True,
+        )
+    )
+    available: dict[int, dict[str, Decimal]] = {}
+    for row in rows:
+        available.setdefault(row.partner_id, {})[str(row.currency or 'UZS').upper()] = row.available
+    return available
+
+
 def rebuild_agreement_positions(agreement: InvestmentAgreement) -> None:
     """Rebuild all read-model rows for one agreement from Phase 3 sources."""
     with transaction.atomic():

@@ -33,7 +33,8 @@ from .agreement_services import (
     get_partner_aggregate,
     pay_dividend,
 )
-from .advances import partner_capital_positions, settle_partner_capital
+from .advances import settle_partner_capital
+from .read_models import read_positions, read_venture_positions
 from .workspace_support import (
     add_agreement_contribution,
     add_agreement_withdrawal,
@@ -194,8 +195,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     def profit_summary(self, request, pk=None):
         """Per-partner, per-procurement undistributed profit (UZS) — payable rows
         for the dividend sheet. Only rows with pending > 0."""
-        from .venture import procurement_venture_positions
-
         agreement = self.get_object()
         procurements = list(Procurement.objects.filter(
             tenant_id=request.tenant_id, agreement=agreement,
@@ -203,7 +202,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
         rows = []
         for proc in procurements:
-            venture_positions = procurement_venture_positions(procurement=proc)
+            venture_positions = read_venture_positions(proc)
             has_venture_facts = any(
                 Decimal(str(pos.get('capital_recovered_uzs', '0.00'))) != 0
                 or Decimal(str(pos.get('provisional_profit_uzs', '0.00'))) != 0
@@ -231,8 +230,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16 agreement-level partner proceeds summary across linked procurements."""
-        from .venture import procurement_venture_positions
-
         agreement = self.get_object()
         members = {
             member.partner_id: member
@@ -257,7 +254,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         }
         procurement_rows = []
         for procurement in Procurement.objects.filter(tenant_id=request.tenant_id, agreement=agreement):
-            positions = procurement_venture_positions(procurement=procurement)
+            positions = read_venture_positions(procurement)
             procurement_total = Decimal('0.00')
             for partner_id, pos in positions.items():
                 target = totals.setdefault(partner_id, {
@@ -350,8 +347,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         """E16 preview for capital/profit payouts with blocking reasons."""
         from apps.finance.models import CashAccount
         from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
-        from .venture import procurement_venture_positions
-
         agreement = self.get_object()
         partner_id = int(request.data.get('partner_id') or 0)
         procurement_id = request.data.get('procurement_id')
@@ -380,7 +375,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             if procurement is None:
                 reasons.append('Приход не найден в этом договоре.')
             else:
-                position = procurement_venture_positions(procurement=procurement).get(partner_id, {})
+                position = read_venture_positions(procurement).get(partner_id, {})
                 if payout_type == 'PROFIT':
                     available = Decimal(str(position.get('provisional_profit_available_uzs', '0.00')))
                 else:
@@ -388,7 +383,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 if Decimal(str(position.get('negative_position_uzs', '0.00'))) > 0:
                     reasons.append('Есть отрицательная позиция партнёра; сначала погасите её.')
         else:
-            positions = partner_capital_positions(agreement)
+            positions = read_positions(agreement)
             if payout_type == 'PROFIT':
                 reasons.append('Выплата прибыли требует выбрать конкретный приход.')
             else:
@@ -432,7 +427,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     def capital_positions(self, request, pk=None):
         """B (participant↔pool): net capital position per partner vs the pool."""
         agreement = self.get_object()
-        positions = partner_capital_positions(agreement)
+        positions = read_positions(agreement)
         members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
         rows = []
         for partner_id, pos in positions.items():
@@ -518,10 +513,10 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='venture-summary')
     def venture_summary(self, request, pk=None):
         """E16: current procurement-venture economic buckets in functional UZS."""
-        from .venture import procurement_has_active_lots, procurement_venture_positions
+        from .venture import procurement_has_active_lots
 
         procurement = self.get_object()
-        positions = procurement_venture_positions(procurement=procurement)
+        positions = read_venture_positions(procurement)
         members = {}
         if procurement.agreement_id:
             members = {

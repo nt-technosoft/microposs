@@ -24,8 +24,8 @@ from .models import (
 )
 from .policies import ProcurementPolicyContext, evaluate_procurement_policy
 from .procurement_cost import procurement_cost_by_currency
+from .read_models import read_available_by_partner
 from .workspace_common import (
-    _agreement_available_by_partner,
     _has_capital_activity,
     _has_payment_activity,
     _landed_expense_allocations,
@@ -664,7 +664,7 @@ def _investment_payload(procurement: Procurement) -> dict | None:
     agreement = procurement.agreement
     if not agreement:
         return None
-    available = _agreement_available_by_partner(agreement)
+    available = read_available_by_partner(agreement)
     pool_account = agreement.capital_account
     return {
         'agreement_id': agreement.id,

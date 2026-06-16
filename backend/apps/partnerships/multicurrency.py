@@ -142,6 +142,8 @@ def convert_agreement_pool(
             converted_at=converted_at,
             source_ref=source_ref,
         )
+        from .read_models import rebuild_agreement_positions
+        rebuild_agreement_positions(agreement)
     return lot
 
 

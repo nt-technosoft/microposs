@@ -1,8 +1,12 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from apps.partnerships.advances import settle_partner_capital
+from apps.partnerships.advances import partner_capital_positions as legacy_partner_capital_positions
 from apps.partnerships.models import (
     AgreementAllocation,
     CapitalAdvanceSettlement,
@@ -20,8 +24,10 @@ from apps.partnerships.read_models import (
 )
 from apps.partnerships.venture import (
     create_venture_settlement,
+    procurement_venture_positions as legacy_procurement_venture_positions,
     repay_partner_venture_debt,
 )
+from apps.partnerships.workspace_common import _agreement_available_by_partner as legacy_available_by_partner
 from apps.partnerships.workspace import apply_items_amendment, create_workspace, dispatch_workspace_action
 from apps.partnerships.workspace_support import add_agreement_withdrawal
 from apps.sales.models import SalePayment
@@ -338,3 +344,82 @@ class PartnerPositionReadModelReplayTests(TestCase):
 
         rebuild_agreement_positions(agreement)
         self.assertEqual(_read_model_snapshot(agreement), incremental)
+
+
+class PartnerPositionReadModelDisplaySwitchTests(APITestCase):
+    def _build_display_scenario(self):
+        ctx = build_tenant()
+        procurement, _ = seed_received_procurement(ctx)
+        session = open_session(ctx)
+        create_sale(
+            tenant_id=ctx['business'].id,
+            pos_session_id=session.id,
+            location_id=ctx['store'].id,
+            sold_by_id=ctx['cashier'].id,
+            customer_id=ctx['customer'].id,
+            lines=[{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': 5,
+                'unit_price': Decimal('240000.00'),
+            }],
+            payments=[{
+                'amount': Decimal('1200000.00'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+                'method': SalePayment.Method.CASH,
+                'account_id': ctx['cash_account'].id,
+            }],
+        )
+        create_venture_settlement(
+            tenant_id=ctx['business'].id,
+            procurement_id=procurement.id,
+            settlement_type=ProcurementVentureSettlement.SettlementType.CONSTRUCTIVE,
+        )
+        return ctx, procurement
+
+    def _display_payloads(self, ctx, procurement):
+        self.client.force_authenticate(user=ctx['owner'])
+        agreement_id = procurement.agreement_id
+        requests = [
+            ('agreement_detail', 'get', f'/api/v1/partnerships/agreements/{agreement_id}/', None),
+            ('capital_positions', 'get', f'/api/v1/partnerships/agreements/{agreement_id}/capital-positions/', None),
+            ('agreement_venture_summary', 'get', f'/api/v1/partnerships/agreements/{agreement_id}/venture-summary/', None),
+            ('profit_summary', 'get', f'/api/v1/partnerships/agreements/{agreement_id}/profit-summary/', None),
+            ('procurement_detail', 'get', f'/api/v1/partnerships/procurements/{procurement.id}/', None),
+            ('procurement_venture_summary', 'get', f'/api/v1/partnerships/procurements/{procurement.id}/venture-summary/', None),
+            ('close_preview', 'get', f'/api/v1/partnerships/agreements/{agreement_id}/close-preview/', None),
+            ('payout_preview', 'post', f'/api/v1/partnerships/agreements/{agreement_id}/payout-preview/', {
+                'partner_id': ctx['investor'].id,
+                'procurement_id': procurement.id,
+                'payout_type': 'CAPITAL_RETURN',
+                'amount': '100000.00',
+                'currency': 'UZS',
+                'from_account_id': ctx['cash_account'].id,
+            }),
+        ]
+        payloads = {}
+        for name, method, url, body in requests:
+            if method == 'post':
+                response = self.client.post(url, body, format='json')
+            else:
+                response = self.client.get(url)
+            self.assertEqual(response.status_code, status.HTTP_200_OK, msg=name)
+            payloads[name] = response.data
+        return payloads
+
+    def test_display_endpoints_match_legacy_reads(self):
+        ctx, procurement = self._build_display_scenario()
+        read_model_payloads = self._display_payloads(ctx, procurement)
+
+        with (
+            patch('apps.partnerships.views.read_positions', side_effect=legacy_partner_capital_positions),
+            patch(
+                'apps.partnerships.views.read_venture_positions',
+                side_effect=lambda procurement: legacy_procurement_venture_positions(procurement=procurement),
+            ),
+            patch('apps.partnerships.read_models.read_positions', side_effect=legacy_partner_capital_positions),
+            patch('apps.partnerships.workspace_payload.read_available_by_partner', side_effect=legacy_available_by_partner),
+        ):
+            legacy_payloads = self._display_payloads(ctx, procurement)
+
+        self.assertEqual(read_model_payloads, legacy_payloads)

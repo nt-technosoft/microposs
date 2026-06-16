@@ -378,12 +378,13 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
   оптимизация, НЕ блокирует 4c; провизор в 4c берётся из `ProcurementSaleRealization` с live-неттингом).
 - [ ] T-5.3 Verify: conservation точный 0 UZS; honest history (закроется с T-5.2).
 
-### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано)
-- [ ] T-6.1 Полнота хуков: аудит ВСЕХ денежных мутаций → у каждой есть `rebuild`-hook; добить пропуски.
-- [ ] T-6.2 Дисплей-reads → материализованная таблица: `serializers.py:400`, `views.py:391/435/206/260/383/524`,
-  `workspace_payload.py:667`. Валидация-/гейт-reads — НЕ трогаем (живые узлы, транзакц. свежесть).
-- [ ] T-6.3 Verify: API **байт-в-байт** (дисплей-из-таблицы == дисплей-из-легаси, ловит stale-хук);
-  close-гейты идентичны; suite зелёный. **Независимый money sign-off.**
+### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано) ✅ (лид PASS + независимый APPROVE 2026-06-16)
+- [x] T-6.1 ✅ Полнота хуков: добит `convert_agreement_pool`-hook (multicurrency:146); все мутации хукнуты.
+- [x] T-6.2 ✅ Дисплей-reads → таблица (`read_positions`/`read_venture_positions`/`read_available_by_partner`):
+  serializers, views (5 эндпоинтов), workspace_payload. Валидация/close-гейты — на живых узлах (подтверждено).
+- [x] T-6.3 ✅ `test_display_endpoints_match_legacy_reads` — 8 живых эндпоинтов, table-vs-patched-legacy
+  байт-в-байт; close-гейты идентичны; 352 passed; миграций нет. **Независимый sign-off APPROVE.**
+  Follow-up: 1 тест на convert-pool freshness (единственный хук без выделенной freshness-сверки).
 - ~~Удаление 3 узлов / ретайр AgreementAllocation~~ → **вынесено за E18** (узлы = rebuild+валидация;
   AgreementAllocation = pre-receive intent, не дубль). Отдельный анализ.
 
