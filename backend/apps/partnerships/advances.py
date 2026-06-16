@@ -169,7 +169,7 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
                       amount=amount, date=when, source_ref_type='partner_from_profit', source_ref_id=partner_id)
     create_cash_entry(tenant_id=tenant_id, account=pool, direction=CashEntry.Direction.IN,
                       amount=amount, date=when, source_ref_type='partner_from_profit', source_ref_id=partner_id)
-    create_journal_entry(
+    journal = create_journal_entry(
         tenant_id=tenant_id, operation_type='advance_settle', operation_id=agreement.id,
         lines=[
             {'account_code': pool.linked_account.code, 'debit': functional, 'credit': Decimal('0'),
@@ -197,6 +197,14 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
         source=AgreementActionSource.PROFIT_REINVEST,
         confirmation_status=AgreementConfirmationStatus.CONFIRMED,
         notes='Прибыль реинвестирована в капитал пула',
+    )
+    from .journal_tags import tag_profit_to_capital
+    tag_profit_to_capital(
+        tenant_id=tenant_id,
+        journal_entry=journal,
+        agreement=agreement,
+        partner_id=partner_id,
+        procurement=procurement,
     )
 
 

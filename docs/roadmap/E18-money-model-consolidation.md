@@ -337,14 +337,19 @@ golden + property-based (сохранение как свойство). Ужес
   golden не тронут. Каркас инертен (поведение не изменилось).
 
 ### Фаза 4 — Tag-слой + ОСМЫСЛЕННАЯ сверка эквивалентности
-- [ ] T-4.1 partnerships-owned `PartnerJournalLineTag` (`journal_line FK→finance`,
-  partner/agreement/procurement/pocket; FK partnerships→finance; `JournalLine` не трогаем).
-- [ ] T-4.2 Писать теги на всех партнёр-гранулярных проводках (вперёд, транзакционно).
-- [ ] T-4.3 Best-effort backfill тегов по однозначному `source_ref`.
-- [ ] T-4.4 read-model питается из независимого источника: реализованное = `GROUP BY` tag + join,
-  провизорное = `ProcurementSaleRealization`.
-- [ ] T-4.5 **Доказательство:** `read-model (из тегов+провизора) == легаси-3-узла` поле-в-поле на
-  всех 10 golden + conservation точный 0 UZS + GL/`JournalLine` не изменились.
+**Слайс 1 (4a+4b) ✅ (лид-аудит PASS 2026-06-16, инертно):** модель + 5 реализованных тег-функций +
+backfill; finance агностичен, FK partnerships→finance, reads/rebuild не тронуты, 347 passed.
+- [x] T-4.1 ✅ `PartnerJournalLineTag` (models.py; FK→finance.JournalLine, partner/agreement/
+  procurement?/pocket{CAPITAL/PROCEEDS/DISTRIBUTION}; тег без суммы — сумма на journal-строке).
+- [x] T-4.2 ✅ Теги на 5 реализованных операциях (contribution/withdrawal/dividend/profit→capital/
+  debt-repay). **`deploy` НЕ тегируется** (лид-правка: `deployed` — провизорное из `ReceiveBatchCapitalAllocation`,
+  агрегированная 1100-строка не несёт per-partner суммы → был бы over-count).
+- [x] T-4.3 ✅ Best-effort idempotent backfill по однозначному `source_ref`.
+- [ ] T-4.4 (слайс 4c) read-model realized-источник → теги (`GROUP BY` tag + join), провизорное из таблиц.
+  ⚠️ Перед/вместе с реконструкцией `paid_in`: Ф5 `return_kind` (тег withdrawal должен различать пуловый
+  возврат vs recovered-из-выручки, иначе вернётся double-count S4).
+- [ ] T-4.5 (слайс 4c) **Доказательство:** `read-model == легаси-3-узла` поле-в-поле на всех 10 golden
+  + conservation точный 0 UZS + GL/`JournalLine` не изменились. **Обязательный независимый money sign-off.**
 
 ### Фаза 5 — Явные типы + честный true-up
 - [ ] T-5.1 `return_kind` (FROM_POOL/FROM_PROCEEDS) на возврате; снос дискриминатора по `CashEntry.account` (3 места).

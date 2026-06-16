@@ -335,7 +335,6 @@ def receive_workspace_batch(
                 capital_share=row['capital_share'],
                 profit_share=row['profit_share'],
             )
-
         # E17 T-2.1: the AGREED funding gap (agreed shares vs actual cash) is no
         # longer reified as a CapitalAdvance. Shares stay pinned to the agreed
         # snapshot (Rule #14); the gap is read as the partner's net capital

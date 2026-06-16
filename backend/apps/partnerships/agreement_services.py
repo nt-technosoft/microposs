@@ -350,7 +350,7 @@ def pay_dividend(
         if cash_entry is not None and cash_entry.account.linked_account_id:
             # E15: profit distribution reduces retained earnings (3200), not the
             # investor-payable liability (2100, the old placeholder). DR 3200 / CR cash.
-            record_journal_from_cash_entry(
+            journal = record_journal_from_cash_entry(
                 tenant_id=tenant_id,
                 cash_entry=cash_entry,
                 operation_type='profit_distrib',
@@ -359,6 +359,8 @@ def pay_dividend(
                 description=f'Profit distribution #{payment.pk}',
                 date=date,
             )
+            from .journal_tags import tag_dividend_payment
+            tag_dividend_payment(dividend=payment, journal_entry=journal)
 
         publish_event(
             event_type='partnership.dividend_paid',

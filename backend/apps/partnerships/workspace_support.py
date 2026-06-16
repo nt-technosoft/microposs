@@ -278,7 +278,7 @@ def add_agreement_contribution(
         pool = get_or_create_agreement_capital_account(
             tenant_id=tenant_id, agreement=agreement,
         )
-        record_capital_pool_contribution(
+        payment = record_capital_pool_contribution(
             tenant_id=tenant_id,
             pool_account_id=pool.pk,
             partner_id=partner_id,
@@ -296,6 +296,8 @@ def add_agreement_contribution(
             client_request_id=client_request_id,
             notes=notes,
         )
+        from .journal_tags import tag_capital_contribution
+        tag_capital_contribution(contribution=contribution, payment=payment)
 
         if agreement.status == InvestmentAgreement.Status.OPEN:
             agreement.status = InvestmentAgreement.Status.ACTIVE
@@ -467,7 +469,7 @@ def add_agreement_withdrawal(
                 amount=amount, date=date,
                 source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
             )
-            create_journal_entry(
+            journal = create_journal_entry(
                 tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
                 lines=[
                     {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
@@ -496,7 +498,7 @@ def add_agreement_withdrawal(
                 amount=amount, date=date,
                 source_ref_type='agreement_withdrawal', source_ref_id=withdrawal.pk,
             )
-            create_journal_entry(
+            journal = create_journal_entry(
                 tenant_id=tenant_id, operation_type='capital_return', operation_id=withdrawal.pk,
                 lines=[
                     {'account_code': equity_code, 'debit': functional, 'credit': Decimal('0'),
@@ -506,6 +508,8 @@ def add_agreement_withdrawal(
                 ],
                 description=f'Возврат капитала #{withdrawal.pk}', date=date,
             )
+        from .journal_tags import tag_capital_withdrawal
+        tag_capital_withdrawal(withdrawal=withdrawal, journal_entry=journal)
 
         record_agreement_event(
             tenant_id=tenant_id,

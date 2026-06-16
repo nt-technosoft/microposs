@@ -272,6 +272,54 @@ class PartnerPositionReadModel(TenantModel):
         return {field: getattr(self, field) for field in self.MONEY_FIELDS}
 
 
+class PartnerJournalLineTag(TenantModel):
+    """Partnership-owned analytical tag for finance journal lines."""
+
+    class Pocket(models.TextChoices):
+        CAPITAL = 'CAPITAL', 'Capital'
+        PROCEEDS = 'PROCEEDS', 'Proceeds'
+        DISTRIBUTION = 'DISTRIBUTION', 'Distribution'
+
+    journal_line = models.ForeignKey(
+        'finance.JournalLine',
+        on_delete=models.CASCADE,
+        related_name='partner_tags',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='journal_line_tags',
+    )
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='journal_line_tags',
+    )
+    procurement = models.ForeignKey(
+        'Procurement',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='journal_line_tags',
+    )
+    pocket = models.CharField(max_length=16, choices=Pocket.choices)
+
+    class Meta:
+        db_table = 'partnerships_partner_journal_line_tag'
+        indexes = [
+            models.Index(fields=['tenant', 'agreement', 'partner', 'pocket'], name='pjlt_agreement_idx'),
+            models.Index(fields=['tenant', 'procurement', 'partner', 'pocket'], name='pjlt_procurement_idx'),
+            models.Index(fields=['journal_line'], name='pjlt_line_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['journal_line', 'partner', 'agreement', 'procurement', 'pocket'],
+                name='uq_partner_journal_line_tag',
+                nulls_distinct=False,
+            ),
+        ]
+
+
 class AgreementPartner(TenantModel):
     """A partner participating in a parent investment agreement."""
 

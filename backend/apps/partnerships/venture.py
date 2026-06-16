@@ -1374,11 +1374,13 @@ def repay_partner_venture_debt(
         if repaid_dividend > _ZERO:
             lines.append({'account_code': '3200', 'debit': _ZERO, 'credit': _money(repaid_dividend),
                           'description': 'Погашение долга: возврат излишне выплаченной прибыли'})
-        create_journal_entry(
+        journal = create_journal_entry(
             tenant_id=tenant_id, operation_type='venture_debt_repay', operation_id=repayment.pk,
             lines=lines, description=f'Погашение долга партнёра по приходу #{procurement_id}', date=date,
         )
 
+        from .journal_tags import tag_venture_debt_repayment
+        tag_venture_debt_repayment(repayment=repayment, journal_entry=journal)
         from .read_models import rebuild_agreement_positions
         rebuild_agreement_positions(agreement)
         return repayment
