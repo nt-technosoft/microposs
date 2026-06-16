@@ -29,8 +29,8 @@ const procurementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.procurement ?? null)
 const itemRows = computed(() => report.value?.items ?? [])
 const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? 'UZS')
-const participantTotals = computed(() => procurementDetail.value?.balance.participant_totals ?? [])
-const balanceHistory = computed(() => procurementDetail.value?.balance.history ?? [])
+const participantTotals = computed(() => procurementDetail.value?.balance?.participant_totals ?? [])
+const balanceHistory = computed(() => procurementDetail.value?.balance?.history ?? [])
 const visibleHistory = computed(() => balanceHistory.value.slice(0, 4))
 
 function formatAmount(value: string | number, currency = 'UZS'): string {

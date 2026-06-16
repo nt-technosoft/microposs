@@ -53,7 +53,7 @@ const canFinal = computed(() => props.summary?.has_active_lots === false)
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.capital_return_available_uzs || 0, 'UZS') }}</span>
         </div>
         <div>
-          <span class="block text-muted-foreground">Предв. прибыль</span>
+          <span class="block text-muted-foreground">Прибыль к выплате</span>
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.provisional_profit_available_uzs || 0, 'UZS') }}</span>
         </div>
         <div>

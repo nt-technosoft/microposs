@@ -35,14 +35,21 @@ const amount = ref('')
 const currency = ref<'UZS' | 'USD'>('UZS')
 const accountId = ref<number | null>(null)
 
-const accountOptions = computed(() =>
-  props.accounts
-    .filter((account) => account.is_active && account.currency === currency.value)
-    .map((account) => ({
-      value: account.id,
-      label: `${account.name} · ${formatPrice(account.balance, account.currency)}`,
-    })),
+const eligibleAccounts = computed(() =>
+  props.accounts.filter((account) => account.is_active && account.currency === currency.value),
 )
+const accountOptions = computed(() =>
+  eligibleAccounts.value.map((account) => ({
+    value: account.id,
+    label: `${account.name} · ${formatPrice(account.balance, account.currency)}`,
+  })),
+)
+// A return debits real cash, so default to a funded account. If none has a
+// positive balance, auto-select nothing and let the placeholder force a choice.
+const preferredAccountId = computed(() => {
+  const funded = eligibleAccounts.value.find((account) => Number(account.balance || 0) > 0)
+  return funded ? funded.id : null
+})
 
 const selectedRow = computed(() => props.rows.find((row) => row.key === selectedKey.value) ?? null)
 const activeFxRate = computed(() => currency.value === 'USD' ? Number(props.usdRate || 0) : 1)
@@ -99,7 +106,7 @@ watch(accountOptions, (options) => {
     return
   }
   if (!accountId.value || !options.some((option) => option.value === accountId.value)) {
-    accountId.value = Number(options[0].value)
+    accountId.value = preferredAccountId.value
   }
 }, { immediate: true })
 </script>

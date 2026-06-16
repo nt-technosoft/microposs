@@ -136,7 +136,7 @@ const hasVentureFacts = computed(() =>
             <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.capitalAvailable, 'UZS') }}</span>
           </div>
           <div>
-            <span class="block text-muted-foreground">Предв. прибыль</span>
+            <span class="block text-muted-foreground">Прибыль к выплате</span>
             <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(ventureTotals.profitAvailable, 'UZS') }}</span>
           </div>
           <div>

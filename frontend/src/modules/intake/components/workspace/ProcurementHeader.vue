@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { procurementStatusLabel, procurementStatusMeta } from '@/utils/domainLabels'
+import { procurementReceiveBadgeLabel, procurementStatusMeta } from '@/utils/domainLabels'
 import { ProcurementStatus } from '@/types/enums'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -53,6 +53,15 @@ function onMenuAction(key: string): void {
 function statusColorClass(status: string | null): string | undefined {
   return status ? procurementStatusMeta[status as ProcurementStatus]?.colorClass : undefined
 }
+
+const badgeLabel = computed(() => {
+  if (!props.status) return ''
+  return procurementReceiveBadgeLabel(
+    props.status,
+    props.procurement?.documents.items ?? [],
+    props.procurement?.documents.expenses ?? [],
+  )
+})
 
 const menuActions = computed<MenuAction[]>(() => {
   const p = props.procurement
@@ -119,7 +128,7 @@ const menuActions = computed<MenuAction[]>(() => {
             variant="outline"
             :class="cn('h-6 shrink-0 rounded-full px-2 text-[11px] font-medium', statusColorClass(status))"
           >
-            {{ procurementStatusLabel(status) }}
+            {{ badgeLabel }}
           </Badge>
         </div>
         <p v-if="subtitle" class="mt-0.5 truncate text-xs text-muted-foreground">
