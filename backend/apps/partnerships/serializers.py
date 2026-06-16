@@ -396,7 +396,7 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
     def get_participant_totals(self, obj):
         from .advances import partner_capital_positions
         # Pool-correct positions: paid_in already excludes recovered-capital
-        # returns (same discriminator as advances.partner_capital_positions).
+        # returns via AgreementWithdrawal.return_kind.
         positions = partner_capital_positions(obj)
 
         rows = {

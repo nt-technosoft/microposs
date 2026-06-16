@@ -7,12 +7,14 @@ from apps.finance.models import JournalEntry, JournalLine, Payment
 from .advances import _equity_account_code
 from .models import (
     AgreementActionSource,
+    AgreementAllocation,
     AgreementContribution,
     AgreementPartner,
     AgreementWithdrawal,
     DividendPayment,
     InvestmentAgreement,
     PartnerJournalLineTag,
+    PartnerLedgerEntry,
     Procurement,
     ProcurementPartnerVentureDebtRepayment,
 )
@@ -177,6 +179,31 @@ def tag_venture_debt_repayment(
     return created
 
 
+def tag_overpayment_refund(
+    *,
+    tenant_id: int,
+    journal_entry: JournalEntry | None,
+    agreement: InvestmentAgreement,
+    procurement: Procurement,
+    partner_id: int,
+) -> int:
+    pool_code = (
+        agreement.capital_account.linked_account.code
+        if agreement.capital_account_id and agreement.capital_account.linked_account_id
+        else '1300'
+    )
+    return tag_journal_lines(
+        tenant_id=tenant_id,
+        journal_entry=journal_entry,
+        partner_id=partner_id,
+        agreement=agreement,
+        procurement=procurement,
+        pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+        account_codes={pool_code},
+        debit=True,
+    )
+
+
 def _backfill_contributions(tenant_id: int | None) -> int:
     rows = AgreementContribution.objects.select_related('agreement', 'agreement__capital_account')
     if tenant_id is not None:
@@ -265,6 +292,46 @@ def _backfill_repayments(tenant_id: int | None) -> int:
     return created
 
 
+def _backfill_overpayment_refunds(tenant_id: int | None) -> int:
+    rows = AgreementAllocation.objects.filter(
+        direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+    ).select_related('agreement', 'agreement__capital_account', 'procurement')
+    if tenant_id is not None:
+        rows = rows.filter(tenant_id=tenant_id)
+    created = 0
+    for allocation in rows:
+        if not PartnerLedgerEntry.objects.filter(
+            tenant_id=allocation.tenant_id,
+            ledger__procurement_id=allocation.procurement_id,
+            ledger__partner_id=allocation.partner_id,
+            entry_type=PartnerLedgerEntry.EntryType.CAPITAL_OUT,
+            source_ref=f'allocation:{allocation.id}',
+        ).exists():
+            continue
+        payments = list(
+            Payment.objects.filter(
+                tenant_id=allocation.tenant_id,
+                target_type=Payment.TargetType.PROCUREMENT_COST,
+                target_id=allocation.procurement_id,
+                source_type=Payment.SourceType.CAPITAL_POOL,
+                status=Payment.Status.POSTED,
+                reversed_payment__isnull=False,
+                currency=allocation.currency,
+                paid_at=allocation.date,
+            ).select_related('journal_entry')
+        )
+        if len(payments) != 1:
+            continue
+        created += tag_overpayment_refund(
+            tenant_id=allocation.tenant_id,
+            journal_entry=payments[0].journal_entry,
+            agreement=allocation.agreement,
+            procurement=allocation.procurement,
+            partner_id=allocation.partner_id,
+        )
+    return created
+
+
 def backfill_partner_journal_line_tags(*, tenant_id: int | None = None) -> int:
     """Best-effort metadata backfill; ambiguous history is skipped."""
     created = 0
@@ -272,5 +339,6 @@ def backfill_partner_journal_line_tags(*, tenant_id: int | None = None) -> int:
     created += _backfill_withdrawals(tenant_id)
     created += _backfill_dividends(tenant_id)
     created += _backfill_profit_to_capital(tenant_id)
+    created += _backfill_overpayment_refunds(tenant_id)
     created += _backfill_repayments(tenant_id)
     return created

@@ -9,12 +9,16 @@ from apps.partnerships.agreement_services import pay_dividend
 from apps.partnerships.journal_tags import backfill_partner_journal_line_tags
 from apps.partnerships.models import (
     AgreementContribution,
+    AgreementAllocation,
     CapitalAdvanceSettlement,
     PartnerJournalLineTag,
+    PartnerLedgerEntry,
+    Procurement,
     ProcurementPartnerVentureDebtRepayment,
     ProcurementVentureSettlement,
 )
 from apps.partnerships.venture import create_venture_settlement, repay_partner_venture_debt
+from apps.partnerships.workspace import apply_items_amendment, create_workspace, dispatch_workspace_action
 from apps.partnerships.workspace_support import add_agreement_withdrawal
 from apps.sales.models import PosSession, SalePayment
 from apps.sales.services import create_sale
@@ -119,7 +123,7 @@ class PartnerJournalLineTagForwardTests(TestCase):
             partner=ctx['investor'],
             agreement=agreement,
             procurement=procurement,
-            pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+            pocket=PartnerJournalLineTag.Pocket.PROCEEDS,
         ).exists())
 
     def test_dividend_and_repay_write_tags(self):
@@ -179,6 +183,124 @@ class PartnerJournalLineTagForwardTests(TestCase):
             partner=dividend_ctx['investor'],
             agreement=dividend_procurement.agreement,
             procurement=dividend_procurement,
+        ).exists())
+
+    def test_overpayment_refund_writes_capital_tag_without_deploy_tags(self):
+        ctx = build_tenant()
+        procurement = create_workspace(
+            tenant_id=ctx['business'].id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=ctx['supplier'].id,
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='CREATE_INVESTMENT_AGREEMENT',
+            payload={'payload': {
+                'mudaraba_ratio': Decimal('0.5'),
+                'planned_budget': Decimal('150'),
+                'currency': 'UZS',
+                'partners': [
+                    {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
+                     'planned_capital_share': Decimal('100'), 'profit_share': Decimal('0.333333')},
+                    {'partner_id': ctx['operator'].id, 'role': 'OPERATOR',
+                     'planned_capital_share': Decimal('50'), 'profit_share': Decimal('0.666667')},
+                ],
+            }},
+        )
+        procurement = dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='UPDATE_ITEMS',
+            payload={'payload': {'items': [{
+                'product_variant_id': ctx['variant'].id,
+                'quantity': Decimal('10'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }]}},
+        )
+        for partner_id, amount in (
+            (ctx['investor'].id, Decimal('100')),
+            (ctx['operator'].id, Decimal('50')),
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': {
+                    'partner_id': partner_id,
+                    'amount': amount,
+                    'currency': 'UZS',
+                    'fx_rate': Decimal('1'),
+                }},
+            )
+
+        item = procurement.items.get()
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='ALLOCATE_CAPITAL',
+            payload={'payload': {'allocations': [
+                {'partner_id': ctx['investor'].id, 'amount': Decimal('80'), 'currency': 'UZS'},
+                {'partner_id': ctx['operator'].id, 'amount': Decimal('20'), 'currency': 'UZS'},
+            ], 'item_ids': [item.id]}},
+        )
+        deploy_payment = Payment.objects.get(
+            tenant=ctx['business'],
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            reversed_payment__isnull=True,
+        )
+        self.assertEqual(_tags_for_entry(deploy_payment.journal_entry).count(), 0)
+
+        apply_items_amendment(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            new_items_payload=[{
+                'id': item.id,
+                'product_variant_id': item.product_variant_id,
+                'quantity': Decimal('8'),
+                'unit_purchase_price': Decimal('10'),
+                'currency': 'UZS',
+                'fx_rate': Decimal('1'),
+            }],
+            reason='supplier removed two units after prepayment',
+        )
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RESOLVE_OVERPAYMENT',
+            payload={'payload': {'amount': Decimal('20'), 'currency': 'UZS'}},
+        )
+
+        allocation = AgreementAllocation.objects.get(
+            tenant=ctx['business'],
+            procurement=procurement,
+            direction=AgreementAllocation.Direction.FROM_PROCUREMENT,
+            amount=Decimal('20.00'),
+        )
+        self.assertEqual(allocation.partner_id, ctx['investor'].id)
+        self.assertTrue(PartnerLedgerEntry.objects.filter(
+            ledger__procurement=procurement,
+            ledger__partner=ctx['investor'],
+            entry_type=PartnerLedgerEntry.EntryType.CAPITAL_OUT,
+            source_ref=f'allocation:{allocation.id}',
+        ).exists())
+
+        refund_payment = Payment.objects.get(
+            tenant=ctx['business'],
+            target_type=Payment.TargetType.PROCUREMENT_COST,
+            target_id=procurement.id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            reversed_payment__isnull=False,
+        )
+        self.assertTrue(_tags_for_entry(refund_payment.journal_entry).filter(
+            partner=ctx['investor'],
+            agreement=procurement.agreement,
+            procurement=procurement,
+            pocket=PartnerJournalLineTag.Pocket.CAPITAL,
         ).exists())
 
 

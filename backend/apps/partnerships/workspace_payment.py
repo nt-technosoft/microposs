@@ -482,6 +482,14 @@ def _return_partnership_overpayment_to_pool(
                 source_ref=f'allocation:{allocation.pk}',
                 date=paid_at,
             )
+            from .journal_tags import tag_overpayment_refund
+            tag_overpayment_refund(
+                tenant_id=tenant_id,
+                journal_entry=journal,
+                agreement=locked_agreement,
+                procurement=locked_procurement,
+                partner_id=partner_id,
+            )
             record_agreement_event(
                 tenant_id=tenant_id,
                 agreement=locked_agreement,
