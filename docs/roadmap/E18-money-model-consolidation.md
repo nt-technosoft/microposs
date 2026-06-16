@@ -287,10 +287,16 @@ golden-контракт) и финализироваться здесь.
   без shell-импортов/циклов. `_has_procurement_cost_payment` оставлен в payment как доменный предикат
   (импортируется D/E-guard'ом, ацикл — прецедент `_payment_status_block`); `_resolve_action_datetime`/
   `_draft_cost_total_in_obligation_currency` — C-only. `workspace.py` 108083→84862 байт.
-- [ ] T-2.7 (c) `workspace_receive.py` (receive/reverse/funding-breakdown/pool-spend; рёбра D→B сохранены, без цикла); сеть = то же.
+- [x] T-2.7 (c) `workspace_receive.py` ✅ лид-аудит PASS 2026-06-16: 338 passed, makemigrations чисто,
+  без shell-импортов/циклов; receive корректно импортирует funding-версии `_pre_allocate`/
+  `_resolve_workspace_capital_snapshot`. Call-graph добавил receive-only `_check_prepaid_coverage`/
+  `_receivable_line_states`; `_landed_expense_allocations` остаётся в common (A+D). `workspace.py` 85k→52k байт.
+  ⚠️ Вскрыто: 2 shadow-def в shell со слайса 2 (дубли funding) — мёртвые, в T-2.9.
 - [ ] T-2.8 (c) `workspace_amendments.py` (source/lines/settlement/amend/split/cancel); сеть = то же.
 - [ ] T-2.9 (d) **Отдельным коммитом** удалить доказанно-мёртвый код (`_draft_cost_total_uzs`,
-  `_payment_amount_for_terms`) — после переносов, не вместе с move.
+  `_payment_amount_for_terms`) **+ 2 shadow-def в `workspace.py`** (`_pre_allocate_at_receipt_partnership_capital`,
+  `_resolve_workspace_capital_snapshot` — дубли funding со слайса 2, ноль вызовов; сохранить
+  import-из-funding для re-export) — после переносов, не вместе с move. Сверить дубль-сканом = 0.
 - [ ] T-2.10 (инвариант 3 + e) После каждого шага: дословность (`@transaction.atomic`/publish_event/
   декораторы) сохранена; те же сценарии + trigger-map → доказать идентичность; ни один кластер не импортирует shell.
 - [ ] T-2.11 Acceptance: `makemigrations --check` чисто; полный suite зелёный; ноль изменений
