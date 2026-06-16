@@ -393,7 +393,7 @@ def agreement_pool_reconciliation_residual(agreement) -> Decimal:
     Σ contributions − Σ pool-funded receives − Σ pool capital returns.
     Returns balance − expected (0 = reconciled). Recovered-capital returns leave
     the operating cash, not the pool, so they are excluded (matching the net fix)."""
-    from apps.finance.models import CashEntry, Payment
+    from apps.finance.models import Payment
     from .models import AgreementWithdrawal
 
     pool = agreement.capital_account
@@ -417,18 +417,14 @@ def agreement_pool_reconciliation_residual(agreement) -> Decimal:
         )),
         _ZERO,
     )
-    withdrawals = list(agreement.withdrawals.filter(currency=ccy))
-    pool_return_ids = set(
-        CashEntry.objects.filter(
-            tenant_id=tenant_id,
-            source_ref_type='agreement_withdrawal',
-            source_ref_id__in=[w.id for w in withdrawals],
-            account_id=pool.pk,
-            direction=CashEntry.Direction.OUT,
-        ).values_list('source_ref_id', flat=True)
-    ) if withdrawals else set()
     pool_returns = sum(
-        (Decimal(str(w.amount)) for w in withdrawals if w.id in pool_return_ids),
+        (
+            Decimal(str(w.amount))
+            for w in agreement.withdrawals.filter(
+                currency=ccy,
+                return_kind=AgreementWithdrawal.ReturnKind.FROM_POOL,
+            )
+        ),
         _ZERO,
     )
     expected = _q(contrib - deployed - pool_returns)

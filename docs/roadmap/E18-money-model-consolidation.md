@@ -352,9 +352,14 @@ backfill; finance агностичен, FK partnerships→finance, reads/rebuild
   + conservation точный 0 UZS + GL/`JournalLine` не изменились. **Обязательный независимый money sign-off.**
 
 ### Фаза 5 — Явные типы + честный true-up
-- [ ] T-5.1 `return_kind` (FROM_POOL/FROM_PROCEEDS) на возврате; снос дискриминатора по `CashEntry.account` (3 места).
-- [ ] T-5.2 `SETTLEMENT_TRUEUP`-события; net-пересчёт перестаёт перетирать live.
-- [ ] T-5.3 Verify: conservation точный 0 UZS; honest history.
+- [x] T-5.1 ✅ лид-аудит PASS 2026-06-16 (поведенчески-сохраняющий, 349=347+2): `return_kind`
+  (FROM_POOL/FROM_PROCEEDS) на `AgreementWithdrawal` + миграция 0030 с backfill; классификация =
+  прежней логике (числа идентичны); дискриминатор по `CashEntry.account` снят в 3 местах (grep=0);
+  `tag_capital_withdrawal` pocket по kind. Сделано **до 4c** (разблокирует честный `paid_in`).
+  Binding независимый sign-off — на 4c (там return_kind переутвердится через golden).
+- [ ] T-5.2 `SETTLEMENT_TRUEUP`-события; net-пересчёт перестаёт перетирать live. **Отложено** (честность/
+  оптимизация, НЕ блокирует 4c; провизор в 4c берётся из `ProcurementSaleRealization` с live-неттингом).
+- [ ] T-5.3 Verify: conservation точный 0 UZS; honest history (закроется с T-5.2).
 
 ### Фаза 6 — Переключение чтений + снос параллельных источников капитала
 - [ ] T-6.1 Позиции/conservation/close-гейты/сериализаторы → read-model.

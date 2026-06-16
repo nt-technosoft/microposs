@@ -141,26 +141,10 @@ class InvestmentAgreement(TenantModel):
 
         for c in self.contributions.all():
             _bump(c.currency, _D(str(c.amount)))
-        # E17: only POOL withdrawals (cash out of the agreement pool) reduce the
-        # pool free balance. Recovered-capital returns (operating cash,
-        # procurement-scoped) are a venture distribution and must NOT reduce this
-        # balance — same discriminator as partner_capital_positions in advances.py.
-        all_withdrawals = list(self.withdrawals.all())
-        pool_account_id = self.capital_account_id
-        pool_withdrawal_ids: set[int] = set()
-        if pool_account_id and all_withdrawals:
-            from apps.finance.models import CashEntry
-            pool_withdrawal_ids = set(
-                CashEntry.objects.filter(
-                    source_ref_type='agreement_withdrawal',
-                    source_ref_id__in=[w.id for w in all_withdrawals],
-                    account_id=pool_account_id,
-                    direction=CashEntry.Direction.OUT,
-                ).values_list('source_ref_id', flat=True)
-            )
-        for w in all_withdrawals:
-            if w.id in pool_withdrawal_ids:
-                _bump(w.currency, -_D(str(w.amount)))
+        # Only pool-funded returns reduce the agreement pool balance. Recovered
+        # proceeds are procurement-scoped venture distributions.
+        for w in self.withdrawals.filter(return_kind=AgreementWithdrawal.ReturnKind.FROM_POOL):
+            _bump(w.currency, -_D(str(w.amount)))
         for a in self.allocations.all():
             amt = _D(str(a.amount))
             if a.direction == AgreementAllocation.Direction.TO_PROCUREMENT:
@@ -1064,6 +1048,10 @@ class AgreementContribution(TenantModel):
 class AgreementWithdrawal(TenantModel):
     """Money returned from the parent investment agreement to a partner."""
 
+    class ReturnKind(models.TextChoices):
+        FROM_POOL = 'FROM_POOL', 'From pool'
+        FROM_PROCEEDS = 'FROM_PROCEEDS', 'From proceeds'
+
     agreement = models.ForeignKey(
         InvestmentAgreement,
         on_delete=models.CASCADE,
@@ -1084,6 +1072,12 @@ class AgreementWithdrawal(TenantModel):
         blank=True,
         related_name='agreement_capital_withdrawals',
         help_text='E16: operating cash source when returning recovered proceeds directly.',
+    )
+    return_kind = models.CharField(
+        max_length=16,
+        choices=ReturnKind.choices,
+        default=ReturnKind.FROM_POOL,
+        help_text='E18: explicit capital return classification.',
     )
     partner = models.ForeignKey(
         'core.Partner',

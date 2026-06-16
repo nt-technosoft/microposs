@@ -82,13 +82,18 @@ def tag_capital_contribution(*, contribution: AgreementContribution, payment: Pa
 
 
 def tag_capital_withdrawal(*, withdrawal: AgreementWithdrawal, journal_entry: JournalEntry | None) -> int:
+    pocket = (
+        PartnerJournalLineTag.Pocket.CAPITAL
+        if withdrawal.return_kind == AgreementWithdrawal.ReturnKind.FROM_POOL
+        else PartnerJournalLineTag.Pocket.PROCEEDS
+    )
     return tag_journal_lines(
         tenant_id=withdrawal.tenant_id,
         journal_entry=journal_entry,
         partner_id=withdrawal.partner_id,
         agreement=withdrawal.agreement,
         procurement=withdrawal.procurement,
-        pocket=PartnerJournalLineTag.Pocket.CAPITAL,
+        pocket=pocket,
         account_codes={_partner_equity_code(agreement=withdrawal.agreement, partner_id=withdrawal.partner_id)},
         debit=True,
     )

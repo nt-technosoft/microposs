@@ -219,16 +219,16 @@ def partner_capital_positions(agreement) -> dict:
         net > 0 → owes the pool (must contribute `net` more)
         net < 0 → over-contributed (claim on the pool)
 
-    Only withdrawals whose cash physically left the POOL reduce paid_in. E16
+    Only withdrawals explicitly classified as FROM_POOL reduce paid_in. E16
     recovered-capital returns leave the OPERATING cash (a venture distribution,
-    counted in the venture position), so they do NOT touch the pool net —
-    discriminated by the withdrawal's CashEntry account (pool vs operating).
+    counted in the venture position), so they do NOT touch the pool net.
 
     `withdrawable` = how much an over-contributor can actually take out NOW,
     bounded by the pool's free cash (overpaid money tied up in inventory becomes
     withdrawable only once debtors top up). Reversed batches are excluded. A
     fresh agreement (no receives) → everything 0, nothing owed/withdrawable."""
     from .models import (
+        AgreementWithdrawal,
         ProcurementReceiveBatch,
         ProcurementReceiveBatchCapitalAllocation,
     )
@@ -251,30 +251,16 @@ def partner_capital_positions(agreement) -> dict:
     paid_in: dict[int, Decimal] = {}
     for c in agreement.contributions.filter(currency=currency):
         paid_in[c.partner_id] = paid_in.get(c.partner_id, Decimal('0')) + Decimal(str(c.amount))
-    # E17 fix: only POOL withdrawals (cash physically out of the agreement pool)
-    # reduce pool paid-in. E16 recovered-capital returns leave the OPERATING cash
+    # E17/E18: only explicit POOL withdrawals reduce pool paid-in. E16
+    # recovered-capital returns leave the OPERATING cash
     # and are a venture distribution already counted in the venture position
     # (capital_returned_uzs); counting them here too double-counted the same return
-    # and falsely inflated net into "owes the pool". The physical source of truth
-    # is the withdrawal's CashEntry account (pool vs operating) — matching the
-    # three-pockets model of the conservation invariant.
-    agreement_withdrawals = list(agreement.withdrawals.filter(currency=currency))
-    pool_account_id = agreement.capital_account_id
-    pool_withdrawal_ids: set[int] = set()
-    if pool_account_id and agreement_withdrawals:
-        from apps.finance.models import CashEntry
-        pool_withdrawal_ids = set(
-            CashEntry.objects.filter(
-                tenant_id=tenant_id,
-                source_ref_type='agreement_withdrawal',
-                source_ref_id__in=[w.id for w in agreement_withdrawals],
-                account_id=pool_account_id,
-                direction=CashEntry.Direction.OUT,
-            ).values_list('source_ref_id', flat=True)
-        )
-    for w in agreement_withdrawals:
-        if w.id in pool_withdrawal_ids:
-            paid_in[w.partner_id] = paid_in.get(w.partner_id, Decimal('0')) - Decimal(str(w.amount))
+    # and falsely inflated net into "owes the pool".
+    for w in agreement.withdrawals.filter(
+        currency=currency,
+        return_kind=AgreementWithdrawal.ReturnKind.FROM_POOL,
+    ):
+        paid_in[w.partner_id] = paid_in.get(w.partner_id, Decimal('0')) - Decimal(str(w.amount))
 
     total_paid = sum(paid_in.values(), Decimal('0'))
     total_deployed = sum(deployed.values(), Decimal('0'))
