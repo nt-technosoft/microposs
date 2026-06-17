@@ -252,3 +252,64 @@ rather than guess. Architectural calls belong to Opus or to the founder.
 
 The point isn't to analyze every message for routing — that itself burns
 Opus tokens. The point is one heuristic call per phase, then execute.
+
+## Execution layer routing policy (v1)
+
+One main Opus session = orchestrator. On a "go for the epic/phase" it runs
+without stopping, picking the executor per the rules below. Default is
+**direct in-session orchestration** (tool-calls that return a result inline).
+Handoff files are a fallback, never the default workflow.
+
+Pick the first rule that matches:
+
+1. **Plan a phase** → OpusPlan (`/model opusplan`): Opus plans, auto-switches to
+   Sonnet for execution. Orchestrator itself stays Opus.
+2. **Bounded, independent, ≤ medium** → do it yourself. Opus is faster
+   end-to-end on small/medium edits than the delegate round-trip.
+3. **Bounded but large (≥8000 out-tokens) OR parallelizable** → **fresh**
+   subagent(s) (`Agent`). Default is fresh, not forked.
+4. **Tight series in one module, context still fresh** → resume the same
+   subagent (SendMessage) *if available*; otherwise fresh + a 3–5 line
+   delta-prompt. Never resume a stale/polluted session — fresh+delta is
+   cheaper and higher-quality there.
+5. **Long mechanical execution / parallel isolated tracks** → background
+   subagent in a git worktree.
+6. **Other model needed — fast-impl / UI / browser-like / bug-hunt /
+   independent review** → **Codex plugin** (`/codex:rescue`, `/codex:review`,
+   `/codex:adversarial-review`). Independent review belongs to Codex, not a
+   self-subagent — a different model is real independence.
+7. **Sonnet executor stuck on a local (non-architectural) design fork** →
+   Advisor (consult Opus on-demand), not a human escalation.
+8. **Handoff file** (`.agents/handoffs/`) → ONLY when (a) an external session
+   is not wired to the orchestrator, (b) a long-running task needs a durable
+   trace, or (c) the assignment/result must be auditable. Otherwise never.
+9. **Ask Aziz** → only a real architecture/product gate: domain-contract
+   change, irreversible action, cross-domain consequence, merge to `main`.
+   Choosing an executor or relaying a prompt is NOT a gate.
+
+Anti-rules: don't spawn agents for small work; don't fork by habit; don't
+resume a stale session; don't write a handoff file where a direct tool-call
+returns the result; don't interrupt the human for mechanics.
+
+### Cycle, scope & stop conditions
+
+- **The autonomous unit is whatever scope the founder grants in plain words** —
+  a single task, a phase, or a whole epic. The grant *is* the boundary; the
+  orchestrator does not narrow or widen it on its own. "Do these 3 phases" →
+  run through all 3, then stop. "Do the whole epic" → run every phase and its
+  tasks, then stop at epic completion.
+- **Within the granted scope, run continuously**: do not yield the turn or ask
+  permission between sub-tasks or phases. Decide and execute, delegating per
+  the routing policy above.
+- **Stop and return to the founder only when:**
+  1. the granted scope is complete and verified;
+  2. a hard gate is hit — architecture/product decision (domain-contract
+     change, irreversible, cross-domain consequence) or merge to `main`;
+  3. a real blocker — verification fails and can't be resolved, an ambiguity
+     not covered by docs/plan, or missing access/credentials;
+  4. a destructive or outward-facing action needs confirmation.
+- **Not a stop:** choosing an executor, mechanical sub-tasks, or an
+  intermediate red state during a planned architecture-first reset.
+- Context-window / compaction handling for very long runs (e.g. a full
+  multi-phase epic in one pass) is a **deferred optimization**, not part of
+  this process. Build the process first; optimize later.
