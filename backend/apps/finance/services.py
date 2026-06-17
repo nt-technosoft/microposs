@@ -2516,6 +2516,15 @@ def get_agreement_profitability_detail(
         requested_currency=report_currency,
         default_currency=agreement.currency,
     )
+    # Per-partner capital movements are presented in the agreement currency
+    # (label = agreement_currency), independent of the report-currency toggle.
+    # All movements are accumulated in functional UZS and converted here through
+    # the report fx model — never emitted raw under a foreign label.
+    agreement_currency_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=agreement.currency,
+        default_currency=agreement.currency,
+    )
 
     procurement_rows: list[dict] = []
     totals = {
@@ -2692,34 +2701,23 @@ def get_agreement_profitability_detail(
         if key:
             target[key] += Decimal(str(row['total'] or '0'))
 
-    def _to_agreement_currency(amount, currency, fx_rate) -> Decimal:
-        amount_dec = Decimal(str(amount))
-        source = str(currency or agreement.currency or 'UZS').upper()
-        target = str(agreement.currency or 'UZS').upper()
-        rate_dec = Decimal(str(fx_rate or '1'))
-        if source == target:
-            return _money(amount_dec)
-        if source == 'USD' and target == 'UZS':
-            return _money(amount_dec * rate_dec)
-        if source == 'UZS' and target == 'USD':
-            if rate_dec <= 0:
-                return Decimal('0.00')
-            return _money(amount_dec / rate_dec)
-        return _money(amount_dec)
+    def _entry_functional_uzs(amount, fx_rate) -> Decimal:
+        # fx_rate is the entry-currency → functional-UZS snapshot, so
+        # amount * fx_rate is the entry value in functional UZS. A UZS entry
+        # carries fx_rate=1; a USD entry carries the USD→UZS rate.
+        return _money(Decimal(str(amount)) * Decimal(str(fx_rate or '1')))
 
     for contribution in agreement.contributions.all():
         if contribution.partner_id in partner_rows:
-            partner_rows[contribution.partner_id]['agreement_contributed'] += _to_agreement_currency(
+            partner_rows[contribution.partner_id]['agreement_contributed'] += _entry_functional_uzs(
                 contribution.amount,
-                contribution.currency,
                 contribution.fx_rate,
             )
 
     for withdrawal in agreement.withdrawals.all():
         if withdrawal.partner_id in partner_rows:
-            partner_rows[withdrawal.partner_id]['agreement_withdrawn'] += _to_agreement_currency(
+            partner_rows[withdrawal.partner_id]['agreement_withdrawn'] += _entry_functional_uzs(
                 withdrawal.amount,
-                withdrawal.currency,
                 withdrawal.fx_rate,
             )
 
@@ -2728,9 +2726,8 @@ def get_agreement_profitability_detail(
     returned_by_partner: dict[int, Decimal] = {}
     for allocation in allocations:
         if allocation.partner_id in partner_rows:
-            agreement_amount = _to_agreement_currency(
+            agreement_amount = _entry_functional_uzs(
                 allocation.amount,
-                allocation.currency,
                 allocation.fx_rate,
             )
             key = (
@@ -2819,6 +2816,16 @@ def get_agreement_profitability_detail(
             - row['agreement_allocated']
             + row['agreement_returned']
         )
+        # Movements are accumulated in functional UZS; present them in the
+        # agreement currency via the report fx model (no raw UZS under a USD label).
+        for _agreement_key in (
+            'agreement_contributed',
+            'agreement_withdrawn',
+            'agreement_allocated',
+            'agreement_returned',
+            'agreement_available',
+        ):
+            row[_agreement_key] = agreement_currency_context.convert_uzs(row[_agreement_key])
         # Authoritative payable profit = venture profit available after settlement.
         row['profit_pending_payout'] = _money(venture['provisional_profit_available_uzs'])
         row['display'] = {
