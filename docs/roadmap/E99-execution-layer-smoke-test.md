@@ -6,8 +6,8 @@
 > Финальная фаза самоликвидируется: проверяет workflow по логам, даёт отчёт,
 > сносит все артефакты, удаляет строку из ROADMAP и удаляет сам этот файл.
 
-**Статус:** `NOT_STARTED`
-**Прогресс:** 0%
+**Статус:** `IN_PROGRESS`
+**Прогресс:** ~43% (фазы 1–3 из 7)
 **Зависит от:** execution-layer v1 (CLAUDE.md routing policy)
 **Блокирует:** —
 
@@ -87,18 +87,18 @@ execution-layer v1 (commit `bfb1ada`) задал правила, но они н�
 ## Задачи (чек-лист)
 
 ### Фаза 1
-- [ ] T-1.1 Создать `sandbox/exec-smoke/MANIFEST.md` со списком артефактов фаз 1–6
-- [ ] T-1.2 Коммит `chore(e99): phase 1 — bootstrap`
+- [x] T-1.1 Создать `sandbox/exec-smoke/MANIFEST.md` со списком артефактов фаз 1–6
+- [x] T-1.2 Коммит `chore(e99): phase 1 — bootstrap`
 
 ### Фаза 2
-- [ ] T-2.1 (fresh subagent) `data/cities.json` — 5 городов
-- [ ] T-2.2 (fresh subagent) `data/notes.md` — 3–4 строки текста
-- [ ] T-2.3 Коммит `chore(e99): phase 2 — data via subagent`
+- [x] T-2.1 (fresh subagent) `data/cities.json` — 5 городов
+- [x] T-2.2 (fresh subagent) `data/notes.md` — 3–4 строки текста
+- [x] T-2.3 Коммит `chore(e99): phase 2 — data via subagent`
 
 ### Фаза 3
-- [ ] T-3.1 `scripts/wordcount.py` — счётчик слов в `data/notes.md`
-- [ ] T-3.2 Запустить, сохранить вывод в `out/wordcount.txt`
-- [ ] T-3.3 Коммит `chore(e99): phase 3 — script + run`
+- [x] T-3.1 `scripts/wordcount.py` — счётчик слов в `data/notes.md`
+- [x] T-3.2 Запустить, сохранить вывод в `out/wordcount.txt`
+- [x] T-3.3 Коммит `chore(e99): phase 3 — script + run`
 
 ### Фаза 4
 - [ ] T-4.1 Codex-ревью `scripts/wordcount.py` → `reviews/codex-review.md`
