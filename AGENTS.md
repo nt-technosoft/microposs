@@ -127,6 +127,15 @@ in this file, `docs/ROADMAP.md`, domain docs, and tests. Before starting a new
 thread, summarize: branch, goal, changed files, relevant docs, commands to run,
 and unresolved risks.
 
+### Graphify workflow
+Graphify is a navigation aid, not the source of truth. Freshness is maintained
+by repo git hooks (`graphify hook install`), not by Claude/Codex per-turn hooks.
+Consult `graphify-out/graph.json`, `GRAPH_REPORT.md`, `wiki/`, or
+`graphify query/explain/path/affected` for architecture/cross-module questions,
+"how does X work?", and before broad codebase discovery. Default rebuild:
+`.graphify-venv/bin/graphify update .` (code-only). Use semantic/doc updates
+only when the task explicitly needs non-code extraction.
+
 ## Architecture
 - **Monorepo**: `backend/` (Django) + `frontend/` (Vue.js 3)
 - **Backend**: Python 3.12 / Django 5.x / DRF / PostgreSQL 16 / Redis / Celery

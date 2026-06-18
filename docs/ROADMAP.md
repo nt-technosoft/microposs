@@ -41,7 +41,6 @@
 | **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | ✅ DONE | 100% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
 | **E18** | Money Model Consolidation | 🔵 IN_REVIEW | ~100% core | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
-
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
 импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке
