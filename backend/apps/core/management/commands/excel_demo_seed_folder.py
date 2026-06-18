@@ -74,6 +74,15 @@ def _currency(value) -> str:
     return raw or 'UZS'
 
 
+def _payout_kind(value) -> str:
+    raw = _norm(value)
+    if 'FOYDA' in raw:
+        return 'PROFIT'
+    if 'KAPITAL' in raw:
+        return 'CAPITAL_RETURN'
+    return raw
+
+
 def _is_executable_sale(row: dict) -> bool:
     return bool(row.get('MAHSULOT')) and _dec(row.get('JAMI DONA')) > 0 and _dec(row.get('SOTUV NARXI')) > 0
 
@@ -114,6 +123,8 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true')
         parser.add_argument('--dry-run', action='store_true')
         parser.add_argument('--wipe', action='store_true')
+        parser.add_argument('--skip-payouts', action='store_true')
+        parser.add_argument('--strict-payouts', action='store_true')
         parser.add_argument('--confirm-production-wipe', action='store_true')
 
     def handle(self, *args, **options):
@@ -143,6 +154,8 @@ class Command(BaseCommand):
         }
         plan = self._build_plan(master, deal_books)
         self._print_plan(plan)
+        if options['skip_payouts']:
+            self.stdout.write(self.style.WARNING('  payouts: skipped by --skip-payouts'))
         if options['dry_run']:
             return
 
@@ -155,6 +168,8 @@ class Command(BaseCommand):
                     deal_id=source.deal_id,
                     sheets=deal_books[source.deal_id],
                     funding_rows=master['funding_by_deal'].get(source.deal_id, []),
+                    payout_rows=[] if options['skip_payouts'] else master['payouts_by_deal'].get(source.deal_id, []),
+                    strict_payouts=options['strict_payouts'],
                 )
         WorkflowEngine()._refresh_financial_aggregates()
         self.stdout.write(self.style.SUCCESS('Excel demo seed applied.'))
@@ -250,7 +265,33 @@ class Command(BaseCommand):
                     'amount_usd': Decimal(str(amount)),
                     'date': record.get('Sana'),
                 })
-        return {'investors': investors, 'funding_by_deal': dict(funding_by_deal)}
+
+        payouts_by_deal = defaultdict(list)
+        if 'INVESTOR_PAYOUTS' in wb.sheetnames:
+            ws = wb['INVESTOR_PAYOUTS']
+            header = _find_header(ws, 'Sana')
+            headers = [ws.cell(header, col).value for col in range(1, 8)]
+            for row in range(header + 1, (ws.max_row or 0) + 1):
+                record = {headers[col - 1]: ws.cell(row, col).value for col in range(1, len(headers) + 1)}
+                deal_id = str(record.get('Bitim ID') or '').strip()
+                investor = str(record.get('Investor') or '').strip()
+                amount = record.get('USD summa')
+                kind = _payout_kind(record.get('Payout turi'))
+                if deal_id and investor and amount not in (None, '') and kind in {'PROFIT', 'CAPITAL_RETURN'}:
+                    payouts_by_deal[deal_id].append({
+                        'date': record.get('Sana'),
+                        'investor': investor,
+                        'deal_id': deal_id,
+                        'kind': kind,
+                        'currency': _currency(record.get('Valyuta')),
+                        'amount': _money(amount),
+                        'raw_type': str(record.get('Payout turi') or '').strip(),
+                    })
+        return {
+            'investors': investors,
+            'funding_by_deal': dict(funding_by_deal),
+            'payouts_by_deal': dict(payouts_by_deal),
+        }
 
     def _build_plan(self, master: dict, deal_books: dict) -> dict:
         result = {
@@ -272,8 +313,18 @@ class Command(BaseCommand):
                 'currencies': dict(currencies),
                 'foyda': sheets['_foyda'],
                 'opening_shortages': sheets.get('_opening_shortages', []),
+                'payout_totals': self._payout_totals(master.get('payouts_by_deal', {}).get(deal_id, [])),
             }
         return result
+
+    def _payout_totals(self, payout_rows: list[dict]) -> dict:
+        totals = defaultdict(Decimal)
+        for row in payout_rows:
+            totals[(row['kind'], row['currency'])] += Decimal(str(row['amount']))
+        return {
+            f'{kind}:{currency}': _money(amount)
+            for (kind, currency), amount in sorted(totals.items())
+        }
 
     def _print_plan(self, plan: dict) -> None:
         self.stdout.write('Excel demo seed plan')
@@ -288,6 +339,8 @@ class Command(BaseCommand):
                     f"    {partner['name']}: capital={partner['capital']}, "
                     f"capital_share={partner['capital_share']}, profit_share={partner['profit_share']}"
                 )
+            if row['payout_totals']:
+                self.stdout.write(f"    payouts: {row['payout_totals']}")
             for shortage in row['opening_shortages']:
                 self.stdout.write(
                     f"    opening stock: {shortage['product']} +{shortage['quantity']} "
@@ -467,7 +520,16 @@ class Command(BaseCommand):
             'cash_accounts': cash_accounts,
         }
 
-    def _apply_deal(self, *, ctx: dict, deal_id: str, sheets: dict, funding_rows: list[dict]) -> None:
+    def _apply_deal(
+        self,
+        *,
+        ctx: dict,
+        deal_id: str,
+        sheets: dict,
+        funding_rows: list[dict],
+        payout_rows: list[dict],
+        strict_payouts: bool,
+    ) -> None:
         from apps.customers.models import Customer
 
         customers = {}
@@ -507,8 +569,70 @@ class Command(BaseCommand):
             discount_reason_id=ctx['discount_reason'].id,
             sheets=sale_sheets,
         )
+        self._apply_payouts(
+            ctx=ctx,
+            deal_id=deal_id,
+            procurement=procurement,
+            payout_rows=payout_rows,
+            strict_payouts=strict_payouts,
+        )
         self._stage_demo_shop_stock(ctx=ctx, variants=variants)
         self.stdout.write(self.style.SUCCESS(f'  {deal_id}: applied'))
+
+    def _apply_payouts(self, *, ctx: dict, deal_id: str, procurement, payout_rows: list[dict], strict_payouts: bool) -> None:
+        if not payout_rows:
+            return
+
+        from apps.partnerships.agreement_services import pay_dividend
+        from apps.partnerships.workspace_support import add_agreement_withdrawal
+
+        kind_order = {'CAPITAL_RETURN': 0, 'PROFIT': 1}
+        for row in sorted(
+            payout_rows,
+            key=lambda item: (_parse_dt(item['date']), kind_order.get(item['kind'], 99), item['investor']),
+        ):
+            partner = ctx['investor_partners'].get(row['investor'])
+            if partner is None:
+                raise CommandError(f"{deal_id}: payout investor not found: {row['investor']}")
+            currency = row['currency']
+            if currency == 'USD':
+                account = ctx['cash_accounts']['KASSA DOLLAR']
+            elif currency == 'UZS':
+                account = ctx['cash_accounts']['KASSA SOM']
+            else:
+                raise CommandError(f'{deal_id}: unsupported payout currency {currency}.')
+            paid_at = _parse_dt(row['date'])
+            try:
+                if row['kind'] == 'PROFIT':
+                    pay_dividend(
+                        tenant_id=ctx['tenant_id'],
+                        partner_id=partner.id,
+                        procurement_id=procurement.id,
+                        amount=row['amount'],
+                        currency=currency,
+                        from_account_id=account.id,
+                        date=paid_at,
+                    )
+                elif row['kind'] == 'CAPITAL_RETURN':
+                    add_agreement_withdrawal(
+                        tenant_id=ctx['tenant_id'],
+                        agreement_id=procurement.agreement_id,
+                        procurement_id=procurement.id,
+                        partner_id=partner.id,
+                        amount=row['amount'],
+                        currency=currency,
+                        from_account_id=account.id,
+                        date=paid_at,
+                        reason=f"Excel payout {deal_id}: {row['raw_type']}",
+                    )
+            except ValueError as error:
+                message = (
+                    f"{deal_id}: payout failed for {row['investor']} "
+                    f"{row['kind']} {row['amount']} {currency}: {error}"
+                )
+                if strict_payouts:
+                    raise CommandError(message) from error
+                self.stdout.write(self.style.WARNING(f'  WARN: {message}'))
 
     def _stage_demo_shop_stock(self, *, ctx: dict, variants: dict, max_products: int = 8) -> None:
         """Leave a small real shop balance for live POS demos after Excel replay sales."""
