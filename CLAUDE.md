@@ -170,6 +170,23 @@ When working on a task:
 6. New large theme → new epic via [`docs/roadmap/_template.md`](./docs/roadmap/_template.md).
 7. Don't duplicate implementation details in `CLAUDE.md` or `AGENTS.md` — keep live work in epic files.
 
+## Graphify workflow
+
+Graphify is the repo-level code graph assistant. Use it as a navigation layer,
+not as a source of truth; source truth remains code, tests, `docs/ROADMAP.md`,
+and domain docs.
+
+- Freshness is handled by git hooks (`graphify hook install`): post-commit and
+  post-checkout rebuild the graph in the background. Do not put `graphify
+  update` in Claude/Codex per-turn hooks.
+- Consult `graphify-out/graph.json`, `GRAPH_REPORT.md`, `wiki/`, or
+  `graphify query/explain/path/affected` when the task is architectural,
+  cross-module, asks "how does X work?", or before broad `grep/find/glob`
+  discovery across the codebase.
+- Use code-only rebuilds by default: `.graphify-venv/bin/graphify update .`.
+  Run semantic/document updates only when the task is explicitly about docs,
+  screenshots, or non-code assets.
+
 ## Workflow rules
 
 **Documentation.** Document only what survives the session:

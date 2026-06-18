@@ -51,6 +51,9 @@ dokploy.env
 # Logs
 *.log
 
+# Local Graphify artifacts
+graphify-out/
+
 # E2E artifacts
 test-results/
 playwright-report/
