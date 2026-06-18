@@ -115,6 +115,11 @@ def _find_header(ws, first_label: str) -> int:
     raise CommandError(f'Header {first_label!r} not found in {ws.title}.')
 
 
+def _deal_operator_row(foyda_rows: list[dict]) -> dict:
+    investor_aggregate = next((row for row in foyda_rows if 'USTOZ' in _norm(row['name'])), foyda_rows[0])
+    return next((row for row in foyda_rows if row is not investor_aggregate), foyda_rows[-1])
+
+
 class Command(BaseCommand):
     help = 'Seed demo data from files/ investor Excel workbooks using UI-like domain flows.'
 
@@ -161,10 +166,10 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             self._wipe_database()
-            ctx = self._create_baseline(master)
+            baseline = self._create_baseline(master, deal_books)
             for source in DEALS:
                 self._apply_deal(
-                    ctx=ctx,
+                    ctx=baseline['deal_contexts'][source.deal_id],
                     deal_id=source.deal_id,
                     sheets=deal_books[source.deal_id],
                     funding_rows=master['funding_by_deal'].get(source.deal_id, []),
@@ -339,6 +344,7 @@ class Command(BaseCommand):
                     f"    {partner['name']}: capital={partner['capital']}, "
                     f"capital_share={partner['capital_share']}, profit_share={partner['profit_share']}"
                 )
+            self.stdout.write(f"    business/operator: {_deal_operator_row(row['foyda'])['name']}")
             if row['payout_totals']:
                 self.stdout.write(f"    payouts: {row['payout_totals']}")
             for shortage in row['opening_shortages']:
@@ -414,7 +420,7 @@ class Command(BaseCommand):
                 cursor.execute(f'TRUNCATE {quoted} RESTART IDENTITY CASCADE;')
         User.objects.all().delete()
 
-    def _create_baseline(self, master: dict) -> dict:
+    def _create_baseline(self, master: dict, deal_books: dict) -> dict:
         from apps.catalog.models import Category, DiscountReason
         from apps.core.models import Business, BusinessInvestorRelation, Partner
         from apps.finance.chart_of_accounts import setup_chart_of_accounts
@@ -439,85 +445,108 @@ class Command(BaseCommand):
         owner = create_user('owner', 'owner@local.dev', 'Owner123!', groups['owner'])
         cashier = create_user('cashier', 'cashier@local.dev', 'Cashier123!', groups['cashier'])
         warehouse_user = create_user('warehouse', 'warehouse@local.dev', 'Warehouse123!', groups['warehouse'])
-        business = Business.objects.create(owner=owner, name='Sherik Demo Excel', currency='UZS', is_active=True)
-        tenant_id = business.id
-        setup_chart_of_accounts(tenant_id)
-        ExchangeRate.objects.create(
-            tenant=business,
-            base_currency='USD',
-            quote_currency='UZS',
-            rate_date=timezone.localdate(),
-            rate=DEFAULT_DEMO_USD_UZS_RATE,
-            source=ExchangeRate.Source.MANUAL,
-            is_manual=True,
-            notes='Excel demo seed fallback rate',
-            raw_payload={},
-            fetched_at=timezone.now(),
-        )
 
-        cash_account = Account.objects.get(tenant_id=tenant_id, code='1000')
-        bank_account = Account.objects.get(tenant_id=tenant_id, code='1010')
-        cash_accounts = {}
-        for name, currency, kind, linked in (
-            ('KASSA SOM', 'UZS', CashAccount.Kind.CASH, cash_account),
-            ('KASSA DOLLAR', 'USD', CashAccount.Kind.CASH, bank_account),
-            ('PLASTIK SOM', 'UZS', CashAccount.Kind.CARD_TERMINAL, bank_account),
-        ):
-            cash_accounts[name] = CashAccount.objects.create(
-                tenant=business,
-                name=name,
-                currency=currency,
-                kind=kind,
-                balance=Decimal('0'),
-                is_active=True,
-                linked_account=linked,
-            )
-        warehouses = {
-            'ASOSIY': Warehouse.objects.create(tenant=business, name='Основной склад', kind=Warehouse.WarehouseKind.STORAGE, is_active=True),
-            'DOKON': Warehouse.objects.create(tenant=business, name='Основной магазин', kind=Warehouse.WarehouseKind.SHOP, is_active=True),
-        }
-        operator = Partner.objects.create(tenant=business, role=Partner.Role.OPERATOR, display_name='Owner operator', user=owner, is_active=True)
-
-        investor_partners = {}
         investor_users = {}
         for investor in master['investors']:
             username = _username(investor['name'], used)
             user = create_user(username, f'{username}@local.dev', 'Investor123!', groups['investor'])
-            partner = Partner.objects.create(
-                tenant=business,
-                role=Partner.Role.INVESTOR,
-                display_name=investor['name'],
-                user=user,
-                is_active=True,
-            )
-            BusinessInvestorRelation.objects.create(
-                tenant=business,
-                partner=partner,
-                status=BusinessInvestorRelation.Status.ACTIVE,
-                source=BusinessInvestorRelation.Source.MANUAL,
-                created_by=owner,
-                notes='Excel demo investor access',
-            )
-            Investor.objects.create(tenant=business, user=user, name=investor['name'], email=user.email, is_active=True)
-            investor_partners[investor['name']] = partner
             investor_users[investor['name']] = user
 
-        category = Category.objects.create(tenant=business, name='Excel demo товары', sort_order=1)
-        discount_reason = DiscountReason.objects.create(tenant=business, name='Excel price', is_default=True, is_active=True)
-        supplier = Supplier.objects.create(tenant=business, name='Excel supplier', is_active=True)
+        def create_business_context(operator_name: str) -> dict:
+            business = Business.objects.create(owner=owner, name=operator_name, currency='UZS', is_active=True)
+            tenant_id = business.id
+            setup_chart_of_accounts(tenant_id)
+            ExchangeRate.objects.create(
+                tenant=business,
+                base_currency='USD',
+                quote_currency='UZS',
+                rate_date=timezone.localdate(),
+                rate=DEFAULT_DEMO_USD_UZS_RATE,
+                source=ExchangeRate.Source.MANUAL,
+                is_manual=True,
+                notes='Excel demo seed fallback rate',
+                raw_payload={},
+                fetched_at=timezone.now(),
+            )
+
+            cash_account = Account.objects.get(tenant_id=tenant_id, code='1000')
+            bank_account = Account.objects.get(tenant_id=tenant_id, code='1010')
+            cash_accounts = {}
+            for name, currency, kind, linked in (
+                ('KASSA SOM', 'UZS', CashAccount.Kind.CASH, cash_account),
+                ('KASSA DOLLAR', 'USD', CashAccount.Kind.CASH, bank_account),
+                ('PLASTIK SOM', 'UZS', CashAccount.Kind.CARD_TERMINAL, bank_account),
+            ):
+                cash_accounts[name] = CashAccount.objects.create(
+                    tenant=business,
+                    name=name,
+                    currency=currency,
+                    kind=kind,
+                    balance=Decimal('0'),
+                    is_active=True,
+                    linked_account=linked,
+                )
+            warehouses = {
+                'ASOSIY': Warehouse.objects.create(tenant=business, name='Основной склад', kind=Warehouse.WarehouseKind.STORAGE, is_active=True),
+                'DOKON': Warehouse.objects.create(tenant=business, name='Основной магазин', kind=Warehouse.WarehouseKind.SHOP, is_active=True),
+            }
+            operator = Partner.objects.create(
+                tenant=business,
+                role=Partner.Role.OPERATOR,
+                display_name=operator_name,
+                user=owner,
+                is_active=True,
+            )
+
+            investor_partners = {}
+            for investor in master['investors']:
+                user = investor_users[investor['name']]
+                partner = Partner.objects.create(
+                    tenant=business,
+                    role=Partner.Role.INVESTOR,
+                    display_name=investor['name'],
+                    user=user,
+                    is_active=True,
+                )
+                BusinessInvestorRelation.objects.create(
+                    tenant=business,
+                    partner=partner,
+                    status=BusinessInvestorRelation.Status.ACTIVE,
+                    source=BusinessInvestorRelation.Source.MANUAL,
+                    created_by=owner,
+                    notes='Excel demo investor access',
+                )
+                Investor.objects.create(tenant=business, user=user, name=investor['name'], email=user.email, is_active=True)
+                investor_partners[investor['name']] = partner
+
+            category = Category.objects.create(tenant=business, name='Excel demo товары', sort_order=1)
+            discount_reason = DiscountReason.objects.create(tenant=business, name='Excel price', is_default=True, is_active=True)
+            supplier = Supplier.objects.create(tenant=business, name='Excel supplier', is_active=True)
+            return {
+                'business': business,
+                'tenant_id': tenant_id,
+                'owner': owner,
+                'cashier': cashier,
+                'warehouse_user': warehouse_user,
+                'operator': operator,
+                'investor_partners': investor_partners,
+                'category': category,
+                'discount_reason': discount_reason,
+                'supplier': supplier,
+                'warehouses': warehouses,
+                'cash_accounts': cash_accounts,
+            }
+
+        business_contexts = {}
+        deal_contexts = {}
+        for deal_id, sheets in deal_books.items():
+            operator_name = _deal_operator_row(sheets['_foyda'])['name']
+            if operator_name not in business_contexts:
+                business_contexts[operator_name] = create_business_context(operator_name)
+            deal_contexts[deal_id] = business_contexts[operator_name]
         return {
-            'business': business,
-            'tenant_id': tenant_id,
-            'owner': owner,
-            'cashier': cashier,
-            'warehouse_user': warehouse_user,
-            'operator': operator,
-            'investor_partners': investor_partners,
-            'category': category,
-            'discount_reason': discount_reason,
-            'supplier': supplier,
-            'warehouses': warehouses,
-            'cash_accounts': cash_accounts,
+            'business_contexts': business_contexts,
+            'deal_contexts': deal_contexts,
         }
 
     def _apply_deal(
