@@ -58,6 +58,8 @@ def _fund_terms_snapshot(fund: InvestmentFund, manager_profit_share: Decimal) ->
         'name': fund.name,
         'currency': str(fund.currency or 'UZS').upper(),
         'target_amount': str(fund.target_amount) if fund.target_amount is not None else None,
+        'min_contribution_amount': str(fund.min_contribution_amount),
+        'visibility': fund.visibility,
         'manager_partner_id': fund.manager_partner_id,
         'manager_profit_share': str(manager_profit_share),
         'members': sorted(row.partner_id for row in fund.members.all()),

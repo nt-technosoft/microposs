@@ -13,14 +13,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.models import BusinessInvestorRelation, Partner
-from apps.finance.models import Account, CashAccount, Payment
-from apps.finance.services import record_capital_pool_contribution
+from apps.finance.models import Account, CashAccount, CashEntry, Payment
+from apps.finance.services import create_cash_entry, record_capital_pool_contribution
 
 from .models import (
     AgreementPartner,
+    FundApplication,
     FundContribution,
     FundDeployment,
     FundMember,
+    FundMemberExit,
     FundMemberPositionReadModel,
     FundPositionReadModel,
     FundTermsVersion,
@@ -40,6 +42,8 @@ def create_investment_fund(
     member_partner_ids: list[int],
     currency: str = 'UZS',
     target_amount: Decimal | None = None,
+    min_contribution_amount: Decimal = Decimal('0'),
+    visibility: str = InvestmentFund.Visibility.PRIVATE_INVITE,
     manager_profit_share: Decimal = Decimal('0'),
     review_at=None,
     offline_agreed_at=None,
@@ -56,8 +60,13 @@ def create_investment_fund(
     if not Decimal('0') <= manager_profit_share <= Decimal('1'):
         raise ValueError('manager_profit_share must be in [0, 1].')
     member_ids = sorted({int(item) for item in member_partner_ids})
-    if not member_ids:
-        raise ValueError('A fund needs at least one member before capital can be raised.')
+    min_contribution_amount = money(min_contribution_amount)
+    if target_amount is not None and money(target_amount) <= ZERO:
+        raise ValueError('target_amount must be positive when provided.')
+    if min_contribution_amount < ZERO:
+        raise ValueError('min_contribution_amount cannot be negative.')
+    if visibility not in InvestmentFund.Visibility.values:
+        raise ValueError('Unsupported fund visibility.')
 
     with transaction.atomic():
         manager = Partner.objects.select_for_update().filter(
@@ -104,8 +113,10 @@ def create_investment_fund(
             holder_partner=holder,
             capital_account=account,
             status=InvestmentFund.Status.RAISING,
+            visibility=visibility,
             currency=currency,
             target_amount=money(target_amount) if target_amount is not None else None,
+            min_contribution_amount=min_contribution_amount,
             opened_at=now,
         )
         FundMember.objects.bulk_create([
@@ -132,6 +143,8 @@ def create_investment_fund(
                 'name': fund.name,
                 'currency': currency,
                 'target_amount': str(fund.target_amount) if fund.target_amount is not None else None,
+                'min_contribution_amount': str(fund.min_contribution_amount),
+                'visibility': visibility,
                 'manager_partner_id': manager.pk,
                 'manager_profit_share': str(manager_profit_share),
                 'members': member_ids,
@@ -155,6 +168,266 @@ def create_investment_fund(
         fund.save(update_fields=['current_terms', 'updated_at'])
         rebuild_fund_member_positions(fund)
     return fund
+
+
+def _confirmed_capital(fund: InvestmentFund) -> Decimal:
+    contributions = sum(
+        (money(row.amount) for row in FundContribution.objects.filter(fund=fund, currency=fund.currency)),
+        ZERO,
+    )
+    exits = sum(
+        (money(row.refund_amount) for row in FundMemberExit.objects.filter(fund=fund, currency=fund.currency)),
+        ZERO,
+    )
+    return money(contributions - exits)
+
+
+def submit_fund_application(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    partner_id: int,
+    requested_amount: Decimal,
+    message: str = '',
+) -> FundApplication:
+    requested_amount = money(requested_amount)
+    if requested_amount <= ZERO:
+        raise ValueError('Requested amount must be > 0.')
+    with transaction.atomic():
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id, tenant_id=tenant_id)
+        if fund.status != InvestmentFund.Status.RAISING:
+            raise ValueError('Fund is not accepting applications.')
+        if requested_amount < money(fund.min_contribution_amount):
+            raise ValueError('Requested amount is below fund minimum contribution.')
+        partner = Partner.objects.filter(pk=partner_id, tenant_id=tenant_id, is_active=True).first()
+        if partner is None:
+            raise ValueError('Fund application partner was not found.')
+        if FundMember.objects.filter(fund=fund, partner=partner, status=FundMember.Status.ACTIVE).exists():
+            raise ValueError('Partner is already an active fund member.')
+        application, created = FundApplication.objects.get_or_create(
+            tenant_id=tenant_id,
+            fund=fund,
+            partner=partner,
+            status=FundApplication.Status.PENDING,
+            defaults={
+                'requested_amount': requested_amount,
+                'currency': fund.currency,
+                'message': message,
+            },
+        )
+        if not created:
+            application.requested_amount = requested_amount
+            application.message = message
+            application.save(update_fields=['requested_amount', 'message', 'updated_at'])
+    return application
+
+
+def approve_fund_application(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    application_id: int,
+    approved_amount: Decimal | None = None,
+    decided_by_id: int | None = None,
+) -> FundApplication:
+    with transaction.atomic():
+        application = FundApplication.objects.select_for_update().select_related('fund', 'partner').filter(
+            pk=application_id,
+            tenant_id=tenant_id,
+            fund_id=fund_id,
+        ).first()
+        if application is None:
+            raise ValueError('Fund application was not found.')
+        if application.status != FundApplication.Status.PENDING:
+            raise ValueError('Only pending applications can be approved.')
+        fund = InvestmentFund.objects.select_for_update().get(pk=application.fund_id, tenant_id=tenant_id)
+        if fund.status != InvestmentFund.Status.RAISING:
+            raise ValueError('Fund is closed for new members after deployment.')
+        amount = money(approved_amount if approved_amount is not None else application.requested_amount)
+        if amount <= ZERO:
+            raise ValueError('Approved amount must be > 0.')
+        if amount > money(application.requested_amount):
+            raise ValueError('Approved amount cannot exceed requested amount.')
+        if amount < money(fund.min_contribution_amount):
+            raise ValueError('Approved amount is below fund minimum contribution.')
+        if fund.target_amount is not None:
+            active_approved = sum(
+                (money(row.approved_amount) for row in FundMember.objects.filter(
+                    fund=fund,
+                    status=FundMember.Status.ACTIVE,
+                )),
+                ZERO,
+            )
+            if active_approved + amount > money(fund.target_amount):
+                raise ValueError('Fund hard cap would be exceeded. Amend terms before approving more capital.')
+        application.status = FundApplication.Status.APPROVED
+        application.approved_amount = amount
+        application.decided_by_id = decided_by_id
+        application.decided_at = timezone.now()
+        application.save(update_fields=['status', 'approved_amount', 'decided_by', 'decided_at', 'updated_at'])
+        FundMember.objects.update_or_create(
+            tenant_id=tenant_id,
+            fund=fund,
+            partner=application.partner,
+            defaults={
+                'application': application,
+                'status': FundMember.Status.ACTIVE,
+                'approved_amount': amount,
+                'confirmed_amount': ZERO,
+                'joined_at': timezone.now(),
+                'exited_at': None,
+                'offline_agreed_at': application.decided_at,
+                'offline_agreement_reference': 'fund-application-approved',
+            },
+        )
+        rebuild_fund_member_positions(fund)
+    return application
+
+
+def preview_fund_application_approvals(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    approvals: list[dict],
+) -> dict:
+    """Preview approval batch without changing application/member state."""
+    fund = InvestmentFund.objects.get(pk=fund_id, tenant_id=tenant_id)
+    if fund.status != InvestmentFund.Status.RAISING:
+        raise ValueError('Fund is closed for new members after deployment.')
+    active_approved = sum(
+        (money(row.approved_amount) for row in FundMember.objects.filter(
+            fund=fund,
+            status=FundMember.Status.ACTIVE,
+        )),
+        ZERO,
+    )
+    rows = []
+    batch_total = ZERO
+    for item in approvals:
+        application = FundApplication.objects.select_related('partner').filter(
+            pk=int(item['application_id']),
+            fund=fund,
+            tenant_id=tenant_id,
+            status=FundApplication.Status.PENDING,
+        ).first()
+        if application is None:
+            raise ValueError('Fund application was not found.')
+        amount = money(item.get('approved_amount') or application.requested_amount)
+        if amount <= ZERO:
+            raise ValueError('Approved amount must be > 0.')
+        if amount > money(application.requested_amount):
+            raise ValueError('Approved amount cannot exceed requested amount.')
+        if amount < money(fund.min_contribution_amount):
+            raise ValueError('Approved amount is below fund minimum contribution.')
+        batch_total += amount
+        rows.append({
+            'application_id': application.pk,
+            'partner_id': application.partner_id,
+            'partner_name': application.partner.display_name,
+            'requested_amount': str(money(application.requested_amount)),
+            'approved_amount': str(amount),
+            'currency': fund.currency,
+        })
+    target_amount = money(fund.target_amount) if fund.target_amount is not None else None
+    after_total = money(active_approved + batch_total)
+    return {
+        'fund_id': fund.pk,
+        'currency': fund.currency,
+        'target_amount': str(target_amount) if target_amount is not None else None,
+        'active_approved_amount': str(money(active_approved)),
+        'batch_approved_amount': str(money(batch_total)),
+        'after_approved_amount': str(after_total),
+        'exceeds_target': bool(target_amount is not None and after_total > target_amount),
+        'rows': rows,
+    }
+
+
+def amend_fundraising_terms(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    target_amount: Decimal | None = None,
+    min_contribution_amount: Decimal | None = None,
+    visibility: str | None = None,
+    review_at=None,
+    manager_profit_share: Decimal | None = None,
+    offline_agreed_at=None,
+    offline_agreement_reference: str = '',
+    notes: str = '',
+    created_by_id: int | None = None,
+    payout_policy: dict | None = None,
+) -> FundTermsVersion:
+    """Explicit pre-deployment fundraising amendment + immutable terms version."""
+    from .lifecycle_services import create_fund_terms_version
+
+    with transaction.atomic():
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id, tenant_id=tenant_id)
+        if fund.status != InvestmentFund.Status.RAISING:
+            raise ValueError('Fundraising terms cannot be changed after deployment.')
+        updates: list[str] = []
+        if target_amount is not None:
+            target = money(target_amount)
+            if target <= ZERO:
+                raise ValueError('target_amount must be positive when provided.')
+            confirmed = _confirmed_capital(fund)
+            approved = sum(
+                (money(row.approved_amount) for row in FundMember.objects.filter(
+                    fund=fund,
+                    status=FundMember.Status.ACTIVE,
+                )),
+                ZERO,
+            )
+            if target < confirmed or target < approved:
+                raise ValueError('target_amount cannot be below approved or confirmed fund capital.')
+            fund.target_amount = target
+            updates.append('target_amount')
+        if min_contribution_amount is not None:
+            minimum = money(min_contribution_amount)
+            if minimum < ZERO:
+                raise ValueError('min_contribution_amount cannot be negative.')
+            fund.min_contribution_amount = minimum
+            updates.append('min_contribution_amount')
+        if visibility is not None:
+            if visibility not in InvestmentFund.Visibility.values:
+                raise ValueError('Unsupported fund visibility.')
+            fund.visibility = visibility
+            updates.append('visibility')
+        if updates:
+            updates.append('updated_at')
+            fund.save(update_fields=updates)
+        return create_fund_terms_version(
+            fund=fund,
+            review_at=review_at,
+            manager_profit_share=manager_profit_share,
+            offline_agreed_at=offline_agreed_at,
+            offline_agreement_reference=offline_agreement_reference,
+            notes=notes,
+            created_by_id=created_by_id,
+            payout_policy=payout_policy,
+        )
+
+
+def reject_fund_application(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    application_id: int,
+    decided_by_id: int | None = None,
+) -> FundApplication:
+    application = FundApplication.objects.select_related('fund').filter(
+        pk=application_id,
+        tenant_id=tenant_id,
+        fund_id=fund_id,
+    ).first()
+    if application is None:
+        raise ValueError('Fund application was not found.')
+    if application.status != FundApplication.Status.PENDING:
+        raise ValueError('Only pending applications can be rejected.')
+    application.status = FundApplication.Status.REJECTED
+    application.decided_by_id = decided_by_id
+    application.decided_at = timezone.now()
+    application.save(update_fields=['status', 'decided_by', 'decided_at', 'updated_at'])
+    return application
 
 
 def add_fund_contribution(
@@ -189,10 +462,14 @@ def add_fund_contribution(
         if currency != str(fund.currency).upper():
             raise ValueError('Fund contribution currency must match fund currency.')
         member = FundMember.objects.select_related('partner').filter(
-            fund=fund, partner_id=partner_id,
+            fund=fund, partner_id=partner_id, status=FundMember.Status.ACTIVE,
         ).first()
         if member is None:
-            raise ValueError('Selected partner is not a member of this fund.')
+            raise ValueError('Selected partner is not an active member of this fund.')
+        if member.approved_amount and money(member.confirmed_amount) + amount > money(member.approved_amount):
+            raise ValueError('Contribution exceeds approved member amount.')
+        if fund.target_amount is not None and _confirmed_capital(fund) + amount > money(fund.target_amount):
+            raise ValueError('Fund hard cap would be exceeded. Amend terms before accepting more capital.')
         contribution = FundContribution.objects.create(
             tenant_id=tenant_id,
             fund=fund,
@@ -223,6 +500,8 @@ def add_fund_contribution(
         contribution.fx_rate_source = payment.fx_rate_source
         contribution.fx_rate_date = payment.fx_rate_date
         contribution.save(update_fields=['fx_rate', 'fx_rate_source', 'fx_rate_date', 'updated_at'])
+        member.confirmed_amount = money(member.confirmed_amount) + amount
+        member.save(update_fields=['confirmed_amount', 'updated_at'])
         rebuild_fund_member_positions(fund)
     return contribution
 
@@ -256,6 +535,8 @@ def deploy_fund_to_agreement(
         )
         if fund.status not in {InvestmentFund.Status.RAISING, InvestmentFund.Status.DEPLOYED}:
             raise ValueError('Only an open fund can make a deployment.')
+        if FundApplication.objects.filter(fund=fund, status=FundApplication.Status.PENDING).exists():
+            raise ValueError('Resolve pending fund applications before deployment.')
         agreement = InvestmentAgreement.objects.select_for_update().get(
             pk=agreement_id, tenant_id=tenant_id,
         )
@@ -300,15 +581,90 @@ def deploy_fund_to_agreement(
     return deployment
 
 
-def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
-    """Fold fund contributions and E18 holder positions into member-facing rows."""
-    members = list(FundMember.objects.filter(fund=fund).select_related('partner'))
-    currency = str(fund.currency or 'UZS').upper()
-    paid_by_member = {
-        member.pk: sum(
-            (money(row.amount) for row in FundContribution.objects.filter(fund=fund, member=member, currency=currency)),
+def exit_fund_member(
+    *,
+    tenant_id: int,
+    fund_id: int,
+    partner_id: int,
+    reason: str,
+    notes: str = '',
+    client_request_id=None,
+) -> FundMemberExit:
+    if reason not in FundMemberExit.Reason.values:
+        raise ValueError('Unsupported fund member exit reason.')
+    with transaction.atomic():
+        if client_request_id:
+            existing = FundMemberExit.objects.filter(
+                tenant_id=tenant_id,
+                client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+        fund = InvestmentFund.objects.select_for_update().select_related('capital_account').get(
+            pk=fund_id,
+            tenant_id=tenant_id,
+        )
+        if fund.status != InvestmentFund.Status.RAISING:
+            raise ValueError('Members cannot exit or be removed after fund deployment.')
+        member = FundMember.objects.select_for_update().get(
+            fund=fund,
+            partner_id=partner_id,
+            status=FundMember.Status.ACTIVE,
+        )
+        refund_amount = sum(
+            (money(row.amount) for row in FundContribution.objects.filter(fund=fund, member=member, currency=fund.currency)),
+            ZERO,
+        ) - sum(
+            (money(row.refund_amount) for row in FundMemberExit.objects.filter(fund=fund, member=member, currency=fund.currency)),
             ZERO,
         )
+        refund_amount = money(max(ZERO, refund_amount))
+        refunded_at = timezone.now()
+        exit_row = FundMemberExit.objects.create(
+            tenant_id=tenant_id,
+            fund=fund,
+            member=member,
+            reason=reason,
+            refund_amount=refund_amount,
+            currency=fund.currency,
+            refunded_at=refunded_at,
+            notes=notes,
+            client_request_id=client_request_id,
+        )
+        if refund_amount > ZERO:
+            create_cash_entry(
+                tenant_id=tenant_id,
+                account=fund.capital_account,
+                direction=CashEntry.Direction.OUT,
+                amount=refund_amount,
+                date=refunded_at,
+                source_ref_type='fund_member_exit',
+                source_ref_id=exit_row.pk,
+            )
+        member.status = (
+            FundMember.Status.EXITED
+            if reason == FundMemberExit.Reason.MEMBER_EXIT
+            else FundMember.Status.REMOVED
+        )
+        member.confirmed_amount = ZERO
+        member.exited_at = exit_row.refunded_at
+        member.save(update_fields=['status', 'confirmed_amount', 'exited_at', 'updated_at'])
+        rebuild_fund_member_positions(fund)
+    return exit_row
+
+
+def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
+    """Fold fund contributions and E18 holder positions into member-facing rows."""
+    members = list(FundMember.objects.filter(fund=fund, status=FundMember.Status.ACTIVE).select_related('partner'))
+    currency = str(fund.currency or 'UZS').upper()
+    paid_by_member = {
+        member.pk: money(sum(
+            (money(row.amount) for row in FundContribution.objects.filter(fund=fund, member=member, currency=currency)),
+            ZERO,
+        ) - sum(
+            (money(row.refund_amount) for row in FundMemberExit.objects.filter(fund=fund, member=member, currency=currency)),
+            ZERO,
+        ))
         for member in members
     }
     total_paid = sum(paid_by_member.values(), ZERO)

@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from apps.core.permissions import IsOwner, IsWarehouse
 
 from .models import (
-    DividendPayment, InvestmentAgreement, InvestmentFund, PayoutObligation,
+    AgreementPartner, DividendPayment, InvestmentAgreement, InvestmentFund, PayoutObligation,
     Procurement, DisputeCase, ContractReview,
 )
 from .serializers import (
@@ -511,6 +511,123 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             'available_uzs': str(available.quantize(Decimal('0.01'))),
             'blocking_reasons': reasons,
         })
+
+    def _aggregate_payout_breakdown(self, *, agreement, partner_id: int, payout_type: str, amount: Decimal):
+        remaining = amount.quantize(Decimal('0.01'))
+        rows = []
+        total_available = Decimal('0.00')
+        for procurement in Procurement.objects.filter(
+            tenant_id=self.request.tenant_id,
+            agreement=agreement,
+        ).order_by('opened_at', 'id'):
+            position = read_venture_positions(procurement).get(partner_id, {})
+            if Decimal(str(position.get('negative_position_uzs', '0.00'))) > 0:
+                continue
+            key = (
+                'provisional_profit_available_uzs'
+                if payout_type == 'PROFIT'
+                else 'capital_return_available_uzs'
+            )
+            available = Decimal(str(position.get(key, '0.00'))).quantize(Decimal('0.01'))
+            total_available += available
+            take = min(remaining, available) if remaining > 0 else Decimal('0.00')
+            if take > 0:
+                rows.append({
+                    'procurement_id': procurement.id,
+                    'available_uzs': str(available),
+                    'amount_uzs': str(take),
+                })
+                remaining -= take
+        return rows, total_available.quantize(Decimal('0.01')), remaining.quantize(Decimal('0.01'))
+
+    @action(detail=True, methods=['post'], url_path='aggregate-payout-preview')
+    def aggregate_payout_preview(self, request, pk=None):
+        """Agreement-level UX preview; facts are still per-procurement."""
+        agreement = self.get_object()
+        partner_id = int(request.data.get('partner_id') or 0)
+        payout_type = str(request.data.get('payout_type') or 'CAPITAL_RETURN').upper()
+        amount = Decimal(str(request.data.get('amount') or '0')).quantize(Decimal('0.01'))
+        reasons = []
+        if payout_type not in {'CAPITAL_RETURN', 'PROFIT'}:
+            reasons.append('Unsupported payout_type.')
+        if partner_id <= 0:
+            reasons.append('Выберите участника договора.')
+        else:
+            member = AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).select_related('partner').first()
+            if member is None:
+                reasons.append('Выбранная сторона не входит в договор.')
+            elif member.role == AgreementPartner.Role.OPERATOR:
+                reasons.append('Бизнес-позиция показывается как отчётность; payout самому себе не создаётся.')
+        if amount <= 0:
+            reasons.append('Укажите сумму выплаты.')
+        breakdown, total_available, remaining = ([], Decimal('0.00'), amount)
+        if not reasons:
+            breakdown, total_available, remaining = self._aggregate_payout_breakdown(
+                agreement=agreement,
+                partner_id=partner_id,
+                payout_type=payout_type,
+                amount=amount,
+            )
+            if remaining > 0:
+                reasons.append(f'Доступно только {total_available} UZS.')
+        return Response({
+            'allowed': not reasons,
+            'agreement_id': agreement.id,
+            'partner_id': partner_id or None,
+            'payout_type': payout_type,
+            'amount_uzs': str(amount),
+            'available_uzs': str(total_available),
+            'remaining_uzs': str(remaining),
+            'breakdown': breakdown,
+            'blocking_reasons': reasons,
+        })
+
+    @action(detail=True, methods=['post'], url_path='aggregate-payouts')
+    def aggregate_payouts(self, request, pk=None):
+        """Execute an aggregate payout by creating per-procurement facts."""
+        agreement = self.get_object()
+        preview_response = self.aggregate_payout_preview(request, pk=pk)
+        preview = preview_response.data
+        if not preview['allowed']:
+            raise ValidationError({'detail': 'Aggregate payout is blocked.', 'blocking_reasons': preview['blocking_reasons']})
+        partner_id = int(preview['partner_id'])
+        payout_type = str(preview['payout_type'])
+        from_account_id = request.data.get('from_account_id')
+        if not from_account_id:
+            raise ValidationError({'from_account_id': 'This field is required for payout execution.'})
+        created = []
+        try:
+            with transaction.atomic():
+                for row in preview['breakdown']:
+                    if payout_type == 'PROFIT':
+                        created.append(pay_dividend(
+                            tenant_id=request.tenant_id,
+                            partner_id=partner_id,
+                            procurement_id=row['procurement_id'],
+                            amount=Decimal(str(row['amount_uzs'])),
+                            currency='UZS',
+                            from_account_id=from_account_id,
+                        ))
+                    else:
+                        created.append(add_agreement_withdrawal(
+                            tenant_id=request.tenant_id,
+                            agreement_id=agreement.id,
+                            partner_id=partner_id,
+                            procurement_id=row['procurement_id'],
+                            from_account_id=from_account_id,
+                            amount=Decimal(str(row['amount_uzs'])),
+                            currency='UZS',
+                            reason='aggregate-proceeds-payout',
+                            created_by_id=request.user.id if request.user.is_authenticated else None,
+                        ))
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response({
+            'agreement_id': agreement.id,
+            'payout_type': payout_type,
+            'created_count': len(created),
+            'breakdown': preview['breakdown'],
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='capital-positions')
     def capital_positions(self, request, pk=None):

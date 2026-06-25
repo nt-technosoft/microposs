@@ -150,6 +150,37 @@ async function changeLocale(locale: Locale): Promise<void> {
 
     <main class="content">
       <section class="card">
+        <h2 class="section-title">Профиль и бизнес</h2>
+        <div class="setting-row vertical">
+          <div class="setting-meta">
+            <div class="setting-name">{{ auth.user?.full_name || auth.user?.username }}</div>
+            <div class="setting-desc">Пользователь · роль {{ auth.role || '—' }}</div>
+          </div>
+          <div class="identity-grid">
+            <div>
+              <span class="identity-label">Активный бизнес</span>
+              <strong>{{ auth.user?.active_business?.name || auth.user?.tenant_name || 'не выбран' }}</strong>
+            </div>
+            <div>
+              <span class="identity-label">Валюта</span>
+              <strong>{{ auth.user?.active_business?.currency || '—' }}</strong>
+            </div>
+            <div>
+              <span class="identity-label">Бизнесов</span>
+              <strong>{{ auth.user?.owned_businesses.length ?? 0 }}</strong>
+            </div>
+            <div>
+              <span class="identity-label">Профилей партнёра</span>
+              <strong>{{ auth.user?.partner_profiles.length ?? 0 }}</strong>
+            </div>
+          </div>
+          <p v-if="auth.user?.tenant_issue" class="tenant-warning">
+            У аккаунта несколько активных бизнесов. Для MVP нужен явный контекст входа, поэтому данные бизнеса не выбираются автоматически.
+          </p>
+        </div>
+      </section>
+
+      <section class="card">
         <h2 class="section-title">{{ t('settings.appearance') }}</h2>
         <div class="setting-row">
           <div class="setting-meta">
@@ -275,6 +306,33 @@ async function changeLocale(locale: Locale): Promise<void> {
 .settings-page {
   min-height: 100%;
   background: var(--color-bg-primary);
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.identity-grid > div {
+  border: 1px solid var(--color-border);
+  border-radius: 0.875rem;
+  padding: 0.75rem;
+  background: var(--color-bg-secondary);
+}
+
+.identity-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}
+
+.tenant-warning {
+  color: var(--color-warning);
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
 
 .page-header {

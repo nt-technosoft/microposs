@@ -58,6 +58,10 @@ const { capitalSectionVisible } = useProcurementReadiness(procurement)
 const paymentSectionVisible = computed(
   () => procurement.value?.documents.settlement?.type !== 'AT_RECEIPT',
 )
+const postReceiveView = computed(() => {
+  const status = procurement.value?.status
+  return status === 'RECEIVED' || status === 'PARTIALLY_RECEIVED' || status === 'CLOSED'
+})
 
 // Which flow steps have a rendered section in this scenario. Backend policy
 // drives visibility; we only render the rail items the user can actually reach.
@@ -294,6 +298,43 @@ onBeforeUnmount(() => store.$reset())
 
           <!-- Sections in the founder-controlled order -->
           <div class="flex min-w-0 flex-col gap-3">
+            <template v-if="postReceiveView">
+              <section v-if="ventureSummary" class="scroll-mt-16">
+                <ProcurementVentureSettlementCard
+                  :summary="ventureSummary"
+                  :saving="savingVentureSettlement"
+                  :readonly="procurement?.status === 'CLOSED'"
+                  @settle="onVentureSettle"
+                />
+              </section>
+
+              <section v-if="closePreview" class="scroll-mt-16">
+                <VentureCloseCard
+                  entity-label="приход"
+                  :preview="closePreview"
+                  :busy="closingProcurement"
+                  @close="onCloseProcurement"
+                />
+              </section>
+
+              <details class="rounded-2xl border border-border bg-background p-3">
+                <summary class="cursor-pointer text-sm font-medium text-foreground">Исходные детали прихода</summary>
+                <div class="mt-3 flex flex-col gap-3">
+                  <ProcurementCardItems
+                    :procurement="procurement"
+                    @update-items="onUpdateItems"
+                    @delete-item="onDeleteItem"
+                    @split-item="onSplitItem"
+                  />
+                  <ProcurementCardExpenses
+                    :procurement="procurement"
+                    @update-expenses="onUpdateExpenses"
+                    @delete-expense="onDeleteExpense"
+                  />
+                </div>
+              </details>
+            </template>
+
             <section v-if="capitalSectionVisible" id="step-funding" class="scroll-mt-16">
               <ProcurementCardFinancing
                 :procurement="procurement"
@@ -302,7 +343,7 @@ onBeforeUnmount(() => store.$reset())
               />
             </section>
 
-            <section id="step-supplier_settlement" class="scroll-mt-16">
+            <section v-if="!postReceiveView" id="step-supplier_settlement" class="scroll-mt-16">
               <ProcurementCardSupplier
                 :procurement="procurement"
                 @update-source="onUpdateSource"
@@ -311,7 +352,7 @@ onBeforeUnmount(() => store.$reset())
               />
             </section>
 
-            <section id="step-purchase_intent" class="flex scroll-mt-16 flex-col gap-3">
+            <section v-if="!postReceiveView" id="step-purchase_intent" class="flex scroll-mt-16 flex-col gap-3">
               <ProcurementCardItems
                 :procurement="procurement"
                 @update-items="onUpdateItems"
@@ -325,7 +366,7 @@ onBeforeUnmount(() => store.$reset())
               />
             </section>
 
-            <section v-if="paymentSectionVisible" id="step-payment_obligation" class="scroll-mt-16">
+            <section v-if="paymentSectionVisible && !postReceiveView" id="step-payment_obligation" class="scroll-mt-16">
               <ProcurementCardPayment
                 :procurement="procurement"
                 :payment-error="paymentError"
@@ -335,14 +376,14 @@ onBeforeUnmount(() => store.$reset())
               />
             </section>
 
-            <section id="step-goods_receipt" class="scroll-mt-16">
+            <section v-if="!postReceiveView" id="step-goods_receipt" class="scroll-mt-16">
               <ProcurementCardReceive
                 :procurement="procurement"
                 @dispatch="(k, p) => dispatch(k, p)"
               />
             </section>
 
-            <section v-if="ventureSummary" class="scroll-mt-16">
+            <section v-if="ventureSummary && !postReceiveView" class="scroll-mt-16">
               <ProcurementVentureSettlementCard
                 :summary="ventureSummary"
                 :saving="savingVentureSettlement"
@@ -351,7 +392,7 @@ onBeforeUnmount(() => store.$reset())
               />
             </section>
 
-            <section v-if="closePreview" class="scroll-mt-16">
+            <section v-if="closePreview && !postReceiveView" class="scroll-mt-16">
               <VentureCloseCard
                 entity-label="приход"
                 :preview="closePreview"

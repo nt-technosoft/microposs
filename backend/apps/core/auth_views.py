@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from apps.core.models import Business, BusinessRegistrationRequest, UserPreference
+from apps.core.models import Business, BusinessInvestorRelation, BusinessRegistrationRequest, Partner, UserPreference
 from apps.core.permissions import ensure_request_tenant, resolve_user_role
 
 
@@ -23,6 +23,16 @@ def _locale_from_request(request):
 
 class PendingAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     """JWT auth with clearer messages for pending business registration requests."""
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        from apps.core.permissions import resolve_tenant_id_for_user
+
+        tenant_id = resolve_tenant_id_for_user(user)
+        if tenant_id is not None:
+            token['tenant_id'] = tenant_id
+        return token
 
     def validate(self, attrs):
         username = str(attrs.get(self.username_field, '')).strip()
@@ -56,26 +66,68 @@ class CurrentUserView(APIView):
     @staticmethod
     def _payload(request):
         tenant_id = ensure_request_tenant(request)
-        tenant_name = None
+        active_business = None
         preferences, _ = UserPreference.objects.get_or_create(
             user=request.user,
             defaults={'locale': _locale_from_request(request)},
         )
 
         if tenant_id is not None:
-            tenant_name = (
+            active_business = (
                 Business.objects
                 .filter(id=tenant_id)
-                .values_list('name', flat=True)
+                .values('id', 'name', 'currency')
                 .first()
             )
+
+        owned_businesses = list(
+            Business.objects
+            .filter(owner=request.user, is_active=True)
+            .order_by('id')
+            .values('id', 'name', 'currency')
+        )
+        partner_profiles = list(
+            Partner.objects
+            .filter(user=request.user, is_active=True)
+            .order_by('tenant_id', 'role', 'id')
+            .values('id', 'tenant_id', 'role', 'display_name')
+        )
+        investor_relations = list(
+            BusinessInvestorRelation.objects
+            .filter(partner__user=request.user, partner__is_active=True)
+            .select_related('tenant', 'partner')
+            .order_by('tenant_id', 'partner_id')
+            .values(
+                'id', 'tenant_id', 'tenant__name', 'partner_id',
+                'partner__display_name', 'status',
+            )
+        )
+        tenant_issue = ''
+        if tenant_id is None and len(owned_businesses) > 1:
+            tenant_issue = 'multiple_active_businesses_require_explicit_context'
 
         return {
             'id': request.user.id,
             'username': request.user.username,
+            'full_name': request.user.get_full_name(),
             'role': resolve_user_role(request.user, tenant_id),
             'active_tenant_id': tenant_id,
-            'tenant_name': tenant_name or '',
+            'tenant_name': (active_business or {}).get('name', ''),
+            'active_business': active_business,
+            'owned_businesses': owned_businesses,
+            'partner_profiles': partner_profiles,
+            'investor_relations': [
+                {
+                    'id': row['id'],
+                    'tenant_id': row['tenant_id'],
+                    'tenant_name': row['tenant__name'],
+                    'partner_id': row['partner_id'],
+                    'partner_name': row['partner__display_name'],
+                    'status': row['status'],
+                }
+                for row in investor_relations
+            ],
+            'tenant_issue': tenant_issue,
             'locale': preferences.locale,
         }
 

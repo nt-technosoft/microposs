@@ -42,7 +42,7 @@
 | **E18** | Money Model Consolidation | 🔵 IN_REVIEW | ~100% core | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
 | **E20** | Multi-Party Investment, Closed Funds & Contract Lifecycle | 🔵 IN_REVIEW | 100% implementation | E04, E18 | [→](./roadmap/E20-multi-party-investment-and-managed-funds.md) |
-| **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | ⚪ NOT_STARTED | 0% | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
+| **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | 100% implementation | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
 импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке

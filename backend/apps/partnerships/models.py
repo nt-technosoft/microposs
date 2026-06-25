@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from django.db import models
 
-from apps.core.models import TenantModel, ImmutableMixin
+from apps.core.models import TenantModel, ImmutableMixin, generate_invite_token
 from apps.core.exceptions import ImmutableRecordError
 
 
@@ -421,6 +421,10 @@ class InvestmentFund(TenantModel):
         DEPLOYED = 'DEPLOYED', 'Закрыт для новых взносов'
         CLOSED = 'CLOSED', 'Закрыт'
 
+    class Visibility(models.TextChoices):
+        PRIVATE_INVITE = 'PRIVATE_INVITE', 'Закрытый по приглашению'
+        PUBLIC_LISTING = 'PUBLIC_LISTING', 'Публичная заявка'
+
     name = models.CharField(max_length=255)
     manager_partner = models.ForeignKey(
         'core.Partner',
@@ -439,8 +443,21 @@ class InvestmentFund(TenantModel):
         related_name='backed_investment_funds',
     )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    visibility = models.CharField(
+        max_length=20,
+        choices=Visibility.choices,
+        default=Visibility.PRIVATE_INVITE,
+    )
+    invite_token = models.CharField(
+        max_length=96,
+        default=generate_invite_token,
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     currency = models.CharField(max_length=3, default='UZS')
     target_amount = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)
+    min_contribution_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
     current_terms = models.ForeignKey(
@@ -456,6 +473,13 @@ class InvestmentFund(TenantModel):
         indexes = [
             models.Index(fields=['tenant', 'status']),
             models.Index(fields=['tenant', 'manager_partner']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['invite_token'],
+                condition=models.Q(invite_token__isnull=False),
+                name='uq_investment_fund_invite_token',
+            ),
         ]
 
 
@@ -553,9 +577,25 @@ class PayoutPolicy(TenantModel):
 
 
 class FundMember(TenantModel):
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Активен'
+        EXITED = 'EXITED', 'Вышел до размещения'
+        REMOVED = 'REMOVED', 'Удалён до размещения'
+
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='members')
     partner = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='fund_memberships')
+    application = models.OneToOneField(
+        'FundApplication',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='member',
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    approved_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    confirmed_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     joined_at = models.DateTimeField()
+    exited_at = models.DateTimeField(null=True, blank=True)
     offline_agreed_at = models.DateTimeField(null=True, blank=True)
     offline_agreement_reference = models.CharField(max_length=255, blank=True, default='')
 
@@ -563,6 +603,43 @@ class FundMember(TenantModel):
         db_table = 'partnerships_fund_member'
         constraints = [
             models.UniqueConstraint(fields=['fund', 'partner'], name='uq_fund_member'),
+        ]
+
+
+class FundApplication(TenantModel):
+    """Request to join a fund. This is intent, not money."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Ожидает'
+        APPROVED = 'APPROVED', 'Одобрена'
+        REJECTED = 'REJECTED', 'Отклонена'
+        CANCELLED = 'CANCELLED', 'Отменена'
+
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='applications')
+    partner = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='fund_applications')
+    requested_amount = models.DecimalField(max_digits=20, decimal_places=2)
+    approved_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    currency = models.CharField(max_length=3, default='UZS')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    message = models.TextField(blank=True, default='')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='fund_applications_decided',
+    )
+
+    class Meta:
+        db_table = 'partnerships_fund_application'
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['fund', 'partner'],
+                condition=models.Q(status='PENDING'),
+                name='uq_fund_pending_application',
+            ),
         ]
 
 
@@ -620,6 +697,34 @@ class FundDeployment(TenantModel):
                 fields=['tenant', 'client_request_id'],
                 condition=models.Q(client_request_id__isnull=False),
                 name='uq_fund_deployment_idempotent',
+            ),
+        ]
+
+
+class FundMemberExit(TenantModel):
+    """Pre-deployment member exit/removal with explicit refund fact."""
+
+    class Reason(models.TextChoices):
+        MEMBER_EXIT = 'MEMBER_EXIT', 'Выход участника'
+        MANAGER_REMOVE = 'MANAGER_REMOVE', 'Удаление управляющим'
+
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='member_exits')
+    member = models.ForeignKey(FundMember, on_delete=models.PROTECT, related_name='exits')
+    reason = models.CharField(max_length=20, choices=Reason.choices)
+    refund_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    currency = models.CharField(max_length=3, default='UZS')
+    refunded_at = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_fund_member_exit'
+        ordering = ['-refunded_at', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_fund_member_exit_idempotent',
             ),
         ]
 

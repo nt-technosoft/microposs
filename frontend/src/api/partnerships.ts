@@ -825,22 +825,29 @@ export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
   participant_totals: Array<{
     partner_id: number
     partner_name: string
+    display_name?: string
     role: string
     planned_capital_share: string
     planned_profit_share: string
     contributed_amount: string
+    gross_contributed_amount?: string
     withdrawn_amount: string
+    pool_withdrawn_amount?: string
+    proceeds_withdrawn_amount?: string
     allocated_amount: string
     returned_amount: string
     available_amount: string
+    withdrawable_amount?: string
   }>
   history: Array<{
     id: string
     kind: string
+    return_kind?: 'FROM_POOL' | 'FROM_PROCEEDS'
     date: string
     title: string
     partner_id: number | null
     partner_name: string | null
+    display_name?: string | null
     partner_role: string | null
     amount: string
     currency: string
@@ -913,10 +920,46 @@ export interface FundMemberPosition {
   computed_at: string
 }
 
+export interface FundApplication {
+  id: number
+  fund: number
+  partner: number
+  partner_name: string
+  requested_amount: string
+  approved_amount: string
+  currency: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+  message: string
+  decided_at: string | null
+  decided_by: number | null
+  created_at: string
+}
+
+export interface FundApplicationApprovalPreview {
+  fund_id: number
+  currency: string
+  target_amount: string | null
+  active_approved_amount: string
+  batch_approved_amount: string
+  after_approved_amount: string
+  exceeds_target: boolean
+  rows: Array<{
+    application_id: number
+    partner_id: number
+    partner_name: string
+    requested_amount: string
+    approved_amount: string
+    currency: string
+  }>
+}
+
 export interface InvestmentFund {
   id: number
   name: string
   status: 'DRAFT' | 'RAISING' | 'DEPLOYED' | 'CLOSED'
+  visibility: 'PRIVATE_INVITE' | 'PUBLIC_LISTING'
+  invite_token: string | null
+  invite_path: string
   manager_partner: number
   manager_partner_name: string
   holder_partner: number
@@ -924,12 +967,15 @@ export interface InvestmentFund {
   capital_account: number
   currency: string
   target_amount: string | null
+  min_contribution_amount: string
   opened_at: string
   closed_at: string | null
   current_terms: (AgreementTermsVersion & { manager_profit_share: string }) | null
-  members: Array<{ id: number; partner: number; partner_name: string; joined_at: string }>
+  members: Array<{ id: number; partner: number; partner_name: string; status: 'ACTIVE' | 'EXITED' | 'REMOVED'; approved_amount: string; confirmed_amount: string; joined_at: string; exited_at: string | null }>
+  applications: FundApplication[]
   contributions: Array<{ id: number; member: number; partner: number; partner_name: string; amount: string; currency: string; date: string }>
   deployments: Array<{ id: number; agreement: number; agreement_label: string; agreement_contribution: number; amount: string; currency: string; date: string }>
+  member_exits: Array<{ id: number; member: number; partner: number; partner_name: string; reason: string; refund_amount: string; currency: string; refunded_at: string }>
   positions: FundMemberPosition[]
   position: {
     currency: string
@@ -1181,12 +1227,29 @@ export async function fetchInvestmentFund(id: number): Promise<InvestmentFund> {
   return data
 }
 
+export interface PartnershipActionQueueItem {
+  id: string
+  kind: 'FUND_APPLICATION' | 'PAYOUT_OBLIGATION' | 'CONTRACT_REVIEW' | 'DISPUTE'
+  fund_id: number | null
+  agreement_id?: number | null
+  title: string
+  subtitle: string
+  created_at: string
+}
+
+export async function fetchPartnershipActionQueue(): Promise<PartnershipActionQueueItem[]> {
+  const { data } = await api.get<PartnershipActionQueueItem[]>('/api/v1/partnerships/funds/action-queue/')
+  return data
+}
+
 export async function createInvestmentFund(payload: {
   name: string
   manager_partner_id: number
-  member_partner_ids: number[]
+  member_partner_ids?: number[]
   currency?: string
   target_amount?: string | number | null
+  min_contribution_amount?: string | number
+  visibility?: 'PRIVATE_INVITE' | 'PUBLIC_LISTING'
   manager_profit_share?: string | number
   review_at?: string | null
   offline_agreed_at?: string | null
@@ -1195,6 +1258,64 @@ export async function createInvestmentFund(payload: {
   payout_policy?: Partial<PayoutPolicy>
 }): Promise<InvestmentFund> {
   const { data } = await api.post<InvestmentFund>('/api/v1/partnerships/funds/', payload)
+  return data
+}
+
+export async function fetchInvestmentFundByInvite(token: string): Promise<InvestmentFund> {
+  const { data } = await api.get<InvestmentFund>(`/api/v1/partnerships/funds/by-invite/${token}/`)
+  return data
+}
+
+export async function submitFundApplication(id: number, payload: {
+  partner_id: number
+  requested_amount: string | number
+  message?: string
+}): Promise<FundApplication> {
+  const { data } = await api.post<FundApplication>(`/api/v1/partnerships/funds/${id}/applications/`, payload)
+  return data
+}
+
+export async function approveFundApplication(id: number, applicationId: number, payload: {
+  approved_amount?: string | number | null
+} = {}): Promise<FundApplication> {
+  const { data } = await api.post<FundApplication>(`/api/v1/partnerships/funds/${id}/applications/${applicationId}/approve/`, payload)
+  return data
+}
+
+export async function rejectFundApplication(id: number, applicationId: number): Promise<FundApplication> {
+  const { data } = await api.post<FundApplication>(`/api/v1/partnerships/funds/${id}/applications/${applicationId}/reject/`)
+  return data
+}
+
+export async function previewFundApplicationApprovals(id: number, payload: {
+  approvals: Array<{ application_id: number; approved_amount?: string | number | null }>
+}): Promise<FundApplicationApprovalPreview> {
+  const { data } = await api.post<FundApplicationApprovalPreview>(`/api/v1/partnerships/funds/${id}/applications/approval-preview/`, payload)
+  return data
+}
+
+export async function amendFundTerms(id: number, payload: {
+  target_amount?: string | number | null
+  min_contribution_amount?: string | number | null
+  visibility?: 'PRIVATE_INVITE' | 'PUBLIC_LISTING' | null
+  manager_profit_share?: string | number | null
+  review_at?: string | null
+  offline_agreed_at?: string | null
+  offline_agreement_reference?: string
+  notes?: string
+  payout_policy?: Partial<PayoutPolicy>
+}): Promise<AgreementTermsVersion & { manager_profit_share: string }> {
+  const { data } = await api.post<AgreementTermsVersion & { manager_profit_share: string }>(`/api/v1/partnerships/funds/${id}/terms/`, payload)
+  return data
+}
+
+export async function exitFundMember(id: number, payload: {
+  partner_id: number
+  reason: 'MEMBER_EXIT' | 'MANAGER_REMOVE'
+  notes?: string
+  client_request_id?: string
+}): Promise<InvestmentFund['member_exits'][number]> {
+  const { data } = await api.post<InvestmentFund['member_exits'][number]>(`/api/v1/partnerships/funds/${id}/member-exits/`, payload)
   return data
 }
 

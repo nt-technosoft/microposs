@@ -1,17 +1,25 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APITestCase
 from uuid import uuid4
 
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.exceptions import ImmutableRecordError
 from apps.partnerships.fund_services import (
     add_fund_contribution,
+    amend_fundraising_terms,
+    approve_fund_application,
     create_investment_fund,
     deploy_fund_to_agreement,
+    exit_fund_member,
+    preview_fund_application_approvals,
+    submit_fund_application,
 )
 from apps.partnerships.lifecycle_services import (
     agreement_has_funding_hold,
@@ -26,6 +34,9 @@ from apps.partnerships.lifecycle_services import (
 )
 from apps.partnerships.models import (
     AgreementPartner,
+    FundApplication,
+    FundMember,
+    FundMemberExit,
     InvestmentFund,
     PartnerPositionReadModel,
     PayoutObligation,
@@ -161,6 +172,146 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
                 amount=Decimal('1'),
                 currency='UZS',
             )
+        with self.assertRaisesMessage(ValueError, 'after fund deployment'):
+            exit_fund_member(
+                tenant_id=self.business.id,
+                fund_id=fund.id,
+                partner_id=self.investor.id,
+                reason=FundMemberExit.Reason.MEMBER_EXIT,
+            )
+
+    def test_fund_application_approval_hard_cap_and_pre_deployment_exit_refund(self):
+        second = self._second_investor()
+        fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Applications fund',
+            manager_partner_id=self.operator.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+            min_contribution_amount=Decimal('100'),
+            visibility=InvestmentFund.Visibility.PUBLIC_LISTING,
+        )
+
+        application = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=self.investor.id,
+            requested_amount=Decimal('600'),
+        )
+        self.assertEqual(application.status, FundApplication.Status.PENDING)
+        approve_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('600'),
+            decided_by_id=self.ctx['owner'].id,
+        )
+        member = FundMember.objects.get(fund=fund, partner=self.investor)
+        self.assertEqual(member.approved_amount, Decimal('600.00'))
+
+        second_application = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=second.id,
+            requested_amount=Decimal('500'),
+        )
+        with self.assertRaisesMessage(ValueError, 'hard cap'):
+            approve_fund_application(
+                tenant_id=self.business.id,
+                fund_id=fund.id,
+                application_id=second_application.id,
+                approved_amount=Decimal('500'),
+            )
+
+        add_fund_contribution(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=self.investor.id,
+            amount=Decimal('600'),
+            currency='UZS',
+        )
+        fund.refresh_from_db()
+        self.assertEqual(fund.capital_account.balance, Decimal('600.00'))
+
+        exit_row = exit_fund_member(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=self.investor.id,
+            reason=FundMemberExit.Reason.MEMBER_EXIT,
+        )
+        fund.capital_account.refresh_from_db()
+        member.refresh_from_db()
+        self.assertEqual(exit_row.refund_amount, Decimal('600.00'))
+        self.assertEqual(fund.capital_account.balance, Decimal('0.00'))
+        self.assertEqual(member.status, FundMember.Status.EXITED)
+
+    def test_fund_approval_preview_and_terms_amendment_allow_explicit_target_change(self):
+        second = self._second_investor()
+        fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Target amendment fund',
+            manager_partner_id=self.operator.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+            min_contribution_amount=Decimal('100'),
+        )
+        first = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=self.investor.id,
+            requested_amount=Decimal('700'),
+        )
+        approve_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            application_id=first.id,
+            approved_amount=Decimal('700'),
+        )
+        second_application = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=second.id,
+            requested_amount=Decimal('400'),
+        )
+
+        preview = preview_fund_application_approvals(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            approvals=[{'application_id': second_application.id, 'approved_amount': Decimal('400')}],
+        )
+        self.assertTrue(preview['exceeds_target'])
+        self.assertEqual(preview['after_approved_amount'], '1100.00')
+
+        with self.assertRaisesMessage(ValueError, 'hard cap'):
+            approve_fund_application(
+                tenant_id=self.business.id,
+                fund_id=fund.id,
+                application_id=second_application.id,
+                approved_amount=Decimal('400'),
+            )
+
+        amended = amend_fundraising_terms(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            target_amount=Decimal('1200'),
+            min_contribution_amount=Decimal('100'),
+            visibility=InvestmentFund.Visibility.PUBLIC_LISTING,
+        )
+        fund.refresh_from_db()
+        self.assertEqual(fund.target_amount, Decimal('1200.00'))
+        self.assertEqual(fund.visibility, InvestmentFund.Visibility.PUBLIC_LISTING)
+        self.assertEqual(amended.version, 2)
+        self.assertEqual(amended.terms_snapshot['target_amount'], '1200.00')
+
+        approve_fund_application(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            application_id=second_application.id,
+            approved_amount=Decimal('400'),
+        )
+        self.assertEqual(FundMember.objects.get(fund=fund, partner=second).approved_amount, Decimal('400.00'))
 
     def test_overdue_dispute_holds_only_new_agreement_funding(self):
         agreement = create_investment_agreement(
@@ -464,3 +615,104 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         agreement.refresh_from_db()
         self.assertIsNotNone(review)
         self.assertNotEqual(agreement.status, agreement.Status.CLOSED)
+
+
+class E21FundPermissionApiTests(APITestCase):
+    def setUp(self):
+        self.ctx = build_tenant()
+        self.business = self.ctx['business']
+        self.operator = self.ctx['operator']
+        self.investor = self.ctx['investor']
+        self.other_user = User.objects.create_user(username='other_investor', password='x')
+        self.other_partner = Partner.objects.create(
+            tenant=self.business,
+            role=Partner.Role.INVESTOR,
+            display_name='Other investor',
+            user=self.other_user,
+            is_active=True,
+        )
+        BusinessInvestorRelation.objects.create(
+            tenant=self.business,
+            partner=self.other_partner,
+            status=BusinessInvestorRelation.Status.ACTIVE,
+            source=BusinessInvestorRelation.Source.MANUAL,
+        )
+        self.fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Permission fund',
+            manager_partner_id=self.operator.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+            visibility=InvestmentFund.Visibility.PUBLIC_LISTING,
+        )
+
+    def test_fund_application_and_manager_actions_are_actor_bound(self):
+        self.client.force_authenticate(user=self.ctx['investor'].user)
+
+        impersonation = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/',
+            {'partner_id': self.other_partner.id, 'requested_amount': '100'},
+            format='json',
+        )
+        self.assertEqual(impersonation.status_code, status.HTTP_403_FORBIDDEN)
+
+        own_application = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/',
+            {'partner_id': self.investor.id, 'requested_amount': '100'},
+            format='json',
+        )
+        self.assertEqual(own_application.status_code, status.HTTP_201_CREATED)
+
+        investor_approval = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/{own_application.data["id"]}/approve/',
+            {'approved_amount': '100'},
+            format='json',
+        )
+        self.assertEqual(investor_approval.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.ctx['owner'])
+        manager_approval = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/{own_application.data["id"]}/approve/',
+            {'approved_amount': '100'},
+            format='json',
+        )
+        self.assertEqual(manager_approval.status_code, status.HTTP_200_OK)
+
+    def test_approval_url_cannot_cross_apply_application_from_other_fund(self):
+        second_fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Second permission fund',
+            manager_partner_id=self.operator.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+        )
+        application = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=second_fund.id,
+            partner_id=self.investor.id,
+            requested_amount=Decimal('100'),
+        )
+
+        self.client.force_authenticate(user=self.ctx['owner'])
+        response = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/{application.id}/approve/',
+            {'approved_amount': '100'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(FundApplication.objects.get(pk=application.id).status, FundApplication.Status.PENDING)
+
+    def test_invite_lookup_does_not_require_existing_tenant_relation(self):
+        outside_user = User.objects.create_user(username='outside_investor', password='x')
+        self.client.force_authenticate(user=outside_user)
+
+        response = self.client.get(
+            f'/api/v1/partnerships/funds/by-invite/{self.fund.invite_token}/',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], self.fund.id)
+        self.assertEqual(response.data['invite_path'], f'/investor/funds/join/{self.fund.invite_token}')

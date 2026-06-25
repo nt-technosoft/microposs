@@ -1,11 +1,14 @@
 from decimal import Decimal
 
 from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from apps.finance.models import JournalEntry
 from apps.partnerships.advances import partner_capital_positions
 from apps.partnerships.agreement_services import agreement_pool_reconciliation_residual
 from apps.partnerships.models import AgreementWithdrawal, PartnerJournalLineTag
+from apps.partnerships.serializers import InvestmentAgreementDetailSerializer
 from apps.partnerships.workspace import dispatch_workspace_action
 from apps.partnerships.workspace_support import add_agreement_withdrawal
 from apps.sales.models import PosSession, SalePayment
@@ -99,6 +102,17 @@ class AgreementWithdrawalReturnKindTests(TestCase):
             partner_capital_positions(agreement)[ctx['investor'].id]['paid_in'],
             Decimal('100.00'),
         )
+        payload = InvestmentAgreementDetailSerializer(agreement).data
+        investor_row = next(
+            row for row in payload['participant_totals']
+            if row['partner_id'] == ctx['investor'].id
+        )
+        self.assertEqual(investor_row['gross_contributed_amount'], '140.00')
+        self.assertEqual(investor_row['contributed_amount'], '100.00')
+        self.assertEqual(investor_row['pool_withdrawn_amount'], '40.00')
+        history_row = next(row for row in payload['history'] if row['id'] == f'withdrawal-{withdrawal.id}')
+        self.assertEqual(history_row['return_kind'], AgreementWithdrawal.ReturnKind.FROM_POOL)
+        self.assertEqual(history_row['title'], 'Возврат свободного капитала из договора')
 
         AgreementWithdrawal.objects.filter(pk=withdrawal.pk).update(
             return_kind=AgreementWithdrawal.ReturnKind.FROM_PROCEEDS,
@@ -139,3 +153,61 @@ class AgreementWithdrawalReturnKindTests(TestCase):
             procurement=procurement,
             pocket=PartnerJournalLineTag.Pocket.PROCEEDS,
         ).exists())
+
+        payload = InvestmentAgreementDetailSerializer(procurement.agreement).data
+        history_row = next(row for row in payload['history'] if row['id'] == f'withdrawal-{withdrawal.id}')
+        self.assertEqual(history_row['return_kind'], AgreementWithdrawal.ReturnKind.FROM_PROCEEDS)
+        self.assertEqual(history_row['title'], 'Возврат реализованного капитала')
+        self.assertEqual(history_row['procurement_id'], procurement.id)
+
+
+class AgreementAggregatePayoutApiTests(APITestCase):
+    def test_aggregate_payout_preview_blocks_operator_and_executes_per_procurement_capital_returns(self):
+        ctx = build_tenant()
+        first, _ = seed_received_procurement(ctx)
+        _sell(ctx, first)
+        second, _ = seed_received_procurement(ctx)
+        _sell(ctx, second)
+        self.client.force_authenticate(user=ctx['owner'])
+
+        operator_response = self.client.post(
+            f'/api/v1/partnerships/agreements/{first.agreement_id}/aggregate-payout-preview/',
+            {
+                'partner_id': ctx['operator'].id,
+                'payout_type': 'CAPITAL_RETURN',
+                'amount': '1000',
+            },
+            format='json',
+        )
+        self.assertEqual(operator_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(operator_response.data['allowed'])
+
+        preview = self.client.post(
+            f'/api/v1/partnerships/agreements/{first.agreement_id}/aggregate-payout-preview/',
+            {
+                'partner_id': ctx['investor'].id,
+                'payout_type': 'CAPITAL_RETURN',
+                'amount': '100000',
+            },
+            format='json',
+        )
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertTrue(preview.data['allowed'])
+        self.assertEqual(preview.data['breakdown'][0]['procurement_id'], first.id)
+
+        execute = self.client.post(
+            f'/api/v1/partnerships/agreements/{first.agreement_id}/aggregate-payouts/',
+            {
+                'partner_id': ctx['investor'].id,
+                'payout_type': 'CAPITAL_RETURN',
+                'amount': '100000',
+                'from_account_id': ctx['cash_account'].id,
+            },
+            format='json',
+        )
+        self.assertEqual(execute.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(AgreementWithdrawal.objects.filter(
+            agreement_id=first.agreement_id,
+            procurement__isnull=False,
+            return_kind=AgreementWithdrawal.ReturnKind.FROM_PROCEEDS,
+        ).count(), execute.data['created_count'])

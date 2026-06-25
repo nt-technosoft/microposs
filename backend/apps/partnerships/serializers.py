@@ -15,9 +15,11 @@ from .models import (
     ContractPartner,
     DividendPayment,
     DisputeCase,
+    FundApplication,
     FundContribution,
     FundDeployment,
     FundMember,
+    FundMemberExit,
     FundMemberPositionReadModel,
     FundPositionReadModel,
     FundTermsVersion,
@@ -170,14 +172,18 @@ class ProcurementTermsSerializer(serializers.ModelSerializer):
 
 class AgreementPartnerSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    display_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AgreementPartner
         fields = [
-            'id', 'partner', 'partner_name', 'role',
+            'id', 'partner', 'partner_name', 'display_name', 'role',
             'planned_capital_share', 'profit_share',
         ]
         read_only_fields = ['id']
+
+    def get_display_name(self, obj):
+        return 'Бизнес' if obj.role == AgreementPartner.Role.OPERATOR else obj.partner.display_name
 
 
 class PayoutPolicySerializer(serializers.ModelSerializer):
@@ -229,10 +235,43 @@ class FundMemberSerializer(serializers.ModelSerializer):
     class Meta:
         model = FundMember
         fields = [
-            'id', 'partner', 'partner_name', 'joined_at', 'offline_agreed_at',
-            'offline_agreement_reference',
+            'id', 'partner', 'partner_name', 'application', 'status',
+            'approved_amount', 'confirmed_amount', 'joined_at', 'exited_at',
+            'offline_agreed_at', 'offline_agreement_reference',
         ]
         read_only_fields = fields
+
+
+class FundApplicationSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+
+    class Meta:
+        model = FundApplication
+        fields = [
+            'id', 'fund', 'partner', 'partner_name', 'requested_amount',
+            'approved_amount', 'currency', 'status', 'message', 'decided_at',
+            'decided_by', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+class FundApplicationCreateSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    requested_amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    message = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class FundApplicationDecisionSerializer(serializers.Serializer):
+    approved_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+
+
+class FundApplicationApprovalPreviewRowSerializer(serializers.Serializer):
+    application_id = serializers.IntegerField()
+    approved_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+
+
+class FundApplicationApprovalPreviewSerializer(serializers.Serializer):
+    approvals = FundApplicationApprovalPreviewRowSerializer(many=True)
 
 
 class FundContributionSerializer(serializers.ModelSerializer):
@@ -262,6 +301,27 @@ class FundDeploymentSerializer(serializers.ModelSerializer):
 
     def get_agreement_label(self, obj):
         return f'Инвестдоговор #{obj.agreement_id}'
+
+
+class FundMemberExitSerializer(serializers.ModelSerializer):
+    partner = serializers.IntegerField(source='member.partner_id', read_only=True)
+    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+
+    class Meta:
+        model = FundMemberExit
+        fields = [
+            'id', 'fund', 'member', 'partner', 'partner_name', 'reason',
+            'refund_amount', 'currency', 'refunded_at', 'notes',
+            'client_request_id',
+        ]
+        read_only_fields = fields
+
+
+class FundMemberExitCreateSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    reason = serializers.ChoiceField(choices=FundMemberExit.Reason.choices)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class FundMemberPositionSerializer(serializers.ModelSerializer):
@@ -295,35 +355,62 @@ class InvestmentFundSerializer(serializers.ModelSerializer):
     holder_partner_name = serializers.CharField(source='holder_partner.display_name', read_only=True)
     current_terms = FundTermsVersionSerializer(read_only=True)
     members = FundMemberSerializer(many=True, read_only=True)
+    applications = FundApplicationSerializer(many=True, read_only=True)
     contributions = FundContributionSerializer(many=True, read_only=True)
     deployments = FundDeploymentSerializer(many=True, read_only=True)
+    member_exits = FundMemberExitSerializer(many=True, read_only=True)
     positions = FundMemberPositionSerializer(source='member_position_rows', many=True, read_only=True)
     position = FundPositionSerializer(source='position_row', read_only=True)
+    invite_path = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentFund
         fields = [
             'id', 'name', 'status', 'manager_partner', 'manager_partner_name',
             'holder_partner', 'holder_partner_name', 'capital_account', 'currency',
-            'target_amount', 'opened_at', 'closed_at', 'current_terms', 'members',
-            'contributions', 'deployments', 'positions',
+            'visibility', 'invite_token', 'invite_path', 'target_amount',
+            'min_contribution_amount', 'opened_at', 'closed_at', 'current_terms', 'members',
+            'applications', 'contributions', 'deployments', 'member_exits', 'positions',
             'position',
         ]
         read_only_fields = fields
+
+    def get_invite_path(self, obj):
+        if not obj.invite_token:
+            return ''
+        return f'/investor/funds/join/{obj.invite_token}'
 
 
 class InvestmentFundCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     manager_partner_id = serializers.IntegerField()
-    member_partner_ids = serializers.ListField(child=serializers.IntegerField(), min_length=1)
+    member_partner_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     target_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+    min_contribution_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, default='0')
+    visibility = serializers.ChoiceField(choices=InvestmentFund.Visibility.choices, required=False, default=InvestmentFund.Visibility.PRIVATE_INVITE)
     manager_profit_share = serializers.DecimalField(max_digits=7, decimal_places=6, required=False, default='0')
     review_at = serializers.DateTimeField(required=False, allow_null=True)
     offline_agreed_at = serializers.DateTimeField(required=False, allow_null=True)
     offline_agreement_reference = serializers.CharField(max_length=255, required=False, default='', allow_blank=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     payout_policy = PayoutPolicyInputSerializer(required=False)
+
+
+class FundTermsAmendSerializer(serializers.Serializer):
+    target_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+    min_contribution_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+    visibility = serializers.ChoiceField(
+        choices=InvestmentFund.Visibility.choices,
+        required=False,
+        allow_null=True,
+    )
+    review_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreed_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreement_reference = serializers.CharField(max_length=255, required=False, default='', allow_blank=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    payout_policy = PayoutPolicyInputSerializer(required=False)
+    manager_profit_share = serializers.DecimalField(max_digits=7, decimal_places=6, required=False, allow_null=True)
 
 
 class FundContributionCreateSerializer(serializers.Serializer):
@@ -495,7 +582,7 @@ class AgreementWithdrawalSerializer(serializers.ModelSerializer):
         model = AgreementWithdrawal
         fields = [
             'id', 'procurement', 'paid_from_account', 'partner', 'partner_name', 'partner_role',
-            'amount', 'currency', 'fx_rate', 'date',
+            'return_kind', 'amount', 'currency', 'fx_rate', 'date',
             'source', 'confirmation_status', 'created_by',
             'created_by_name', 'actor_partner', 'actor_partner_name',
             'reason', 'client_request_id',
@@ -643,11 +730,15 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
             partner.partner_id: {
                 'partner_id': partner.partner_id,
                 'partner_name': partner.partner.display_name,
+                'display_name': 'Бизнес' if partner.role == AgreementPartner.Role.OPERATOR else partner.partner.display_name,
                 'role': partner.role,
                 'planned_capital_share': str(_money(partner.planned_capital_share)),
                 'planned_profit_share': str(_ratio(partner.profit_share)),
                 'contributed_amount': Decimal('0.00'),
+                'gross_contributed_amount': Decimal('0.00'),
                 'withdrawn_amount': Decimal('0.00'),
+                'pool_withdrawn_amount': Decimal('0.00'),
+                'proceeds_withdrawn_amount': Decimal('0.00'),
                 'allocated_amount': Decimal('0.00'),
                 'returned_amount': Decimal('0.00'),
             }
@@ -656,14 +747,19 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
         target_currency = str(obj.currency or 'UZS').upper()
         for contribution in obj.contributions.all():
             if contribution.partner_id in rows:
-                rows[contribution.partner_id]['contributed_amount'] += _to_contract_currency(
+                rows[contribution.partner_id]['gross_contributed_amount'] += _to_contract_currency(
                     contribution.amount, contribution.currency, contribution.fx_rate, target_currency,
                 )
         for withdrawal in obj.withdrawals.all():
             if withdrawal.partner_id in rows:
-                rows[withdrawal.partner_id]['withdrawn_amount'] += _to_contract_currency(
+                amount = _to_contract_currency(
                     withdrawal.amount, withdrawal.currency, withdrawal.fx_rate, target_currency,
                 )
+                rows[withdrawal.partner_id]['withdrawn_amount'] += amount
+                if withdrawal.return_kind == AgreementWithdrawal.ReturnKind.FROM_POOL:
+                    rows[withdrawal.partner_id]['pool_withdrawn_amount'] += amount
+                else:
+                    rows[withdrawal.partner_id]['proceeds_withdrawn_amount'] += amount
         for allocation in obj.allocations.all():
             if allocation.partner_id not in rows:
                 continue
@@ -680,8 +776,15 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
             # instead of contributed − ALL withdrawals (which wrongly included
             # recovered-capital returns and made available_amount go negative).
             paid_in = Decimal(str(pos.get('paid_in', Decimal('0.00'))))
+            withdrawable = Decimal(str(pos.get('withdrawable', Decimal('0.00'))))
+            row['contributed_amount'] = paid_in
             row['available_amount'] = paid_in - row['allocated_amount'] + row['returned_amount']
-            for key in ['contributed_amount', 'withdrawn_amount', 'allocated_amount', 'returned_amount', 'available_amount']:
+            row['withdrawable_amount'] = withdrawable
+            for key in [
+                'contributed_amount', 'gross_contributed_amount',
+                'withdrawn_amount', 'pool_withdrawn_amount', 'proceeds_withdrawn_amount',
+                'allocated_amount', 'returned_amount', 'available_amount', 'withdrawable_amount',
+            ]:
                 row[key] = str(_money(row[key]))
             result.append(row)
         return sorted(result, key=lambda item: (item['role'], item['partner_id']))
@@ -703,17 +806,24 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
                 'note': contribution.notes,
             })
         for withdrawal in obj.withdrawals.all():
+            title = (
+                'Возврат реализованного капитала'
+                if withdrawal.return_kind == AgreementWithdrawal.ReturnKind.FROM_PROCEEDS
+                else 'Возврат свободного капитала из договора'
+            )
             entries.append({
                 'id': f'withdrawal-{withdrawal.id}',
                 'kind': 'WITHDRAWAL',
+                'return_kind': withdrawal.return_kind,
                 'date': withdrawal.date,
-                'title': 'Возврат из договора',
+                'title': title,
                 'partner_id': withdrawal.partner_id,
                 'partner_name': withdrawal.partner.display_name,
+                'display_name': 'Бизнес' if withdrawal.partner.role == Partner.Role.OPERATOR else withdrawal.partner.display_name,
                 'partner_role': withdrawal.partner.role,
                 'amount': str(_money(withdrawal.amount)),
                 'currency': str(withdrawal.currency).upper(),
-                'procurement_id': None,
+                'procurement_id': withdrawal.procurement_id,
                 'note': withdrawal.reason,
             })
         for allocation in obj.allocations.all():

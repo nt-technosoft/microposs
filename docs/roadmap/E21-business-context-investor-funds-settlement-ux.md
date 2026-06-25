@@ -1,8 +1,8 @@
 # E21 — Business Context, Investor-Led Funds & Settlement UX Hardening
 
-**Статус:** `NOT_STARTED`  
-**Прогресс:** 0%  
-**Зависит от:** E18 (единый money read-model), E20 (multi-party/fund/lifecycle base)  
+**Статус:** `IN_REVIEW`
+**Прогресс:** 100% implementation
+**Зависит от:** E18 (единый money read-model), E20 (multi-party/fund/lifecycle base)
 **Блокирует:** pilot-ready investor fund workflow, корректный rollout E20 UX
 
 ---
@@ -70,10 +70,10 @@ gross-цифр, а business context перестаёт молча выбират
 - ⚠️ **Что начато, но не завершено:** fund screens существуют, но не как
   полноценный application/invite workflow; agreement screens используют часть
   read-model данных, но hero/participants всё ещё могут показывать gross totals.
-- ❌ **Чего нет:** fund applications, public/private visibility, hard cap,
-  pre-deployment exit/refund flow, business context guard, profile/business page,
-  aggregated payout preview, status-aware post-receive procurement analytics,
-  единый action queue.
+- ✅ **Что реализовано в E21:** fund applications, public/private visibility,
+  hard cap, explicit pre-deployment terms amendment, pre-deployment exit/refund
+  flow, business context guard, profile/business page, aggregated payout
+  preview, status-aware post-receive procurement view и action queue.
 
 ## Целевая модель
 
@@ -159,56 +159,56 @@ mapping.
 ## Задачи (чек-лист)
 
 ### Фаза 1
-- [ ] T-1.1 Зафиксировать E21 в roadmap и связать с E18/E20.
-- [ ] T-1.2 Описать state machines: business context, fund application,
+- [x] T-1.1 Зафиксировать E21 в roadmap и связать с E18/E20.
+- [x] T-1.2 Описать state machines: business context, fund application,
   fund membership, payout action.
-- [ ] T-1.3 Зафиксировать migration boundary: no financial history rewrite.
+- [x] T-1.3 Зафиксировать migration boundary: no financial history rewrite.
 
 ### Фаза 2
-- [ ] T-2.1 Реализовать guard для owner с несколькими active businesses без
+- [x] T-2.1 Реализовать guard для owner с несколькими active businesses без
   выбранного контекста.
-- [ ] T-2.2 Подготовить JWT/session tenant-binding contract.
-- [ ] T-2.3 Добавить `/auth/me`/profile data для user + active business +
+- [x] T-2.2 Подготовить JWT/session tenant-binding contract.
+- [x] T-2.3 Добавить `/auth/me`/profile data для user + active business +
   operator/investor profiles.
-- [ ] T-2.4 Добавить profile/business UI.
-- [ ] T-2.5 Исправить demo/seed так, чтобы MVP не создавал неявный multi-business
+- [x] T-2.4 Добавить profile/business UI.
+- [x] T-2.5 Исправить demo/seed так, чтобы MVP не создавал неявный multi-business
   owner без switcher.
 
 ### Фаза 3
-- [ ] T-3.1 Добавить fund visibility и invite token/public listing.
-- [ ] T-3.2 Реализовать fund application model/API.
-- [ ] T-3.3 Реализовать requested/approved/paid/confirmed amounts.
-- [ ] T-3.4 Реализовать approve/reject/partial approve и bulk approve preview.
-- [ ] T-3.5 Реализовать hard cap и explicit terms change для сверхлимита.
-- [ ] T-3.6 Реализовать pre-deployment exit/remove with refund.
-- [ ] T-3.7 Проверить permissions: investor/manager owns fund workflow; business
+- [x] T-3.1 Добавить fund visibility и invite token/public listing.
+- [x] T-3.2 Реализовать fund application model/API.
+- [x] T-3.3 Реализовать requested/approved/paid/confirmed amounts.
+- [x] T-3.4 Реализовать approve/reject/partial approve и bulk approve preview.
+- [x] T-3.5 Реализовать hard cap и explicit terms change для сверхлимита.
+- [x] T-3.6 Реализовать pre-deployment exit/remove with refund.
+- [x] T-3.7 Проверить permissions: investor/manager owns fund workflow; business
   cannot create fund as business action.
 
 ### Фаза 4
-- [ ] T-4.1 Исправить agreement participant labels.
-- [ ] T-4.2 Перевести hero/participants на net paid-in/read-model values.
-- [ ] T-4.3 Показывать contribution/withdrawal blocks только по реальным условиям.
-- [ ] T-4.4 Разделить history titles по `FROM_POOL`, `FROM_PROCEEDS`, profit payout.
-- [ ] T-4.5 Убрать misleading operator payout action; оставить reporting row.
-- [ ] T-4.6 Добавить aggregated payout preview с per-procurement breakdown.
+- [x] T-4.1 Исправить agreement participant labels.
+- [x] T-4.2 Перевести hero/participants на net paid-in/read-model values.
+- [x] T-4.3 Показывать contribution/withdrawal blocks только по реальным условиям.
+- [x] T-4.4 Разделить history titles по `FROM_POOL`, `FROM_PROCEEDS`, profit payout.
+- [x] T-4.5 Убрать misleading operator payout action; оставить reporting row.
+- [x] T-4.6 Добавить aggregated payout preview с per-procurement breakdown.
 
 ### Фаза 5
-- [ ] T-5.1 Перестроить investor fund list/detail/application screens.
-- [ ] T-5.2 Перестроить manager fund applications/capital progress screens.
-- [ ] T-5.3 Обновить business agreement detail под corrected settlement UX.
-- [ ] T-5.4 Сделать procurement detail status-aware: after receive analytics first,
+- [x] T-5.1 Перестроить investor fund list/detail/application screens.
+- [x] T-5.2 Перестроить manager fund applications/capital progress screens.
+- [x] T-5.3 Обновить business agreement detail под corrected settlement UX.
+- [x] T-5.4 Сделать procurement detail status-aware: after receive analytics first,
   source details collapsed.
-- [ ] T-5.5 Добавить in-app action queue для fund/payout/review/dispute actions.
+- [x] T-5.5 Добавить in-app action queue для fund/payout/review/dispute actions.
 
 ### Фаза 6
-- [ ] T-6.1 Backend tests: tenant guard, fund application lifecycle, hard cap,
+- [x] T-6.1 Backend tests: tenant guard, fund application lifecycle, hard cap,
   pre-deployment refund, post-deployment exit block.
-- [ ] T-6.2 Backend tests: contribution/withdrawal loop net paid-in, return kind
+- [x] T-6.2 Backend tests: contribution/withdrawal loop net paid-in, return kind
   labels/data, proceeds payout requires procurement.
-- [ ] T-6.3 Backend tests: aggregated payout preview creates per-procurement facts.
-- [ ] T-6.4 Frontend tests/type-check for labels, conditional blocks, fund
+- [x] T-6.3 Backend tests: aggregated payout preview creates per-procurement facts.
+- [x] T-6.4 Frontend tests/type-check for labels, conditional blocks, fund
   application states and profile/business context.
-- [ ] T-6.5 Run targeted backend suite, full core/partnership suite, frontend
+- [x] T-6.5 Run targeted backend suite, full core/partnership suite, frontend
   type-check/build and fresh review.
 
 ## Не входит в MVP
@@ -221,10 +221,12 @@ mapping.
 
 ## Открытые вопросы
 
-- ? Полный business switcher делать в E21 или ограничиться MVP guard + auth
-  contract до отдельного эпика?
-- ? Нужен ли manager fee validation по Sharia/AAOIFI уже в E21 или оставить для E06?
-- ? Достаточно ли in-app action queue без external notifications для пилота?
+- ✓ Полный business switcher не входит в E21: MVP guard + JWT/session tenant
+  contract достаточно, полноценный switcher остаётся отдельным эпиком.
+- ✓ Manager fee validation по Sharia/AAOIFI остаётся для E06/legal-policy слоя;
+  E21 только фиксирует disclosed manager profit share в terms snapshot.
+- ✓ Для пилота достаточно in-app action queue; external notifications не входят
+  в E21.
 
 ## Решённые вопросы (история)
 
@@ -237,3 +239,7 @@ mapping.
   истины остаётся per-procurement append-only facts.
 - ✓ 2026-06-25: Operator/business proceeds в UI — отчётность, не обычная кнопка
   payout самому себе.
+- ✓ 2026-06-25: Cashier/warehouse tenant fallback допустим только если в системе
+  ровно один active business; при нескольких бизнесах silent selection запрещён.
+- ✓ 2026-06-25: Сверхлимит фонда не проходит через молчаливый approve; сначала
+  создаётся явная amendment-версия условий до первого deployment.

@@ -74,9 +74,13 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
     if ROLE_PLATFORM_ADMIN in group_names or user.is_superuser or user.is_staff:
         return None
 
+    # E21: product tenant context is selected at the auth/session boundary.
+    # Frontend requests must not be able to silently switch business context by
+    # passing X-Tenant-ID. Keep the argument for integration/admin call sites,
+    # but authenticated product users resolve only from their explicit session
+    # marker or from an unambiguous single-access tenant.
     explicit_candidates = [
         _coerce_tenant_id(getattr(user, 'active_tenant_id', None)),
-        _coerce_tenant_id(header_tenant_id),
     ]
     for candidate in explicit_candidates:
         if _user_has_tenant_access(user, candidate):
@@ -84,19 +88,21 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
 
     tenant_id = None
     if hasattr(user, 'owned_businesses'):
-        owned_business_id = (
+        owned_business_ids = list(
             user.owned_businesses
             .filter(is_active=True)
             .order_by('id')
-            .values_list('id', flat=True)
-            .first()
+            .values_list('id', flat=True)[:2]
         )
-        tenant_id = _coerce_tenant_id(owned_business_id)
+        if len(owned_business_ids) == 1:
+            tenant_id = _coerce_tenant_id(owned_business_ids[0])
+        elif len(owned_business_ids) > 1:
+            return None
 
     if tenant_id is None:
         from apps.core.models import BusinessInvestorRelation, Partner
 
-        partner_tenant_id = (
+        partner_tenant_ids = list(
             BusinessInvestorRelation.objects
             .filter(
                 partner__user_id=user.id,
@@ -106,29 +112,25 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
             )
             .order_by('id')
             .values_list('tenant_id', flat=True)
-            .first()
+            .distinct()[:2]
         )
-        if partner_tenant_id is None:
-            partner_tenant_id = (
+        if len(partner_tenant_ids) == 1:
+            tenant_id = _coerce_tenant_id(partner_tenant_ids[0])
+        elif len(partner_tenant_ids) > 1:
+            return None
+
+        if tenant_id is None:
+            operator_tenant_ids = list(
                 Partner.objects
                 .filter(user_id=user.id, is_active=True, role=Partner.Role.OPERATOR)
                 .order_by('id')
                 .values_list('tenant_id', flat=True)
-                .first()
+                .distinct()[:2]
             )
-        tenant_id = _coerce_tenant_id(partner_tenant_id)
-
-    if tenant_id is None and (user.is_superuser or user.is_staff):
-        from apps.core.models import Business
-
-        system_business_id = (
-            Business.objects
-            .filter(is_active=True)
-            .order_by('id')
-            .values_list('id', flat=True)
-            .first()
-        )
-        tenant_id = _coerce_tenant_id(system_business_id)
+            if len(operator_tenant_ids) == 1:
+                tenant_id = _coerce_tenant_id(operator_tenant_ids[0])
+            elif len(operator_tenant_ids) > 1:
+                return None
 
     if tenant_id is None:
         if (
@@ -139,17 +141,17 @@ def resolve_tenant_id_for_user(user, header_tenant_id=None) -> int | None:
         ):
             return None
 
-    if tenant_id is None:
-        from apps.core.models import Business
+        if ROLE_CASHIER in group_names or ROLE_WAREHOUSE in group_names:
+            from apps.core.models import Business
 
-        active_ids = list(
-            Business.objects
-            .filter(is_active=True)
-            .order_by('id')
-            .values_list('id', flat=True)[:2]
-        )
-        if len(active_ids) == 1:
-            tenant_id = _coerce_tenant_id(active_ids[0])
+            tenant_ids = list(
+                Business.objects
+                .filter(is_active=True)
+                .order_by('id')
+                .values_list('id', flat=True)[:2]
+            )
+            if len(tenant_ids) == 1:
+                return _coerce_tenant_id(tenant_ids[0])
 
     return tenant_id
 

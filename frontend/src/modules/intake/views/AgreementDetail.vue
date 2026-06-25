@@ -130,8 +130,13 @@ const usedProgress = computed(() => Math.min(100, (usedTotal.value / budgetBase.
 const investorName = computed(() => agreement.value?.partners.find((partner) => partner.role === 'INVESTOR')?.partner_name ?? 'Инвестор')
 const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
   value: partner.partner,
-  label: agreementSideLabel(partner.role),
+  label: partner.role === 'OPERATOR' ? 'Бизнес' : partner.partner_name,
 })))
+const withdrawalSideOptions = computed(() => agreementSideOptions.value.filter((option) => {
+  const position = positions.value.find((row) => row.partner_id === option.value)
+  const partner = agreement.value?.partners.find((row) => row.partner === option.value)
+  return partner?.role !== 'OPERATOR' && Number(position?.withdrawable || 0) > 0
+}))
 const partyRows = computed(() => {
   const rows = agreement.value?.participant_totals ?? []
   const total = contributedTotal.value
@@ -143,7 +148,7 @@ const partyRows = computed(() => {
     const actualCapitalPercent = total > 0 ? Math.round((contributedAmount / total) * 100) : null
     return {
       ...row,
-      displayName: row.role === 'OPERATOR' ? 'Бизнес' : row.partner_name,
+      displayName: row.display_name || (row.role === 'OPERATOR' ? 'Бизнес' : row.partner_name),
       plannedAmount,
       contributedAmount,
       plannedCapitalPercent,
@@ -158,7 +163,7 @@ const partyRows = computed(() => {
 const recoveredCapitalRows = computed<RecoveredCapitalRow[]>(() =>
   ventureSummaries.value.flatMap((summary) =>
     summary.positions
-      .filter((row) => Number(row.capital_return_available_uzs || 0) > 0.01)
+      .filter((row) => row.role !== 'OPERATOR' && Number(row.capital_return_available_uzs || 0) > 0.01)
       .map((row) => ({
         key: `${summary.procurement_id}-${row.partner_id}`,
         procurementId: summary.procurement_id,
@@ -240,7 +245,7 @@ async function load(): Promise<void> {
   try {
     agreement.value = await fetchInvestmentAgreement(agreementId.value)
     contributionPartnerId.value = agreement.value.partners[0]?.partner ?? null
-    withdrawalPartnerId.value = agreement.value.partners[0]?.partner ?? null
+    withdrawalPartnerId.value = withdrawalSideOptions.value[0]?.value ?? null
     allocationProcurementId.value = activeProcurements.value[0]?.id ?? null
     await loadAdvances()
   } catch (err: unknown) {
@@ -715,7 +720,7 @@ onMounted(async () => {
               </CardContent>
             </Card>
 
-            <Card v-if="contributedTotal > 0" class="rounded-2xl bg-background">
+            <Card v-if="withdrawalSideOptions.length" class="rounded-2xl bg-background">
               <CardHeader>
                 <div class="flex items-start justify-between gap-3">
                   <div>
@@ -729,7 +734,7 @@ onMounted(async () => {
                 <div class="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
                   <BaseSelect
                     :model-value="withdrawalPartnerId"
-                    :options="agreementSideOptions"
+                    :options="withdrawalSideOptions"
                     title="Кому вернуть деньги"
                     @update:model-value="setWithdrawalPartner"
                   />
