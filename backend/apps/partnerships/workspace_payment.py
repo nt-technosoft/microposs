@@ -249,8 +249,8 @@ def _record_own_funds_overpayment_refund(
             tenant_id=tenant_id,
             is_active=True,
         )
-        if account.kind == CashAccount.Kind.AGREEMENT_CAPITAL:
-            raise ValueError('Use partnership overpayment action for agreement capital accounts.')
+        if account.kind in {CashAccount.Kind.AGREEMENT_CAPITAL, CashAccount.Kind.FUND_CAPITAL}:
+            raise ValueError('Use the explicit agreement or fund lifecycle action for restricted capital pools.')
         if str(account.currency or '').upper() != currency:
             raise ValueError(f'Cash account currency must be {currency}.')
 

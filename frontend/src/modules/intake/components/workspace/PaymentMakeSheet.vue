@@ -49,7 +49,7 @@ const transferSourceAccountId = ref<number | null>(null)
 // currencies are never a source (no implicit conversion) — convert/top up first.
 const operatingAccounts = computed(() =>
   cashAccounts.value.filter(
-    (a) => a.kind !== 'agreement_capital' &&
+    (a) => a.kind !== 'agreement_capital' && a.kind !== 'fund_capital' &&
       (a.currency || 'UZS').toUpperCase() === obligationCurrency.value,
   ),
 )
@@ -65,7 +65,7 @@ const exchangeSourceAccounts = computed(() =>
   cashAccounts.value.filter(
     (a) =>
       a.is_active !== false &&
-      a.kind !== 'agreement_capital' &&
+      a.kind !== 'agreement_capital' && a.kind !== 'fund_capital' &&
       (a.currency || 'UZS').toUpperCase() !== obligationCurrency.value &&
       parseFloat(a.balance || '0') > 0,
   ),
@@ -74,7 +74,7 @@ const transferSourceAccounts = computed(() =>
   cashAccounts.value.filter(
     (a) =>
       a.is_active !== false &&
-      a.kind !== 'agreement_capital' &&
+      a.kind !== 'agreement_capital' && a.kind !== 'fund_capital' &&
       a.id !== paymentTargetAccount.value?.id &&
       (a.currency || 'UZS').toUpperCase() === obligationCurrency.value &&
       parseFloat(a.balance || '0') > 0,

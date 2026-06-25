@@ -110,6 +110,14 @@ class InvestmentAgreement(TenantModel):
         related_name='backed_agreements',
         help_text='E11 capital pool cash account for this agreement.',
     )
+    current_terms = models.ForeignKey(
+        'AgreementTermsVersion',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='current_for_agreements',
+        help_text='Current forward-only terms version. Historical lot snapshots remain authoritative.',
+    )
 
     class Meta:
         db_table = 'partnerships_investment_agreement'
@@ -353,6 +361,486 @@ class AgreementPartner(TenantModel):
             models.UniqueConstraint(
                 fields=['agreement', 'partner', 'role'],
                 name='uq_agreement_partner_role',
+            ),
+        ]
+
+
+# E20 — Contract terms, payout policy and lifecycle. These records are not a
+# second money ledger: actual cash remains in Payment/GL and position read models.
+class AgreementTermsVersion(TenantModel):
+    """Forward-only agreement terms accepted outside the platform if needed."""
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.CASCADE,
+        related_name='terms_versions',
+    )
+    version = models.PositiveIntegerField()
+    effective_at = models.DateTimeField()
+    review_at = models.DateTimeField(null=True, blank=True)
+    offline_agreed_at = models.DateTimeField(null=True, blank=True)
+    offline_agreement_reference = models.CharField(max_length=255, blank=True, default='')
+    terms_snapshot = models.JSONField(
+        default=dict,
+        help_text='Immutable economic parties and rule inputs captured when this version became effective.',
+    )
+    notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='agreement_terms_versions_created',
+    )
+
+    class Meta:
+        db_table = 'partnerships_agreement_terms_version'
+        ordering = ['agreement_id', '-version']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['agreement', 'version'],
+                name='uq_agreement_terms_version',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('AgreementTermsVersion is append-only. Create a new version instead.')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('AgreementTermsVersion is append-only.')
+
+
+class InvestmentFund(TenantModel):
+    """Closed-capital fund that participates in agreements through one holder partner."""
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Черновик'
+        RAISING = 'RAISING', 'Сбор капитала'
+        DEPLOYED = 'DEPLOYED', 'Закрыт для новых взносов'
+        CLOSED = 'CLOSED', 'Закрыт'
+
+    name = models.CharField(max_length=255)
+    manager_partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='managed_investment_funds',
+    )
+    holder_partner = models.OneToOneField(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='managed_fund_holder',
+        help_text='Synthetic investor partner representing this fund in external agreements.',
+    )
+    capital_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        related_name='backed_investment_funds',
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    currency = models.CharField(max_length=3, default='UZS')
+    target_amount = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)
+    opened_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    current_terms = models.ForeignKey(
+        'FundTermsVersion',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='current_for_funds',
+    )
+
+    class Meta:
+        db_table = 'partnerships_investment_fund'
+        indexes = [
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['tenant', 'manager_partner']),
+        ]
+
+
+class FundTermsVersion(TenantModel):
+    """Forward-only fund rules, including disclosed manager profit participation."""
+
+    fund = models.ForeignKey(
+        InvestmentFund,
+        on_delete=models.CASCADE,
+        related_name='terms_versions',
+    )
+    version = models.PositiveIntegerField()
+    effective_at = models.DateTimeField()
+    review_at = models.DateTimeField(null=True, blank=True)
+    manager_profit_share = models.DecimalField(max_digits=7, decimal_places=6, default=Decimal('0'))
+    offline_agreed_at = models.DateTimeField(null=True, blank=True)
+    offline_agreement_reference = models.CharField(max_length=255, blank=True, default='')
+    terms_snapshot = models.JSONField(
+        default=dict,
+        help_text='Immutable fund parties and waterfall inputs captured when this version became effective.',
+    )
+    notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='fund_terms_versions_created',
+    )
+
+    class Meta:
+        db_table = 'partnerships_fund_terms_version'
+        ordering = ['fund_id', '-version']
+        constraints = [
+            models.UniqueConstraint(fields=['fund', 'version'], name='uq_fund_terms_version'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('FundTermsVersion is append-only. Create a new version instead.')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('FundTermsVersion is append-only.')
+
+
+class PayoutPolicy(TenantModel):
+    """Eligibility policy; it creates obligations but never moves money automatically."""
+
+    agreement_terms = models.OneToOneField(
+        AgreementTermsVersion,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payout_policy',
+    )
+    fund_terms = models.OneToOneField(
+        FundTermsVersion,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payout_policy',
+    )
+    review_interval_days = models.PositiveIntegerField(default=30)
+    minimum_available_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    minimum_days_between_payouts = models.PositiveIntegerField(default=30)
+    reserve_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    grace_period_days = models.PositiveIntegerField(default=0)
+    allow_partial = models.BooleanField(default=True)
+    last_evaluated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'partnerships_payout_policy'
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agreement_terms__isnull=False, fund_terms__isnull=True)
+                    | models.Q(agreement_terms__isnull=True, fund_terms__isnull=False)
+                ),
+                name='payout_policy_exactly_one_terms_owner',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            original = self.__class__.all_objects.get(pk=self.pk)
+            immutable_fields = (
+                'agreement_terms_id', 'fund_terms_id', 'review_interval_days',
+                'minimum_available_amount', 'minimum_days_between_payouts',
+                'reserve_amount', 'grace_period_days', 'allow_partial',
+            )
+            if any(getattr(self, field) != getattr(original, field) for field in immutable_fields):
+                raise ImmutableRecordError('PayoutPolicy is fixed by its terms version. Create amended terms instead.')
+        return super().save(*args, **kwargs)
+
+
+class FundMember(TenantModel):
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='members')
+    partner = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='fund_memberships')
+    joined_at = models.DateTimeField()
+    offline_agreed_at = models.DateTimeField(null=True, blank=True)
+    offline_agreement_reference = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_fund_member'
+        constraints = [
+            models.UniqueConstraint(fields=['fund', 'partner'], name='uq_fund_member'),
+        ]
+
+
+class FundContribution(TenantModel):
+    """Actual member money entering the fund pool; append-only like agreement contributions."""
+
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='contributions')
+    member = models.ForeignKey(FundMember, on_delete=models.PROTECT, related_name='contributions')
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
+    date = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_fund_contribution'
+        ordering = ['-date', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_fund_contribution_idempotent',
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('FundContribution is append-only. Record a reversal instead.')
+
+
+class FundDeployment(TenantModel):
+    """One actual transfer from the closed fund pool into an external agreement."""
+
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.PROTECT, related_name='deployments')
+    agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.PROTECT, related_name='fund_deployments')
+    agreement_contribution = models.OneToOneField(
+        'AgreementContribution',
+        on_delete=models.PROTECT,
+        related_name='fund_deployment',
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    date = models.DateTimeField()
+    notes = models.CharField(max_length=255, blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_fund_deployment'
+        ordering = ['-date', '-id']
+        indexes = [models.Index(fields=['fund', 'agreement'])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_fund_deployment_idempotent',
+            ),
+        ]
+
+
+class FundMemberPositionReadModel(TenantModel):
+    """Materialized member view derived from fund facts and E18 holder positions."""
+
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='member_position_rows')
+    member = models.ForeignKey(FundMember, on_delete=models.CASCADE, related_name='position_rows')
+    currency = models.CharField(max_length=3, default='UZS')
+    capital_share = models.DecimalField(max_digits=12, decimal_places=9, default=Decimal('0'))
+    paid_in = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    deployed = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    available = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    provisional_profit_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_return_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    profit_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    manager_fee_accrued_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'partnerships_fund_member_position_read_model'
+        constraints = [
+            models.UniqueConstraint(fields=['fund', 'member', 'currency'], name='uq_fund_member_position'),
+        ]
+
+
+class FundPositionReadModel(TenantModel):
+    """Fund-level position, including manager fee when the manager is not a member."""
+
+    fund = models.OneToOneField(InvestmentFund, on_delete=models.CASCADE, related_name='position_row')
+    currency = models.CharField(max_length=3, default='UZS')
+    paid_in = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    deployed = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    available = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    provisional_profit_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_return_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    profit_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    manager_fee_accrued_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'partnerships_fund_position_read_model'
+
+
+class PayoutObligation(TenantModel):
+    """A due action derived from terms; payment is separately recorded and confirmed."""
+
+    class Kind(models.TextChoices):
+        PROFIT = 'PROFIT', 'Прибыль'
+        CAPITAL_RETURN = 'CAPITAL_RETURN', 'Возврат капитала'
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Ожидает выплаты'
+        RECORDED = 'RECORDED', 'Зафиксировано бизнесом'
+        CONFIRMED = 'CONFIRMED', 'Подтверждено получателем'
+        DISPUTED = 'DISPUTED', 'Оспаривается'
+        WAIVED = 'WAIVED', 'Отменено соглашением'
+
+    agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.CASCADE, null=True, blank=True, related_name='payout_obligations')
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, null=True, blank=True, related_name='payout_obligations')
+    recipient = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='payout_obligations')
+    procurement = models.ForeignKey('Procurement', on_delete=models.PROTECT, null=True, blank=True, related_name='payout_obligations')
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    paid_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    currency = models.CharField(max_length=3, default='UZS')
+    due_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    recorded_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    dividend_payment = models.OneToOneField('DividendPayment', on_delete=models.PROTECT, null=True, blank=True, related_name='payout_obligation')
+    capital_withdrawal = models.OneToOneField('AgreementWithdrawal', on_delete=models.PROTECT, null=True, blank=True, related_name='payout_obligation')
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_payout_obligation'
+        ordering = ['due_at', 'id']
+        indexes = [
+            models.Index(fields=['agreement', 'status', 'due_at']),
+            models.Index(fields=['fund', 'status', 'due_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agreement__isnull=False, fund__isnull=True)
+                    | models.Q(agreement__isnull=True, fund__isnull=False)
+                ),
+                name='payout_obligation_exactly_one_owner',
+            ),
+            models.UniqueConstraint(
+                fields=['agreement', 'recipient', 'procurement', 'kind'],
+                condition=(
+                    models.Q(agreement__isnull=False)
+                    & models.Q(status__in=['PENDING', 'RECORDED', 'DISPUTED'])
+                ),
+                nulls_distinct=False,
+                name='uq_agreement_open_payout_obligation',
+            ),
+            models.UniqueConstraint(
+                fields=['fund', 'recipient', 'kind'],
+                condition=(
+                    models.Q(fund__isnull=False)
+                    & models.Q(status__in=['PENDING', 'RECORDED', 'DISPUTED'])
+                ),
+                name='uq_fund_open_payout_obligation',
+            ),
+        ]
+
+
+class PayoutSettlement(TenantModel):
+    """One factual partial or full payment reported against a payout obligation.
+
+    Direct agreement payouts reference an immutable payment/withdrawal. Fund
+    payouts may be settled outside the business ledger, so they retain the
+    external evidence and declared amount rather than inventing a GL entry.
+    """
+
+    obligation = models.ForeignKey(
+        PayoutObligation,
+        on_delete=models.CASCADE,
+        related_name='settlements',
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    settled_at = models.DateTimeField()
+    evidence = models.TextField(blank=True, default='')
+    dividend_payment = models.OneToOneField(
+        'DividendPayment',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payout_settlement',
+    )
+    capital_withdrawal = models.OneToOneField(
+        'AgreementWithdrawal',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payout_settlement',
+    )
+
+    class Meta:
+        db_table = 'partnerships_payout_settlement'
+        ordering = ['settled_at', 'id']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(dividend_payment__isnull=False, capital_withdrawal__isnull=True)
+                    | models.Q(dividend_payment__isnull=True, capital_withdrawal__isnull=False)
+                    | models.Q(dividend_payment__isnull=True, capital_withdrawal__isnull=True)
+                ),
+                name='payout_settlement_at_most_one_direct_payment',
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('PayoutSettlement is append-only. Record a correcting settlement instead.')
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('PayoutSettlement is append-only. Record a correcting settlement instead.')
+        return super().save(*args, **kwargs)
+
+
+class ContractReview(TenantModel):
+    class Resolution(models.TextChoices):
+        CONTINUE = 'CONTINUE', 'Продолжить'
+        ORDERLY_SALE = 'ORDERLY_SALE', 'План распродажи'
+        WRITE_OFF = 'WRITE_OFF', 'Зафиксировать убыток'
+        BUYOUT = 'BUYOUT', 'Добровольный выкуп'
+        DISPUTE = 'DISPUTE', 'Зафиксировать спор'
+
+    agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.CASCADE, null=True, blank=True, related_name='contract_reviews')
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, null=True, blank=True, related_name='contract_reviews')
+    due_at = models.DateTimeField()
+    resolution = models.CharField(max_length=20, choices=Resolution.choices, null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey('auth.User', on_delete=models.PROTECT, null=True, blank=True, related_name='contract_reviews_resolved')
+    extension_until = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_contract_review'
+        indexes = [models.Index(fields=['agreement', 'due_at']), models.Index(fields=['fund', 'due_at'])]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agreement__isnull=False, fund__isnull=True)
+                    | models.Q(agreement__isnull=True, fund__isnull=False)
+                ),
+                name='contract_review_exactly_one_owner',
+            ),
+        ]
+
+
+class DisputeCase(TenantModel):
+    class Status(models.TextChoices):
+        OPEN = 'OPEN', 'Открыт'
+        RESOLVED = 'RESOLVED', 'Урегулирован'
+        REJECTED = 'REJECTED', 'Отклонён'
+
+    agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.CASCADE, null=True, blank=True, related_name='disputes')
+    fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, null=True, blank=True, related_name='disputes')
+    obligation = models.ForeignKey(PayoutObligation, on_delete=models.PROTECT, null=True, blank=True, related_name='disputes')
+    raised_by = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='raised_disputes')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    evidence = models.TextField(blank=True, default='')
+    statement = models.TextField()
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'partnerships_dispute_case'
+        indexes = [models.Index(fields=['agreement', 'status']), models.Index(fields=['fund', 'status'])]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agreement__isnull=False, fund__isnull=True)
+                    | models.Q(agreement__isnull=True, fund__isnull=False)
+                ),
+                name='dispute_case_exactly_one_owner',
             ),
         ]
 

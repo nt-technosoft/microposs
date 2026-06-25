@@ -184,6 +184,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.analytics.tasks.mark_overdue_payment_schedules',
         'schedule': crontab(minute=5, hour=0),
     },
+    'partnerships.evaluate-due-contract-lifecycle': {
+        'task': 'apps.partnerships.tasks.evaluate_due_contract_lifecycle',
+        'schedule': crontab(minute=10, hour=0),
+    },
 }
 
 # --- FX sync ---

@@ -300,6 +300,10 @@ def rebuild_agreement_positions(agreement: InvestmentAgreement) -> None:
         if kept_ids:
             stale = stale.exclude(pk__in=kept_ids)
         stale.delete()
+    # E20 fund member positions are a materialized projection of the holder's
+    # E18 rows. Rebuild after the agreement transaction is complete.
+    from .fund_services import rebuild_fund_positions_for_agreement
+    rebuild_fund_positions_for_agreement(agreement)
 
 
 def rebuild_procurement_agreement_positions(procurement: Procurement) -> None:

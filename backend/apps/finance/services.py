@@ -35,6 +35,21 @@ def _to_decimal(value: str | int | float | Decimal) -> Decimal:
     return Decimal(str(value))
 
 
+RESTRICTED_CAPITAL_ACCOUNT_KINDS = frozenset({
+    CashAccount.Kind.AGREEMENT_CAPITAL,
+    CashAccount.Kind.FUND_CAPITAL,
+})
+
+
+def require_operating_cash_account(account: CashAccount, *, action: str = 'this operation') -> None:
+    """Keep contract/fund pools out of generic business cash operations."""
+    if account.kind in RESTRICTED_CAPITAL_ACCOUNT_KINDS:
+        raise ValueError(
+            f'{action} cannot use a restricted capital pool. '
+            'Use the explicit agreement or fund lifecycle action instead.'
+        )
+
+
 def get_account(tenant_id: int, code: str) -> Account:
     """Get account by code for tenant."""
     return Account.objects.get(tenant_id=tenant_id, code=code)
@@ -514,6 +529,7 @@ def record_generic_cash_payment(
             tenant_id=tenant_id,
             is_active=True,
         )
+        require_operating_cash_account(account, action='Generic payment')
         payment_currency = str(currency or account.currency or 'UZS').upper()
         if payment_currency != str(account.currency or '').upper():
             raise ValueError('Payment currency must match CashAccount currency.')
@@ -601,12 +617,14 @@ def record_capital_pool_contribution(
     contribution_id: int,
     amount: Decimal,
     equity_account_code: str,
+    target_type: str = Payment.TargetType.CAPITAL_CONTRIBUTION,
     currency: str = 'UZS',
     fx_rate: Decimal | None = None,
     fx_rate_source: str = '',
     fx_rate_date=None,
     paid_at=None,
     from_cash_account_id: int | None = None,
+    allow_restricted_source: bool = False,
     client_request_id=None,
     notes: str = '',
 ) -> Payment:
@@ -650,6 +668,8 @@ def record_capital_pool_contribution(
             tenant_id=tenant_id,
             is_active=True,
         )
+        if pool.kind not in RESTRICTED_CAPITAL_ACCOUNT_KINDS:
+            raise ValueError('Capital contribution target must be an agreement or fund capital pool.')
         if str(pool.currency or '').upper() != payment_currency:
             raise ValueError(
                 'Contribution currency must match the agreement capital pool currency.'
@@ -674,7 +694,7 @@ def record_capital_pool_contribution(
             tenant_id=tenant_id,
             source_type=source_type,
             source_id=source_id,
-            target_type=Payment.TargetType.CAPITAL_CONTRIBUTION,
+            target_type=target_type,
             target_id=contribution_id,
             amount=amount,
             currency=payment_currency,
@@ -688,7 +708,7 @@ def record_capital_pool_contribution(
         PaymentAllocation.objects.create(
             tenant_id=tenant_id,
             payment=payment,
-            target_type=Payment.TargetType.CAPITAL_CONTRIBUTION,
+            target_type=target_type,
             target_id=contribution_id,
             amount=amount,
             currency=payment_currency,
@@ -713,6 +733,8 @@ def record_capital_pool_contribution(
                 tenant_id=tenant_id,
                 is_active=True,
             )
+            if not allow_restricted_source:
+                require_operating_cash_account(operating, action='Capital contribution')
             if str(operating.currency or '').upper() != payment_currency:
                 raise ValueError(
                     'Turnover contribution requires an operating account in the '
@@ -828,6 +850,8 @@ def record_capital_pool_payment(
             tenant_id=tenant_id,
             is_active=True,
         )
+        if pool.kind != CashAccount.Kind.AGREEMENT_CAPITAL:
+            raise ValueError('Only an agreement capital pool can pay procurement costs.')
         if str(pool.currency or '').upper() != payment_currency:
             raise ValueError('Payment currency must match the agreement capital pool currency.')
         if pool.balance < amount:
@@ -1241,6 +1265,7 @@ def exchange_currency(
     rate: Decimal,
     date=None,
     notes: str = '',
+    allow_restricted_accounts: bool = False,
 ) -> CurrencyExchange:
     """
     Atomically exchange from_amount from from_account into to_account at rate.
@@ -1265,6 +1290,9 @@ def exchange_currency(
         to_acc = CashAccount.objects.select_for_update().get(
             pk=to_account_id, tenant_id=tenant_id,
         )
+        if not allow_restricted_accounts:
+            require_operating_cash_account(from_acc, action='Currency exchange')
+            require_operating_cash_account(to_acc, action='Currency exchange')
 
         if from_acc.balance < from_amount:
             raise ValueError(
@@ -1377,6 +1405,7 @@ def refund_customer(
             account = CashAccount.objects.select_for_update().get(
                 pk=account_id, tenant_id=tenant_id,
             )
+            require_operating_cash_account(account, action='Customer refund')
             if account.balance < amount:
                 raise ValueError(
                     f'Insufficient cash in {account.name}: '
@@ -1492,6 +1521,7 @@ def record_owner_contribution(
         account = CashAccount.objects.select_for_update().get(
             pk=to_account_id, tenant_id=tenant_id,
         )
+        require_operating_cash_account(account, action='Owner contribution')
 
         contribution = OwnerContribution.objects.create(
             tenant_id=tenant_id,
@@ -1569,6 +1599,7 @@ def record_owner_drawing(
         account = CashAccount.objects.select_for_update().get(
             pk=from_account_id, tenant_id=tenant_id,
         )
+        require_operating_cash_account(account, action='Owner drawing')
         if account.balance < amount:
             raise ValueError(
                 f'Insufficient balance in {account.name}: have {account.balance}, need {amount}.'
@@ -1658,6 +1689,8 @@ def record_cash_transfer(
         to_account = CashAccount.objects.select_for_update().get(
             pk=to_account_id, tenant_id=tenant_id,
         )
+        require_operating_cash_account(from_account, action='Cash transfer')
+        require_operating_cash_account(to_account, action='Cash transfer')
 
         if from_account.currency != to_account.currency:
             raise ValueError(

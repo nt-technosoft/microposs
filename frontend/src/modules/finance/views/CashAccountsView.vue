@@ -28,9 +28,9 @@ const fxError = ref<string | null>(null)
 
 let abortController: AbortController | null = null
 
-const CAPITAL_KIND = 'agreement_capital'
-const operatingAccounts = computed(() => accounts.value.filter((a) => a.kind !== CAPITAL_KIND))
-const capitalAccounts = computed(() => accounts.value.filter((a) => a.kind === CAPITAL_KIND))
+const CAPITAL_KINDS = new Set(['agreement_capital', 'fund_capital'])
+const operatingAccounts = computed(() => accounts.value.filter((a) => !CAPITAL_KINDS.has(a.kind)))
+const capitalAccounts = computed(() => accounts.value.filter((a) => CAPITAL_KINDS.has(a.kind)))
 
 async function load() {
   abortController?.abort()
@@ -120,6 +120,7 @@ function kindLabel(kind: string): string {
     card_terminal: 'Карт-терминал',
     bank: 'Банк',
     agreement_capital: 'Капитал инвест-договора',
+    fund_capital: 'Капитал инвестиционного фонда',
   }
   return map[kind] ?? kind
 }

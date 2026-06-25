@@ -11,6 +11,10 @@ from .models import (
     Procurement, ProcurementItem, ProcurementExpense,
     InvestmentContract, ContractPartner,
     ProcurementPartnerLedger, PartnerLedgerEntry, DividendPayment,
+    AgreementTermsVersion, InvestmentFund, FundTermsVersion, FundMember,
+    FundContribution, FundDeployment, FundMemberPositionReadModel,
+    FundPositionReadModel, PayoutPolicy, PayoutObligation, ContractReview,
+    DisputeCase,
 )
 
 
@@ -27,6 +31,24 @@ class ProcurementExpenseInline(admin.TabularInline):
 class AgreementPartnerInline(admin.TabularInline):
     model = AgreementPartner
     extra = 0
+
+
+class FundMemberInline(admin.TabularInline):
+    model = FundMember
+    extra = 0
+    readonly_fields = ('joined_at', 'offline_agreed_at', 'offline_agreement_reference')
+
+
+class FundContributionInline(admin.TabularInline):
+    model = FundContribution
+    extra = 0
+    readonly_fields = ('date', 'amount', 'currency', 'fx_rate', 'notes')
+
+
+class FundDeploymentInline(admin.TabularInline):
+    model = FundDeployment
+    extra = 0
+    readonly_fields = ('agreement', 'agreement_contribution', 'amount', 'currency', 'date', 'notes')
 
 
 class CapitalCommitmentInline(admin.TabularInline):
@@ -57,6 +79,31 @@ class InvestmentAgreementAdmin(admin.ModelAdmin):
         AgreementContributionInline,
         AgreementAllocationInline,
     ]
+
+
+@admin.register(InvestmentFund)
+class InvestmentFundAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'status', 'currency', 'manager_partner', 'opened_at')
+    list_filter = ('status', 'currency')
+    inlines = [FundMemberInline, FundContributionInline, FundDeploymentInline]
+
+
+@admin.register(AgreementTermsVersion, FundTermsVersion, PayoutPolicy, PayoutObligation, ContractReview, DisputeCase)
+class LifecycleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'tenant', 'created_at')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(FundMemberPositionReadModel)
+class FundMemberPositionReadModelAdmin(admin.ModelAdmin):
+    list_display = ('id', 'fund', 'computed_at')
+    readonly_fields = [field.name for field in FundMemberPositionReadModel._meta.fields]
+
+
+@admin.register(FundPositionReadModel)
+class FundPositionReadModelAdmin(admin.ModelAdmin):
+    list_display = ('id', 'fund', 'computed_at')
+    readonly_fields = [field.name for field in FundPositionReadModel._meta.fields]
 
 
 @admin.register(Procurement)

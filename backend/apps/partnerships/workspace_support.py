@@ -12,6 +12,7 @@ from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.services import publish_event
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.models import CashAccount
+from apps.finance.services import require_operating_cash_account
 from apps.partnerships.formulas import profit_shares_from_capital
 from apps.partnerships.money_utils import (
     MONEY_Q as CENT,
@@ -85,6 +86,10 @@ def create_investment_agreement(
     source: str = AgreementActionSource.BUSINESS_RECORDED,
     confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
     reconciliation_mode: str = InvestmentAgreement.ReconciliationMode.FACTUAL,
+    review_at=None,
+    offline_agreed_at=None,
+    offline_agreement_reference: str = '',
+    payout_policy: dict | None = None,
     partners: list[dict],
 ) -> InvestmentAgreement:
     if opened_at is None:
@@ -166,6 +171,15 @@ def create_investment_agreement(
             payload={'agreement_id': agreement.pk},
             tenant_id=tenant_id,
         )
+        from .lifecycle_services import create_agreement_terms_version
+        create_agreement_terms_version(
+            agreement=agreement,
+            review_at=review_at,
+            offline_agreed_at=offline_agreed_at,
+            offline_agreement_reference=offline_agreement_reference,
+            created_by_id=created_by_id,
+            payout_policy=payout_policy,
+        )
     return agreement
 
 
@@ -183,6 +197,7 @@ def add_agreement_contribution(
     created_by_id: int | None = None,
     actor_partner_id: int | None = None,
     from_cash_account_id: int | None = None,
+    allow_restricted_source: bool = False,
     source: str = AgreementActionSource.BUSINESS_RECORDED,
     confirmation_status: str = AgreementConfirmationStatus.CONFIRMED,
 ) -> AgreementContribution:
@@ -217,6 +232,9 @@ def add_agreement_contribution(
             pk=agreement_id,
             tenant_id=tenant_id,
         )
+        from .lifecycle_services import agreement_has_funding_hold
+        if agreement_has_funding_hold(agreement=agreement):
+            raise ValueError('New funding is temporarily restricted until the overdue payout dispute is resolved.')
         if agreement.status not in (InvestmentAgreement.Status.OPEN, InvestmentAgreement.Status.ACTIVE):
             raise ValueError('Cannot contribute to closed agreement.')
         member = (
@@ -267,6 +285,7 @@ def add_agreement_contribution(
             fx_rate_date=contribution_fx_snapshot.rate_date,
             paid_at=date,
             from_cash_account_id=from_cash_account_id,
+            allow_restricted_source=allow_restricted_source,
             client_request_id=client_request_id,
             notes=notes,
         )
@@ -433,6 +452,7 @@ def add_agreement_withdrawal(
                 tenant_id=tenant_id,
                 is_active=True,
             )
+            require_operating_cash_account(source_account, action='Recovered capital return')
             if str(source_account.currency).upper() != currency:
                 raise ValueError(
                     f'Возврат в {currency} должен списываться из кассы {currency}. '

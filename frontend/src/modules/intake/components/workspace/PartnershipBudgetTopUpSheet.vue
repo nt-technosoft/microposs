@@ -43,7 +43,7 @@ const isBusiness = computed(() => selectedPartner.value?.role === 'OPERATOR')
 // agreement capital pool (a pool can't fund itself or another agreement).
 const eligibleAccounts = computed(() =>
   cashAccounts.value.filter(
-    (a) => a.kind !== 'agreement_capital'
+    (a) => a.kind !== 'agreement_capital' && a.kind !== 'fund_capital'
       && a.currency.toUpperCase() === agreementCurrency.value,
   ),
 )

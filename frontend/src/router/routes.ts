@@ -211,6 +211,18 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/investors/funds',
+    name: 'fund-list',
+    component: () => import('@/modules/investors/views/FundList.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
+    path: '/investors/funds/:id',
+    name: 'fund-detail',
+    component: () => import('@/modules/investors/views/FundDetail.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/platform-admin',
     name: 'platform-admin-requests',
     component: () => import('@/modules/platformAdmin/views/PlatformAdminRequestsView.vue'),

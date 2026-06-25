@@ -41,6 +41,8 @@
 | **E17** | Production Lifecycle Readiness: Venture Close, Single Truth & UI Flow | ✅ DONE | 100% | E16 | [→](./roadmap/E17-production-lifecycle-readiness.md) |
 | **E18** | Money Model Consolidation | 🔵 IN_REVIEW | ~100% core | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
+| **E20** | Multi-Party Investment, Closed Funds & Contract Lifecycle | 🔵 IN_REVIEW | 100% implementation | E04, E18 | [→](./roadmap/E20-multi-party-investment-and-managed-funds.md) |
+| **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | ⚪ NOT_STARTED | 0% | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
 импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке
@@ -76,6 +78,12 @@ acceptance 11/11) → **E18 (Money Model Consolidation, Ф1–Ф8 IN_REVIEW)**. 
 есть чистый read-model, на который ему опираться. Вынесено за E18 (отдельные задачи):
 ретайр `AgreementAllocation` (не дубль), split `get_partner_aggregate` (cross-app),
 functional-currency (UZS захардкожен → будущий эпик под не-UZS бизнес).
+
+**E20 (IN_REVIEW):** Multi-Party Investment, Closed Funds & Contract Lifecycle
+реализован как отдельный partnership-layer: несколько прямых инвесторов,
+простой закрытый фонд и payout/review/dispute lifecycle. Использует E18 как
+единственный money read-side; series/reinvestment, redemption и PDF намеренно
+отложены.
 
 **Предыдущий P0 (2026-05-19 — 2026-05-21):** E09 — Procurement Completeness.
 Wave A (backend, 8 slices) + Wave B (frontend rebuild, 14 slices) завершены.
@@ -114,6 +122,15 @@ legacy-взаиморасчёты рядом с net-position, незакрыва
 E19 — параллельный ecosystem-layer трек. Он строит provider-neutral integration
 runtime и не зависит от внутренней реализации E18: gateway вызывает доменные
 команды Sherik Core, а не пишет в GL, partner read-model или domain tables.
+
+E20 опирается на E18 как на единственный денежный read-side и на E04 как на
+явную классификацию договора. Он не заменяет текущую FIFO-экономику и не вводит
+второй ledger: добавляет contract/fund lifecycle над фактическими событиями.
+
+E21 — корректирующий продуктово-архитектурный слой после E20 review. Он не
+меняет денежную основу E18/E20, а доводит границы user/business/fund, investor-led
+fundraising UX, net paid-in display и procurement-bound payout semantics до
+pilot-ready состояния.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации

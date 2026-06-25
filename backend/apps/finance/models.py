@@ -273,6 +273,7 @@ class CashAccount(TenantModel):
         CARD_TERMINAL = 'card_terminal', 'Карт-терминал'
         BANK = 'bank', 'Банковский счёт'
         AGREEMENT_CAPITAL = 'agreement_capital', 'Капитал инвест-договора (пул)'
+        FUND_CAPITAL = 'fund_capital', 'Капитал инвестиционного фонда (пул)'
 
     name = models.CharField(max_length=120)
     currency = models.CharField(max_length=3, default='UZS')
@@ -370,6 +371,7 @@ class Payment(TenantModel):
         PROCUREMENT_COST = 'PROCUREMENT_COST', 'Procurement cost'
         SUPPLIER_PAYABLE = 'SUPPLIER_PAYABLE', 'Supplier payable'
         CAPITAL_CONTRIBUTION = 'CAPITAL_CONTRIBUTION', 'Capital contribution'
+        FUND_CONTRIBUTION = 'FUND_CONTRIBUTION', 'Fund contribution'
         DIVIDEND = 'DIVIDEND', 'Dividend'
 
     class Status(models.TextChoices):

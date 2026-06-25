@@ -7,14 +7,27 @@ from .models import (
     AgreementContribution,
     AgreementEvent,
     AgreementPartner,
+    AgreementTermsVersion,
     AgreementWithdrawal,
     CapitalSettlementSource,
     CapitalCommitment,
     InvestmentAgreement,
     ContractPartner,
     DividendPayment,
+    DisputeCase,
+    FundContribution,
+    FundDeployment,
+    FundMember,
+    FundMemberPositionReadModel,
+    FundPositionReadModel,
+    FundTermsVersion,
     InvestmentContract,
     PartnerLedgerEntry,
+    InvestmentFund,
+    PayoutObligation,
+    PayoutPolicy,
+    PayoutSettlement,
+    ContractReview,
     Procurement,
     ProcurementExpense,
     ProcurementExpenseTarget,
@@ -165,6 +178,242 @@ class AgreementPartnerSerializer(serializers.ModelSerializer):
             'planned_capital_share', 'profit_share',
         ]
         read_only_fields = ['id']
+
+
+class PayoutPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayoutPolicy
+        fields = [
+            'review_interval_days', 'minimum_available_amount',
+            'minimum_days_between_payouts', 'reserve_amount',
+            'grace_period_days', 'allow_partial', 'last_evaluated_at',
+        ]
+
+
+class PayoutPolicyInputSerializer(serializers.Serializer):
+    review_interval_days = serializers.IntegerField(required=False, min_value=1, default=30)
+    minimum_available_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, default='0')
+    minimum_days_between_payouts = serializers.IntegerField(required=False, min_value=0, default=30)
+    reserve_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, default='0')
+    grace_period_days = serializers.IntegerField(required=False, min_value=0, default=0)
+    allow_partial = serializers.BooleanField(required=False, default=True)
+
+
+class AgreementTermsVersionSerializer(serializers.ModelSerializer):
+    payout_policy = PayoutPolicySerializer(read_only=True)
+
+    class Meta:
+        model = AgreementTermsVersion
+        fields = [
+            'id', 'version', 'effective_at', 'review_at', 'offline_agreed_at',
+            'offline_agreement_reference', 'terms_snapshot', 'notes', 'payout_policy',
+        ]
+        read_only_fields = fields
+
+
+class FundTermsVersionSerializer(serializers.ModelSerializer):
+    payout_policy = PayoutPolicySerializer(read_only=True)
+
+    class Meta:
+        model = FundTermsVersion
+        fields = [
+            'id', 'version', 'effective_at', 'review_at', 'manager_profit_share',
+            'offline_agreed_at', 'offline_agreement_reference', 'terms_snapshot', 'notes', 'payout_policy',
+        ]
+        read_only_fields = fields
+
+
+class FundMemberSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+
+    class Meta:
+        model = FundMember
+        fields = [
+            'id', 'partner', 'partner_name', 'joined_at', 'offline_agreed_at',
+            'offline_agreement_reference',
+        ]
+        read_only_fields = fields
+
+
+class FundContributionSerializer(serializers.ModelSerializer):
+    partner = serializers.IntegerField(source='member.partner_id', read_only=True)
+    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+
+    class Meta:
+        model = FundContribution
+        fields = [
+            'id', 'member', 'partner', 'partner_name', 'amount', 'currency',
+            'fx_rate', 'fx_rate_source', 'fx_rate_date', 'date', 'notes',
+            'client_request_id',
+        ]
+        read_only_fields = fields
+
+
+class FundDeploymentSerializer(serializers.ModelSerializer):
+    agreement_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FundDeployment
+        fields = [
+            'id', 'agreement', 'agreement_label', 'agreement_contribution',
+            'amount', 'currency', 'date', 'notes', 'client_request_id',
+        ]
+        read_only_fields = fields
+
+    def get_agreement_label(self, obj):
+        return f'Инвестдоговор #{obj.agreement_id}'
+
+
+class FundMemberPositionSerializer(serializers.ModelSerializer):
+    partner = serializers.IntegerField(source='member.partner_id', read_only=True)
+    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+
+    class Meta:
+        model = FundMemberPositionReadModel
+        fields = [
+            'id', 'member', 'partner', 'partner_name', 'currency', 'capital_share',
+            'paid_in', 'deployed', 'available', 'provisional_profit_uzs',
+            'capital_return_available_uzs', 'profit_available_uzs',
+            'manager_fee_accrued_uzs', 'computed_at',
+        ]
+        read_only_fields = fields
+
+
+class FundPositionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FundPositionReadModel
+        fields = [
+            'currency', 'paid_in', 'deployed', 'available',
+            'provisional_profit_uzs', 'capital_return_available_uzs',
+            'profit_available_uzs', 'manager_fee_accrued_uzs', 'computed_at',
+        ]
+        read_only_fields = fields
+
+
+class InvestmentFundSerializer(serializers.ModelSerializer):
+    manager_partner_name = serializers.CharField(source='manager_partner.display_name', read_only=True)
+    holder_partner_name = serializers.CharField(source='holder_partner.display_name', read_only=True)
+    current_terms = FundTermsVersionSerializer(read_only=True)
+    members = FundMemberSerializer(many=True, read_only=True)
+    contributions = FundContributionSerializer(many=True, read_only=True)
+    deployments = FundDeploymentSerializer(many=True, read_only=True)
+    positions = FundMemberPositionSerializer(source='member_position_rows', many=True, read_only=True)
+    position = FundPositionSerializer(source='position_row', read_only=True)
+
+    class Meta:
+        model = InvestmentFund
+        fields = [
+            'id', 'name', 'status', 'manager_partner', 'manager_partner_name',
+            'holder_partner', 'holder_partner_name', 'capital_account', 'currency',
+            'target_amount', 'opened_at', 'closed_at', 'current_terms', 'members',
+            'contributions', 'deployments', 'positions',
+            'position',
+        ]
+        read_only_fields = fields
+
+
+class InvestmentFundCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    manager_partner_id = serializers.IntegerField()
+    member_partner_ids = serializers.ListField(child=serializers.IntegerField(), min_length=1)
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    target_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+    manager_profit_share = serializers.DecimalField(max_digits=7, decimal_places=6, required=False, default='0')
+    review_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreed_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreement_reference = serializers.CharField(max_length=255, required=False, default='', allow_blank=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    payout_policy = PayoutPolicyInputSerializer(required=False)
+
+
+class FundContributionCreateSerializer(serializers.Serializer):
+    partner_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default='UZS')
+    fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
+    from_cash_account_id = serializers.IntegerField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class FundDeploymentCreateSerializer(serializers.Serializer):
+    agreement_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class PayoutSettlementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayoutSettlement
+        fields = [
+            'id', 'amount', 'settled_at', 'evidence', 'dividend_payment',
+            'capital_withdrawal',
+        ]
+        read_only_fields = fields
+
+
+class PayoutObligationSerializer(serializers.ModelSerializer):
+    recipient_name = serializers.CharField(source='recipient.display_name', read_only=True)
+    settlements = PayoutSettlementSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayoutObligation
+        fields = [
+            'id', 'agreement', 'fund', 'recipient', 'recipient_name', 'procurement',
+            'kind', 'amount', 'paid_amount', 'currency', 'due_at', 'status', 'recorded_at',
+            'confirmed_at', 'dividend_payment', 'capital_withdrawal', 'notes',
+            'settlements',
+        ]
+        read_only_fields = fields
+
+
+class DisputeCaseSerializer(serializers.ModelSerializer):
+    raised_by_name = serializers.CharField(source='raised_by.display_name', read_only=True)
+
+    class Meta:
+        model = DisputeCase
+        fields = [
+            'id', 'agreement', 'fund', 'obligation', 'raised_by', 'raised_by_name',
+            'status', 'statement', 'evidence', 'resolved_at', 'resolution_notes',
+        ]
+        read_only_fields = fields
+
+
+class DisputeCreateSerializer(serializers.Serializer):
+    raised_by_id = serializers.IntegerField()
+    statement = serializers.CharField()
+    evidence = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class DisputeResolveSerializer(serializers.Serializer):
+    accepted = serializers.BooleanField()
+    resolution_notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class ContractReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContractReview
+        fields = [
+            'id', 'agreement', 'fund', 'due_at', 'resolution', 'resolved_at',
+            'resolved_by', 'extension_until', 'notes',
+        ]
+        read_only_fields = fields
+
+
+class ContractReviewResolveSerializer(serializers.Serializer):
+    resolution = serializers.ChoiceField(choices=ContractReview.Resolution.choices)
+    extension_until = serializers.DateTimeField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+
+
+class TermsVersionCreateSerializer(serializers.Serializer):
+    review_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreed_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreement_reference = serializers.CharField(max_length=255, required=False, default='', allow_blank=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
+    payout_policy = PayoutPolicyInputSerializer(required=False)
+    manager_profit_share = serializers.DecimalField(max_digits=7, decimal_places=6, required=False)
 
 
 class CapitalCommitmentSerializer(serializers.ModelSerializer):
@@ -319,7 +568,7 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'planned_budget', 'currency', 'mudaraba_ratio', 'reconciliation_mode', 'balances',
             'partners_count', 'investor_names', 'operator_names',
-            'investor_shares', 'procurements_count', 'notes',
+            'investor_shares', 'procurements_count', 'notes', 'current_terms',
         ]
         read_only_fields = ['id']
 
@@ -369,13 +618,14 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
     procurements = serializers.SerializerMethodField()
     participant_totals = serializers.SerializerMethodField()
     history = serializers.SerializerMethodField()
+    current_terms = AgreementTermsVersionSerializer(read_only=True)
 
     class Meta:
         model = InvestmentAgreement
         fields = [
             'id', 'status', 'opened_at', 'closed_at', 'supplier', 'supplier_name',
             'mudaraba_ratio', 'loss_rule', 'planned_budget', 'currency',
-            'reconciliation_mode',
+            'reconciliation_mode', 'current_terms',
             'balances', 'notes', 'client_request_id', 'partners',
             'commitments', 'contributions', 'withdrawals', 'allocations',
             'events', 'procurements', 'participant_totals', 'history',
@@ -662,6 +912,10 @@ class InvestmentAgreementCreateSerializer(serializers.Serializer):
     investor_profit_percent = serializers.DecimalField(max_digits=7, decimal_places=4, required=False)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     notes = serializers.CharField(required=False, default='', allow_blank=True)
+    review_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreed_at = serializers.DateTimeField(required=False, allow_null=True)
+    offline_agreement_reference = serializers.CharField(max_length=255, required=False, default='', allow_blank=True)
+    payout_policy = PayoutPolicyInputSerializer(required=False)
     reconciliation_mode = serializers.ChoiceField(
         choices=InvestmentAgreement.ReconciliationMode.choices, required=False)
     partners = ContractPartnerInputSerializer(many=True, required=False)
@@ -854,6 +1108,7 @@ class AgreementWithdrawalCreateSerializer(serializers.Serializer):
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     reason = serializers.CharField(required=False, default='', allow_blank=True)
+    payout_obligation_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class ReceiveProcurementSerializer(serializers.Serializer):
@@ -960,3 +1215,4 @@ class DividendPaymentCreateSerializer(serializers.Serializer):
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     paid_from_account_id = serializers.IntegerField(required=False, allow_null=True)
+    payout_obligation_id = serializers.IntegerField(required=False, allow_null=True)

@@ -1297,6 +1297,7 @@ def repay_partner_venture_debt(
     client_request_id; blocked after close."""
     from django.utils import timezone
     from apps.finance.models import CashAccount, CashEntry
+    from apps.finance.services import require_operating_cash_account
     from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
     from apps.finance.services import create_cash_entry, create_journal_entry
     from .models import (
@@ -1352,6 +1353,7 @@ def repay_partner_venture_debt(
         repaid_dividend = min(remaining, out_dividend)
 
         account = CashAccount.objects.select_for_update().get(pk=paid_to_account_id, tenant_id=tenant_id)
+        require_operating_cash_account(account, action='Venture debt repayment')
         if str(account.currency).upper() != currency:
             raise ValueError(
                 f'Погашение в {currency} должно поступать на кассу {currency}; '

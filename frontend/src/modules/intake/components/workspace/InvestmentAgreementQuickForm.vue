@@ -25,13 +25,19 @@ const toast = useToast()
 const { generateRequestId } = useIdempotency()
 
 const partners = ref<Partner[]>([])
-const investorId = ref<number | null>(null)
-const investorPlannedAmount = ref('')
+const selectedInvestorIds = ref<number[]>([])
+const investorAmounts = ref<Record<number, string>>({})
 const currency = ref<'USD' | 'UZS'>('USD')
 const investorCapitalPercent = ref('')
 const investorProfitPercentInput = ref('')
 const simulatedInvestorCapitalPercentDraft = ref('')
 const notes = ref('')
+const reviewAt = ref('')
+const payoutIntervalDays = ref('30')
+const payoutMinimum = ref('0')
+const payoutSpacingDays = ref('30')
+const payoutReserve = ref('0')
+const allowPartialPayout = ref(true)
 // E14: reconciliation policy is fixed here, at agreement creation. AGREED (Путь 2)
 // is the product default; the receive only reflects this choice later.
 const reconciliationMode = ref<'AGREED' | 'FACTUAL'>('AGREED')
@@ -47,7 +53,7 @@ const quickPartnerOpen = ref(false)
 
 const investorOptions = computed(() => partners.value.filter((partner) => partner.role === 'INVESTOR' && partner.is_active))
 const operatorPartner = computed(() => partners.value.find((partner) => partner.role === 'OPERATOR' && partner.is_active) ?? null)
-const selectedInvestor = computed(() => investorOptions.value.find((partner) => partner.id === investorId.value) ?? null)
+const selectedInvestors = computed(() => investorOptions.value.filter((partner) => selectedInvestorIds.value.includes(partner.id)))
 
 function parseNumber(value: string): number {
   const parsed = Number(value || 0)
@@ -63,7 +69,10 @@ function formatPercent(value: number): string {
   return `${(Number.isFinite(value) ? value : 0).toFixed(2)}%`
 }
 
-const investorPlannedAmountValue = computed(() => parseNumber(investorPlannedAmount.value))
+const investorPlannedAmountValue = computed(() => selectedInvestors.value.reduce(
+  (total, partner) => total + parseNumber(investorAmounts.value[partner.id] ?? ''),
+  0,
+))
 const investorCapitalPercentValue = computed(() => clampPercent(investorCapitalPercent.value))
 const investorProfitPercentValue = computed(() => clampPercent(investorProfitPercentInput.value))
 const operatorCapitalPercentValue = computed(() => Math.max(0, 100 - investorCapitalPercentValue.value))
@@ -97,7 +106,7 @@ const simulationExplanation = computed(() => {
 const simulationRangeStyle = computed(() => ({ '--split': `${simulatedInvestorCapitalPercent.value}%` }))
 
 const ratioError = computed(() => {
-  if (!investorId.value) return 'Выберите инвестора'
+  if (!selectedInvestorIds.value.length) return 'Выберите хотя бы одного инвестора'
   if (!operatorPartner.value) return 'Для бизнеса не найден оператор. Его нужно создать в базовых данных.'
   if (investorPlannedAmountValue.value <= 0) return 'Укажите сумму, которую планирует вложить инвестор'
   if (investorCapitalPercentValue.value <= 0) return 'Доля капитала инвестора должна быть больше 0'
@@ -109,14 +118,25 @@ async function loadPartners(): Promise<void> {
   isLoading.value = true
   try {
     partners.value = await fetchPartners({ is_active: true })
-    if (investorId.value && !investorOptions.value.some((partner) => partner.id === investorId.value)) {
-      investorId.value = null
-    }
+    selectedInvestorIds.value = selectedInvestorIds.value.filter((id) => investorOptions.value.some((partner) => partner.id === id))
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : 'Не удалось загрузить инвесторов'
   } finally {
     isLoading.value = false
   }
+}
+
+function toggleInvestor(id: number): void {
+  if (selectedInvestorIds.value.includes(id)) {
+    selectedInvestorIds.value = selectedInvestorIds.value.filter((value) => value !== id)
+    return
+  }
+  selectedInvestorIds.value = [...selectedInvestorIds.value, id]
+  if (!investorAmounts.value[id]) investorAmounts.value = { ...investorAmounts.value, [id]: '' }
+}
+
+function setInvestorAmount(id: number, value: string): void {
+  investorAmounts.value = { ...investorAmounts.value, [id]: value }
 }
 
 function setSimulationCapitalPercent(value: string): void {
@@ -163,13 +183,40 @@ async function submit(): Promise<void> {
   try {
     const agreement = await createInvestmentAgreement({
       client_request_id: generateRequestId(),
-      investor_partner_id: investorId.value as number,
-      investor_planned_amount: investorPlannedAmountValue.value.toFixed(2),
-      investor_capital_percent: investorCapitalPercentValue.value.toFixed(4),
-      investor_profit_percent: investorProfitPercentValue.value.toFixed(4),
+      planned_budget: plannedBudgetValue.value.toFixed(2),
+      mudaraba_ratio: mudarabaRatio.value.toFixed(6),
       currency: currency.value,
       notes: notes.value,
+      review_at: reviewAt.value ? new Date(`${reviewAt.value}T00:00:00`).toISOString() : null,
       reconciliation_mode: reconciliationMode.value,
+      offline_agreed_at: new Date().toISOString(),
+      offline_agreement_reference: 'offline-confirmed',
+      payout_policy: {
+        review_interval_days: Number(payoutIntervalDays.value || 30),
+        minimum_available_amount: payoutMinimum.value || '0',
+        minimum_days_between_payouts: Number(payoutSpacingDays.value || 30),
+        reserve_amount: payoutReserve.value || '0',
+        grace_period_days: 0,
+        allow_partial: allowPartialPayout.value,
+      },
+      partners: [
+        ...selectedInvestors.value.map((partner) => {
+          const amount = parseNumber(investorAmounts.value[partner.id] ?? '')
+          const capitalRatio = investorPlannedAmountValue.value > 0 ? amount / investorPlannedAmountValue.value : 0
+          return {
+            partner_id: partner.id,
+            role: 'INVESTOR',
+            planned_capital_share: amount.toFixed(2),
+            profit_share: ((investorProfitPercentValue.value / 100) * capitalRatio).toFixed(6),
+          }
+        }),
+        {
+          partner_id: operatorPartner.value?.id as number,
+          role: 'OPERATOR',
+          planned_capital_share: operatorCapital.value.toFixed(2),
+          profit_share: (1 - investorProfitPercentValue.value / 100).toFixed(6),
+        },
+      ],
     })
     toast.success('Инвестдоговор создан')
     emit('created', agreement)
@@ -182,7 +229,8 @@ async function submit(): Promise<void> {
 
 function onPartnerCreated(partner: Partner): void {
   partners.value = [...partners.value, partner]
-  investorId.value = partner.id
+  selectedInvestorIds.value = [...selectedInvestorIds.value, partner.id]
+  investorAmounts.value = { ...investorAmounts.value, [partner.id]: '' }
 }
 
 onMounted(loadPartners)
@@ -222,23 +270,38 @@ onMounted(loadPartners)
           <button
             v-for="partner in investorOptions"
             :key="partner.id"
-            :aria-pressed="investorId === partner.id"
+            :aria-pressed="selectedInvestorIds.includes(partner.id)"
             class="flex min-h-16 items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-left transition hover:bg-muted/50 aria-pressed:border-primary aria-pressed:bg-primary/5"
             type="button"
-            @click="investorId = partner.id"
+            @click="toggleInvestor(partner.id)"
           >
             <span class="min-w-0">
               <span class="block truncate text-sm font-medium text-foreground">{{ partner.display_name }}</span>
               <span class="mt-0.5 block text-xs text-muted-foreground">
-                {{ investorId === partner.id ? 'Выбран для договора' : 'Активный инвестор' }}
+                {{ selectedInvestorIds.includes(partner.id) ? 'Входит в инвесторский пул' : 'Активный инвестор' }}
               </span>
             </span>
             <span
               class="grid size-3.5 shrink-0 place-items-center rounded-full border"
-              :class="investorId === partner.id ? 'border-primary bg-primary' : 'border-muted-foreground/30'"
+              :class="selectedInvestorIds.includes(partner.id) ? 'border-primary bg-primary' : 'border-muted-foreground/30'"
               aria-hidden="true"
             />
           </button>
+        </div>
+        <div v-if="selectedInvestors.length" class="grid gap-2 border-t border-border pt-3">
+          <label v-for="partner in selectedInvestors" :key="partner.id" class="grid grid-cols-[1fr_minmax(8rem,0.75fr)] items-center gap-3">
+            <span class="truncate text-sm font-medium text-foreground">{{ partner.display_name }}</span>
+            <MoneyCurrencyInput
+              :model-value="investorAmounts[partner.id] ?? ''"
+              :currency="currency"
+              size="md"
+              :currencies="['USD', 'UZS']"
+              :aria-label="`Плановый взнос ${partner.display_name}`"
+              @update:model-value="setInvestorAmount(partner.id, String($event))"
+              @update:currency="currency = $event as 'USD' | 'UZS'"
+            />
+          </label>
+          <p class="text-xs text-muted-foreground">Доля прибыли задаётся для общего пула и автоматически распределяется пропорционально фактическому капиталу участников.</p>
         </div>
       </CardContent>
     </Card>
@@ -254,13 +317,10 @@ onMounted(loadPartners)
       </CardHeader>
       <CardContent class="flex flex-col gap-4">
         <label class="flex flex-col gap-2">
-          <span class="text-sm font-medium text-muted-foreground">Инвестор планирует вложить</span>
-          <MoneyCurrencyInput
-            v-model="investorPlannedAmount"
-            v-model:currency="currency"
-            size="lg"
-            aria-label="Сумма, которую инвестор планирует вложить"
-          />
+          <span class="text-sm font-medium text-muted-foreground">Инвесторский пул планирует вложить</span>
+          <div class="rounded-xl border border-border bg-muted/30 px-3 py-2.5 text-lg font-semibold tabular-nums text-foreground">
+            {{ formatPrice(investorPlannedAmountValue, currency) }}
+          </div>
         </label>
 
         <div class="grid grid-cols-2 gap-3">
@@ -276,7 +336,7 @@ onMounted(loadPartners)
 
         <div class="grid grid-cols-3 gap-px overflow-hidden rounded-xl bg-border text-center">
           <div class="bg-primary px-2 py-2 text-primary-foreground">
-            <p class="text-[11px] opacity-80">Инвестор</p>
+            <p class="text-[11px] opacity-80">Пул инвесторов</p>
             <p class="text-sm font-semibold tabular-nums">{{ formatPrice(investorCapital, currency) }}</p>
           </div>
           <div class="bg-background px-2 py-2">
@@ -383,6 +443,18 @@ onMounted(loadPartners)
 
     <Card class="rounded-2xl bg-background">
       <CardContent class="flex flex-col gap-2 pt-4">
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-medium text-muted-foreground">Дата пересмотра договора</span>
+          <Input v-model="reviewAt" type="date" class="h-10" />
+          <span class="text-xs text-muted-foreground">Это напоминание и точка выбора сценария, а не автоматическое закрытие.</span>
+        </label>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1"><span class="text-sm font-medium text-muted-foreground">Проверка выплат, дней</span><Input v-model="payoutIntervalDays" inputmode="numeric" class="h-10" /></label>
+          <label class="flex flex-col gap-1"><span class="text-sm font-medium text-muted-foreground">Мин. накопление</span><Input v-model="payoutMinimum" inputmode="decimal" class="h-10" /></label>
+          <label class="flex flex-col gap-1"><span class="text-sm font-medium text-muted-foreground">Пауза между выплатами</span><Input v-model="payoutSpacingDays" inputmode="numeric" class="h-10" /></label>
+          <label class="flex flex-col gap-1"><span class="text-sm font-medium text-muted-foreground">Резерв</span><Input v-model="payoutReserve" inputmode="decimal" class="h-10" /></label>
+        </div>
+        <label class="flex items-center gap-2 text-sm text-muted-foreground"><input v-model="allowPartialPayout" type="checkbox" />Разрешить частичную выплату</label>
         <label class="flex flex-col gap-2">
           <span class="text-sm font-medium text-muted-foreground">Заметка</span>
           <Textarea

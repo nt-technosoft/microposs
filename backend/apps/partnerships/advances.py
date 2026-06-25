@@ -21,7 +21,7 @@ from django.db import transaction
 
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.models import CashEntry
-from apps.finance.services import create_cash_entry, create_journal_entry
+from apps.finance.services import create_cash_entry, create_journal_entry, require_operating_cash_account
 
 from .models import (
     AgreementPartner,
@@ -145,6 +145,7 @@ def _settle_partner_from_profit(*, tenant_id, agreement, partner_id, amount, fun
     if pool is None:
         raise ValueError('Agreement has no capital pool account.')
     account = CashAccount.objects.select_for_update().get(pk=from_account_id, tenant_id=tenant_id)
+    require_operating_cash_account(account, action='Profit-to-capital settlement')
     if not account.linked_account_id:
         raise ValueError('Source account has no linked GL account.')
     if Decimal(str(account.balance)) < amount:

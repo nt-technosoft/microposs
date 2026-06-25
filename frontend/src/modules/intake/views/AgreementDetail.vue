@@ -32,13 +32,17 @@ import {
   fetchInvestmentAgreement,
   fetchCapitalPositions,
   fetchAgreementProfitSummary,
+  evaluateAgreementPayouts,
+  fetchAgreementPayoutObligations,
   fetchProcurementVentureSummary,
+  resolveAgreementReview,
   type AgreementAllocationPreview,
   type AgreementProfitRow,
   type CapitalPositionRow,
   type ClosePreview,
   type InvestmentAgreementDetail,
   type ProcurementVentureSummary,
+  type PayoutObligation,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
@@ -85,6 +89,9 @@ const savingRecoveredCapital = ref(false)
 const withdrawalError = ref('')
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
+const payoutObligations = ref<PayoutObligation[]>([])
+const reviewResolution = ref<'CONTINUE' | 'ORDERLY_SALE' | 'WRITE_OFF' | 'BUYOUT' | 'DISPUTE'>('CONTINUE')
+const resolvingReview = ref(false)
 const allocating = ref(false)
 const {
   rate: latestUsdRate,
@@ -264,6 +271,20 @@ async function saveContribution(): Promise<void> {
   }
 }
 
+async function resolveReview(): Promise<void> {
+  if (!agreement.value) return
+  resolvingReview.value = true
+  try {
+    await resolveAgreementReview(agreement.value.id, { resolution: reviewResolution.value })
+    toast.success('Решение по пересмотру зафиксировано')
+    await load()
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Пока нельзя зафиксировать пересмотр: проверьте дату и условия договора.'))
+  } finally {
+    resolvingReview.value = false
+  }
+}
+
 async function saveWithdrawal(): Promise<void> {
   if (!agreement.value || !withdrawalPartnerId.value || !withdrawalAmount.value) return
   withdrawalError.value = withdrawalAvailabilityError.value
@@ -323,22 +344,34 @@ async function returnRecoveredCapital(payload: {
 
 async function loadAdvances(): Promise<void> {
   try {
-    const [pos, profit, accounts, preview] = await Promise.all([
+    const [pos, profit, accounts, preview, obligations] = await Promise.all([
       fetchCapitalPositions(agreementId.value),
       fetchAgreementProfitSummary(agreementId.value),
       operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
       fetchAgreementClosePreview(agreementId.value).catch(() => null),
+      fetchAgreementPayoutObligations(agreementId.value).catch(() => []),
     ])
     positions.value = pos
     profitRows.value = profit
-    operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital')
+    operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital' && a.kind !== 'fund_capital')
     closePreview.value = preview
+    payoutObligations.value = obligations
     const procurementIds = agreement.value?.procurements.map((procurement) => procurement.id) ?? []
     ventureSummaries.value = procurementIds.length
       ? await Promise.all(procurementIds.map((id) => fetchProcurementVentureSummary(id)))
       : []
   } catch {
     // positions/distributions are supplementary — keep the page usable if they fail
+  }
+}
+
+async function evaluatePayouts(): Promise<void> {
+  try {
+    await evaluateAgreementPayouts(agreementId.value)
+    await loadAdvances()
+    toast.success('Обязательства по выплатам обновлены')
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Не удалось проверить обязательства по выплатам'))
   }
 }
 
@@ -515,6 +548,32 @@ onMounted(async () => {
               <span>Внесено <strong class="font-semibold text-foreground">{{ formatPrice(contributedTotal, primaryCurrency) }}</strong></span>
               <span>В приходах <strong class="font-semibold text-foreground">{{ formatPrice(allocatedTotal, primaryCurrency) }}</strong></span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card class="rounded-2xl bg-background">
+          <CardHeader>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle class="text-base">Условия, выплаты и пересмотр</CardTitle>
+                <CardDescription class="mt-1">
+                  <template v-if="agreement.current_terms?.review_at">Пересмотр: {{ dateOnly(agreement.current_terms.review_at) }}.</template>
+                  <template v-else>Дата пересмотра пока не задана.</template>
+                  Выплаты создают обязательство, но не переводятся автоматически.
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" type="button" @click="evaluatePayouts">Проверить выплаты</Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div v-if="!payoutObligations.length" class="text-sm text-muted-foreground">Нет обязательств к действию.</div>
+            <div v-else class="divide-y divide-border border-y border-border">
+              <div v-for="row in payoutObligations" :key="row.id" class="flex items-center justify-between gap-3 py-3 text-sm">
+                <span class="min-w-0"><strong class="block truncate text-foreground">{{ row.kind === 'PROFIT' ? 'Прибыль к выплате' : 'Капитал к возврату' }} · {{ row.recipient_name }}</strong><span class="text-xs text-muted-foreground">срок {{ dateOnly(row.due_at) }} · {{ row.status }} · выплачено {{ formatPrice(row.paid_amount || 0, row.currency) }}</span></span>
+                <strong class="shrink-0 tabular-nums text-foreground">{{ formatPrice(row.amount, row.currency) }}</strong>
+              </div>
+            </div>
+            <div v-if="agreement.current_terms?.review_at" class="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4"><select v-model="reviewResolution" class="h-9 rounded-md border border-input bg-background px-2 text-sm"><option value="CONTINUE">Продолжить договор</option><option value="ORDERLY_SALE">План распродажи</option><option value="WRITE_OFF">Зафиксировать убыток</option><option value="BUYOUT">Добровольный выкуп</option><option value="DISPUTE">Зафиксировать спор</option></select><Button variant="outline" size="sm" type="button" :disabled="resolvingReview" @click="resolveReview">Зафиксировать пересмотр</Button></div>
           </CardContent>
         </Card>
 

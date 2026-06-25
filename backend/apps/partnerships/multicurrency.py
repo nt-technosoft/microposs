@@ -18,6 +18,8 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
+from apps.finance.models import CashAccount
+
 from .models import (
     AgreementCurrencyPool,
     CurrencyConversionLot,
@@ -117,6 +119,11 @@ def convert_agreement_pool(
         target_pool = get_or_create_currency_pool(
             tenant_id=tenant_id, agreement=agreement, currency=to_currency,
         )
+        if (
+            base_pool.kind != CashAccount.Kind.AGREEMENT_CAPITAL
+            or target_pool.kind != CashAccount.Kind.AGREEMENT_CAPITAL
+        ):
+            raise ValueError('Agreement pool conversion requires agreement capital accounts.')
 
         exchange = exchange_currency(
             tenant_id=tenant_id,
@@ -126,6 +133,7 @@ def convert_agreement_pool(
             rate=rate,
             date=converted_at,
             notes=f'Agreement #{agreement_id} capital conversion {base_ccy}->{to_currency}',
+            allow_restricted_accounts=True,
         )
         to_amount = Decimal(str(exchange.to_amount))
 

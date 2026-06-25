@@ -11,6 +11,7 @@ import type {
   InvestorProcurementListItem,
 } from '../types/models'
 import { toList, toPaginated, type PaginatedResponse } from './catalog'
+import type { PayoutObligation } from './partnerships'
 
 export interface Investor {
   id: number
@@ -88,6 +89,23 @@ export async function fetchInvestorAgreementDetail(
     { params },
   )
   return data
+}
+
+export async function fetchInvestorPayoutObligations(): Promise<PayoutObligation[]> {
+  const { data } = await api.get<PayoutObligation[]>('/api/v1/investors/payout-obligations/')
+  return toList<PayoutObligation>(data)
+}
+
+export async function confirmInvestorPayoutObligation(id: number): Promise<PayoutObligation> {
+  const { data } = await api.post<PayoutObligation>(`/api/v1/investors/payout-obligations/${id}/confirm/`)
+  return data
+}
+
+export async function disputeInvestorPayoutObligation(
+  id: number,
+  payload: { statement: string; evidence?: string },
+): Promise<void> {
+  await api.post(`/api/v1/investors/payout-obligations/${id}/dispute/`, payload)
 }
 
 export async function closeContract(contractId: number): Promise<InvestorContract> {

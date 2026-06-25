@@ -1,3 +1,5 @@
+from django.db import transaction
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -5,10 +7,14 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 
-from .models import DividendPayment, InvestmentAgreement, Procurement
+from .models import (
+    DividendPayment, InvestmentAgreement, InvestmentFund, PayoutObligation,
+    Procurement, DisputeCase, ContractReview,
+)
 from .serializers import (
     AgreementAllocationCreateSerializer,
     AgreementAllocationSerializer,
+    AgreementTermsVersionSerializer,
     AgreementContributionSerializer,
     AgreementWithdrawalSerializer,
     SettlePartnerCapitalSerializer,
@@ -16,9 +22,21 @@ from .serializers import (
     AgreementWithdrawalCreateSerializer,
     DividendPaymentCreateSerializer,
     DividendPaymentSerializer,
+    DisputeCaseSerializer,
+    DisputeCreateSerializer,
+    FundContributionCreateSerializer,
+    FundContributionSerializer,
+    FundDeploymentCreateSerializer,
+    FundDeploymentSerializer,
+    InvestmentFundCreateSerializer,
+    InvestmentFundSerializer,
     InvestmentAgreementCreateSerializer,
     InvestmentAgreementDetailSerializer,
     InvestmentAgreementListSerializer,
+    PayoutObligationSerializer,
+    ContractReviewResolveSerializer,
+    ContractReviewSerializer,
+    TermsVersionCreateSerializer,
     ProcurementCreateSerializer,
     ProcurementExpenseTargetsSerializer,
     PayProcurementExpensesSerializer,
@@ -58,8 +76,9 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         return (
             InvestmentAgreement.objects
             .filter(tenant_id=self.request.tenant_id)
-            .select_related('supplier')
+            .select_related('supplier', 'current_terms')
             .prefetch_related(
+                'current_terms__payout_policy',
                 'partners__partner',
                 'commitments__partner',
                 'commitments__created_by',
@@ -102,6 +121,10 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 currency=data.get('currency', 'UZS'),
                 notes=data.get('notes', ''),
                 reconciliation_mode=data.get('reconciliation_mode') or 'FACTUAL',
+                review_at=data.get('review_at'),
+                offline_agreed_at=data.get('offline_agreed_at'),
+                offline_agreement_reference=data.get('offline_agreement_reference', ''),
+                payout_policy=data.get('payout_policy'),
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
                 created_by_id=request.user.id if request.user.is_authenticated else None,
                 partners=[dict(partner) for partner in data.get('partners', [])],
@@ -109,6 +132,57 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(InvestmentAgreementDetailSerializer(agreement).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='terms')
+    def terms(self, request, pk=None):
+        from .lifecycle_services import create_agreement_terms_version
+        serializer = TermsVersionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        agreement = self.get_object()
+        terms = create_agreement_terms_version(
+            agreement=agreement,
+            review_at=serializer.validated_data.get('review_at'),
+            offline_agreed_at=serializer.validated_data.get('offline_agreed_at'),
+            offline_agreement_reference=serializer.validated_data.get('offline_agreement_reference', ''),
+            notes=serializer.validated_data.get('notes', ''),
+            created_by_id=request.user.id if request.user.is_authenticated else None,
+            payout_policy=serializer.validated_data.get('payout_policy'),
+        )
+        return Response(AgreementTermsVersionSerializer(terms).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='evaluate-payouts')
+    def evaluate_payouts(self, request, pk=None):
+        from .lifecycle_services import evaluate_agreement_payout_obligations
+        agreement = self.get_object()
+        rows = evaluate_agreement_payout_obligations(agreement=agreement)
+        return Response(PayoutObligationSerializer(rows, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='payout-obligations')
+    def payout_obligations(self, request, pk=None):
+        agreement = self.get_object()
+        rows = PayoutObligation.objects.filter(agreement=agreement).select_related(
+            'recipient', 'procurement',
+        ).prefetch_related('settlements')
+        return Response(PayoutObligationSerializer(rows, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='review')
+    def review(self, request, pk=None):
+        from .lifecycle_services import ensure_contract_review, resolve_contract_review
+        agreement = self.get_object()
+        review = ensure_contract_review(agreement=agreement)
+        if review is None:
+            return Response({'detail': 'Contract review date has not arrived.'}, status=status.HTTP_400_BAD_REQUEST)
+        if request.data.get('resolution'):
+            serializer = ContractReviewResolveSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            review = resolve_contract_review(
+                review=review,
+                resolution=serializer.validated_data['resolution'],
+                resolved_by_id=request.user.id if request.user.is_authenticated else None,
+                extension_until=serializer.validated_data.get('extension_until'),
+                notes=serializer.validated_data.get('notes', ''),
+            )
+        return Response(ContractReviewSerializer(review).data)
 
     @action(detail=True, methods=['post'], url_path='contributions')
     def contributions(self, request, pk=None):
@@ -136,20 +210,35 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         serializer = AgreementWithdrawalCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            withdrawal = add_agreement_withdrawal(
-                tenant_id=request.tenant_id,
-                agreement_id=agreement.id,
-                partner_id=serializer.validated_data['partner_id'],
-                procurement_id=serializer.validated_data.get('procurement_id'),
-                from_account_id=serializer.validated_data.get('from_account_id'),
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data.get('fx_rate'),
-                reason=serializer.validated_data.get('reason', ''),
-                created_by_id=request.user.id if request.user.is_authenticated else None,
-            )
+            with transaction.atomic():
+                withdrawal = add_agreement_withdrawal(
+                    tenant_id=request.tenant_id,
+                    agreement_id=agreement.id,
+                    partner_id=serializer.validated_data['partner_id'],
+                    procurement_id=serializer.validated_data.get('procurement_id'),
+                    from_account_id=serializer.validated_data.get('from_account_id'),
+                    amount=serializer.validated_data['amount'],
+                    currency=serializer.validated_data['currency'],
+                    fx_rate=serializer.validated_data.get('fx_rate'),
+                    reason=serializer.validated_data.get('reason', ''),
+                    created_by_id=request.user.id if request.user.is_authenticated else None,
+                )
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                if obligation_id:
+                    from .lifecycle_services import record_payout_obligation
+                    obligation = PayoutObligation.objects.get(
+                        tenant_id=request.tenant_id,
+                        pk=obligation_id,
+                        agreement=agreement,
+                        recipient_id=withdrawal.partner_id,
+                        procurement_id=withdrawal.procurement_id,
+                        kind=PayoutObligation.Kind.CAPITAL_RETURN,
+                    )
+                    record_payout_obligation(obligation=obligation, withdrawal=withdrawal)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
+        except PayoutObligation.DoesNotExist as error:
+            raise ValidationError({'payout_obligation_id': 'Payout obligation was not found for this agreement.'}) from error
         return Response(AgreementWithdrawalSerializer(withdrawal).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='allocation-preview')
@@ -953,15 +1042,29 @@ class DividendPaymentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            payment = pay_dividend(
-                tenant_id=request.tenant_id,
-                partner_id=serializer.validated_data['partner_id'],
-                procurement_id=serializer.validated_data['procurement_id'],
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data.get('fx_rate'),
-                from_account_id=serializer.validated_data.get('paid_from_account_id'),
-            )
+            with transaction.atomic():
+                payment = pay_dividend(
+                    tenant_id=request.tenant_id,
+                    partner_id=serializer.validated_data['partner_id'],
+                    procurement_id=serializer.validated_data['procurement_id'],
+                    amount=serializer.validated_data['amount'],
+                    currency=serializer.validated_data['currency'],
+                    fx_rate=serializer.validated_data.get('fx_rate'),
+                    from_account_id=serializer.validated_data.get('paid_from_account_id'),
+                )
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                if obligation_id:
+                    from .lifecycle_services import record_payout_obligation
+                    obligation = PayoutObligation.objects.get(
+                        tenant_id=request.tenant_id,
+                        pk=obligation_id,
+                        procurement_id=payment.procurement_id,
+                        recipient_id=payment.partner_id,
+                        kind=PayoutObligation.Kind.PROFIT,
+                    )
+                    record_payout_obligation(obligation=obligation, payment=payment)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
+        except PayoutObligation.DoesNotExist as error:
+            raise ValidationError({'payout_obligation_id': 'Payout obligation was not found for this dividend.'}) from error
         return Response(DividendPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)

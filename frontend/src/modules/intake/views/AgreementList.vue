@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { FileText, Plus, RefreshCcw } from 'lucide-vue-next'
+import { FileText, Landmark, Plus, RefreshCcw } from 'lucide-vue-next'
 import { fetchInvestmentAgreements, type InvestmentAgreementListItem } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -85,12 +85,15 @@ onMounted(load)
 
 <template>
   <main class="min-h-dvh bg-background pb-[calc(var(--bottom-nav-height)+1rem)]">
-    <header class="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
+    <header class="sticky top-0 z-20 border-b border-border bg-background">
       <div class="mx-auto flex w-full max-w-[var(--max-content-width)] items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
         <h1 class="text-lg font-semibold text-foreground">{{ t('procurements.agreementsTitle') }}</h1>
         <div class="flex items-center gap-2">
           <Button variant="outline" size="icon" type="button" :aria-label="t('procurements.refreshAgreements')" :disabled="loading" @click="load">
             <RefreshCcw :class="loading && 'animate-spin'" />
+          </Button>
+          <Button variant="outline" size="sm" type="button" @click="router.push({ name: 'fund-list' })">
+            <Landmark data-icon="inline-start" /> Фонды
           </Button>
           <Button size="sm" type="button" @click="goToCreate">
             <Plus data-icon="inline-start" />

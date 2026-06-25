@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Delivery Workflow"
+  short_description: "Orchestrate, execute, and review epics"
+  default_prompt: "Use $codex-orchestrator-worker-reviewer to run the approved MicroPOS epic phase through planning, execution, and independent review."

@@ -194,7 +194,7 @@ const cashBalance = computed(() => {
 })
 
 const operationalCashAccounts = computed(() =>
-  cashAccounts.value.filter((account) => account.kind !== 'agreement_capital'),
+  cashAccounts.value.filter((account) => account.kind !== 'agreement_capital' && account.kind !== 'fund_capital'),
 )
 
 const nativeCashByCurrency = computed(() => {

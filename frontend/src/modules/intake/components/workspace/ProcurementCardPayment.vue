@@ -136,7 +136,7 @@ const overpaymentMaxAmount = computed(() => {
 const overpaymentOperatingAccounts = computed(() =>
   overpaymentAccounts.value.filter((account) =>
     account.is_active &&
-    account.kind !== 'AGREEMENT_CAPITAL' &&
+    account.kind !== 'agreement_capital' && account.kind !== 'fund_capital' &&
     account.currency.toUpperCase() === (overpaymentCurrency.value || '').toUpperCase(),
   ),
 )

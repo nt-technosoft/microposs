@@ -692,12 +692,34 @@ export interface InvestmentAgreementListItem {
   investor_shares: { capital_percent: number; profit_percent: number } | null
   procurements_count: number
   notes: string
+  current_terms?: number | AgreementTermsVersion | null
+}
+
+export interface PayoutPolicy {
+  review_interval_days: number
+  minimum_available_amount: string
+  minimum_days_between_payouts: number
+  reserve_amount: string
+  grace_period_days: number
+  allow_partial: boolean
+}
+
+export interface AgreementTermsVersion {
+  id: number
+  version: number
+  effective_at: string
+  review_at: string | null
+  offline_agreed_at: string | null
+  offline_agreement_reference: string
+  notes: string
+  payout_policy: PayoutPolicy
 }
 
 export interface InvestmentAgreementDetail extends InvestmentAgreementListItem {
   loss_rule: string
   reconciliation_mode: 'FACTUAL' | 'AGREED'
   client_request_id: string | null
+  current_terms: AgreementTermsVersion | null
   partners: Array<{
     id: number
     partner: number
@@ -838,8 +860,88 @@ export interface InvestmentAgreementCreatePayload {
   investor_profit_percent?: string | number
   currency?: string
   notes?: string
+  review_at?: string | null
+  offline_agreed_at?: string | null
+  offline_agreement_reference?: string
+  payout_policy?: Partial<PayoutPolicy>
   reconciliation_mode?: 'FACTUAL' | 'AGREED'
   partners?: AgreementPartnerPayload[]
+}
+
+export interface PayoutObligation {
+  id: number
+  agreement: number | null
+  fund: number | null
+  recipient: number
+  recipient_name: string
+  procurement: number | null
+  kind: 'PROFIT' | 'CAPITAL_RETURN'
+  amount: string
+  paid_amount: string
+  currency: string
+  due_at: string
+  status: 'PENDING' | 'RECORDED' | 'CONFIRMED' | 'DISPUTED' | 'WAIVED'
+  recorded_at: string | null
+  confirmed_at: string | null
+  dividend_payment: number | null
+  capital_withdrawal: number | null
+  notes: string
+  settlements: Array<{
+    id: number
+    amount: string
+    settled_at: string
+    evidence: string
+    dividend_payment: number | null
+    capital_withdrawal: number | null
+  }>
+}
+
+export interface FundMemberPosition {
+  id: number
+  member: number
+  partner: number
+  partner_name: string
+  currency: string
+  capital_share: string
+  paid_in: string
+  deployed: string
+  available: string
+  provisional_profit_uzs: string
+  capital_return_available_uzs: string
+  profit_available_uzs: string
+  manager_fee_accrued_uzs: string
+  computed_at: string
+}
+
+export interface InvestmentFund {
+  id: number
+  name: string
+  status: 'DRAFT' | 'RAISING' | 'DEPLOYED' | 'CLOSED'
+  manager_partner: number
+  manager_partner_name: string
+  holder_partner: number
+  holder_partner_name: string
+  capital_account: number
+  currency: string
+  target_amount: string | null
+  opened_at: string
+  closed_at: string | null
+  current_terms: (AgreementTermsVersion & { manager_profit_share: string }) | null
+  members: Array<{ id: number; partner: number; partner_name: string; joined_at: string }>
+  contributions: Array<{ id: number; member: number; partner: number; partner_name: string; amount: string; currency: string; date: string }>
+  deployments: Array<{ id: number; agreement: number; agreement_label: string; agreement_contribution: number; amount: string; currency: string; date: string }>
+  positions: FundMemberPosition[]
+  position: {
+    currency: string
+    paid_in: string
+    deployed: string
+    available: string
+    provisional_profit_uzs: string
+    capital_return_available_uzs: string
+    profit_available_uzs: string
+    manager_fee_accrued_uzs: string
+    computed_at: string
+  } | null
 }
 
 export interface AgreementAllocationPreview {
@@ -1066,6 +1168,110 @@ export async function fetchInvestmentAgreement(id: number): Promise<InvestmentAg
 
 export async function createInvestmentAgreement(payload: InvestmentAgreementCreatePayload): Promise<InvestmentAgreementDetail> {
   const { data } = await api.post<InvestmentAgreementDetail>('/api/v1/partnerships/agreements/', payload)
+  return data
+}
+
+export async function fetchInvestmentFunds(): Promise<InvestmentFund[]> {
+  const { data } = await api.get<InvestmentFund[]>('/api/v1/partnerships/funds/')
+  return Array.isArray(data) ? data : (data as { results?: InvestmentFund[] }).results ?? []
+}
+
+export async function fetchInvestmentFund(id: number): Promise<InvestmentFund> {
+  const { data } = await api.get<InvestmentFund>(`/api/v1/partnerships/funds/${id}/`)
+  return data
+}
+
+export async function createInvestmentFund(payload: {
+  name: string
+  manager_partner_id: number
+  member_partner_ids: number[]
+  currency?: string
+  target_amount?: string | number | null
+  manager_profit_share?: string | number
+  review_at?: string | null
+  offline_agreed_at?: string | null
+  offline_agreement_reference?: string
+  notes?: string
+  payout_policy?: Partial<PayoutPolicy>
+}): Promise<InvestmentFund> {
+  const { data } = await api.post<InvestmentFund>('/api/v1/partnerships/funds/', payload)
+  return data
+}
+
+export async function addFundContribution(id: number, payload: {
+  partner_id: number
+  amount: string | number
+  currency?: string
+  fx_rate?: string | number | null
+  from_cash_account_id?: number | null
+  notes?: string
+  client_request_id?: string
+}): Promise<InvestmentFund['contributions'][number]> {
+  const { data } = await api.post(`/api/v1/partnerships/funds/${id}/contributions/`, payload)
+  return data
+}
+
+export async function deployFund(id: number, payload: {
+  agreement_id: number
+  amount: string | number
+  notes?: string
+  client_request_id?: string
+}): Promise<InvestmentFund['deployments'][number]> {
+  const { data } = await api.post(`/api/v1/partnerships/funds/${id}/deployments/`, payload)
+  return data
+}
+
+export async function evaluateAgreementPayouts(id: number): Promise<PayoutObligation[]> {
+  const { data } = await api.post<PayoutObligation[]>(`/api/v1/partnerships/agreements/${id}/evaluate-payouts/`)
+  return data
+}
+
+export async function fetchAgreementPayoutObligations(id: number): Promise<PayoutObligation[]> {
+  const { data } = await api.get<PayoutObligation[]>(`/api/v1/partnerships/agreements/${id}/payout-obligations/`)
+  return data
+}
+
+export async function evaluateFundPayouts(id: number): Promise<PayoutObligation[]> {
+  const { data } = await api.post<PayoutObligation[]>(`/api/v1/partnerships/funds/${id}/evaluate-payouts/`)
+  return data
+}
+
+export async function fetchFundPayoutObligations(id: number): Promise<PayoutObligation[]> {
+  const { data } = await api.get<PayoutObligation[]>(`/api/v1/partnerships/funds/${id}/payout-obligations/`)
+  return data
+}
+
+export async function recordFundPayout(id: number, payload: {
+  amount: string | number
+  evidence?: string
+  notes?: string
+}): Promise<PayoutObligation> {
+  const { data } = await api.post<PayoutObligation>(`/api/v1/partnerships/payout-obligations/${id}/record/`, payload)
+  return data
+}
+
+export async function confirmFundPayout(id: number): Promise<PayoutObligation> {
+  const { data } = await api.post<PayoutObligation>(`/api/v1/partnerships/payout-obligations/${id}/confirm/`)
+  return data
+}
+
+export type ContractReviewResolution = 'CONTINUE' | 'ORDERLY_SALE' | 'WRITE_OFF' | 'BUYOUT' | 'DISPUTE'
+
+export async function resolveAgreementReview(id: number, payload: {
+  resolution: ContractReviewResolution
+  notes?: string
+  extension_until?: string | null
+}): Promise<unknown> {
+  const { data } = await api.post(`/api/v1/partnerships/agreements/${id}/review/`, payload)
+  return data
+}
+
+export async function resolveFundReview(id: number, payload: {
+  resolution: ContractReviewResolution
+  notes?: string
+  extension_until?: string | null
+}): Promise<unknown> {
+  const { data } = await api.post(`/api/v1/partnerships/funds/${id}/review/`, payload)
   return data
 }
 

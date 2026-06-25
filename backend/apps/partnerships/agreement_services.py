@@ -10,7 +10,11 @@ from django.utils import timezone
 
 from apps.finance.models import CashAccount, CashEntry
 from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
-from apps.finance.services import create_cash_entry, record_journal_from_cash_entry
+from apps.finance.services import (
+    create_cash_entry,
+    record_journal_from_cash_entry,
+    require_operating_cash_account,
+)
 from apps.core.services import publish_event
 from .money_utils import MONEY_Q as _CENT, ZERO as _ZERO, functional_uzs as _functional_uzs, money as _q
 
@@ -301,6 +305,7 @@ def pay_dividend(
                 pk=from_account_id,
                 tenant_id=tenant_id,
             )
+            require_operating_cash_account(account, action='Dividend payout')
             if account.currency != currency:
                 raise ValueError(
                     f'Dividend currency {currency} does not match cash account '
