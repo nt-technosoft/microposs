@@ -143,6 +143,8 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
             manager = manager_query.first()
             if manager is None:
                 raise ValueError('Fund manager was not found.')
+            if manager.role != Partner.Role.INVESTOR:
+                raise PermissionDenied('Fund creation is investor-led: manager must be an investor profile.')
             if manager.user_id and manager.user_id != request.user.id and not request.user.is_staff:
                 raise PermissionDenied('Only the selected fund manager can create this fund.')
             if not request.user.is_staff and not manager.user_id:

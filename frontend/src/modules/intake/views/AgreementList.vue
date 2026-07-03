@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { FileText, Landmark, Plus, RefreshCcw } from 'lucide-vue-next'
+import { FileText, Plus, RefreshCcw } from 'lucide-vue-next'
 import { fetchInvestmentAgreements, type InvestmentAgreementListItem } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
@@ -93,9 +93,6 @@ onMounted(load)
         <div class="flex items-center gap-2">
           <Button variant="outline" size="icon" type="button" :aria-label="t('procurements.refreshAgreements')" :disabled="loading" @click="load">
             <RefreshCcw :class="loading && 'animate-spin'" />
-          </Button>
-          <Button variant="outline" size="sm" type="button" @click="router.push({ name: 'fund-list' })">
-            <Landmark data-icon="inline-start" /> Фонды
           </Button>
           <Button size="sm" type="button" @click="goToCreate">
             <Plus data-icon="inline-start" />

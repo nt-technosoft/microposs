@@ -787,6 +787,20 @@ class E21FundPermissionApiTests(APITestCase):
         self.business = self.ctx['business']
         self.operator = self.ctx['operator']
         self.investor = self.ctx['investor']
+        self.manager_user = User.objects.create_user(username='fund_manager', password='x')
+        self.manager_partner = Partner.objects.create(
+            tenant=self.business,
+            role=Partner.Role.INVESTOR,
+            display_name='Fund manager',
+            user=self.manager_user,
+            is_active=True,
+        )
+        BusinessInvestorRelation.objects.create(
+            tenant=self.business,
+            partner=self.manager_partner,
+            status=BusinessInvestorRelation.Status.ACTIVE,
+            source=BusinessInvestorRelation.Source.MANUAL,
+        )
         self.other_user = User.objects.create_user(username='other_investor', password='x')
         self.other_partner = Partner.objects.create(
             tenant=self.business,
@@ -804,7 +818,7 @@ class E21FundPermissionApiTests(APITestCase):
         self.fund = create_investment_fund(
             tenant_id=self.business.id,
             name='Permission fund',
-            manager_partner_id=self.operator.id,
+            manager_partner_id=self.manager_partner.id,
             member_partner_ids=[],
             currency='UZS',
             target_amount=Decimal('1000'),
@@ -836,6 +850,14 @@ class E21FundPermissionApiTests(APITestCase):
         self.assertEqual(investor_approval.status_code, status.HTTP_403_FORBIDDEN)
 
         self.client.force_authenticate(user=self.ctx['owner'])
+        owner_approval = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/applications/{own_application.data["id"]}/approve/',
+            {'approved_amount': '100'},
+            format='json',
+        )
+        self.assertEqual(owner_approval.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.manager_user)
         manager_approval = self.client.post(
             f'/api/v1/partnerships/funds/{self.fund.id}/applications/{own_application.data["id"]}/approve/',
             {'approved_amount': '100'},
@@ -847,7 +869,7 @@ class E21FundPermissionApiTests(APITestCase):
         second_fund = create_investment_fund(
             tenant_id=self.business.id,
             name='Second permission fund',
-            manager_partner_id=self.operator.id,
+            manager_partner_id=self.manager_partner.id,
             member_partner_ids=[],
             currency='UZS',
             target_amount=Decimal('1000'),
@@ -859,7 +881,7 @@ class E21FundPermissionApiTests(APITestCase):
             requested_amount=Decimal('100'),
         )
 
-        self.client.force_authenticate(user=self.ctx['owner'])
+        self.client.force_authenticate(user=self.manager_user)
         response = self.client.post(
             f'/api/v1/partnerships/funds/{self.fund.id}/applications/{application.id}/approve/',
             {'approved_amount': '100'},
@@ -920,3 +942,23 @@ class E21FundPermissionApiTests(APITestCase):
         detail_response = self.client.get(f'/api/v1/partnerships/funds/{create_response.data["id"]}/')
         self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
         self.assertEqual(detail_response.data['id'], create_response.data['id'])
+
+    def test_business_operator_profile_cannot_create_fund(self):
+        self.client.force_authenticate(user=self.ctx['owner'])
+
+        response = self.client.post(
+            '/api/v1/partnerships/funds/',
+            {
+                'name': 'Business-side fund',
+                'manager_partner_id': self.operator.id,
+                'member_partner_ids': [],
+                'currency': 'UZS',
+                'target_amount': '5000',
+                'visibility': InvestmentFund.Visibility.PRIVATE_INVITE,
+                'manager_profit_share': '0',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(InvestmentFund.objects.filter(name='Business-side fund').exists())

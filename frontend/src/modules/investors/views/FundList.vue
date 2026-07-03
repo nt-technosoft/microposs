@@ -40,7 +40,7 @@ let controller: AbortController | null = null
 
 const isInvestorCabinet = computed(() => route.name === 'investor-funds')
 const activePartners = computed(() => partners.value.filter((partner) => partner.is_active))
-const managerOptions = computed(() => activePartners.value.filter((partner) => partner.role === 'OPERATOR' || partner.role === 'INVESTOR'))
+const managerOptions = computed(() => activePartners.value.filter((partner) => partner.role === 'INVESTOR'))
 const detailRouteName = computed(() => isInvestorCabinet.value ? 'investor-fund-detail' : 'fund-detail')
 
 function formatStatus(status: InvestmentFund['status']): string {
