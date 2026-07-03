@@ -962,3 +962,36 @@ class E21FundPermissionApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(InvestmentFund.objects.filter(name='Business-side fund').exists())
+
+    def test_owner_session_cannot_create_fund_even_with_investor_profile(self):
+        owner_investor_profile = Partner.objects.create(
+            tenant=self.business,
+            role=Partner.Role.INVESTOR,
+            display_name='Owner investor profile',
+            user=self.ctx['owner'],
+            is_active=True,
+        )
+        BusinessInvestorRelation.objects.create(
+            tenant=self.business,
+            partner=owner_investor_profile,
+            status=BusinessInvestorRelation.Status.ACTIVE,
+            source=BusinessInvestorRelation.Source.MANUAL,
+        )
+        self.client.force_authenticate(user=self.ctx['owner'])
+
+        response = self.client.post(
+            '/api/v1/partnerships/funds/',
+            {
+                'name': 'Owner investor-profile fund',
+                'manager_partner_id': owner_investor_profile.id,
+                'member_partner_ids': [],
+                'currency': 'UZS',
+                'target_amount': '5000',
+                'visibility': InvestmentFund.Visibility.PRIVATE_INVITE,
+                'manager_profit_share': '0',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(InvestmentFund.objects.filter(name='Owner investor-profile fund').exists())

@@ -56,8 +56,12 @@ async function load(): Promise<void> {
   if (!Number.isFinite(fundId.value)) return
   controller?.abort(); controller = new AbortController(); loading.value = true; error.value = ''
   try {
-    const [fundRow, partnerRows, agreementRows, accountRows, payoutRows] = await Promise.all([
-      fetchInvestmentFund(fundId.value), fetchPartners({ is_active: true }, controller.signal), fetchInvestmentAgreements(), fetchCashAccounts(), fetchFundPayoutObligations(fundId.value),
+    const fundRow = await fetchInvestmentFund(fundId.value)
+    const [partnerRows, agreementRows, accountRows, payoutRows] = await Promise.all([
+      fetchPartners({ is_active: true }, controller.signal).catch(() => []),
+      fetchInvestmentAgreements().catch(() => []),
+      fetchCashAccounts().catch(() => []),
+      fetchFundPayoutObligations(fundId.value).catch(() => []),
     ])
     fund.value = fundRow; partners.value = partnerRows; agreements.value = agreementRows; accounts.value = accountRows; obligations.value = payoutRows
     targetDraft.value = fundRow.target_amount || ''

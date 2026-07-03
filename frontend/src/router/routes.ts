@@ -213,13 +213,13 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/investors/funds',
     name: 'fund-list',
-    component: () => import('@/modules/investors/views/FundList.vue'),
+    redirect: { name: 'investor-funds' },
     meta: { roles: ['investor'] },
   },
   {
     path: '/investors/funds/:id',
     name: 'fund-detail',
-    component: () => import('@/modules/investors/views/FundDetail.vue'),
+    redirect: (to) => ({ name: 'investor-fund-detail', params: to.params }),
     meta: { roles: ['investor'] },
   },
   {

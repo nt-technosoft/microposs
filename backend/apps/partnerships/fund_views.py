@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.db.models import Q
 
 from apps.core.models import Partner
-from apps.core.permissions import ensure_request_tenant
+from apps.core.permissions import ROLE_OWNER, ensure_request_tenant, resolve_user_role
 
 from .fund_services import (
     add_fund_contribution,
@@ -133,6 +133,8 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
         return InvestmentFundCreateSerializer if self.action == 'create' else InvestmentFundSerializer
 
     def create(self, request, *args, **kwargs):
+        if not request.user.is_staff and resolve_user_role(request.user, request.tenant_id) == ROLE_OWNER:
+            raise PermissionDenied('Fund creation is available only from the investor cabinet.')
         serializer = InvestmentFundCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
