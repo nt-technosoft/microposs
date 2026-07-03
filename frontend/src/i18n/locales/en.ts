@@ -235,6 +235,8 @@ const en: typeof ru = {
         dashboardDescription: 'Capital, profit, payouts, and goods balance.',
         agreements: 'My agreements',
         agreementsDescription: 'Agreements, budget balance, goods, and profit.',
+        funds: 'Investment funds',
+        fundsDescription: 'Create funds, review applications, confirm capital, and deploy.',
         agreement: 'Investor agreement',
         agreementDescription: 'Opens from the investor summary.',
         procurement: 'Investor intake',

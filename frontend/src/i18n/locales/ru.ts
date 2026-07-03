@@ -233,6 +233,8 @@ const ru = {
         dashboardDescription: 'Капитал, прибыль, выплаты и остаток в товаре.',
         agreements: 'Мои инвестдоговоры',
         agreementsDescription: 'Договоры, остаток в бюджете, товар и прибыль.',
+        funds: 'Инвестфонды',
+        fundsDescription: 'Создание фонда, заявки, взносы и размещения.',
         agreement: 'Инвесторский договор',
         agreementDescription: 'Открывается из сводки инвестора.',
         procurement: 'Инвесторский приход',

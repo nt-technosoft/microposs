@@ -235,6 +235,8 @@ const uz: typeof ru = {
         dashboardDescription: 'Kapital, foyda, to‘lovlar va tovar qoldig‘i.',
         agreements: 'Mening shartnomalarim',
         agreementsDescription: 'Shartnomalar, budjet qoldig‘i, tovar va foyda.',
+        funds: 'Investfondlar',
+        fundsDescription: 'Fond yaratish, arizalar, badallar va joylashtirish.',
         agreement: 'Investor shartnomasi',
         agreementDescription: 'Investor svodkasidan ochiladi.',
         procurement: 'Investor kirimi',

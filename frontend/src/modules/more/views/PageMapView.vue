@@ -115,6 +115,7 @@ const sections = computed<PageMapSection[]>(() => [
     items: [
       { title: t('pageMap.sections.investor.dashboard'), description: t('pageMap.sections.investor.dashboardDescription'), routeName: 'investor-dashboard', roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.agreements'), description: t('pageMap.sections.investor.agreementsDescription'), routeName: 'investor-agreements', roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.funds'), description: t('pageMap.sections.investor.fundsDescription'), routeName: 'investor-funds', roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.agreement'), description: t('pageMap.sections.investor.agreementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.procurement'), description: t('pageMap.sections.investor.procurementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
     ],
