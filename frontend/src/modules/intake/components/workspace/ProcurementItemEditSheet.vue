@@ -33,7 +33,12 @@ const vpVariants = ref<ProductVariant[]>([]); const catOptions = ref<SelectOptio
 const qpOpen = ref(false); const qpName = ref(''); const qpCatId = ref<number | null>(null)
 const qpBasePrice = ref(''); const qpError = ref<string | null>(null); const qpSaving = ref(false)
 
-const { rate: fetchedFx, load: loadFx } = useFxRate()
+const {
+  rate: fetchedFx,
+  load: loadFx,
+  isLoading: fxLoading,
+  error: fxError,
+} = useFxRate()
 
 const editItem = computed<Item | null>(() =>
   props.editingItemId ? (props.procurement.documents.items.find((i) => i.id === props.editingItemId) ?? null) : null,
@@ -63,13 +68,31 @@ const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
 const allowedCurrencies = computed<Array<'UZS' | 'USD'>>(() =>
   lockedCurrency.value ? [lockedCurrency.value] : ['USD', 'UZS'],
 )
+const usdFxMissing = computed(() =>
+  currency.value === 'USD'
+  && (!fxRateLocal.value || !Number.isFinite(Number.parseFloat(fxRateLocal.value)) || Number.parseFloat(fxRateLocal.value) <= 1),
+)
 const variantDisplay = (v: ProductVariant) => v.product_name ?? v.display_sku ?? v.sku ?? String(v.id)
 
 watch(fetchedFx, (r) => { if (r) fxRateLocal.value = r })
-watch(currency, async (cur) => {
-  if (cur === 'USD') { if (fxRateLocal.value === '1' || !fxRateLocal.value) await loadFx() }
+watch(currency, (cur) => {
+  if (cur === 'USD') void ensureUsdFxRate()
   else fxRateLocal.value = '1'
 })
+
+async function ensureUsdFxRate(): Promise<boolean> {
+  if (currency.value !== 'USD') return true
+  const parsed = Number.parseFloat(fxRateLocal.value)
+  if (Number.isFinite(parsed) && parsed > 1) return true
+  try {
+    const loaded = await loadFx()
+    fxRateLocal.value = loaded
+    const nextParsed = Number.parseFloat(loaded)
+    return Number.isFinite(nextParsed) && nextParsed > 1
+  } catch {
+    return false
+  }
+}
 
 watch(() => props.open, (isOpen) => {
   if (!isOpen) return
@@ -82,6 +105,7 @@ watch(() => props.open, (isOpen) => {
   } else {
     variantId.value = null; variantName.value = ''; qty.value = '1'
     price.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS'); fxRateLocal.value = currency.value === 'USD' ? fxRateLocal.value : '1'
+    void ensureUsdFxRate()
     // Adding a new item: jump straight to picking the product (saves one tap).
     // The form (qty/price) reveals underneath once a variant is chosen.
     vpOpen.value = true
@@ -123,9 +147,10 @@ async function onQpSubmit(): Promise<void> {
   finally { qpSaving.value = false }
 }
 
-function onSave(): void {
+async function onSave(): Promise<void> {
   if (!canMutate.value) return
   if (!variantId.value) return
+  if (!await ensureUsdFxRate()) return
   emit('save', {
     ...(props.editingItemId ? { id: props.editingItemId } : {}),
     product_variant_id: variantId.value,
@@ -183,12 +208,26 @@ function onSplit(): void {
       <p v-if="lockedCurrency" class="-mt-1.5 text-xs text-neutral-400">
         Валюта прихода зафиксирована: {{ lockedCurrency }}.
       </p>
+      <div
+        v-if="currency === 'USD' && usdFxMissing && fxError"
+        class="-mt-1.5 rounded-[10px] bg-amber-50 px-3 py-2 text-xs text-amber-700"
+      >
+        <p>{{ fxError || 'Для USD-позиции нужен курс USD/UZS. Без курса приход нельзя корректно сверить.' }}</p>
+        <button
+          v-if="canMutate"
+          type="button"
+          class="mt-2 font-medium underline underline-offset-2"
+          @click="void ensureUsdFxRate()"
+        >
+          Получить курс автоматически
+        </button>
+      </div>
 
       <div class="flex flex-col gap-2 pt-1">
         <p v-if="!canMutate" class="rounded-[10px] bg-neutral-50 px-3.5 py-3 text-sm text-neutral-500">
           Позиция уже участвует в оплате или приёмке, поэтому доступна только для просмотра.
         </p>
-        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!variantId" @click="onSave">Сохранить</Button>
+        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!variantId || fxLoading" @click="onSave">Сохранить</Button>
         <Button v-if="canSplit" variant="outline" class="w-full" @click="onSplit">Разделить позицию</Button>
         <button
           v-if="canMutate && editingItemId"

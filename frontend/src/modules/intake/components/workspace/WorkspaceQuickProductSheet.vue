@@ -56,7 +56,7 @@ const emit = defineEmits<{
       </div>
 
       <label class="flex flex-col gap-1.5">
-        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Базовая цена продажи</span>
+        <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Базовая цена продажи, UZS</span>
         <Input
           type="number"
           min="0"
@@ -66,6 +66,9 @@ const emit = defineEmits<{
           :model-value="basePrice"
           @update:model-value="emit('updateBasePrice', String($event))"
         />
+        <span class="text-xs leading-4 text-neutral-500">
+          Это цена продажи в каталоге, не закупочная цена прихода.
+        </span>
       </label>
 
       <Button type="submit" class="h-12 w-full text-base" :disabled="saving">

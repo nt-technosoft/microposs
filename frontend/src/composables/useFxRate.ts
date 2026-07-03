@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { fetchLatestFxRate } from '@/api/finance'
+import { fetchLatestFxRate, refreshOfficialFxRate, type ExchangeRateItem } from '@/api/finance'
 import { translateNow } from '@/i18n'
 
 interface UseFxRateOptions {
@@ -14,6 +14,18 @@ function normalizeCurrency(value: string | null | undefined, fallback: string): 
 function apiErrorMessage(error: unknown, fallback: string): string {
   const response = error as { response?: { data?: { detail?: string } } }
   return response.response?.data?.detail || (error instanceof Error ? error.message : fallback)
+}
+
+function isMissingRateError(error: unknown): boolean {
+  const response = error as { response?: { status?: number; data?: { code?: string } } }
+  return response.response?.status === 404 && response.response?.data?.code === 'fx_rate_missing'
+}
+
+const fxRateCache = new Map<string, ExchangeRateItem>()
+const pendingFxRateLoads = new Map<string, Promise<ExchangeRateItem>>()
+
+function cacheKey(baseCurrency: string, quoteCurrency: string, onDate?: string): string {
+  return `${baseCurrency}/${quoteCurrency}/${onDate || 'latest'}`
 }
 
 export function useFxRate(options: UseFxRateOptions = {}) {
@@ -37,19 +49,49 @@ export function useFxRate(options: UseFxRateOptions = {}) {
     error.value = ''
   }
 
+  function applyRate(latest: ExchangeRateItem): string {
+    rate.value = String(latest.rate)
+    rateDate.value = latest.rate_date
+    source.value = latest.source
+    error.value = ''
+    return rate.value
+  }
+
   async function load(onDate?: string): Promise<string> {
+    const key = cacheKey(baseCurrency, quoteCurrency, onDate)
+    const cached = fxRateCache.get(key)
+    if (cached) return applyRate(cached)
+
     isLoading.value = true
     error.value = ''
     try {
-      const latest = await fetchLatestFxRate({
-        base_currency: baseCurrency,
-        quote_currency: quoteCurrency,
-        ...(onDate ? { on_date: onDate } : {}),
-      })
-      rate.value = String(latest.rate)
-      rateDate.value = latest.rate_date
-      source.value = latest.source
-      return rate.value
+      let pending = pendingFxRateLoads.get(key)
+      if (!pending) {
+        pending = (async () => {
+          try {
+            return await fetchLatestFxRate({
+              base_currency: baseCurrency,
+              quote_currency: quoteCurrency,
+              ...(onDate ? { on_date: onDate } : {}),
+            })
+          } catch (err: unknown) {
+            if (!isMissingRateError(err)) throw err
+            const refreshed = await refreshOfficialFxRate({
+              base_currency: baseCurrency,
+              quote_currency: quoteCurrency,
+              ...(onDate ? { rate_date: onDate } : {}),
+            })
+            return refreshed.rate
+          }
+        })()
+        pendingFxRateLoads.set(key, pending)
+      }
+      const latest = await pending
+      fxRateCache.set(key, latest)
+      if (!onDate) {
+        fxRateCache.set(cacheKey(baseCurrency, quoteCurrency, latest.rate_date), latest)
+      }
+      return applyRate(latest)
     } catch (err: unknown) {
       clear()
       error.value = apiErrorMessage(
@@ -58,8 +100,14 @@ export function useFxRate(options: UseFxRateOptions = {}) {
       )
       throw err
     } finally {
+      pendingFxRateLoads.delete(key)
       isLoading.value = false
     }
+  }
+
+  const initialCached = fxRateCache.get(cacheKey(baseCurrency, quoteCurrency))
+  if (initialCached) {
+    applyRate(initialCached)
   }
 
   function rateForCurrency(currency: string | null | undefined): string {

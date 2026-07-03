@@ -281,10 +281,20 @@ def resolve_fx_rate_snapshot_details(
         rate_date=target_date,
     )
     if rate_row is None:
-        raise ValueError(
-            f'FX rate for {currency}/UZS is missing on {target_date}. '
-            f'Add manual rate or run official sync first.'
-        )
+        try:
+            rate_row, _ = sync_official_exchange_rate(
+                tenant_id=tenant_id,
+                base_currency=currency,
+                quote_currency='UZS',
+                rate_date=target_date,
+                overwrite_manual=False,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f'FX rate for {currency}/UZS is missing on {target_date}. '
+                f'Official sync failed; add a manual rate or run official sync first. '
+                f'Details: {exc}'
+            ) from exc
     return FxRateSnapshot(
         rate=_to_decimal(rate_row.rate).quantize(Decimal('0.000001')),
         rate_date=rate_row.rate_date,

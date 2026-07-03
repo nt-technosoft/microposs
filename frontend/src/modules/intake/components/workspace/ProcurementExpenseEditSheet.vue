@@ -34,7 +34,12 @@ const allocMethod = ref('BY_VALUE')
 const targetScope = ref<'all' | 'selected'>('all')
 const selectedTargets = ref<number[]>([])
 
-const { rate: fetchedFx, load: loadFx } = useFxRate()
+const {
+  rate: fetchedFx,
+  load: loadFx,
+  isLoading: fxLoading,
+  error: fxError,
+} = useFxRate()
 
 const editExpense = computed<Expense | null>(() =>
   props.editingExpenseId
@@ -69,12 +74,30 @@ const lockedCurrency = computed<'UZS' | 'USD' | null>(() => {
 const allowedCurrencies = computed<Array<'UZS' | 'USD'>>(() =>
   lockedCurrency.value ? [lockedCurrency.value] : ['USD', 'UZS'],
 )
+const usdFxMissing = computed(() =>
+  currency.value === 'USD'
+  && (!fxRateLocal.value || !Number.isFinite(Number.parseFloat(fxRateLocal.value)) || Number.parseFloat(fxRateLocal.value) <= 1),
+)
 
 watch(fetchedFx, (r) => { if (r) fxRateLocal.value = r })
-watch(currency, async (cur) => {
-  if (cur === 'USD') { if (fxRateLocal.value === '1' || !fxRateLocal.value) await loadFx() }
+watch(currency, (cur) => {
+  if (cur === 'USD') void ensureUsdFxRate()
   else fxRateLocal.value = '1'
 })
+
+async function ensureUsdFxRate(): Promise<boolean> {
+  if (currency.value !== 'USD') return true
+  const parsed = Number.parseFloat(fxRateLocal.value)
+  if (Number.isFinite(parsed) && parsed > 1) return true
+  try {
+    const loaded = await loadFx()
+    fxRateLocal.value = loaded
+    const nextParsed = Number.parseFloat(loaded)
+    return Number.isFinite(nextParsed) && nextParsed > 1
+  } catch {
+    return false
+  }
+}
 
 watch(() => props.open, (isOpen) => {
   if (!isOpen) return
@@ -88,6 +111,7 @@ watch(() => props.open, (isOpen) => {
   } else {
     expenseType.value = 'LOGISTICS'; amount.value = ''; currency.value = lockedCurrency.value ?? (props.procurement.documents.procurement.primary_currency === 'USD' ? 'USD' : 'UZS')
     fxRateLocal.value = '1'; allocMethod.value = 'BY_VALUE'
+    void ensureUsdFxRate()
     targetScope.value = hasLockedItems.value ? 'selected' : 'all'
     selectedTargets.value = hasLockedItems.value ? targetableItems.value.map((it) => it.id) : []
   }
@@ -107,8 +131,9 @@ function toggleAllTargets(): void {
     : targetableItems.value.map((it) => it.id)
 }
 
-function onSave(): void {
+async function onSave(): Promise<void> {
   if (!canMutate.value) return
+  if (!await ensureUsdFxRate()) return
   emit('save', {
     ...(props.editingExpenseId ? { id: props.editingExpenseId } : {}),
     expense_type: expenseType.value,
@@ -156,6 +181,20 @@ function onDelete(): void {
         <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма</span>
         <MoneyCurrencyInput v-model:model-value="amount" v-model:currency="currency" :currencies="allowedCurrencies" :disabled="!canMutate" />
         <p v-if="lockedCurrency" class="text-xs text-neutral-400">Валюта прихода зафиксирована: {{ lockedCurrency }}.</p>
+        <div
+          v-if="currency === 'USD' && usdFxMissing && fxError"
+          class="rounded-[10px] bg-amber-50 px-3 py-2 text-xs text-amber-700"
+        >
+          <p>{{ fxError || 'Для USD-расхода нужен курс USD/UZS. Без курса приход нельзя корректно сверить.' }}</p>
+          <button
+            v-if="canMutate"
+            type="button"
+            class="mt-2 font-medium underline underline-offset-2"
+            @click="void ensureUsdFxRate()"
+          >
+            Получить курс автоматически
+          </button>
+        </div>
       </div>
 
       <!-- Метод распределения -->
@@ -241,7 +280,7 @@ function onDelete(): void {
         <p v-if="!canMutate" class="rounded-[10px] bg-neutral-50 px-3.5 py-3 text-sm text-neutral-500">
           Расход уже участвует в оплате или приёмке, поэтому доступен только для просмотра.
         </p>
-        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!amount" @click="onSave">Сохранить</Button>
+        <Button v-if="canMutate" class="h-12 w-full text-base" :disabled="!amount || fxLoading" @click="onSave">Сохранить</Button>
         <button
           v-if="canMutate && editingExpenseId"
           type="button"

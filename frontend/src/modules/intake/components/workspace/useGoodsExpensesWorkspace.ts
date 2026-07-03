@@ -465,10 +465,6 @@ export function useGoodsExpensesWorkspace(options: UseGoodsExpensesWorkspaceOpti
     }
 
     updateLine(activeLineId.value, 'variant', variant)
-    const target = draftLines.value.find((line) => line.id === activeLineId.value)
-    if (target && !target.cost_per_unit && variant.price) {
-      updateLine(activeLineId.value, 'cost_per_unit', variant.price)
-    }
     closeVariantPicker()
   }
 
@@ -519,12 +515,8 @@ export function useGoodsExpensesWorkspace(options: UseGoodsExpensesWorkspaceOpti
       const targetLineId = quickProductTargetLineId.value ?? draftLines.value.find((line) => !line.variant)?.id ?? null
       if (targetLineId) {
         updateLine(targetLineId, 'variant', variant)
-        const target = draftLines.value.find((line) => line.id === targetLineId)
-        if (target && !target.cost_per_unit && variant.price) {
-          updateLine(targetLineId, 'cost_per_unit', variant.price)
-        }
       } else {
-        draftLines.value = [...draftLines.value, { ...buildEmptyLine(), variant, cost_per_unit: String(variant.price ?? '') }]
+        draftLines.value = [...draftLines.value, { ...buildEmptyLine(), variant }]
       }
       toast.success('Товар создан и добавлен')
       closeQuickProductCreator()

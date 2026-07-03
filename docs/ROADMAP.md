@@ -42,7 +42,7 @@
 | **E18** | Money Model Consolidation | 🔵 IN_REVIEW | ~100% core | E11–E17 | [→](./roadmap/E18-money-model-consolidation.md) |
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
 | **E20** | Multi-Party Investment, Closed Funds & Contract Lifecycle | 🔵 IN_REVIEW | 100% implementation | E04, E18 | [→](./roadmap/E20-multi-party-investment-and-managed-funds.md) |
-| **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | 100% implementation | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
+| **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | follow-ups implemented | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
 импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке
@@ -52,6 +52,20 @@
 **Возвращаемся ТОЛЬКО после** того, как приход доведён и проверен end-to-end
 (снапшоты долей, движение денег, отчёты, аналитика). См.
 [E13](./roadmap/E13-multicurrency-procurement.md).
+
+**⚠️ ОТКРЫТЫЙ ВОПРОС — FX на строках товара/расхода в черновике прихода (2026-07-03):**
+обсуждали, что обязательный `fx_rate` на `ProcurementItem/ProcurementExpense`
+может быть историческим компромиссом, а не правильной domain-границей. Сейчас
+код использует его для UZS-себестоимости, `total_inventory_uzs`, landed cost,
+FIFO COGS и отчётов, поэтому просто удалить нельзя. Целевая гипотеза для
+следующего проектного прохода: в draft хранить native сумму+валюту; obligation
+и payment показывать/проводить по валютам без `× fx`; курс/стоимость фиксировать
+на реальном lifecycle-gate — оплата, приёмка/lot, реальная конвертация или
+E12 FIFO cost-basis пула. Нужно отдельно решить, что честнее для own-funds и
+partnership: исторический курс строки, курс оплаты, курс приёмки/market report
+или cost-basis фактически потраченной валюты. Пока быстрый UX-fix: FX грузится
+асинхронно/кэшируется и не должен блокировать ввод предупреждением до реального
+сбоя загрузки курса.
 
 **⚠️ НЕ ЗАБЫТЬ — Precision & Distribution Fairness (отложено 2026-06-17, без номера):**
 аудит округлений бэкенда зафиксирован в [`docs/rounding-precision-audit.md`](./rounding-precision-audit.md).
@@ -130,7 +144,10 @@ E20 опирается на E18 как на единственный денеж�
 E21 — корректирующий продуктово-архитектурный слой после E20 review. Он не
 меняет денежную основу E18/E20, а доводит границы user/business/fund, investor-led
 fundraising UX, net paid-in display и procurement-bound payout semantics до
-pilot-ready состояния.
+pilot-ready состояния. Follow-up hardening фиксирует правило: `FACTUAL`
+не допускает partial receive, чтобы один procurement не распадался на несколько
+share-profile/tranches; для partial receive и быстрых продаж используется
+`AGREED`.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации
