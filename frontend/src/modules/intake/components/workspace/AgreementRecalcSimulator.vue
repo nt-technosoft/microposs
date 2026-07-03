@@ -38,12 +38,12 @@ function reset(): void {
   <div class="flex flex-col gap-3 rounded-[10px] bg-neutral-50 p-3">
     <p class="text-xs leading-relaxed text-neutral-500">
       Прибыль делится пропорционально вложенному капиталу по коэффициенту договора.
-      Подвигайте долю капитала инвестора — прибыль пересчитается.
+      Подвигайте долю капитала инвесторского пула — прибыль пересчитается.
     </p>
 
     <div class="flex flex-col gap-2">
       <div class="flex items-baseline justify-between gap-2 text-sm">
-        <span class="text-neutral-600">Капитал инвестора</span>
+        <span class="text-neutral-600">Капитал инвесторского пула</span>
         <strong class="tabular-nums text-foreground">{{ investorCapital }}%</strong>
       </div>
       <Slider :model-value="model" :min="0" :max="100" :step="1" @update:model-value="(v) => model = (v as number[])" />

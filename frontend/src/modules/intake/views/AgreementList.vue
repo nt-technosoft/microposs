@@ -40,7 +40,9 @@ function balanceLabel(item: InvestmentAgreementListItem): string {
 }
 
 function subtitle(item: InvestmentAgreementListItem): string {
-  const who = item.investor_names?.[0] || item.supplier_name || t('procurements.supplierMissing')
+  const who = item.investor_names?.length > 1
+    ? `Пул инвесторов: ${item.investor_names.length}`
+    : item.investor_names?.[0] || item.supplier_name || t('procurements.supplierMissing')
   return `${who} · ${t('procurements.procurementsCount', { count: item.procurements_count })}`
 }
 

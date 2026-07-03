@@ -29,11 +29,9 @@ const investment = computed(() => props.procurement.documents.investment)
 const isFilled = computed(() => (investment.value?.allocations.length ?? 0) > 0)
 
 const currency = computed(() => investment.value?.currency ?? 'UZS')
-const investor = computed(() => investment.value?.partners.find((p) => p.role === 'INVESTOR') ?? null)
 const budget = computed(() => Number.parseFloat(investment.value?.planned_budget ?? '0') || 0)
-const investorCapital = computed(() => Number.parseFloat(investor.value?.planned_capital_share ?? '0') || 0)
-const investorCapitalPercent = computed(() => (budget.value > 0 ? Math.round((investorCapital.value / budget.value) * 100) : 0))
-const investorProfitPercent = computed(() => Math.round((Number.parseFloat(investor.value?.profit_share ?? '0') || 0) * 100))
+const investorCapitalPercent = computed(() => investment.value?.investor_shares?.capital_percent ?? 0)
+const investorProfitPercent = computed(() => investment.value?.investor_shares?.profit_percent ?? 0)
 
 const unallocatedByCurrency = computed<Record<string, number>>(() => {
   const out: Record<string, number> = {}
@@ -51,7 +49,11 @@ const poolPercent = computed(() =>
   budget.value > 0 ? Math.min(100, Math.max(0, (poolBalance.value / budget.value) * 100)) : 0,
 )
 
-const investorName = computed(() => investor.value?.partner_name ?? 'Инвестор')
+const investorName = computed(() => {
+  const names = investment.value?.partners.filter((p) => p.role === 'INVESTOR').map((p) => p.partner_name) ?? []
+  if (names.length <= 1) return names[0] ?? 'Инвестор'
+  return `Пул инвесторов · ${names.length}`
+})
 
 // E12: physical currency sub-pools (base + converted). Show when the pool
 // actually holds more than just the base currency, so the user sees what's
@@ -149,7 +151,7 @@ function onTopUp(): void {
               </span>
             </div>
             <div class="flex items-center justify-between gap-2">
-              <span class="text-xs text-neutral-500">Доли инвестора</span>
+              <span class="text-xs text-neutral-500">Доли инвесторского пула</span>
               <span class="text-sm font-medium tabular-nums text-foreground">
                 капитал {{ investorCapitalPercent }}% · прибыль {{ investorProfitPercent }}%
               </span>

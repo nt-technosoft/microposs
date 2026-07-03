@@ -59,7 +59,7 @@ class IsFundActor(IsAuthenticated):
         if not super().has_permission(request, view):
             return False
         ensure_request_tenant(request)
-        if getattr(view, 'action', None) in {'by_invite', 'applications'}:
+        if getattr(view, 'action', None) in {'by_invite', 'applications', 'list', 'retrieve', 'create'}:
             return True
         return request.tenant_id is not None
 
@@ -69,8 +69,8 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'options']
     ordering = ['-opened_at']
 
-    def get_queryset(self):
-        queryset = InvestmentFund.objects.filter(tenant_id=self.request.tenant_id).select_related(
+    def _base_queryset(self):
+        return InvestmentFund.objects.select_related(
             'manager_partner', 'holder_partner', 'capital_account', 'current_terms',
         ).prefetch_related(
             'current_terms__payout_policy',
@@ -78,6 +78,11 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
             'deployments__agreement', 'member_position_rows__member__partner', 'position_row',
             'member_exits__member__partner',
         )
+
+    def get_queryset(self):
+        queryset = self._base_queryset()
+        if self.request.tenant_id is not None:
+            queryset = queryset.filter(tenant_id=self.request.tenant_id)
         if not self.request.user.is_staff:
             user_partner_ids = self._user_partner_ids(self.request.tenant_id)
             queryset = queryset.filter(
@@ -94,13 +99,13 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
         return queryset
 
     def _user_partner_ids(self, tenant_id: int | None) -> list[int]:
-        if tenant_id is None:
-            return []
-        return list(Partner.objects.filter(
-            tenant_id=tenant_id,
+        query = Partner.objects.filter(
             user_id=self.request.user.id,
             is_active=True,
-        ).values_list('id', flat=True))
+        )
+        if tenant_id is not None:
+            query = query.filter(tenant_id=tenant_id)
+        return list(query.values_list('id', flat=True))
 
     def _require_fund_manager(self, fund: InvestmentFund) -> None:
         if self.request.user.is_staff:
@@ -132,17 +137,19 @@ class InvestmentFundViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         try:
-            manager = Partner.objects.filter(
-                tenant_id=request.tenant_id,
-                pk=data['manager_partner_id'],
-                is_active=True,
-            ).first()
+            manager_query = Partner.objects.filter(pk=data['manager_partner_id'], is_active=True)
+            if request.tenant_id is not None:
+                manager_query = manager_query.filter(tenant_id=request.tenant_id)
+            manager = manager_query.first()
             if manager is None:
                 raise ValueError('Fund manager was not found.')
             if manager.user_id and manager.user_id != request.user.id and not request.user.is_staff:
                 raise PermissionDenied('Only the selected fund manager can create this fund.')
+            if not request.user.is_staff and not manager.user_id:
+                raise PermissionDenied('Investor-cabinet fund creation requires a user-linked manager profile.')
+            tenant_id = request.tenant_id or manager.tenant_id
             fund = create_investment_fund(
-                tenant_id=request.tenant_id,
+                tenant_id=tenant_id,
                 name=data['name'],
                 manager_partner_id=data['manager_partner_id'],
                 member_partner_ids=data['member_partner_ids'],

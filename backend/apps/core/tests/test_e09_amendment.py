@@ -93,6 +93,30 @@ class AmendItemsTests(TestCase):
         self.assertNotEqual(after_qty, original_qty)
         self.assertEqual(Decimal(after_qty), Decimal('8'))
 
+    def test_cancelled_draft_items_are_excluded_from_workspace_summaries(self):
+        proc = _build_open_procurement(self.ctx)
+        item = proc.items.first()
+
+        apply_items_amendment(
+            tenant_id=self.ctx['business'].id,
+            procurement=proc,
+            new_items_payload=[
+                {'id': item.id, 'cancel': True},
+                {
+                    'product_variant_id': self.ctx['variant'].id,
+                    'quantity': 2,
+                    'unit_purchase_price': '1200',
+                    'currency': 'UZS',
+                    'fx_rate': '1',
+                },
+            ],
+            reason='replace mistaken draft line',
+        )
+
+        payload = build_workspace_payload(proc)
+        self.assertEqual(payload['summaries']['items_total_uzs'], '2400.00')
+        self.assertEqual(len(payload['documents']['items']), 1)
+
     def test_amend_items_in_cancelled_rejected(self):
         """CANCELLED procurement raises ValueError on amendment."""
         proc = create_workspace(

@@ -29,7 +29,7 @@ const rows = [{
 
 function mountCard(accounts: unknown[]) {
   return mount(AgreementRecoveredCapitalCard, {
-    props: { rows: rows as never, accounts: accounts as never, usdRate: '0' },
+    props: { rows: rows as never, accounts: accounts as never, usdRate: '0', agreementCurrency: 'UZS' },
     global: { stubs: { BaseSelect: BaseSelectStub, MoneyCurrencyInput: MoneyStub } },
   })
 }

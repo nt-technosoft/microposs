@@ -23,17 +23,20 @@ const props = defineProps<{
   rows: RecoveredCapitalRow[]
   accounts: CashAccountRecord[]
   usdRate: string
+  agreementCurrency: 'UZS' | 'USD'
   saving?: boolean
 }>()
 
 const emit = defineEmits<{
   returnCapital: [payload: { row: RecoveredCapitalRow; amount: string; currency: 'UZS' | 'USD'; fxRate: string; accountId: number }]
+  returnCapitalBatch: [payload: { entries: Array<{ row: RecoveredCapitalRow; amount: string }>; currency: 'UZS' | 'USD'; fxRate: string; accountId: number }]
 }>()
 
 const selectedKey = ref('')
 const amount = ref('')
 const currency = ref<'UZS' | 'USD'>('UZS')
 const accountId = ref<number | null>(null)
+const batchAmount = ref('')
 
 const eligibleAccounts = computed(() =>
   props.accounts.filter((account) => account.is_active && account.currency === currency.value),
@@ -53,19 +56,52 @@ const preferredAccountId = computed(() => {
 
 const selectedRow = computed(() => props.rows.find((row) => row.key === selectedKey.value) ?? null)
 const activeFxRate = computed(() => currency.value === 'USD' ? Number(props.usdRate || 0) : 1)
+function floorMoney(value: number): number {
+  return Math.floor(Math.max(0, value) * 100) / 100
+}
+function amountInCurrency(row: RecoveredCapitalRow, targetCurrency: 'UZS' | 'USD'): number {
+  if (targetCurrency === 'UZS') return row.availableUzs
+  return activeFxRate.value > 0 ? floorMoney(row.availableUzs / activeFxRate.value) : 0
+}
 const selectedAvailableAmount = computed(() => {
   if (!selectedRow.value) return 0
-  if (currency.value === 'UZS') return selectedRow.value.availableUzs
-  return activeFxRate.value > 0 ? selectedRow.value.availableUzs / activeFxRate.value : 0
+  return amountInCurrency(selectedRow.value, currency.value)
+})
+const totalAvailableAmount = computed(() =>
+  props.rows.reduce((sum, row) => sum + amountInCurrency(row, currency.value), 0),
+)
+const batchAmountValue = computed(() => Number(batchAmount.value || 0))
+const batchPreview = computed(() => {
+  const total = Math.min(Math.max(batchAmountValue.value, 0), totalAvailableAmount.value)
+  if (total <= 0 || totalAvailableAmount.value <= 0) return []
+  let distributed = 0
+  const rows = props.rows.map((row) => {
+    const available = amountInCurrency(row, currency.value)
+    const amount = floorMoney(total * (available / totalAvailableAmount.value))
+    distributed += amount
+    return { row, available, amount }
+  })
+  let residue = floorMoney(total - distributed)
+  for (const item of rows) {
+    if (residue <= 0) break
+    const headroom = floorMoney(item.available - item.amount)
+    const topUp = Math.min(headroom, residue)
+    item.amount = floorMoney(item.amount + topUp)
+    residue = floorMoney(residue - topUp)
+  }
+  return rows.filter((item) => item.amount > 0)
 })
 const canSubmit = computed(() => {
   const value = Number(amount.value || 0)
   return Boolean(selectedRow.value && accountId.value && value > 0 && value <= selectedAvailableAmount.value + 0.01)
 })
+const canSubmitBatch = computed(() =>
+  Boolean(accountId.value && batchPreview.value.length && batchAmountValue.value > 0 && batchAmountValue.value <= totalAvailableAmount.value + 0.01),
+)
 
 function selectRow(row: RecoveredCapitalRow): void {
   selectedKey.value = row.key
-  amount.value = selectedAvailableAmount.value.toFixed(2)
+  amount.value = floorMoney(selectedAvailableAmount.value).toFixed(2)
 }
 
 function setAccount(value: string | number | boolean | null): void {
@@ -83,21 +119,38 @@ function submit(): void {
   })
 }
 
+function submitBatch(): void {
+  if (!accountId.value || !canSubmitBatch.value) return
+  emit('returnCapitalBatch', {
+    entries: batchPreview.value.map((entry) => ({ row: entry.row, amount: entry.amount.toFixed(2) })),
+    currency: currency.value,
+    fxRate: currency.value === 'USD' ? props.usdRate : '1',
+    accountId: accountId.value,
+  })
+}
+
 watch(() => props.rows, (rows) => {
   if (!rows.length) {
     selectedKey.value = ''
     amount.value = ''
+    batchAmount.value = ''
     return
   }
   if (!selectedKey.value || !rows.some((row) => row.key === selectedKey.value)) {
     selectRow(rows[0])
   }
+  batchAmount.value = floorMoney(totalAvailableAmount.value).toFixed(2)
+}, { immediate: true })
+
+watch(() => props.agreementCurrency, (value) => {
+  currency.value = value === 'USD' ? 'USD' : 'UZS'
 }, { immediate: true })
 
 watch(currency, () => {
   if (selectedRow.value) {
-    amount.value = selectedAvailableAmount.value.toFixed(2)
+    amount.value = floorMoney(selectedAvailableAmount.value).toFixed(2)
   }
+  batchAmount.value = floorMoney(totalAvailableAmount.value).toFixed(2)
 })
 
 watch(accountOptions, (options) => {
@@ -125,6 +178,43 @@ watch(accountOptions, (options) => {
       </div>
     </CardHeader>
     <CardContent class="flex flex-col gap-3">
+      <div class="rounded-xl border border-border bg-muted/30 p-3">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium text-foreground">Групповой возврат</p>
+            <p class="mt-0.5 text-xs text-muted-foreground">
+              Укажите общую сумму — система распределит её между инвесторами пропорционально доступному капиталу.
+            </p>
+          </div>
+          <span class="shrink-0 text-sm font-semibold tabular-nums text-foreground">
+            {{ formatPrice(totalAvailableAmount, currency) }}
+          </span>
+        </div>
+        <div class="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr]">
+          <MoneyCurrencyInput
+            v-model="batchAmount"
+            v-model:currency="currency"
+            :currencies="['UZS', 'USD']"
+            placeholder="Общая сумма"
+            aria-label="Общая сумма возврата капитала"
+          />
+          <Button type="button" variant="outline" :disabled="saving || !canSubmitBatch" @click="submitBatch">
+            <ArrowDownToLine data-icon="inline-start" />
+            Вернуть по всем
+          </Button>
+        </div>
+        <div v-if="batchPreview.length" class="mt-3 grid gap-1.5">
+          <div
+            v-for="entry in batchPreview"
+            :key="`batch-${entry.row.key}`"
+            class="flex items-center justify-between gap-3 text-xs"
+          >
+            <span class="truncate text-muted-foreground">{{ entry.row.partnerName }}</span>
+            <span class="font-medium tabular-nums text-foreground">{{ formatPrice(entry.amount, currency) }}</span>
+          </div>
+        </div>
+      </div>
+
       <div class="grid gap-2">
         <button
           v-for="row in rows"
@@ -143,7 +233,7 @@ watch(accountOptions, (options) => {
             </span>
           </span>
           <span class="shrink-0 text-sm font-semibold tabular-nums text-foreground">
-            {{ formatPrice(row.availableUzs, 'UZS') }}
+            {{ formatPrice(amountInCurrency(row, currency), currency) }}
           </span>
         </button>
       </div>

@@ -16,6 +16,7 @@ from apps.suppliers.models import SupplierPayable
 
 from .models import (
     AgreementAllocation,
+    AgreementPartner,
     Procurement,
     ProcurementExpense,
     ProcurementItem,
@@ -146,7 +147,7 @@ def build_workspace_payload(procurement: Procurement) -> dict:
 
 def _display(procurement: Procurement, policy) -> dict:
     next_action = None
-    if policy.allowed_actions:
+    if procurement.status not in (Procurement.Status.RECEIVED, Procurement.Status.CLOSED) and policy.allowed_actions:
         next_action = ACTION_MAP.get(policy.allowed_actions[0], policy.allowed_actions[0])
     return {
         'title': f'Procurement #{procurement.id}',
@@ -666,6 +667,14 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         return None
     available = read_available_by_partner(agreement)
     pool_account = agreement.capital_account
+    members = list(agreement.partners.select_related('partner').all())
+    investor_members = [
+        member for member in members
+        if member.role == AgreementPartner.Role.INVESTOR
+    ]
+    investor_capital = sum((Decimal(str(member.planned_capital_share)) for member in investor_members), Decimal('0'))
+    investor_profit = sum((Decimal(str(member.profit_share)) for member in investor_members), Decimal('0'))
+    planned_budget = Decimal(str(agreement.planned_budget or '0'))
     return {
         'agreement_id': agreement.id,
         'agreement_label': f'Investment agreement #{agreement.id}',
@@ -674,6 +683,13 @@ def _investment_payload(procurement: Procurement) -> dict | None:
         'reconciliation_mode': agreement.reconciliation_mode,
         'currency': agreement.currency,
         'planned_budget': str(agreement.planned_budget),
+        'investor_shares': ({
+            'capital_amount': str(investor_capital.quantize(Decimal('0.01'))),
+            'profit_share': str(investor_profit.quantize(Decimal('0.000001'))),
+            'capital_percent': round(float(investor_capital / planned_budget * Decimal('100'))) if planned_budget else 0,
+            'profit_percent': round(float(investor_profit * Decimal('100'))),
+            'investors_count': len(investor_members),
+        } if investor_members else None),
         'pool': ({
             'cash_account_id': pool_account.id,
             'currency': pool_account.currency,
@@ -697,7 +713,7 @@ def _investment_payload(procurement: Procurement) -> dict | None:
                 'planned_capital_share': str(member.planned_capital_share),
                 'profit_share': str(member.profit_share),
             }
-            for member in agreement.partners.select_related('partner').all()
+            for member in members
         ],
         'commitments': [
             {
@@ -831,19 +847,27 @@ def _receive_batch_payload(batch) -> dict:
 
 
 def _summaries_payload(procurement: Procurement, payables) -> dict:
+    active_items = [
+        item for item in procurement.items.all()
+        if item.lifecycle_state != ProcurementItem.LifecycleState.CANCELLED
+    ]
+    active_expenses = [
+        expense for expense in procurement.expenses.all()
+        if expense.lifecycle_state != ProcurementExpense.LifecycleState.CANCELLED
+    ]
     item_total = sum(
         (
             Decimal(str(item.quantity))
             * Decimal(str(item.unit_purchase_price))
             * Decimal(str(item.fx_rate))
-            for item in procurement.items.all()
+            for item in active_items
         ),
         Decimal('0'),
     )
     expense_total = sum(
         (
             Decimal(str(expense.amount)) * Decimal(str(expense.fx_rate))
-            for expense in procurement.expenses.all()
+            for expense in active_expenses
         ),
         Decimal('0'),
     )

@@ -216,7 +216,7 @@ class PartnershipCapitalPoolTests(TestCase):
         self.assertEqual(payload['documents']['payment_status']['state'], 'paid_full')
         self.assertEqual(payload['documents']['payment_status']['paid_by_currency']['UZS'], '120.00')
 
-    def test_partial_receives_keep_independent_68_32_and_72_28_snapshots(self):
+    def _two_item_partnership_procurement(self, *, reconciliation_mode='FACTUAL'):
         ctx = build_tenant()
         procurement = create_workspace(
             tenant_id=ctx['business'].id,
@@ -231,6 +231,7 @@ class PartnershipCapitalPoolTests(TestCase):
                 'mudaraba_ratio': Decimal('0.5'),
                 'planned_budget': Decimal('200'),
                 'currency': 'UZS',
+                'reconciliation_mode': reconciliation_mode,
                 'partners': [
                     {
                         'partner_id': ctx['investor'].id,
@@ -313,6 +314,60 @@ class PartnershipCapitalPoolTests(TestCase):
             set(procurement.items.values_list('lifecycle_state', flat=True)),
             {procurement.items.model.LifecycleState.READY_FOR_RECEIVE},
         )
+        return ctx, procurement
+
+    def test_factual_partial_receive_is_blocked_to_avoid_share_profile_tranches(self):
+        ctx, procurement = self._two_item_partnership_procurement(reconciliation_mode='FACTUAL')
+        first_item, _second_item = list(procurement.items.order_by('id'))
+
+        with self.assertRaisesMessage(
+            ValueError,
+            'FACTUAL reconciliation requires full receive because shares are derived from final factual funding.',
+        ):
+            dispatch_workspace_action(
+                tenant_id=ctx['business'].id,
+                procurement=procurement,
+                action='RECEIVE_BATCH',
+                payload={'payload': {
+                    'warehouse_id': ctx['storage'].id,
+                    'item_ids': [first_item.id],
+                    'capital_allocations': [
+                        {'partner_id': ctx['investor'].id, 'amount': Decimal('68')},
+                        {'partner_id': ctx['operator'].id, 'amount': Decimal('32')},
+                    ],
+                }},
+            )
+
+    def test_factual_full_receive_is_allowed_and_uses_one_final_snapshot(self):
+        ctx, procurement = self._two_item_partnership_procurement(reconciliation_mode='FACTUAL')
+        first_item, second_item = list(procurement.items.order_by('id'))
+
+        dispatch_workspace_action(
+            tenant_id=ctx['business'].id,
+            procurement=procurement,
+            action='RECEIVE_BATCH',
+            payload={'payload': {
+                'warehouse_id': ctx['storage'].id,
+                'item_ids': [first_item.id, second_item.id],
+                'capital_allocations': [
+                    {'partner_id': ctx['investor'].id, 'amount': Decimal('140')},
+                    {'partner_id': ctx['operator'].id, 'amount': Decimal('60')},
+                ],
+            }},
+        )
+
+        first_lot = first_item.lots.get()
+        second_lot = second_item.lots.get()
+        for lot in (first_lot, second_lot):
+            investor = next(
+                row for row in lot.contract_snapshot['partners']
+                if row['partner_id'] == ctx['investor'].id
+            )
+            self.assertEqual(Decimal(investor['capital_share']), Decimal('0.700000'))
+            self.assertEqual(Decimal(investor['profit_share']), Decimal('0.350000'))
+
+    def test_agreed_partial_receive_stays_allowed_and_pins_contract_shares(self):
+        ctx, procurement = self._two_item_partnership_procurement(reconciliation_mode='AGREED')
 
         first_item, second_item = list(procurement.items.order_by('id'))
         dispatch_workspace_action(
@@ -354,9 +409,9 @@ class PartnershipCapitalPoolTests(TestCase):
         )
 
         self.assertEqual(Decimal(first_investor['capital_share']), Decimal('0.680000'))
-        self.assertEqual(Decimal(second_investor['capital_share']), Decimal('0.720000'))
+        self.assertEqual(Decimal(second_investor['capital_share']), Decimal('0.680000'))
         self.assertEqual(Decimal(first_investor['profit_share']), Decimal('0.340000'))
-        self.assertEqual(Decimal(second_investor['profit_share']), Decimal('0.360000'))
+        self.assertEqual(Decimal(second_investor['profit_share']), Decimal('0.340000'))
 
         batch_rows = list(
             ProcurementReceiveBatchCapitalAllocation.objects

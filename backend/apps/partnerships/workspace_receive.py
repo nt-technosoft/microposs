@@ -246,12 +246,35 @@ def receive_workspace_batch(
         ).exclude(
             lifecycle_state__in=[ProcurementItem.LifecycleState.RECEIVED, ProcurementItem.LifecycleState.CANCELLED],
         ).exclude(pk__in=selected_item_ids).exists()
+        has_selected_partial_lines = any(
+            row['qty_received'] < Decimal(str(item.quantity))
+            and row['reason'] != ProcurementReceiveBatchLine.DiscrepancyReason.ACCEPT_AS_SHORTFALL
+            for item in items
+            for row in [discrepancy_map[item.id]]
+        )
+        is_partial_receive = has_delayed_lines or has_selected_partial_lines
+
+        # E21 T-7: FACTUAL derives capital/profit shares from actual funding at
+        # receive time. Allowing multiple partial batches inside one procurement
+        # would create multiple immutable share-profile tranches, which is
+        # technically auditable but product-hostile. Keep Lot.contract_snapshot
+        # immutable; guard the receive shape instead.
+        share_basis = 'FACTUAL'
+        _agreement_for_basis = None
+        if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            _agreement_for_basis = _require_workspace_agreement(locked)
+            share_basis = str(_agreement_for_basis.reconciliation_mode or 'FACTUAL').upper()
+            if share_basis == 'FACTUAL' and is_partial_receive:
+                raise ValueError(
+                    'FACTUAL reconciliation requires full receive because shares are derived '
+                    'from final factual funding. Use AGREED for partial receive and immediate sales.'
+                )
 
         expenses = _expenses_for_receive(
             procurement=locked,
             selected_item_ids=selected_item_ids,
             allowed_states=allowed_states,
-            is_partial_receive=has_delayed_lines,
+            is_partial_receive=is_partial_receive,
         )
         expense_allocations_uzs, expense_values_uzs = _landed_expense_allocations(items, expenses)
         item_values_uzs = [_item_value_uzs(item) for item in items]
@@ -266,10 +289,7 @@ def receive_workspace_batch(
         # as a net capital position; FACTUAL = dynamic recalc) is fixed on the
         # AGREEMENT at creation — the receive only reflects it, it does not
         # re-choose. Read from the agreement.
-        share_basis = 'FACTUAL'
         if locked.funding_source == Procurement.FundingSource.PARTNERSHIP:
-            _agreement_for_basis = _require_workspace_agreement(locked)
-            share_basis = str(_agreement_for_basis.reconciliation_mode or 'FACTUAL').upper()
             # E12: fund the receive out of the capital pools, per obligation
             # currency (base direct; non-base via FIFO cost-basis). The returned
             # base cost drives shares — honest acquisition cost, not market rate.

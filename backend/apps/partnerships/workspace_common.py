@@ -19,6 +19,7 @@ from apps.suppliers.models import SupplierPayable
 
 from .models import (
     AgreementAllocation,
+    AgreementWithdrawal,
     InvestmentAgreement,
     Procurement,
     ProcurementExpense,
@@ -65,12 +66,18 @@ def _resolve_procurement_row_fx_rate(
     raw_fx = row.get('fx_rate')
     if raw_fx is None and current_fx_rate is not None:
         raw_fx = current_fx_rate
-    return _resolve_workspace_fx_rate(
+    resolved = _resolve_workspace_fx_rate(
         tenant_id=tenant_id,
         currency=currency,
         fx_rate=raw_fx,
         operation_at=procurement.opened_at,
     )
+    if currency == 'USD' and resolved <= Decimal('1'):
+        raise ValueError(
+            'USD procurement rows require a valid USD/UZS FX snapshot greater than 1. '
+            'Refresh the exchange rate before saving goods or expenses.'
+        )
+    return resolved
 
 
 def _primary_currency(procurement: Procurement) -> str:
@@ -284,6 +291,8 @@ def _agreement_available_by_partner(agreement: InvestmentAgreement) -> dict[int,
     for contribution in agreement.contributions.all():
         _add_amount(available, contribution.partner_id, contribution.currency, contribution.amount)
     for withdrawal in agreement.withdrawals.all():
+        if withdrawal.return_kind != AgreementWithdrawal.ReturnKind.FROM_POOL:
+            continue
         _add_amount(available, withdrawal.partner_id, withdrawal.currency, -Decimal(str(withdrawal.amount)))
     for allocation in agreement.allocations.all():
         signed = Decimal(str(allocation.amount))

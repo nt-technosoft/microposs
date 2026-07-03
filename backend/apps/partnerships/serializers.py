@@ -63,6 +63,25 @@ def _to_contract_currency(amount, currency: str, fx_rate, contract_currency: str
     return _money(amount_dec)
 
 
+def _investor_pool_shares(obj) -> dict | None:
+    investors = [
+        row for row in obj.partners.all()
+        if row.role == AgreementPartner.Role.INVESTOR
+    ]
+    if not investors:
+        return None
+    budget = Decimal(str(obj.planned_budget or '0'))
+    capital = sum((Decimal(str(row.planned_capital_share or '0')) for row in investors), Decimal('0'))
+    profit = sum((Decimal(str(row.profit_share or '0')) for row in investors), Decimal('0'))
+    return {
+        'capital_amount': str(_money(capital)),
+        'profit_share': str(_ratio(profit)),
+        'capital_percent': round(float(capital / budget * Decimal('100'))) if budget else 0,
+        'profit_percent': round(float(profit * Decimal('100'))),
+        'investors_count': len(investors),
+    }
+
+
 class ProcurementItemSerializer(serializers.ModelSerializer):
     product_variant_name = serializers.CharField(source='product_variant.__str__', read_only=True)
 
@@ -680,18 +699,7 @@ class InvestmentAgreementListSerializer(serializers.ModelSerializer):
         return obj.procurements.count()
 
     def get_investor_shares(self, obj):
-        investor = next(
-            (row for row in obj.partners.all() if row.role == AgreementPartner.Role.INVESTOR),
-            None,
-        )
-        if investor is None:
-            return None
-        budget = float(obj.planned_budget or 0)
-        capital = float(investor.planned_capital_share or 0)
-        return {
-            'capital_percent': round(capital / budget * 100) if budget else 0,
-            'profit_percent': round(float(investor.profit_share or 0) * 100),
-        }
+        return _investor_pool_shares(obj)
 
 
 class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
@@ -706,6 +714,7 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
     participant_totals = serializers.SerializerMethodField()
     history = serializers.SerializerMethodField()
     current_terms = AgreementTermsVersionSerializer(read_only=True)
+    investor_shares = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentAgreement
@@ -716,11 +725,15 @@ class InvestmentAgreementDetailSerializer(serializers.ModelSerializer):
             'balances', 'notes', 'client_request_id', 'partners',
             'commitments', 'contributions', 'withdrawals', 'allocations',
             'events', 'procurements', 'participant_totals', 'history',
+            'investor_shares',
         ]
         read_only_fields = ['id']
 
     def get_procurements(self, obj):
         return ProcurementListSerializer(obj.procurements.all(), many=True, context=self.context).data
+
+    def get_investor_shares(self, obj):
+        return _investor_pool_shares(obj)
 
     def get_participant_totals(self, obj):
         from .read_models import read_positions

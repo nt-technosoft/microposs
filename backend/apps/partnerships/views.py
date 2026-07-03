@@ -720,6 +720,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
     def venture_summary(self, request, pk=None):
         """E16: current procurement-venture economic buckets in functional UZS."""
         from .venture import procurement_has_active_lots
+        from .models import ProcurementReceiveBatchLine
 
         procurement = self.get_object()
         positions = read_venture_positions(procurement)
@@ -757,6 +758,29 @@ class ProcurementViewSet(viewsets.ModelViewSet):
                 totals[key] += value
             rows.append(row)
         rows.sort(key=lambda item: item['partner_id'])
+
+        audit_warnings = []
+        suspicious_fx_lines = list(
+            ProcurementReceiveBatchLine.objects
+            .filter(
+                tenant_id=procurement.tenant_id,
+                batch__procurement=procurement,
+                batch__is_reversal=False,
+                item__currency='USD',
+                item__fx_rate__lte=Decimal('1'),
+            )
+            .select_related('item__product_variant')
+            .order_by('id')[:5]
+        )
+        if suspicious_fx_lines:
+            audit_warnings.append({
+                'code': 'SUSPICIOUS_USD_COST_FX',
+                'message': (
+                    'В полученных USD-товарах найден FX snapshot <= 1. '
+                    'Себестоимость, прибыль/убыток и сверка венчура могут быть искажены.'
+                ),
+                'line_ids': [line.id for line in suspicious_fx_lines],
+            })
         return Response({
             'procurement_id': procurement.id,
             'agreement_id': procurement.agreement_id,
@@ -764,6 +788,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             'positions': rows,
             'totals': {key: str(value.quantize(Decimal('0.01'))) for key, value in totals.items()},
             'has_active_lots': procurement_has_active_lots(procurement),
+            'audit_warnings': audit_warnings,
         })
 
     @action(detail=True, methods=['get'], url_path='close-preview')

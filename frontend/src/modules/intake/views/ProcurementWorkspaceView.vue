@@ -102,9 +102,10 @@ async function ensureWorkspace(): Promise<void> {
     await Promise.all([loadVentureSummary(id), loadClosePreview(id)])
   } else {
     const mode = route.query.mode as string | undefined
-    const agreementId = route.query.agreement ? Number(route.query.agreement) : undefined
+    const rawAgreementId = route.query.agreement ?? route.query.agreement_id ?? route.query.investment_agreement_id
+    const agreementId = rawAgreementId ? Number(rawAgreementId) : undefined
     const draftId = await store.createDraft({
-      funding_source: mode === 'partnership' ? 'PARTNERSHIP' : 'OWN_FUNDS',
+      funding_source: mode === 'partnership' || agreementId ? 'PARTNERSHIP' : 'OWN_FUNDS',
       ...(agreementId ? { agreement_id: agreementId } : {}),
     })
     await router.replace({ name: 'procurement-detail', params: { id: draftId } })

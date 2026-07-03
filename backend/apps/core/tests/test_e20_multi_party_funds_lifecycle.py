@@ -19,6 +19,7 @@ from apps.partnerships.fund_services import (
     deploy_fund_to_agreement,
     exit_fund_member,
     preview_fund_application_approvals,
+    rebuild_fund_member_positions,
     submit_fund_application,
 )
 from apps.partnerships.lifecycle_services import (
@@ -37,11 +38,17 @@ from apps.partnerships.models import (
     FundApplication,
     FundMember,
     FundMemberExit,
+    FundMemberPositionReadModel,
     InvestmentFund,
     PartnerPositionReadModel,
     PayoutObligation,
     PayoutPolicy,
     FundPositionReadModel,
+    Procurement,
+)
+from apps.partnerships.serializers import (
+    InvestmentAgreementDetailSerializer,
+    InvestmentAgreementListSerializer,
 )
 from apps.finance.models import Payment
 from apps.finance.services import record_generic_cash_payment
@@ -49,6 +56,7 @@ from apps.partnerships.workspace_support import (
     add_agreement_contribution,
     create_investment_agreement,
 )
+from apps.partnerships.workspace import build_workspace_payload, create_workspace
 from apps.partnerships.tasks import evaluate_due_contract_lifecycle
 
 from ._helpers import build_tenant
@@ -119,6 +127,52 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         self.assertEqual(amended.payout_policy.grace_period_days, 5)
         self.assertEqual(amended.terms_snapshot['parties'], agreement.current_terms.terms_snapshot['parties'])
 
+    def test_multi_party_agreement_serializers_report_investor_pool_shares(self):
+        second = self._second_investor()
+        agreement = create_investment_agreement(
+            tenant_id=self.business.id,
+            mudaraba_ratio=Decimal('0.375'),
+            planned_budget=Decimal('1000'),
+            partners=[
+                {'partner_id': self.investor.id, 'role': 'INVESTOR', 'planned_capital_share': '300', 'profit_share': '0.112500'},
+                {'partner_id': second.id, 'role': 'INVESTOR', 'planned_capital_share': '500', 'profit_share': '0.187500'},
+                {'partner_id': self.operator.id, 'role': 'OPERATOR', 'planned_capital_share': '200', 'profit_share': '0.70'},
+            ],
+        )
+
+        list_data = InvestmentAgreementListSerializer(agreement).data
+        detail_data = InvestmentAgreementDetailSerializer(agreement).data
+
+        for payload in (list_data, detail_data):
+            self.assertEqual(payload['investor_shares']['capital_percent'], 80)
+            self.assertEqual(payload['investor_shares']['profit_percent'], 30)
+            self.assertEqual(payload['investor_shares']['investors_count'], 2)
+
+    def test_procurement_workspace_payload_reports_investor_pool_shares(self):
+        second = self._second_investor()
+        agreement = create_investment_agreement(
+            tenant_id=self.business.id,
+            mudaraba_ratio=Decimal('0.375'),
+            planned_budget=Decimal('1000'),
+            partners=[
+                {'partner_id': self.investor.id, 'role': 'INVESTOR', 'planned_capital_share': '300', 'profit_share': '0.112500'},
+                {'partner_id': second.id, 'role': 'INVESTOR', 'planned_capital_share': '500', 'profit_share': '0.187500'},
+                {'partner_id': self.operator.id, 'role': 'OPERATOR', 'planned_capital_share': '200', 'profit_share': '0.70'},
+            ],
+        )
+        procurement = create_workspace(
+            tenant_id=self.business.id,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            supplier_id=self.ctx['supplier'].id,
+            agreement_id=agreement.id,
+        )
+
+        investment = build_workspace_payload(procurement)['documents']['investment']
+
+        self.assertEqual(investment['investor_shares']['capital_percent'], 80)
+        self.assertEqual(investment['investor_shares']['profit_percent'], 30)
+        self.assertEqual(investment['investor_shares']['investors_count'], 2)
+
     def test_closed_fund_deploys_via_holder_and_blocks_new_contribution(self):
         second = self._second_investor()
         fund = create_investment_fund(
@@ -179,6 +233,116 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
                 partner_id=self.investor.id,
                 reason=FundMemberExit.Reason.MEMBER_EXIT,
             )
+
+    def test_fund_member_capital_return_survives_agreement_withdrawal(self):
+        second = self._second_investor()
+        fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Returned capital fund',
+            manager_partner_id=self.operator.id,
+            member_partner_ids=[self.investor.id, second.id],
+            currency='UZS',
+            manager_profit_share=Decimal('0'),
+        )
+        add_fund_contribution(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=self.investor.id,
+            amount=Decimal('600'),
+            currency='UZS',
+        )
+        add_fund_contribution(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            partner_id=second.id,
+            amount=Decimal('400'),
+            currency='UZS',
+        )
+        agreement = create_investment_agreement(
+            tenant_id=self.business.id,
+            mudaraba_ratio=Decimal('0.50'),
+            planned_budget=Decimal('1000'),
+            partners=[
+                {'partner_id': fund.holder_partner_id, 'role': 'INVESTOR', 'planned_capital_share': '800', 'profit_share': '0.40'},
+                {'partner_id': self.operator.id, 'role': 'OPERATOR', 'planned_capital_share': '200', 'profit_share': '0.60'},
+            ],
+        )
+        deploy_fund_to_agreement(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            agreement_id=agreement.id,
+            amount=Decimal('800'),
+        )
+        procurement = Procurement.objects.create(
+            tenant=self.business,
+            agreement=agreement,
+            funding_source=Procurement.FundingSource.PARTNERSHIP,
+            opened_at=timezone.now(),
+        )
+        PartnerPositionReadModel.objects.update_or_create(
+            tenant=self.business,
+            agreement=agreement,
+            procurement=None,
+            partner=fund.holder_partner,
+            currency='UZS',
+            defaults={
+                'available': Decimal('-80'),
+                'computed_at': timezone.now(),
+            },
+        )
+        venture_row = PartnerPositionReadModel.objects.create(
+            tenant=self.business,
+            agreement=agreement,
+            procurement=procurement,
+            partner=fund.holder_partner,
+            currency='UZS',
+            provisional_profit_available_uzs=Decimal('20'),
+            capital_return_available_uzs=Decimal('80'),
+            computed_at=timezone.now(),
+        )
+
+        rebuild_fund_member_positions(fund)
+        fund.position_row.refresh_from_db()
+        self.assertEqual(fund.position_row.available, Decimal('0.00'))
+        self.assertEqual(fund.position_row.capital_return_available_uzs, Decimal('80.00'))
+        self.assertEqual(
+            FundMemberPositionReadModel.objects.get(fund=fund, member__partner=self.investor).capital_return_available_uzs,
+            Decimal('48.00'),
+        )
+        self.assertEqual(
+            FundMemberPositionReadModel.objects.get(fund=fund, member__partner=second).capital_return_available_uzs,
+            Decimal('32.00'),
+        )
+
+        venture_row.capital_return_available_uzs = Decimal('0')
+        venture_row.capital_returned_uzs = Decimal('80')
+        venture_row.save(update_fields=['capital_return_available_uzs', 'capital_returned_uzs', 'updated_at'])
+        rebuild_fund_member_positions(fund)
+        fund.position_row.refresh_from_db()
+        self.assertEqual(fund.position_row.available, Decimal('0.00'))
+        self.assertEqual(fund.position_row.capital_return_available_uzs, Decimal('80.00'))
+        self.assertEqual(
+            FundMemberPositionReadModel.objects.get(fund=fund, member__partner=self.investor).capital_return_available_uzs,
+            Decimal('48.00'),
+        )
+
+        PayoutObligation.objects.create(
+            tenant=self.business,
+            fund=fund,
+            recipient=self.investor,
+            kind=PayoutObligation.Kind.CAPITAL_RETURN,
+            amount=Decimal('48'),
+            paid_amount=Decimal('10'),
+            currency='UZS',
+            due_at=timezone.now(),
+        )
+        rebuild_fund_member_positions(fund)
+        fund.position_row.refresh_from_db()
+        self.assertEqual(fund.position_row.capital_return_available_uzs, Decimal('70.00'))
+        self.assertEqual(
+            FundMemberPositionReadModel.objects.get(fund=fund, member__partner=self.investor).capital_return_available_uzs,
+            Decimal('38.00'),
+        )
 
     def test_fund_application_approval_hard_cap_and_pre_deployment_exit_refund(self):
         second = self._second_investor()
@@ -716,3 +880,43 @@ class E21FundPermissionApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], self.fund.id)
         self.assertEqual(response.data['invite_path'], f'/investor/funds/join/{self.fund.invite_token}')
+
+    def test_investor_fund_list_and_create_work_without_active_business_context(self):
+        investor_user = User.objects.create_user(username='standalone_fund_investor', password='x')
+        investor_partner = Partner.objects.create(
+            tenant=self.business,
+            role=Partner.Role.INVESTOR,
+            display_name='Standalone fund investor',
+            user=investor_user,
+            is_active=True,
+        )
+        self.client.force_authenticate(user=investor_user)
+
+        list_response = self.client.get('/api/v1/partnerships/funds/')
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        list_rows = list_response.data.get('results', list_response.data)
+        self.assertEqual([row['id'] for row in list_rows], [self.fund.id])
+
+        create_response = self.client.post(
+            '/api/v1/partnerships/funds/',
+            {
+                'name': 'Investor cabinet fund',
+                'manager_partner_id': investor_partner.id,
+                'member_partner_ids': [],
+                'currency': 'UZS',
+                'target_amount': '5000',
+                'min_contribution_amount': '100',
+                'visibility': InvestmentFund.Visibility.PRIVATE_INVITE,
+                'manager_profit_share': '0',
+            },
+            format='json',
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.data['manager_partner'], investor_partner.id)
+        self.assertEqual(create_response.data['manager_partner_name'], investor_partner.display_name)
+        self.assertEqual(InvestmentFund.objects.get(pk=create_response.data['id']).tenant_id, self.business.id)
+
+        detail_response = self.client.get(f'/api/v1/partnerships/funds/{create_response.data["id"]}/')
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data['id'], create_response.data['id'])

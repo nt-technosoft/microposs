@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Landmark, Plus, RefreshCcw, Users } from 'lucide-vue-next'
 
 import { fetchPartners, type Partner } from '@/api/core'
@@ -8,9 +8,13 @@ import { createInvestmentFund, fetchInvestmentFunds, fetchPartnershipActionQueue
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
 import { formatPrice } from '@/utils/currency'
+import { getApiErrorMessage } from '@/utils/errors'
 
 const router = useRouter()
+const route = useRoute()
+const auth = useAuthStore()
 const toast = useToast()
 const funds = ref<InvestmentFund[]>([])
 const actions = ref<PartnershipActionQueueItem[]>([])
@@ -34,11 +38,23 @@ const payoutReserve = ref('0')
 const allowPartialPayout = ref(true)
 let controller: AbortController | null = null
 
+const isInvestorCabinet = computed(() => route.name === 'investor-funds')
 const activePartners = computed(() => partners.value.filter((partner) => partner.is_active))
 const managerOptions = computed(() => activePartners.value.filter((partner) => partner.role === 'OPERATOR' || partner.role === 'INVESTOR'))
+const detailRouteName = computed(() => isInvestorCabinet.value ? 'investor-fund-detail' : 'fund-detail')
 
 function formatStatus(status: InvestmentFund['status']): string {
   return { DRAFT: 'Черновик', RAISING: 'Сбор капитала', DEPLOYED: 'Закрыт для взносов', CLOSED: 'Закрыт' }[status]
+}
+
+function authPartnerRows(): Partner[] {
+  return (auth.user?.partner_profiles ?? []).map((profile) => ({
+    id: profile.id,
+    role: profile.role,
+    display_name: profile.display_name,
+    is_active: true,
+    user: auth.user?.id ?? null,
+  }))
 }
 
 async function load(): Promise<void> {
@@ -47,17 +63,27 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [fundRows, partnerRows, actionRows] = await Promise.all([
-      fetchInvestmentFunds(),
-      fetchPartners({ is_active: true }, controller.signal),
-      fetchPartnershipActionQueue(),
-    ])
-    funds.value = fundRows
-    partners.value = partnerRows
-    actions.value = actionRows
-    if (!managerId.value) managerId.value = partnerRows.find((partner) => partner.role === 'OPERATOR')?.id ?? null
+    if (isInvestorCabinet.value) {
+      await auth.ensureUserLoaded()
+      const fundRows = await fetchInvestmentFunds()
+      const partnerRows = authPartnerRows()
+      funds.value = fundRows
+      partners.value = partnerRows
+      actions.value = []
+      if (!managerId.value) managerId.value = partnerRows[0]?.id ?? null
+    } else {
+      const [fundRows, partnerRows, actionRows] = await Promise.all([
+        fetchInvestmentFunds(),
+        fetchPartners({ is_active: true }, controller.signal),
+        fetchPartnershipActionQueue(),
+      ])
+      funds.value = fundRows
+      partners.value = partnerRows
+      actions.value = actionRows
+      if (!managerId.value) managerId.value = partnerRows.find((partner) => partner.role === 'OPERATOR')?.id ?? null
+    }
   } catch (cause) {
-    if ((cause as { name?: string })?.name !== 'CanceledError') error.value = cause instanceof Error ? cause.message : 'Не удалось загрузить фонды'
+    if ((cause as { name?: string })?.name !== 'CanceledError') error.value = getApiErrorMessage(cause, 'Не удалось загрузить фонды')
   } finally {
     loading.value = false
   }
@@ -92,9 +118,9 @@ async function submit(): Promise<void> {
       },
     })
     toast.success('Фонд создан: заявки участников принимаются до первого размещения.')
-    router.push({ name: 'fund-detail', params: { id: fund.id } })
+    router.push({ name: detailRouteName.value, params: { id: fund.id } })
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Не удалось создать фонд'
+    error.value = getApiErrorMessage(cause, 'Не удалось создать фонд')
   } finally {
     saving.value = false
   }
@@ -129,7 +155,7 @@ onBeforeUnmount(() => controller?.abort())
           :key="action.id"
           class="rounded-xl bg-muted/60 p-3 text-left"
           type="button"
-          @click="action.fund_id && router.push({ name: 'fund-detail', params: { id: action.fund_id } })"
+          @click="action.fund_id && router.push({ name: detailRouteName, params: { id: action.fund_id } })"
         >
           <span class="block text-sm font-medium text-foreground">{{ action.title }}</span>
           <span class="mt-0.5 block text-xs text-muted-foreground">{{ action.subtitle }}</span>
@@ -140,7 +166,7 @@ onBeforeUnmount(() => controller?.abort())
       <p v-else-if="error && !showCreate" class="text-sm text-destructive">{{ error }}</p>
       <div v-else-if="!funds.length" class="flex flex-col items-center gap-2 border border-dashed border-border py-14 text-center"><Landmark class="size-8 text-muted-foreground" /><strong>Фондов пока нет</strong><span class="max-w-sm text-sm text-muted-foreground">Создайте фонд, отправьте invite link или опубликуйте его в investor cabinet.</span></div>
       <div v-else class="divide-y divide-border border-y border-border">
-        <button v-for="fund in funds" :key="fund.id" class="flex w-full items-center justify-between gap-4 py-4 text-left transition hover:bg-muted/40" type="button" @click="router.push({ name: 'fund-detail', params: { id: fund.id } })"><span class="min-w-0"><span class="flex items-center gap-2 font-medium text-foreground"><Users class="size-4 text-primary" />{{ fund.name }}</span><span class="mt-1 block text-sm text-muted-foreground">{{ formatStatus(fund.status) }} · {{ fund.members.filter((m) => m.status === 'ACTIVE').length }} участников · {{ fund.applications.filter((a) => a.status === 'PENDING').length }} заявок · управляющий {{ fund.manager_partner_name }}</span></span><strong class="shrink-0 tabular-nums text-foreground">{{ formatPrice(fund.positions.reduce((sum, row) => sum + Number(row.paid_in || 0), 0), fund.currency) }}</strong></button>
+        <button v-for="fund in funds" :key="fund.id" class="flex w-full items-center justify-between gap-4 py-4 text-left transition hover:bg-muted/40" type="button" @click="router.push({ name: detailRouteName, params: { id: fund.id } })"><span class="min-w-0"><span class="flex items-center gap-2 font-medium text-foreground"><Users class="size-4 text-primary" />{{ fund.name }}</span><span class="mt-1 block text-sm text-muted-foreground">{{ formatStatus(fund.status) }} · {{ fund.members.filter((m) => m.status === 'ACTIVE').length }} участников · {{ fund.applications.filter((a) => a.status === 'PENDING').length }} заявок · управляющий {{ fund.manager_partner_name }}</span></span><strong class="shrink-0 tabular-nums text-foreground">{{ formatPrice(fund.positions.reduce((sum, row) => sum + Number(row.paid_in || 0), 0), fund.currency) }}</strong></button>
       </div>
     </section>
   </main>

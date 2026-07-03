@@ -4,6 +4,7 @@ from django.db import models
 from django.test import TestCase
 from rest_framework.test import APITestCase
 
+from apps.core.models import Business
 from apps.finance.models import Payment
 from apps.inventory.models import Lot
 from apps.partnerships.models import (
@@ -994,3 +995,23 @@ class ProcurementWorkspaceFacadeApiTests(APITestCase):
         )
         self.assertEqual(receive_response.status_code, 200)
         self.assertEqual(receive_response.data['status'], Procurement.Status.RECEIVED)
+
+    def test_workspace_api_requires_unambiguous_business_context(self):
+        Business.objects.create(
+            name='Second active business',
+            owner=self.ctx['owner'],
+            currency='UZS',
+            is_active=True,
+        )
+
+        response = self.client.post(
+            '/api/v1/procurement-workspaces/',
+            {'funding_source': Procurement.FundingSource.OWN_FUNDS},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            str(response.data['detail']),
+            'Business context is required for procurement workspace operations.',
+        )

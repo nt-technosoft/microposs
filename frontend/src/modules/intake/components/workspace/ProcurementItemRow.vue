@@ -18,16 +18,21 @@ const totalDisplay = computed(() => {
   const total = (parseFloat(props.item.quantity) || 0) * (parseFloat(props.item.unit_purchase_price) || 0)
   return total.toLocaleString('ru-RU', { maximumFractionDigits: 2 })
 })
-const landedCost = computed(() =>
-  props.item.estimated_landed_cost_per_unit
-  ?? props.item.actual_landed_cost_per_unit
-  ?? null,
+const suspiciousUsdFx = computed(() =>
+  props.item.currency === 'USD'
+  && (!Number.isFinite(Number.parseFloat(props.item.fx_rate)) || Number.parseFloat(props.item.fx_rate) <= 1),
 )
+const landedCost = computed(() =>
+  suspiciousUsdFx.value
+    ? (props.item.estimated_landed_cost_per_unit_uzs ?? props.item.actual_landed_cost_per_unit_uzs ?? null)
+    : (props.item.estimated_landed_cost_per_unit ?? props.item.actual_landed_cost_per_unit ?? null),
+)
+const landedCurrency = computed(() => suspiciousUsdFx.value ? 'UZS' : props.item.currency)
 const landedDisplay = computed(() => {
   if (!landedCost.value) return ''
   const value = parseFloat(landedCost.value)
   if (!Number.isFinite(value) || value <= 0) return ''
-  return value.toLocaleString('ru-RU', { maximumFractionDigits: props.item.currency === 'USD' ? 2 : 0 })
+  return value.toLocaleString('ru-RU', { maximumFractionDigits: landedCurrency.value === 'USD' ? 2 : 0 })
 })
 </script>
 
@@ -54,8 +59,9 @@ const landedDisplay = computed(() => {
       </div>
       <div v-if="landedDisplay" class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-neutral-500">
         <span>Себестоимость</span>
-        <span class="font-medium tabular-nums text-foreground">{{ landedDisplay }} {{ item.currency }}/шт</span>
+        <span class="font-medium tabular-nums text-foreground">{{ landedDisplay }} {{ landedCurrency }}/шт</span>
         <span class="text-neutral-400">вкл. расходы</span>
+        <span v-if="suspiciousUsdFx" class="text-amber-600">проверьте курс USD</span>
       </div>
     </div>
     <span class="shrink-0 text-sm font-semibold tabular-nums text-foreground">

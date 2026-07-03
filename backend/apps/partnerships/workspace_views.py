@@ -1,5 +1,5 @@
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -15,17 +15,26 @@ from .workspace import (
 )
 
 
+def _require_tenant(request) -> int:
+    tenant_id = getattr(request, 'tenant_id', None)
+    if tenant_id is None:
+        raise PermissionDenied('Business context is required for procurement workspace operations.')
+    return tenant_id
+
+
 class ProcurementWorkspaceListCreateView(APIView):
     permission_classes = [IsOwner | IsWarehouse]
 
     def get(self, request):
+        tenant_id = _require_tenant(request)
         rows = [
             build_workspace_payload(procurement)
-            for procurement in workspace_queryset(request.tenant_id)[:50]
+            for procurement in workspace_queryset(tenant_id)[:50]
         ]
         return Response(rows)
 
     def post(self, request):
+        tenant_id = _require_tenant(request)
         payload = request.data or {}
         funding_source = (
             payload.get('funding_source')
@@ -33,7 +42,7 @@ class ProcurementWorkspaceListCreateView(APIView):
         )
         try:
             procurement = create_workspace(
-                tenant_id=request.tenant_id,
+                tenant_id=tenant_id,
                 funding_source=funding_source,
                 primary_currency=payload.get('primary_currency') or 'UZS',
                 supplier_id=payload.get('supplier_id'),
@@ -50,7 +59,8 @@ class ProcurementWorkspaceDetailView(APIView):
     permission_classes = [IsOwner | IsWarehouse]
 
     def get_object(self, request, pk: int):
-        return get_object_or_404(workspace_queryset(request.tenant_id), pk=pk)
+        tenant_id = _require_tenant(request)
+        return get_object_or_404(workspace_queryset(tenant_id), pk=pk)
 
     def get(self, request, pk: int):
         return Response(build_workspace_payload(self.get_object(request, pk)))
@@ -60,10 +70,11 @@ class ProcurementWorkspaceActionView(APIView):
     permission_classes = [IsOwner | IsWarehouse]
 
     def post(self, request, pk: int, action: str):
-        procurement = get_object_or_404(workspace_queryset(request.tenant_id), pk=pk)
+        tenant_id = _require_tenant(request)
+        procurement = get_object_or_404(workspace_queryset(tenant_id), pk=pk)
         try:
             procurement = dispatch_workspace_action(
-                tenant_id=request.tenant_id,
+                tenant_id=tenant_id,
                 procurement=procurement,
                 action=action,
                 payload=request.data or {},

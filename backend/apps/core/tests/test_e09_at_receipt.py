@@ -179,7 +179,15 @@ class AtReceiptCombinedActionTests(TestCase):
                 },
             )
 
-    def _build_partnership_at_receipt_procurement(self, ctx, *, total_uzs='5000', qty=5, unit_price='1000'):
+    def _build_partnership_at_receipt_procurement(
+        self,
+        ctx,
+        *,
+        total_uzs='5000',
+        qty=5,
+        unit_price='1000',
+        reconciliation_mode='FACTUAL',
+    ):
         """PARTNERSHIP + AT_RECEIPT procurement with capital contributed but NOT yet allocated."""
         from django.utils import timezone
         from apps.finance.models import ExchangeRate
@@ -197,6 +205,7 @@ class AtReceiptCombinedActionTests(TestCase):
                 'mudaraba_ratio': '0.571429',
                 'planned_budget': total_uzs,
                 'currency': 'UZS',
+                'reconciliation_mode': reconciliation_mode,
                 'partners': [
                     {'partner_id': ctx['investor'].id, 'role': 'INVESTOR',
                      'planned_capital_share': str(int(total_uzs) * 7 // 10),
@@ -297,6 +306,7 @@ class AtReceiptCombinedActionTests(TestCase):
             total_uzs='200',
             qty=10,
             unit_price='10',
+            reconciliation_mode='AGREED',
         )
         proc = dispatch_workspace_action(
             tenant_id=self.ctx['business'].id,

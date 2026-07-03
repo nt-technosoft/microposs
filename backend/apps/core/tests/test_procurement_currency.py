@@ -38,23 +38,25 @@ def _seed_usd_rate(tenant_id):
     )
 
 
-def _make_procurement(ctx, currency='UZS', unit_price='100', qty='10', fx_rate='1'):
+def _make_procurement(ctx, currency='UZS', unit_price='100', qty='10', fx_rate=None):
     proc = create_workspace(
         tenant_id=ctx['business'].id,
         funding_source=Procurement.FundingSource.OWN_FUNDS,
         supplier_id=ctx['supplier'].id,
     )
+    item = {
+        'product_variant_id': ctx['variant'].id,
+        'quantity': qty,
+        'unit_purchase_price': unit_price,
+        'currency': currency,
+    }
+    if fx_rate is not None:
+        item['fx_rate'] = fx_rate
     return dispatch_workspace_action(
         tenant_id=ctx['business'].id,
         procurement=proc,
         action='UPDATE_ITEMS',
-        payload={'payload': {'items': [{
-            'product_variant_id': ctx['variant'].id,
-            'quantity': qty,
-            'unit_purchase_price': unit_price,
-            'currency': currency,
-            'fx_rate': fx_rate,
-        }]}},
+        payload={'payload': {'items': [item]}},
     )
 
 
@@ -73,6 +75,13 @@ class TermsCurrencyDerivationTests(TestCase):
         )
         terms = ProcurementTerms.objects.get(procurement=proc)
         self.assertEqual(terms.currency_of_obligation, 'USD')
+
+    def test_usd_procurement_row_rejects_fx_one(self):
+        """USD procurement rows cannot enter the cost basis with fx=1."""
+        _seed_usd_rate(self.ctx['business'].id)
+        with self.assertRaises(ValueError) as exc_ctx:
+            _make_procurement(self.ctx, currency='USD', unit_price='10', qty='5', fx_rate='1')
+        self.assertIn('USD/UZS FX snapshot', str(exc_ctx.exception))
 
     def test_terms_currency_derived_from_items_uzs(self):
         """UZS items → settlement currency_of_obligation is UZS."""

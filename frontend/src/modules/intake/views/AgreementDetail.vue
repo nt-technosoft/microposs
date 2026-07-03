@@ -79,11 +79,12 @@ const activePosition = ref<CapitalPositionRow | null>(null)
 const dividendOpen = ref(false)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
-const contributionCurrency = ref<'USD' | 'UZS'>('USD')
+type SupportedCurrency = 'USD' | 'UZS'
+const contributionCurrency = ref<SupportedCurrency>('UZS')
 const savingContribution = ref(false)
 const withdrawalPartnerId = ref<number | null>(null)
 const withdrawalAmount = ref('')
-const withdrawalCurrency = ref<'USD' | 'UZS'>('USD')
+const withdrawalCurrency = ref<SupportedCurrency>('UZS')
 const savingWithdrawal = ref(false)
 const savingRecoveredCapital = ref(false)
 const withdrawalError = ref('')
@@ -118,7 +119,7 @@ const balanceLabel = computed(() => {
     .map(([currency, amount]) => formatPrice(amount, currency))
   return parts.length ? parts.join(' · ') : '0'
 })
-const primaryCurrency = computed(() => agreement.value?.currency ?? 'UZS')
+const primaryCurrency = computed<SupportedCurrency>(() => supportedCurrency(agreement.value?.currency))
 const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0) || 0)
 const availablePrimaryAmount = computed(() => Number(agreement.value?.balances?.[primaryCurrency.value] ?? 0) || 0)
 const contributedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.contributed_amount || 0), 0) ?? 0)
@@ -233,6 +234,10 @@ function fxRateForCurrency(currency: string): string {
   return currency === 'USD' ? latestUsdRate.value : '1'
 }
 
+function supportedCurrency(value: string | null | undefined): SupportedCurrency {
+  return String(value || 'UZS').toUpperCase() === 'USD' ? 'USD' : 'UZS'
+}
+
 function ensureFxRate(currency: string): boolean {
   if (currency !== 'USD' || latestUsdRate.value) return true
   toast.error(t('procurements.syncUsdRateFirst'))
@@ -244,6 +249,9 @@ async function load(): Promise<void> {
   error.value = ''
   try {
     agreement.value = await fetchInvestmentAgreement(agreementId.value)
+    const contractCurrency = supportedCurrency(agreement.value.currency)
+    contributionCurrency.value = contractCurrency
+    withdrawalCurrency.value = contractCurrency
     contributionPartnerId.value = agreement.value.partners[0]?.partner ?? null
     withdrawalPartnerId.value = withdrawalSideOptions.value[0]?.value ?? null
     allocationProcurementId.value = activeProcurements.value[0]?.id ?? null
@@ -338,6 +346,35 @@ async function returnRecoveredCapital(payload: {
       fx_rate: payload.fxRate,
       reason: `Возврат восстановленного капитала по приходу #${payload.row.procurementId}`,
     })
+    toast.success(t('procurements.withdrawalAdded'))
+    await load()
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, t('procurements.withdrawalAddFailed')))
+  } finally {
+    savingRecoveredCapital.value = false
+  }
+}
+
+async function returnRecoveredCapitalBatch(payload: {
+  entries: Array<{ row: RecoveredCapitalRow; amount: string }>
+  currency: 'UZS' | 'USD'
+  fxRate: string
+  accountId: number
+}): Promise<void> {
+  if (!agreement.value) return
+  savingRecoveredCapital.value = true
+  try {
+    for (const entry of payload.entries) {
+      await addAgreementWithdrawal(agreement.value.id, {
+        partner_id: entry.row.partnerId,
+        procurement_id: entry.row.procurementId,
+        from_account_id: payload.accountId,
+        amount: entry.amount,
+        currency: payload.currency,
+        fx_rate: payload.fxRate,
+        reason: `Групповой возврат восстановленного капитала по приходу #${entry.row.procurementId}`,
+      })
+    }
     toast.success(t('procurements.withdrawalAdded'))
     await load()
   } catch (err: unknown) {
@@ -633,8 +670,10 @@ onMounted(async () => {
           :rows="recoveredCapitalRows"
           :accounts="operatingAccounts"
           :usd-rate="latestUsdRate"
+          :agreement-currency="primaryCurrency"
           :saving="savingRecoveredCapital"
           @return-capital="returnRecoveredCapital"
+          @return-capital-batch="returnRecoveredCapitalBatch"
         />
 
         <!-- Распределение прибыли — только когда есть что распределять -->
@@ -770,7 +809,7 @@ onMounted(async () => {
                   <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
                   <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
                 </div>
-                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">
+                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { mode: 'partnership', agreement: agreement.id } })">
                   <Plus data-icon="inline-start" />
                   Новый приход
                 </Button>

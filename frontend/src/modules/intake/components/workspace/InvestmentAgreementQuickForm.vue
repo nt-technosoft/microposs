@@ -27,7 +27,7 @@ const { generateRequestId } = useIdempotency()
 const partners = ref<Partner[]>([])
 const selectedInvestorIds = ref<number[]>([])
 const investorAmounts = ref<Record<number, string>>({})
-const currency = ref<'USD' | 'UZS'>('USD')
+const currency = ref<'USD' | 'UZS'>('UZS')
 const investorCapitalPercent = ref('')
 const investorProfitPercentInput = ref('')
 const simulatedInvestorCapitalPercentDraft = ref('')
@@ -372,7 +372,7 @@ onMounted(loadPartners)
             @click="reconciliationMode = 'FACTUAL'"
           >
             <span class="block text-sm font-semibold text-foreground">Пересчёт по факту</span>
-            <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Без долга.</span>
+            <span class="mt-1 block text-xs text-muted-foreground">Доли следуют реально внесённому. Только полный приход, без partial receive.</span>
           </button>
         </div>
       </CardContent>
@@ -384,6 +384,9 @@ onMounted(loadPartners)
         <div class="flex items-start justify-between gap-3">
           <div>
             <CardTitle class="text-base">Доли при фактическом вкладе</CardTitle>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              В этом режиме весь приход принимается целиком: доли фиксируются один раз по финальному фактическому финансированию.
+            </p>
           </div>
           <HandCoins class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
         </div>

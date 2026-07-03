@@ -24,10 +24,14 @@ const error = ref('')
 const simulatorOpen = ref(false)
 
 const currency = computed(() => agreement.value?.currency ?? 'UZS')
-const investorPartner = computed(() => agreement.value?.partners.find((p) => p.role === 'INVESTOR') ?? null)
-const investorName = computed(() => investorPartner.value?.partner_name ?? 'Инвестор')
+const investorPartners = computed(() => agreement.value?.partners.filter((p) => p.role === 'INVESTOR') ?? [])
+const investorName = computed(() => {
+  if (investorPartners.value.length <= 1) return investorPartners.value[0]?.partner_name ?? 'Инвестор'
+  return `Пул инвесторов · ${investorPartners.value.length}`
+})
 const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0) || 0)
 const mudarabaRatio = computed(() => Number(agreement.value?.mudaraba_ratio ?? 0) || 0)
+const isAgreedMode = computed(() => agreement.value?.reconciliation_mode === 'AGREED')
 
 // Budget states: planned vs contributed (deposited by all) vs available.
 const availableAmount = computed(() => Number(agreement.value?.balances?.[currency.value] ?? 0) || 0)
@@ -55,35 +59,26 @@ function clampPercent(value: number): number {
 }
 
 const investorPlannedCapitalPercent = computed(() => {
-  const planned = Number(investorPartner.value?.planned_capital_share ?? 0) || 0
+  const aggregate = agreement.value?.investor_shares
+  if (aggregate) return aggregate.capital_percent
+  const planned = investorPartners.value.reduce((sum, partner) => sum + (Number(partner.planned_capital_share) || 0), 0)
   return plannedBudget.value > 0 ? (planned / plannedBudget.value) * 100 : 0
 })
 const investorActualCapitalPercent = computed(() => {
-  const investorRow = totals.value.find((p) => p.role === 'INVESTOR')
-  if (!investorRow || totalContributed.value <= 0) return null
-  return (Number(investorRow.contributed_amount) / totalContributed.value) * 100
+  const investorContributed = totals.value
+    .filter((p) => p.role === 'INVESTOR')
+    .reduce((sum, row) => sum + (Number(row.contributed_amount) || 0), 0)
+  if (investorContributed <= 0 || totalContributed.value <= 0) return null
+  return (investorContributed / totalContributed.value) * 100
 })
-// Investor profit recalculated from actual capital share via mudaraba ratio.
-const investorActualProfit = computed(() =>
-  investorActualCapitalPercent.value != null
-    ? clampPercent(investorActualCapitalPercent.value * mudarabaRatio.value)
-    : null,
-)
-
 const partyRows = computed(() => {
   const cur = currency.value
   const total = totalContributed.value
-  return totals.value.map((p) => {
+  const baseRows = totals.value.map((p) => {
     const contributedNum = Number(p.contributed_amount) || 0
     const plannedNum = Number(p.planned_capital_share) || 0
     const planCapPct = plannedBudget.value > 0 ? Math.round((plannedNum / plannedBudget.value) * 100) : null
     const factCapPct = total > 0 ? Math.round((contributedNum / total) * 100) : null
-    let factProfit: number | null = null
-    if (investorActualProfit.value != null) {
-      factProfit = p.role === 'INVESTOR'
-        ? Math.round(investorActualProfit.value)
-        : Math.round(clampPercent(100 - investorActualProfit.value))
-    }
     // Neutral deviation marker (not good/bad): did the actual share land above
     // or below the agreed share?
     let capDirection: 'up' | 'down' | null = null
@@ -93,6 +88,7 @@ const partyRows = computed(() => {
     return {
       key: p.partner_id,
       name: p.role === 'OPERATOR' ? 'Бизнес' : p.partner_name,
+      role: p.role,
       // plan (the agreement)
       planCapPct,
       planProfit: Math.round((Number(p.planned_profit_share) || 0) * 100),
@@ -100,9 +96,22 @@ const partyRows = computed(() => {
       // fact (current reality)
       factMoney: formatPrice(contributedNum, cur),
       factCapPct,
-      factProfit,
+      factProfit: null as number | null,
       capDirection,
     }
+  })
+  if (isAgreedMode.value) {
+    return baseRows.map((row) => ({ ...row, factProfit: row.planProfit }))
+  }
+  const investorProfitTotal = baseRows
+    .filter((row) => row.role === 'INVESTOR' && row.factCapPct != null)
+    .reduce((sum, row) => sum + clampPercent(Number(row.factCapPct) * mudarabaRatio.value), 0)
+  return baseRows.map((row) => {
+    if (row.factCapPct == null) return row
+    if (row.role === 'INVESTOR') {
+      return { ...row, factProfit: Math.round(clampPercent(row.factCapPct * mudarabaRatio.value)) }
+    }
+    return { ...row, factProfit: Math.round(clampPercent(100 - investorProfitTotal)) }
   })
 })
 

@@ -1,7 +1,7 @@
 # E21 — Business Context, Investor-Led Funds & Settlement UX Hardening
 
 **Статус:** `IN_REVIEW`
-**Прогресс:** 100% implementation
+**Прогресс:** follow-ups implemented
 **Зависит от:** E18 (единый money read-model), E20 (multi-party/fund/lifecycle base)
 **Блокирует:** pilot-ready investor fund workflow, корректный rollout E20 UX
 
@@ -29,6 +29,10 @@ gross-цифр, а business context перестаёт молча выбират
   языка пользователя;
 - страница прихода после receive должна становиться операционной аналитикой,
   а не оставаться в первую очередь формой старого заполнения.
+- `FACTUAL` partial receive создаёт несколько immutable share-profile/tranches
+  внутри одного procurement; технически это работает через `Lot.contract_snapshot`,
+  но продуктово плохо объясняется и создаёт неоднозначность при продажах до
+  финального прихода.
 
 Принцип реализации: проектируем целевую модель в вакууме и накладываем дельту
 на текущую E18/E20 реализацию. Не вводить второй ledger и не хранить ручные
@@ -61,6 +65,11 @@ gross-цифр, а business context перестаёт молча выбират
   доступные действия; старые детали формы свернуты.
 - **US-10. Action queue.** Заявки фонда, payout obligations, review date,
   disputes и confirmations попадают в единый in-app список действий.
+- **US-11. FACTUAL full receive guard.** Если договор использует `FACTUAL`,
+  приход принимается целиком: один procurement получает один factual snapshot.
+  Для partial receive и продаж до полного прихода используется `AGREED`, где
+  batches/lots наследуют договорные доли, а недовзносы/переплаты уходят в net
+  capital position.
 
 ## Текущее состояние
 
@@ -156,6 +165,22 @@ desktop-readable, без dashboard-card clutter.
 review по tenant isolation, fund boundary, payout provenance и read-model/UI
 mapping.
 
+### Фаза 7 — Factual receive hardening
+
+Закрыть продуктовую неоднозначность `FACTUAL` + partial receive без рефактора
+snapshot model. `Lot.contract_snapshot` остаётся immutable source of truth для
+FIFO, sales realization, settlement, reports и audit. Изменение — минимальный
+guard на receive: `FACTUAL` требует full receive; `AGREED` остаётся основным
+режимом по умолчанию и поддерживает partial receive/immediate sales.
+
+### Фаза 8 — Investor-pool and payout UX follow-ups
+
+Закрыть ошибки, найденные при pilot review после E21: все summary-блоки должны
+говорить об инвесторской стороне как об агрегированном пуле, а не о первом
+инвесторе; возврат восстановленного капитала должен работать в рабочей валюте
+договора, не округлять max-сумму вверх и давать бизнесу групповой action вместо
+обязательного клика по каждому инвестору.
+
 ## Задачи (чек-лист)
 
 ### Фаза 1
@@ -211,6 +236,29 @@ mapping.
 - [x] T-6.5 Run targeted backend suite, full core/partnership suite, frontend
   type-check/build and fresh review.
 
+### Фаза 7
+- [x] T-7.1 Backend guard: `RECEIVE_BATCH` blocks partial receive when linked
+  `InvestmentAgreement.reconciliation_mode == FACTUAL`.
+- [x] T-7.2 Error copy: `FACTUAL reconciliation requires full receive because
+  shares are derived from final factual funding. Use AGREED for partial receive
+  and immediate sales.`
+- [x] T-7.3 Agreement form copy: selecting `FACTUAL` clearly warns that partial
+  receive is unavailable.
+- [x] T-7.4 Tests: `FACTUAL + partial receive` is blocked, `FACTUAL + full
+  receive` is allowed, `AGREED + partial receive` remains allowed.
+
+### Фаза 8
+- [x] T-8.1 Backend list/detail/workspace payload exposes aggregate
+  `investor_shares` for the investor pool.
+- [x] T-8.2 Procurement financing card, agreement list/detail and profit
+  simulator use investor-pool aggregates instead of the first investor.
+- [x] T-8.3 Agreement detail fact profit display respects `AGREED` pinned
+  shares and uses per-partner factual profit only in `FACTUAL`.
+- [x] T-8.4 Recovered-capital return defaults to agreement currency and floors
+  converted max amounts to avoid frontend/backend FX rounding rejection.
+- [x] T-8.5 Recovered-capital card provides a grouped return action with
+  automatic per-investor preview while preserving immutable per-row withdrawals.
+
 ## Не входит в MVP
 
 - Full marketplace/discovery beyond simple public listing.
@@ -227,6 +275,12 @@ mapping.
   E21 только фиксирует disclosed manager profit share в terms snapshot.
 - ✓ Для пилота достаточно in-app action queue; external notifications не входят
   в E21.
+- ✓ 2026-06-29: `FACTUAL` ограничивается full receive. Не делаем true-up по
+  проданным лотам и не переписываем `Lot.contract_snapshot`; partial receive
+  остаётся через `AGREED`.
+- ✓ 2026-06-29: Обобщённые UI/read API по инвесторам должны использовать
+  investor pool aggregate. Поименные строки остаются только там, где пользователь
+  смотрит конкретного участника.
 
 ## Решённые вопросы (история)
 

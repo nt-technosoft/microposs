@@ -10,6 +10,7 @@ from apps.partnerships.agreement_services import agreement_pool_reconciliation_r
 from apps.partnerships.models import AgreementWithdrawal, PartnerJournalLineTag
 from apps.partnerships.serializers import InvestmentAgreementDetailSerializer
 from apps.partnerships.workspace import dispatch_workspace_action
+from apps.partnerships.workspace_common import _agreement_available_by_partner
 from apps.partnerships.workspace_support import add_agreement_withdrawal
 from apps.sales.models import PosSession, SalePayment
 from apps.sales.services import create_sale
@@ -122,6 +123,10 @@ class AgreementWithdrawalReturnKindTests(TestCase):
         self.assertEqual(agreement_pool_reconciliation_residual(agreement), Decimal('-40.00'))
         self.assertEqual(
             partner_capital_positions(agreement)[ctx['investor'].id]['paid_in'],
+            Decimal('140.00'),
+        )
+        self.assertEqual(
+            _agreement_available_by_partner(agreement)[ctx['investor'].id]['UZS'],
             Decimal('140.00'),
         )
 

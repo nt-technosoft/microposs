@@ -448,6 +448,17 @@ class ProcurementVentureRealizationTests(TestCase):
 
 
 class ProcurementVentureApiTests(APITestCase):
+    def test_venture_summary_flags_suspicious_usd_cost_fx(self):
+        ctx = build_tenant()
+        procurement, _ = seed_received_procurement(ctx)
+        procurement.items.update(fx_rate=Decimal('1'))
+
+        self.client.force_authenticate(user=ctx['owner'])
+        response = self.client.get(f'/api/v1/partnerships/procurements/{procurement.id}/venture-summary/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['audit_warnings'][0]['code'], 'SUSPICIOUS_USD_COST_FX')
+
     def test_venture_summary_exposes_returned_and_available_capital(self):
         ctx = build_tenant()
         procurement, _ = seed_received_procurement(ctx)

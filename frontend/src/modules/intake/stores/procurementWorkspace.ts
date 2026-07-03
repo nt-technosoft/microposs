@@ -41,9 +41,21 @@ export const useProcurementWorkspaceStore = defineStore('procurementWorkspace', 
   }
 
   async function createDraft(payload: ProcurementWorkspaceCreatePayload): Promise<number> {
-    const created = await createProcurementWorkspace(payload)
-    procurement.value = created
-    return created.id
+    abortController?.abort()
+    abortController = null
+    isLoading.value = true
+    error.value = null
+    procurement.value = null
+    try {
+      const created = await createProcurementWorkspace(payload)
+      procurement.value = created
+      return created.id
+    } catch (err) {
+      error.value = String((err as any)?.message ?? err)
+      throw err
+    } finally {
+      isLoading.value = false
+    }
   }
 
   async function dispatch(action: WorkspaceActionKey | string, payload: Record<string, unknown>): Promise<void> {

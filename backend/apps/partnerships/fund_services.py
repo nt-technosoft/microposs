@@ -29,6 +29,7 @@ from .models import (
     InvestmentAgreement,
     InvestmentFund,
     PartnerPositionReadModel,
+    PayoutObligation,
     PayoutPolicy,
 )
 from .money_utils import ZERO, equity_account_code, money, ratio
@@ -679,7 +680,7 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
         procurement__isnull=True,
         currency=currency,
     ).distinct()
-    external_available = sum((money(row.available) for row in agreement_rows), ZERO)
+    external_available = max(ZERO, sum((money(row.available) for row in agreement_rows), ZERO))
     venture_rows = PartnerPositionReadModel.objects.filter(
         tenant_id=fund.tenant_id,
         agreement__fund_deployments__fund=fund,
@@ -688,11 +689,34 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
         currency='UZS',
     ).distinct()
     gross_profit = sum((money(row.provisional_profit_uzs) for row in venture_rows), ZERO)
-    capital_available = sum((money(row.capital_return_available_uzs) for row in venture_rows), ZERO)
+    gross_capital_available = sum(
+        (
+            money(row.capital_return_available_uzs)
+            + money(row.capital_returned_uzs)
+            for row in venture_rows
+        ),
+        ZERO,
+    )
+    capital_paid_by_partner: dict[int, Decimal] = {}
+    for row in PayoutObligation.objects.filter(
+        fund=fund,
+        kind=PayoutObligation.Kind.CAPITAL_RETURN,
+    ).values('recipient_id', 'paid_amount'):
+        partner_id = int(row['recipient_id'])
+        capital_paid_by_partner[partner_id] = money(
+            capital_paid_by_partner.get(partner_id, ZERO) + money(row['paid_amount'])
+        )
     profit_available = sum((money(row.provisional_profit_available_uzs) for row in venture_rows), ZERO)
     manager_share = Decimal(str(getattr(fund.current_terms, 'manager_profit_share', ZERO)))
     manager_fee = money(max(ZERO, profit_available) * manager_share)
     distributable_profit = money(max(ZERO, profit_available) - manager_fee)
+    capital_available_by_member: dict[int, Decimal] = {}
+    for member in members:
+        share = ratio(paid_by_member[member.pk] / total_paid) if total_paid > ZERO else ZERO
+        gross_member_capital = money(gross_capital_available * share)
+        paid_to_member = capital_paid_by_partner.get(member.partner_id, ZERO)
+        capital_available_by_member[member.pk] = max(ZERO, money(gross_member_capital - paid_to_member))
+    capital_available = sum(capital_available_by_member.values(), ZERO)
     now = timezone.now()
     FundPositionReadModel.all_objects.update_or_create(
         tenant_id=fund.tenant_id,
@@ -725,7 +749,7 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
                 'deployed': money(total_deployed * share),
                 'available': money(external_available * share),
                 'provisional_profit_uzs': money(gross_profit * share),
-                'capital_return_available_uzs': money(capital_available * share),
+                'capital_return_available_uzs': capital_available_by_member.get(member.pk, ZERO),
                 'profit_available_uzs': money(distributable_profit * share + member_fee),
                 'manager_fee_accrued_uzs': member_fee,
                 'computed_at': now,

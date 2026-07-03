@@ -8,11 +8,14 @@ import { fetchInvestmentFundByInvite, submitFundApplication, type InvestmentFund
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
 import { formatPrice } from '@/utils/currency'
+import { getApiErrorMessage } from '@/utils/errors'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const auth = useAuthStore()
 
 const fund = ref<InvestmentFund | null>(null)
 const partners = ref<Partner[]>([])
@@ -26,20 +29,37 @@ const error = ref('')
 const token = computed(() => String(route.params.token || ''))
 const investorPartners = computed(() => partners.value.filter((partner) => partner.is_active && partner.role === 'INVESTOR'))
 
+function authInvestorPartners(): Partner[] {
+  return (auth.user?.partner_profiles ?? [])
+    .filter((partner) => partner.role === 'INVESTOR')
+    .map((partner) => ({
+      id: partner.id,
+      role: partner.role,
+      display_name: partner.display_name,
+      is_active: true,
+      user: auth.user?.id ?? null,
+    }))
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [fundRow, partnerRows] = await Promise.all([
-      fetchInvestmentFundByInvite(token.value),
-      fetchPartners({ role: 'INVESTOR', is_active: true }),
-    ])
+    const fundRow = await fetchInvestmentFundByInvite(token.value)
+    let partnerRows = authInvestorPartners()
+    try {
+      partnerRows = await fetchPartners({ role: 'INVESTOR', is_active: true })
+    } catch {
+      // Invite links must remain usable for authenticated investors even when
+      // the generic tenant-scoped partner list is unavailable before they
+      // become a fund member. Use the current user's investor profile instead.
+    }
     fund.value = fundRow
     partners.value = partnerRows
     partnerId.value ||= partnerRows[0]?.id ?? null
     amount.value ||= fundRow.min_contribution_amount !== '0.00' ? fundRow.min_contribution_amount : ''
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Не удалось открыть фонд'
+    error.value = getApiErrorMessage(cause, 'Не удалось открыть фонд')
   } finally {
     loading.value = false
   }
@@ -58,7 +78,7 @@ async function apply(): Promise<void> {
     toast.success('Заявка отправлена управляющему фонда')
     router.push({ name: 'investor-funds' })
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Не удалось отправить заявку'
+    error.value = getApiErrorMessage(cause, 'Не удалось отправить заявку')
   } finally {
     saving.value = false
   }

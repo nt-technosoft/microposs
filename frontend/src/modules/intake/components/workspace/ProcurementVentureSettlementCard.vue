@@ -27,6 +27,7 @@ const hasFacts = computed(() => {
 // authoritative signal the backend uses (has_active_lots) so UI and backend never
 // diverge. Close-blocking reasons live in the dedicated close card, not here.
 const canFinal = computed(() => props.summary?.has_active_lots === false)
+const auditWarnings = computed(() => props.summary?.audit_warnings ?? [])
 </script>
 
 <template>
@@ -43,6 +44,12 @@ const canFinal = computed(() => props.summary?.has_active_lots === false)
       </div>
     </CardHeader>
     <CardContent class="flex flex-col gap-3">
+      <div
+        v-if="auditWarnings.length"
+        class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+      >
+        {{ auditWarnings[0].message }}
+      </div>
       <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
         <div>
           <span class="block text-muted-foreground">Восстановлено</span>

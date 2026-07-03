@@ -204,6 +204,7 @@ export interface ProcurementWorkspacePayload {
       reconciliation_mode: 'FACTUAL' | 'AGREED'
       currency: string
       planned_budget: string
+      investor_shares: InvestorPoolShares | null
       pool: {
         cash_account_id: number
         currency: string
@@ -674,6 +675,14 @@ export interface AgreementPartnerPayload {
   profit_share: string | number
 }
 
+export interface InvestorPoolShares {
+  capital_amount: string
+  profit_share: string
+  capital_percent: number
+  profit_percent: number
+  investors_count: number
+}
+
 export interface InvestmentAgreementListItem {
   id: number
   status: string
@@ -689,7 +698,7 @@ export interface InvestmentAgreementListItem {
   partners_count: number
   investor_names: string[]
   operator_names: string[]
-  investor_shares: { capital_percent: number; profit_percent: number } | null
+  investor_shares: InvestorPoolShares | null
   procurements_count: number
   notes: string
   current_terms?: number | AgreementTermsVersion | null
@@ -1112,6 +1121,11 @@ export interface ProcurementVentureSummary {
   positions: ProcurementVenturePosition[]
   totals: Omit<ProcurementVenturePosition, 'partner_id' | 'partner_name' | 'role'>
   has_active_lots?: boolean
+  audit_warnings?: Array<{
+    code: string
+    message: string
+    line_ids?: number[]
+  }>
 }
 
 export interface AgreementVentureSummary {
