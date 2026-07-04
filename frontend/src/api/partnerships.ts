@@ -888,7 +888,8 @@ export interface PayoutObligation {
   id: number
   agreement: number | null
   fund: number | null
-  recipient: number
+  recipient: number | null
+  recipient_profile: number | null
   recipient_name: string
   procurement: number | null
   kind: 'PROFIT' | 'CAPITAL_RETURN'
@@ -915,7 +916,8 @@ export interface PayoutObligation {
 export interface FundMemberPosition {
   id: number
   member: number
-  partner: number
+  profile: number | null
+  partner: number | null
   partner_name: string
   currency: string
   capital_share: string
@@ -932,7 +934,9 @@ export interface FundMemberPosition {
 export interface FundApplication {
   id: number
   fund: number
-  partner: number
+  profile: number | null
+  profile_name: string
+  partner: number | null
   partner_name: string
   requested_amount: string
   approved_amount: string
@@ -954,7 +958,8 @@ export interface FundApplicationApprovalPreview {
   exceeds_target: boolean
   rows: Array<{
     application_id: number
-    partner_id: number
+    profile_id?: number | null
+    partner_id: number | null
     partner_name: string
     requested_amount: string
     approved_amount: string
@@ -969,22 +974,24 @@ export interface InvestmentFund {
   visibility: 'PRIVATE_INVITE' | 'PUBLIC_LISTING'
   invite_token: string | null
   invite_path: string
-  manager_partner: number
+  manager_profile: number | null
+  manager_profile_name: string
+  manager_partner: number | null
   manager_partner_name: string
-  holder_partner: number
+  holder_partner: number | null
   holder_partner_name: string
-  capital_account: number
+  capital_account: number | null
   currency: string
   target_amount: string | null
   min_contribution_amount: string
   opened_at: string
   closed_at: string | null
   current_terms: (AgreementTermsVersion & { manager_profit_share: string }) | null
-  members: Array<{ id: number; partner: number; partner_name: string; status: 'ACTIVE' | 'EXITED' | 'REMOVED'; approved_amount: string; confirmed_amount: string; joined_at: string; exited_at: string | null }>
+  members: Array<{ id: number; profile: number | null; profile_name: string; partner: number | null; partner_name: string; status: 'ACTIVE' | 'EXITED' | 'REMOVED'; approved_amount: string; confirmed_amount: string; joined_at: string; exited_at: string | null }>
   applications: FundApplication[]
-  contributions: Array<{ id: number; member: number; partner: number; partner_name: string; amount: string; currency: string; date: string }>
+  contributions: Array<{ id: number; member: number; profile: number | null; partner: number | null; partner_name: string; amount: string; currency: string; date: string }>
   deployments: Array<{ id: number; agreement: number; agreement_label: string; agreement_contribution: number; amount: string; currency: string; date: string }>
-  member_exits: Array<{ id: number; member: number; partner: number; partner_name: string; reason: string; refund_amount: string; currency: string; refunded_at: string }>
+  member_exits: Array<{ id: number; member: number; profile: number | null; partner: number | null; partner_name: string; reason: string; refund_amount: string; currency: string; refunded_at: string }>
   positions: FundMemberPosition[]
   position: {
     currency: string
@@ -997,6 +1004,17 @@ export interface InvestmentFund {
     manager_fee_accrued_uzs: string
     computed_at: string
   } | null
+  active_members_count: number
+  pending_applications_count: number
+  viewer_role: 'MANAGER' | 'MEMBER' | 'APPLICANT' | 'PUBLIC'
+  permissions: {
+    can_apply: boolean
+    can_manage_applications: boolean
+    can_confirm_contribution: boolean
+    can_amend_terms: boolean
+    can_deploy: boolean
+    can_record_payout: boolean
+  }
 }
 
 export interface AgreementAllocationPreview {
@@ -1258,7 +1276,7 @@ export async function fetchPartnershipActionQueue(): Promise<PartnershipActionQu
 
 export async function createInvestmentFund(payload: {
   name: string
-  manager_partner_id: number
+  manager_partner_id?: number | null
   member_partner_ids?: number[]
   currency?: string
   target_amount?: string | number | null
@@ -1281,7 +1299,8 @@ export async function fetchInvestmentFundByInvite(token: string): Promise<Invest
 }
 
 export async function submitFundApplication(id: number, payload: {
-  partner_id: number
+  partner_id?: number | null
+  invite_token?: string
   requested_amount: string | number
   message?: string
 }): Promise<FundApplication> {
@@ -1324,7 +1343,8 @@ export async function amendFundTerms(id: number, payload: {
 }
 
 export async function exitFundMember(id: number, payload: {
-  partner_id: number
+  profile_id?: number | null
+  partner_id?: number | null
   reason: 'MEMBER_EXIT' | 'MANAGER_REMOVE'
   notes?: string
   client_request_id?: string
@@ -1334,11 +1354,11 @@ export async function exitFundMember(id: number, payload: {
 }
 
 export async function addFundContribution(id: number, payload: {
-  partner_id: number
+  profile_id?: number | null
+  partner_id?: number | null
   amount: string | number
   currency?: string
   fx_rate?: string | number | null
-  from_cash_account_id?: number | null
   notes?: string
   client_request_id?: string
 }): Promise<InvestmentFund['contributions'][number]> {

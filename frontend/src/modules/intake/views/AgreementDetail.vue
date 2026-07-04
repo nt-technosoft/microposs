@@ -128,7 +128,12 @@ const usedTotal = computed(() => Math.max(0, contributedTotal.value - availableP
 const budgetBase = computed(() => Math.max(plannedBudget.value, contributedTotal.value, 1))
 const availableProgress = computed(() => Math.min(100, (availablePrimaryAmount.value / budgetBase.value) * 100))
 const usedProgress = computed(() => Math.min(100, (usedTotal.value / budgetBase.value) * 100))
-const investorName = computed(() => agreement.value?.partners.find((partner) => partner.role === 'INVESTOR')?.partner_name ?? 'Инвестор')
+const investorRows = computed(() => (agreement.value?.partners ?? []).filter((partner) => partner.role === 'INVESTOR'))
+const investorName = computed(() => {
+  if (!investorRows.value.length) return 'Инвесторский пул'
+  if (investorRows.value.length === 1) return investorRows.value[0].partner_name || 'Инвестор'
+  return `Инвесторский пул: ${investorRows.value.length}`
+})
 const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
   value: partner.partner,
   label: partner.role === 'OPERATOR' ? 'Бизнес' : partner.partner_name,

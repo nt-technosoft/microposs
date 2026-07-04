@@ -105,6 +105,10 @@ class CurrentUserView(APIView):
         tenant_issue = ''
         if tenant_id is None and len(owned_businesses) > 1:
             tenant_issue = 'multiple_active_businesses_require_explicit_context'
+        try:
+            investment_profile = request.user.investment_profile
+        except Exception:
+            investment_profile = None
 
         return {
             'id': request.user.id,
@@ -127,6 +131,13 @@ class CurrentUserView(APIView):
                 }
                 for row in investor_relations
             ],
+            'investment_profile': (
+                {
+                    'id': investment_profile.id,
+                    'display_name': investment_profile.display_name,
+                }
+                if investment_profile is not None else None
+            ),
             'tenant_issue': tenant_issue,
             'locale': preferences.locale,
         }

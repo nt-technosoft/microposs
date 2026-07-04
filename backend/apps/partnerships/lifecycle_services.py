@@ -11,6 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.services import publish_event
@@ -60,9 +61,11 @@ def _fund_terms_snapshot(fund: InvestmentFund, manager_profit_share: Decimal) ->
         'target_amount': str(fund.target_amount) if fund.target_amount is not None else None,
         'min_contribution_amount': str(fund.min_contribution_amount),
         'visibility': fund.visibility,
+        'manager_profile_id': fund.manager_profile_id,
         'manager_partner_id': fund.manager_partner_id,
         'manager_profit_share': str(manager_profit_share),
-        'members': sorted(row.partner_id for row in fund.members.all()),
+        'member_profiles': sorted(row.profile_id for row in fund.members.all() if row.profile_id),
+        'legacy_member_partners': sorted(row.partner_id for row in fund.members.all() if row.partner_id),
         'waterfall': ['capital_return', 'net_profit', 'manager_fee'],
     }
 
@@ -227,9 +230,16 @@ def _create_payout_obligation_if_absent(**values) -> tuple[PayoutObligation | No
     agreement_id = values.get('agreement_id') or getattr(values.get('agreement'), 'pk', None)
     fund_id = values.get('fund_id') or getattr(values.get('fund'), 'pk', None)
     owner_filter = {'agreement_id': agreement_id} if agreement_id else {'fund_id': fund_id}
+    recipient_filter = {}
+    if values.get('recipient_id') is not None:
+        recipient_filter['recipient_id'] = values['recipient_id']
+    elif values.get('recipient_profile_id') is not None:
+        recipient_filter['recipient_profile_id'] = values['recipient_profile_id']
+    else:
+        raise ValueError('Payout recipient is required.')
     filters = {
         **owner_filter,
-        'recipient_id': values['recipient_id'],
+        **recipient_filter,
         'kind': values['kind'],
         'status__in': [
             PayoutObligation.Status.PENDING,
@@ -353,6 +363,10 @@ def evaluate_fund_payout_obligations(*, fund: InvestmentFund, now=None) -> list[
         ):
             return []
         for row in rows:
+            recipient_id = row.member.partner_id
+            recipient_profile_id = row.member.profile_id if not recipient_id else None
+            if not recipient_id and not recipient_profile_id:
+                continue
             for kind, available in (
                 (PayoutObligation.Kind.PROFIT, Decimal(str(row.profit_available_uzs))),
                 (PayoutObligation.Kind.CAPITAL_RETURN, Decimal(str(row.capital_return_available_uzs))),
@@ -360,15 +374,18 @@ def evaluate_fund_payout_obligations(*, fund: InvestmentFund, now=None) -> list[
                 amount = _eligible_after_policy(amount=available, policy=policy)
                 if amount <= ZERO:
                     continue
-                existing = PayoutObligation.objects.filter(
-                    fund=fund, recipient_id=row.member.partner_id, kind=kind,
-                )
+                existing = PayoutObligation.objects.filter(fund=fund, kind=kind)
+                if recipient_id:
+                    existing = existing.filter(recipient_id=recipient_id)
+                else:
+                    existing = existing.filter(recipient_profile_id=recipient_profile_id)
                 if not _may_open_next_obligation(queryset=existing, now=now, policy=policy):
                     continue
                 obligation, was_created = _create_payout_obligation_if_absent(
                     tenant_id=fund.tenant_id,
                     fund=fund,
-                    recipient_id=row.member.partner_id,
+                    recipient_id=recipient_id,
+                    recipient_profile_id=recipient_profile_id,
                     kind=kind,
                     amount=amount,
                     currency='UZS',
@@ -385,12 +402,19 @@ def evaluate_fund_payout_obligations(*, fund: InvestmentFund, now=None) -> list[
                 )
         # A manager outside the member pool still receives a disclosed fee.
         # Member-managers already receive this fee in their member position.
-        manager_is_member = FundMemberPositionReadModel.objects.filter(
-            fund=fund,
-            member__partner_id=fund.manager_partner_id,
-        ).exists()
+        manager_member_filter = Q()
+        if fund.manager_profile_id:
+            manager_member_filter |= Q(member__profile_id=fund.manager_profile_id)
+        if fund.manager_partner_id:
+            manager_member_filter |= Q(member__partner_id=fund.manager_partner_id)
+        manager_is_member = (
+            FundMemberPositionReadModel.objects.filter(fund=fund)
+            .filter(manager_member_filter)
+            .exists()
+            if manager_member_filter else False
+        )
         manager_fee = Decimal(str(getattr(fund_position, 'manager_fee_accrued_uzs', ZERO)))
-        if not manager_is_member and manager_fee > ZERO:
+        if not manager_is_member and manager_fee > ZERO and fund.manager_partner_id:
             existing = PayoutObligation.objects.filter(
                 fund=fund,
                 recipient_id=fund.manager_partner_id,
@@ -398,9 +422,35 @@ def evaluate_fund_payout_obligations(*, fund: InvestmentFund, now=None) -> list[
             )
             if _may_open_next_obligation(queryset=existing, now=now, policy=policy):
                 obligation, was_created = _create_payout_obligation_if_absent(
+                        tenant_id=fund.tenant_id,
+                        fund=fund,
+                        recipient_id=fund.manager_partner_id,
+                        recipient_profile_id=None,
+                        kind=PayoutObligation.Kind.PROFIT,
+                        amount=manager_fee,
+                        currency='UZS',
+                    due_at=now + timedelta(days=policy.grace_period_days),
+                    notes='Disclosed manager fee from fund waterfall.',
+                )
+                if was_created:
+                    created.append(obligation)
+                    publish_event(
+                        event_type='partnership.fund_payout_obligation_due',
+                        payload={'fund_id': fund.pk, 'obligation_id': obligation.pk, 'kind': 'MANAGER_FEE'},
+                        tenant_id=fund.tenant_id,
+                    )
+        elif not manager_is_member and manager_fee > ZERO and fund.manager_profile_id:
+            existing = PayoutObligation.objects.filter(
+                fund=fund,
+                recipient_profile_id=fund.manager_profile_id,
+                kind=PayoutObligation.Kind.PROFIT,
+            )
+            if _may_open_next_obligation(queryset=existing, now=now, policy=policy):
+                obligation, was_created = _create_payout_obligation_if_absent(
                     tenant_id=fund.tenant_id,
                     fund=fund,
-                    recipient_id=fund.manager_partner_id,
+                    recipient_id=None,
+                    recipient_profile_id=fund.manager_profile_id,
                     kind=PayoutObligation.Kind.PROFIT,
                     amount=manager_fee,
                     currency='UZS',
@@ -534,12 +584,23 @@ def confirm_payout_obligation(*, obligation: PayoutObligation) -> PayoutObligati
     return locked
 
 
-def open_dispute(*, obligation: PayoutObligation, raised_by_id: int, statement: str, evidence: str = '') -> DisputeCase:
+def open_dispute(
+    *,
+    obligation: PayoutObligation,
+    raised_by_id: int | None = None,
+    raised_by_profile_id: int | None = None,
+    statement: str,
+    evidence: str = '',
+) -> DisputeCase:
     if not statement.strip():
         raise ValueError('A dispute statement is required.')
     with transaction.atomic():
         locked = PayoutObligation.objects.select_for_update().get(pk=obligation.pk)
-        if raised_by_id != locked.recipient_id:
+        if raised_by_id is None and raised_by_profile_id is None:
+            raise ValueError('Payout dispute recipient is required.')
+        if raised_by_id is not None and raised_by_id != locked.recipient_id:
+            raise ValueError('Only the payout recipient can open this dispute.')
+        if raised_by_profile_id is not None and raised_by_profile_id != locked.recipient_profile_id:
             raise ValueError('Only the payout recipient can open this dispute.')
         if locked.status == PayoutObligation.Status.CONFIRMED:
             raise ValueError('A confirmed payout cannot be disputed through this flow.')
@@ -551,6 +612,7 @@ def open_dispute(*, obligation: PayoutObligation, raised_by_id: int, statement: 
             fund_id=locked.fund_id,
             obligation=locked,
             raised_by_id=raised_by_id,
+            raised_by_profile_id=raised_by_profile_id,
             statement=statement.strip(),
             evidence=evidence,
         )

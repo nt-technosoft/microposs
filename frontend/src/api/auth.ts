@@ -17,6 +17,7 @@ export interface CurrentUserResponse {
   role: string | null
   active_tenant_id: number | null
   tenant_name: string
+  investment_profile?: { id: number; display_name: string } | null
   locale: Locale
 }
 

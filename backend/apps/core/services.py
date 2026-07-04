@@ -16,6 +16,7 @@ from .models import (
     Business,
     BusinessRegistrationRequest,
     BusinessInvestorRelation,
+    InvestmentProfile,
     InvestorInvite,
     OutboxEvent,
     Partner,
@@ -55,6 +56,29 @@ def _investor_display_name(user, fallback: str = '') -> str:
     if hasattr(user, 'get_full_name'):
         full_name = user.get_full_name()
     return (fallback or full_name or getattr(user, 'username', '') or 'Investor').strip()
+
+
+def get_or_create_investment_profile(user, display_name: str = '') -> InvestmentProfile:
+    """Return the user's global investor identity, creating the MVP profile if needed."""
+    if not getattr(user, 'is_authenticated', False):
+        raise ValueError('Authenticated user is required for an investment profile.')
+    profile, _created = InvestmentProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            'display_name': _investor_display_name(user, display_name),
+            'is_active': True,
+        },
+    )
+    updates = []
+    if display_name and profile.display_name != display_name:
+        profile.display_name = display_name
+        updates.append('display_name')
+    if not profile.is_active:
+        profile.is_active = True
+        updates.append('is_active')
+    if updates:
+        profile.save(update_fields=[*updates, 'updated_at'])
+    return profile
 
 
 def _operator_display_name(*, first_name: str = '', last_name: str = '', business_name: str = '') -> str:

@@ -425,22 +425,43 @@ class InvestmentFund(TenantModel):
         PRIVATE_INVITE = 'PRIVATE_INVITE', 'Закрытый по приглашению'
         PUBLIC_LISTING = 'PUBLIC_LISTING', 'Публичная заявка'
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_investmentfund_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     name = models.CharField(max_length=255)
+    manager_profile = models.ForeignKey(
+        'core.InvestmentProfile',
+        on_delete=models.PROTECT,
+        related_name='managed_investment_funds',
+        null=True,
+        blank=True,
+    )
     manager_partner = models.ForeignKey(
         'core.Partner',
         on_delete=models.PROTECT,
         related_name='managed_investment_funds',
+        null=True,
+        blank=True,
     )
     holder_partner = models.OneToOneField(
         'core.Partner',
         on_delete=models.PROTECT,
         related_name='managed_fund_holder',
+        null=True,
+        blank=True,
         help_text='Synthetic investor partner representing this fund in external agreements.',
     )
     capital_account = models.ForeignKey(
         'finance.CashAccount',
         on_delete=models.PROTECT,
         related_name='backed_investment_funds',
+        null=True,
+        blank=True,
     )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     visibility = models.CharField(
@@ -473,6 +494,7 @@ class InvestmentFund(TenantModel):
         indexes = [
             models.Index(fields=['tenant', 'status']),
             models.Index(fields=['tenant', 'manager_partner']),
+            models.Index(fields=['manager_profile', 'status']),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -486,6 +508,14 @@ class InvestmentFund(TenantModel):
 class FundTermsVersion(TenantModel):
     """Forward-only fund rules, including disclosed manager profit participation."""
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundtermsversion_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(
         InvestmentFund,
         on_delete=models.CASCADE,
@@ -529,6 +559,14 @@ class FundTermsVersion(TenantModel):
 class PayoutPolicy(TenantModel):
     """Eligibility policy; it creates obligations but never moves money automatically."""
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_payoutpolicy_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     agreement_terms = models.OneToOneField(
         AgreementTermsVersion,
         on_delete=models.CASCADE,
@@ -582,8 +620,29 @@ class FundMember(TenantModel):
         EXITED = 'EXITED', 'Вышел до размещения'
         REMOVED = 'REMOVED', 'Удалён до размещения'
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundmember_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='members')
-    partner = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='fund_memberships')
+    profile = models.ForeignKey(
+        'core.InvestmentProfile',
+        on_delete=models.PROTECT,
+        related_name='fund_memberships',
+        null=True,
+        blank=True,
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='fund_memberships',
+        null=True,
+        blank=True,
+    )
     application = models.OneToOneField(
         'FundApplication',
         on_delete=models.SET_NULL,
@@ -603,6 +662,11 @@ class FundMember(TenantModel):
         db_table = 'partnerships_fund_member'
         constraints = [
             models.UniqueConstraint(fields=['fund', 'partner'], name='uq_fund_member'),
+            models.UniqueConstraint(
+                fields=['fund', 'profile'],
+                condition=models.Q(profile__isnull=False),
+                name='uq_fund_member_profile',
+            ),
         ]
 
 
@@ -615,8 +679,29 @@ class FundApplication(TenantModel):
         REJECTED = 'REJECTED', 'Отклонена'
         CANCELLED = 'CANCELLED', 'Отменена'
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundapplication_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='applications')
-    partner = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='fund_applications')
+    profile = models.ForeignKey(
+        'core.InvestmentProfile',
+        on_delete=models.PROTECT,
+        related_name='fund_applications',
+        null=True,
+        blank=True,
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='fund_applications',
+        null=True,
+        blank=True,
+    )
     requested_amount = models.DecimalField(max_digits=20, decimal_places=2)
     approved_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     currency = models.CharField(max_length=3, default='UZS')
@@ -640,12 +725,25 @@ class FundApplication(TenantModel):
                 condition=models.Q(status='PENDING'),
                 name='uq_fund_pending_application',
             ),
+            models.UniqueConstraint(
+                fields=['fund', 'profile'],
+                condition=models.Q(status='PENDING', profile__isnull=False),
+                name='uq_fund_pending_application_profile',
+            ),
         ]
 
 
 class FundContribution(TenantModel):
     """Actual member money entering the fund pool; append-only like agreement contributions."""
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundcontribution_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='contributions')
     member = models.ForeignKey(FundMember, on_delete=models.PROTECT, related_name='contributions')
     amount = models.DecimalField(max_digits=20, decimal_places=2)
@@ -665,6 +763,11 @@ class FundContribution(TenantModel):
                 fields=['tenant', 'client_request_id'],
                 condition=models.Q(client_request_id__isnull=False),
                 name='uq_fund_contribution_idempotent',
+            ),
+            models.UniqueConstraint(
+                fields=['fund', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_fund_contribution_fund_request',
             ),
         ]
 
@@ -708,6 +811,14 @@ class FundMemberExit(TenantModel):
         MEMBER_EXIT = 'MEMBER_EXIT', 'Выход участника'
         MANAGER_REMOVE = 'MANAGER_REMOVE', 'Удаление управляющим'
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundmemberexit_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='member_exits')
     member = models.ForeignKey(FundMember, on_delete=models.PROTECT, related_name='exits')
     reason = models.CharField(max_length=20, choices=Reason.choices)
@@ -732,6 +843,14 @@ class FundMemberExit(TenantModel):
 class FundMemberPositionReadModel(TenantModel):
     """Materialized member view derived from fund facts and E18 holder positions."""
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundmemberpositionreadmodel_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, related_name='member_position_rows')
     member = models.ForeignKey(FundMember, on_delete=models.CASCADE, related_name='position_rows')
     currency = models.CharField(max_length=3, default='UZS')
@@ -755,6 +874,14 @@ class FundMemberPositionReadModel(TenantModel):
 class FundPositionReadModel(TenantModel):
     """Fund-level position, including manager fee when the manager is not a member."""
 
+    tenant = models.ForeignKey(
+        'core.Business',
+        on_delete=models.PROTECT,
+        related_name='partnerships_fundpositionreadmodel_set',
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     fund = models.OneToOneField(InvestmentFund, on_delete=models.CASCADE, related_name='position_row')
     currency = models.CharField(max_length=3, default='UZS')
     paid_in = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
@@ -786,7 +913,20 @@ class PayoutObligation(TenantModel):
 
     agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.CASCADE, null=True, blank=True, related_name='payout_obligations')
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, null=True, blank=True, related_name='payout_obligations')
-    recipient = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='payout_obligations')
+    recipient = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='payout_obligations',
+        null=True,
+        blank=True,
+    )
+    recipient_profile = models.ForeignKey(
+        'core.InvestmentProfile',
+        on_delete=models.PROTECT,
+        related_name='payout_obligations',
+        null=True,
+        blank=True,
+    )
     procurement = models.ForeignKey('Procurement', on_delete=models.PROTECT, null=True, blank=True, related_name='payout_obligations')
     kind = models.CharField(max_length=20, choices=Kind.choices)
     amount = models.DecimalField(max_digits=20, decimal_places=2)
@@ -828,9 +968,19 @@ class PayoutObligation(TenantModel):
                 fields=['fund', 'recipient', 'kind'],
                 condition=(
                     models.Q(fund__isnull=False)
+                    & models.Q(recipient__isnull=False)
                     & models.Q(status__in=['PENDING', 'RECORDED', 'DISPUTED'])
                 ),
                 name='uq_fund_open_payout_obligation',
+            ),
+            models.UniqueConstraint(
+                fields=['fund', 'recipient_profile', 'kind'],
+                condition=(
+                    models.Q(fund__isnull=False)
+                    & models.Q(recipient_profile__isnull=False)
+                    & models.Q(status__in=['PENDING', 'RECORDED', 'DISPUTED'])
+                ),
+                name='uq_fund_open_payout_obligation_profile',
             ),
         ]
 
@@ -929,7 +1079,20 @@ class DisputeCase(TenantModel):
     agreement = models.ForeignKey(InvestmentAgreement, on_delete=models.CASCADE, null=True, blank=True, related_name='disputes')
     fund = models.ForeignKey(InvestmentFund, on_delete=models.CASCADE, null=True, blank=True, related_name='disputes')
     obligation = models.ForeignKey(PayoutObligation, on_delete=models.PROTECT, null=True, blank=True, related_name='disputes')
-    raised_by = models.ForeignKey('core.Partner', on_delete=models.PROTECT, related_name='raised_disputes')
+    raised_by = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='raised_disputes',
+        null=True,
+        blank=True,
+    )
+    raised_by_profile = models.ForeignKey(
+        'core.InvestmentProfile',
+        on_delete=models.PROTECT,
+        related_name='raised_disputes',
+        null=True,
+        blank=True,
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     evidence = models.TextField(blank=True, default='')
     statement = models.TextField()

@@ -5,6 +5,10 @@
 **Зависит от:** E18 (единый money read-model), E20 (multi-party/fund/lifecycle base)
 **Блокирует:** pilot-ready investor fund workflow, корректный rollout E20 UX
 
+> 2026-07-04: часть E21 про tenant-scoped fund ownership superseded by
+> [E22 — Investor-Owned Funds + E21 UX Correction](./E22-investor-owned-funds-e21-correction.md).
+> E21 остаётся историей по business context, settlement UX и FACTUAL guard.
+
 ---
 
 ## Цель
@@ -83,6 +87,9 @@ gross-цифр, а business context перестаёт молча выбират
   hard cap, explicit pre-deployment terms amendment, pre-deployment exit/refund
   flow, business context guard, profile/business page, aggregated payout
   preview, status-aware post-receive procurement view и action queue.
+- ⚠️ **Superseded by E22:** fund ownership больше не считается tenant-scoped
+  `Partner`/business-side конструкцией. Target owner — global
+  `InvestmentProfile`; business видит только synthetic holder `Фонд: X`.
 
 ## Целевая модель
 
@@ -297,3 +304,6 @@ guard на receive: `FACTUAL` требует full receive; `AGREED` остаёт
   ровно один active business; при нескольких бизнесах silent selection запрещён.
 - ✓ 2026-06-25: Сверхлимит фонда не проходит через молчаливый approve; сначала
   создаётся явная amendment-версия условий до первого deployment.
+- ✓ 2026-07-04: tenant-scoped fund ownership superseded by E22; фонд принадлежит
+  global `InvestmentProfile`, а business-side `Partner` нужен только для
+  deployment в конкретный invest agreement.

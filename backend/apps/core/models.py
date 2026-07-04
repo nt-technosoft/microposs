@@ -124,6 +124,30 @@ class UserPreference(BaseModel):
         return f"{self.user_id}: {self.locale}"
 
 
+class InvestmentProfile(BaseModel):
+    """Global investor identity, independent from any single business tenant."""
+
+    user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.PROTECT,
+        related_name='investment_profile',
+        null=True,
+        blank=True,
+    )
+    display_name = models.CharField(max_length=255)
+    public_slug = models.SlugField(max_length=96, unique=True, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'core_investment_profile'
+        indexes = [
+            models.Index(fields=['is_active', 'display_name']),
+        ]
+
+    def __str__(self):
+        return self.display_name
+
+
 class Partner(TenantModel):
     """
     Abstract business partner — supertype for investors and operators.

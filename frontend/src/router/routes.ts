@@ -290,7 +290,7 @@ const routes: RouteRecordRaw[] = [
     path: '/investor/funds/join/:token',
     name: 'fund-join',
     component: () => import('@/modules/investors/views/FundJoin.vue'),
-    meta: { roles: ['investor'], layout: 'investor' },
+    meta: { requiresAuth: false, layout: 'investor' },
   },
   {
     path: '/investor/funds/:id',

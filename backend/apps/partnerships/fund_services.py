@@ -1,8 +1,9 @@
-"""E20 closed-fund services.
+"""Investor-owned closed-fund services.
 
-The fund is a real capital pool. It joins an external agreement through its
-synthetic holder partner, so existing E11/E18 cash, tags and FIFO economics stay
-the only source of money truth.
+Fundraising is owned by investor profiles and remains off the business GL until
+the fund is deployed into a concrete investment agreement. At deployment the
+business still sees one synthetic investor holder, so existing E11/E18 cash,
+tags and FIFO economics stay the only source of agreement money truth.
 """
 
 from __future__ import annotations
@@ -12,12 +13,12 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-from apps.core.models import BusinessInvestorRelation, Partner
-from apps.finance.models import Account, CashAccount, CashEntry, Payment
-from apps.finance.services import create_cash_entry, record_capital_pool_contribution
+from apps.core.models import BusinessInvestorRelation, InvestmentProfile, Partner
+from apps.core.services import get_or_create_investment_profile
 
 from .models import (
     AgreementPartner,
+    CapitalCommitment,
     FundApplication,
     FundContribution,
     FundDeployment,
@@ -32,15 +33,17 @@ from .models import (
     PayoutObligation,
     PayoutPolicy,
 )
-from .money_utils import ZERO, equity_account_code, money, ratio
+from .money_utils import ZERO, money, ratio
 
 
 def create_investment_fund(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     name: str,
-    manager_partner_id: int,
-    member_partner_ids: list[int],
+    manager_profile_id: int | None = None,
+    manager_partner_id: int | None = None,
+    member_profile_ids: list[int] | None = None,
+    member_partner_ids: list[int] | None = None,
     currency: str = 'UZS',
     target_amount: Decimal | None = None,
     min_contribution_amount: Decimal = Decimal('0'),
@@ -53,14 +56,17 @@ def create_investment_fund(
     created_by_id: int | None = None,
     payout_policy: dict | None = None,
 ) -> InvestmentFund:
-    """Create a raisable fund and its synthetic agreement-facing investor."""
+    """Create a raisable fund owned by an investor profile."""
     currency = str(currency or 'UZS').upper()
     manager_profit_share = ratio(manager_profit_share)
     if not name.strip():
         raise ValueError('Fund name is required.')
     if not Decimal('0') <= manager_profit_share <= Decimal('1'):
         raise ValueError('manager_profit_share must be in [0, 1].')
-    member_ids = sorted({int(item) for item in member_partner_ids})
+    member_profile_ids = member_profile_ids or []
+    member_partner_ids = member_partner_ids or []
+    member_profile_ids = sorted({int(item) for item in member_profile_ids})
+    legacy_member_partner_ids = sorted({int(item) for item in member_partner_ids})
     min_contribution_amount = money(min_contribution_amount)
     if target_amount is not None and money(target_amount) <= ZERO:
         raise ValueError('target_amount must be positive when provided.')
@@ -68,51 +74,75 @@ def create_investment_fund(
         raise ValueError('min_contribution_amount cannot be negative.')
     if visibility not in InvestmentFund.Visibility.values:
         raise ValueError('Unsupported fund visibility.')
+    if tenant_id is None and review_at is not None:
+        raise ValueError('Fund review date requires a business tenant; set review terms after deployment.')
 
     with transaction.atomic():
-        manager = Partner.objects.select_for_update().filter(
-            tenant_id=tenant_id, pk=manager_partner_id, is_active=True,
-        ).first()
-        if manager is None:
-            raise ValueError('Fund manager is not an active business partner.')
-        members = list(Partner.objects.filter(
-            tenant_id=tenant_id, pk__in=member_ids, is_active=True,
-        ))
-        if len(members) != len(member_ids):
-            raise ValueError('Every fund member must be an active business partner.')
+        manager_partner = None
+        if manager_partner_id is not None:
+            manager_query = Partner.objects.select_for_update().filter(pk=manager_partner_id, is_active=True)
+            if tenant_id is not None:
+                manager_query = manager_query.filter(tenant_id=tenant_id)
+            manager_partner = manager_query.first()
+            if manager_partner is None:
+                raise ValueError('Fund manager is not an active business partner.')
+            if manager_partner.user_id and manager_profile_id is None:
+                manager_profile = get_or_create_investment_profile(
+                    manager_partner.user,
+                    manager_partner.display_name,
+                )
+            else:
+                manager_profile = None
+        else:
+            manager_profile = None
+        if manager_profile_id is not None:
+            manager_profile = InvestmentProfile.objects.select_for_update().filter(
+                pk=manager_profile_id,
+                is_active=True,
+            ).first()
+        if manager_profile is None:
+            raise ValueError('Fund manager investment profile is required.')
 
-        holder = Partner.objects.create(
-            tenant_id=tenant_id,
-            role=Partner.Role.INVESTOR,
-            display_name=f'Фонд: {name.strip()}',
+        holder = None
+        if tenant_id is not None and manager_partner is not None:
+            holder = Partner.objects.create(
+                tenant_id=tenant_id,
+                role=Partner.Role.INVESTOR,
+                display_name=f'Фонд: {name.strip()}',
+                is_active=True,
+            )
+            BusinessInvestorRelation.objects.create(
+                tenant_id=tenant_id,
+                partner=holder,
+                status=BusinessInvestorRelation.Status.ACTIVE,
+                source=BusinessInvestorRelation.Source.MANUAL,
+                created_by_id=created_by_id,
+                notes='system_fund_holder',
+            )
+
+        member_profiles = list(InvestmentProfile.objects.filter(
+            pk__in=member_profile_ids,
             is_active=True,
-        )
-        # Existing agreement validation treats the holder as an investor. This
-        # relation is system-created; it is not a marketplace relation.
-        BusinessInvestorRelation.objects.create(
-            tenant_id=tenant_id,
-            partner=holder,
-            status=BusinessInvestorRelation.Status.ACTIVE,
-            source=BusinessInvestorRelation.Source.MANUAL,
-            created_by_id=created_by_id,
-            notes='system_fund_holder',
-        )
-        account = CashAccount.objects.create(
-            tenant_id=tenant_id,
-            name=f'Капитал фонда: {name.strip()}',
-            currency=currency,
-            kind=CashAccount.Kind.FUND_CAPITAL,
-            linked_account=Account.objects.get(tenant_id=tenant_id, code='1300'),
-            balance=ZERO,
-            is_active=True,
-        )
+        ))
+        if len(member_profiles) != len(member_profile_ids):
+            raise ValueError('Every fund member must be an active investment profile.')
+
+        legacy_members = []
+        if legacy_member_partner_ids:
+            legacy_query = Partner.objects.filter(pk__in=legacy_member_partner_ids, is_active=True)
+            if tenant_id is not None:
+                legacy_query = legacy_query.filter(tenant_id=tenant_id)
+            legacy_members = list(legacy_query)
+            if len(legacy_members) != len(legacy_member_partner_ids):
+                raise ValueError('Every fund member must be an active business partner.')
+
         now = timezone.now()
         fund = InvestmentFund.objects.create(
             tenant_id=tenant_id,
             name=name.strip(),
-            manager_partner=manager,
+            manager_profile=manager_profile,
+            manager_partner=manager_partner,
             holder_partner=holder,
-            capital_account=account,
             status=InvestmentFund.Status.RAISING,
             visibility=visibility,
             currency=currency,
@@ -124,12 +154,23 @@ def create_investment_fund(
             FundMember(
                 tenant_id=tenant_id,
                 fund=fund,
-                partner=member,
+                profile=profile,
                 joined_at=now,
                 offline_agreed_at=offline_agreed_at,
                 offline_agreement_reference=offline_agreement_reference,
             )
-            for member in members
+            for profile in member_profiles
+        ] + [
+            FundMember(
+                tenant_id=tenant_id,
+                fund=fund,
+                partner=member,
+                profile=get_or_create_investment_profile(member.user, member.display_name) if member.user_id else None,
+                joined_at=now,
+                offline_agreed_at=offline_agreed_at,
+                offline_agreement_reference=offline_agreement_reference,
+            )
+            for member in legacy_members
         ])
         terms = FundTermsVersion.objects.create(
             tenant_id=tenant_id,
@@ -146,9 +187,11 @@ def create_investment_fund(
                 'target_amount': str(fund.target_amount) if fund.target_amount is not None else None,
                 'min_contribution_amount': str(fund.min_contribution_amount),
                 'visibility': visibility,
-                'manager_partner_id': manager.pk,
+                'manager_profile_id': manager_profile.pk,
+                'manager_partner_id': manager_partner.pk if manager_partner else None,
                 'manager_profit_share': str(manager_profit_share),
-                'members': member_ids,
+                'member_profiles': [profile.pk for profile in member_profiles],
+                'legacy_member_partners': legacy_member_partner_ids,
                 'waterfall': ['capital_return', 'net_profit', 'manager_fee'],
             },
             notes=notes,
@@ -185,9 +228,10 @@ def _confirmed_capital(fund: InvestmentFund) -> Decimal:
 
 def submit_fund_application(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
-    partner_id: int,
+    profile_id: int | None = None,
+    partner_id: int | None = None,
     requested_amount: Decimal,
     message: str = '',
 ) -> FundApplication:
@@ -195,22 +239,43 @@ def submit_fund_application(
     if requested_amount <= ZERO:
         raise ValueError('Requested amount must be > 0.')
     with transaction.atomic():
-        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id, tenant_id=tenant_id)
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id)
         if fund.status != InvestmentFund.Status.RAISING:
             raise ValueError('Fund is not accepting applications.')
         if requested_amount < money(fund.min_contribution_amount):
             raise ValueError('Requested amount is below fund minimum contribution.')
-        partner = Partner.objects.filter(pk=partner_id, tenant_id=tenant_id, is_active=True).first()
-        if partner is None:
-            raise ValueError('Fund application partner was not found.')
-        if FundMember.objects.filter(fund=fund, partner=partner, status=FundMember.Status.ACTIVE).exists():
-            raise ValueError('Partner is already an active fund member.')
+        profile = None
+        partner = None
+        if profile_id is not None:
+            profile = InvestmentProfile.objects.filter(pk=profile_id, is_active=True).first()
+            if profile is None:
+                raise ValueError('Fund application profile was not found.')
+            if FundMember.objects.filter(fund=fund, profile=profile, status=FundMember.Status.ACTIVE).exists():
+                raise ValueError('Investor profile is already an active fund member.')
+        elif partner_id is not None:
+            partner_query = Partner.objects.filter(pk=partner_id, is_active=True)
+            if tenant_id is not None:
+                partner_query = partner_query.filter(tenant_id=tenant_id)
+            partner = partner_query.first()
+            if partner is None:
+                raise ValueError('Fund application partner was not found.')
+            if partner.user_id:
+                profile = get_or_create_investment_profile(partner.user, partner.display_name)
+            if FundMember.objects.filter(fund=fund, partner=partner, status=FundMember.Status.ACTIVE).exists():
+                raise ValueError('Partner is already an active fund member.')
+        else:
+            raise ValueError('Fund application profile is required.')
+
+        lookup = {'fund': fund, 'status': FundApplication.Status.PENDING}
+        if profile is not None:
+            lookup['profile'] = profile
+        else:
+            lookup['partner'] = partner
         application, created = FundApplication.objects.get_or_create(
-            tenant_id=tenant_id,
-            fund=fund,
-            partner=partner,
-            status=FundApplication.Status.PENDING,
+            **lookup,
             defaults={
+                'tenant_id': fund.tenant_id,
+                'partner': partner,
                 'requested_amount': requested_amount,
                 'currency': fund.currency,
                 'message': message,
@@ -225,23 +290,22 @@ def submit_fund_application(
 
 def approve_fund_application(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
     application_id: int,
     approved_amount: Decimal | None = None,
     decided_by_id: int | None = None,
 ) -> FundApplication:
     with transaction.atomic():
-        application = FundApplication.objects.select_for_update().select_related('fund', 'partner').filter(
+        application = FundApplication.objects.select_for_update().filter(
             pk=application_id,
-            tenant_id=tenant_id,
             fund_id=fund_id,
         ).first()
         if application is None:
             raise ValueError('Fund application was not found.')
         if application.status != FundApplication.Status.PENDING:
             raise ValueError('Only pending applications can be approved.')
-        fund = InvestmentFund.objects.select_for_update().get(pk=application.fund_id, tenant_id=tenant_id)
+        fund = InvestmentFund.objects.select_for_update().get(pk=application.fund_id)
         if fund.status != InvestmentFund.Status.RAISING:
             raise ValueError('Fund is closed for new members after deployment.')
         amount = money(approved_amount if approved_amount is not None else application.requested_amount)
@@ -266,11 +330,16 @@ def approve_fund_application(
         application.decided_by_id = decided_by_id
         application.decided_at = timezone.now()
         application.save(update_fields=['status', 'approved_amount', 'decided_by', 'decided_at', 'updated_at'])
+        member_lookup = {'fund': fund}
+        if application.profile_id:
+            member_lookup['profile'] = application.profile
+        else:
+            member_lookup['partner'] = application.partner
         FundMember.objects.update_or_create(
-            tenant_id=tenant_id,
-            fund=fund,
-            partner=application.partner,
+            **member_lookup,
             defaults={
+                'tenant_id': fund.tenant_id,
+                'partner': application.partner,
                 'application': application,
                 'status': FundMember.Status.ACTIVE,
                 'approved_amount': amount,
@@ -287,12 +356,12 @@ def approve_fund_application(
 
 def preview_fund_application_approvals(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
     approvals: list[dict],
 ) -> dict:
     """Preview approval batch without changing application/member state."""
-    fund = InvestmentFund.objects.get(pk=fund_id, tenant_id=tenant_id)
+    fund = InvestmentFund.objects.get(pk=fund_id)
     if fund.status != InvestmentFund.Status.RAISING:
         raise ValueError('Fund is closed for new members after deployment.')
     active_approved = sum(
@@ -305,10 +374,9 @@ def preview_fund_application_approvals(
     rows = []
     batch_total = ZERO
     for item in approvals:
-        application = FundApplication.objects.select_related('partner').filter(
+        application = FundApplication.objects.select_related('partner', 'profile').filter(
             pk=int(item['application_id']),
             fund=fund,
-            tenant_id=tenant_id,
             status=FundApplication.Status.PENDING,
         ).first()
         if application is None:
@@ -324,7 +392,8 @@ def preview_fund_application_approvals(
         rows.append({
             'application_id': application.pk,
             'partner_id': application.partner_id,
-            'partner_name': application.partner.display_name,
+            'profile_id': application.profile_id,
+            'partner_name': application.profile.display_name if application.profile_id else application.partner.display_name,
             'requested_amount': str(money(application.requested_amount)),
             'approved_amount': str(amount),
             'currency': fund.currency,
@@ -345,7 +414,7 @@ def preview_fund_application_approvals(
 
 def amend_fundraising_terms(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
     target_amount: Decimal | None = None,
     min_contribution_amount: Decimal | None = None,
@@ -362,9 +431,11 @@ def amend_fundraising_terms(
     from .lifecycle_services import create_fund_terms_version
 
     with transaction.atomic():
-        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id, tenant_id=tenant_id)
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id)
         if fund.status != InvestmentFund.Status.RAISING:
             raise ValueError('Fundraising terms cannot be changed after deployment.')
+        if fund.tenant_id is None and review_at is not None:
+            raise ValueError('Fund review date requires a business tenant; set review terms after deployment.')
         updates: list[str] = []
         if target_amount is not None:
             target = money(target_amount)
@@ -410,14 +481,13 @@ def amend_fundraising_terms(
 
 def reject_fund_application(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
     application_id: int,
     decided_by_id: int | None = None,
 ) -> FundApplication:
     application = FundApplication.objects.select_related('fund').filter(
         pk=application_id,
-        tenant_id=tenant_id,
         fund_id=fund_id,
     ).first()
     if application is None:
@@ -433,18 +503,22 @@ def reject_fund_application(
 
 def add_fund_contribution(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
-    partner_id: int,
+    profile_id: int | None = None,
+    partner_id: int | None = None,
     amount: Decimal,
     currency: str = 'UZS',
     fx_rate: Decimal | None = None,
     date=None,
     notes: str = '',
     client_request_id=None,
-    from_cash_account_id: int | None = None,
 ) -> FundContribution:
-    """Record real member capital before the fund's first deployment."""
+    """Record confirmed member capital before deployment.
+
+    This is a fund-side offline fact. It does not create business GL/cash rows;
+    business accounting starts only when the fund deploys into an agreement.
+    """
     amount = money(amount)
     currency = str(currency or 'UZS').upper()
     if amount <= ZERO:
@@ -453,18 +527,26 @@ def add_fund_contribution(
     with transaction.atomic():
         if client_request_id:
             existing = FundContribution.objects.filter(
-                tenant_id=tenant_id, client_request_id=client_request_id,
+                fund_id=fund_id, client_request_id=client_request_id,
             ).first()
             if existing is not None:
                 return existing
-        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id, tenant_id=tenant_id)
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id)
         if fund.status != InvestmentFund.Status.RAISING:
             raise ValueError('Fund is closed for new capital after its first deployment.')
         if currency != str(fund.currency).upper():
             raise ValueError('Fund contribution currency must match fund currency.')
-        member = FundMember.objects.select_related('partner').filter(
-            fund=fund, partner_id=partner_id, status=FundMember.Status.ACTIVE,
-        ).first()
+        member_query = FundMember.objects.select_related('partner', 'profile').filter(
+            fund=fund,
+            status=FundMember.Status.ACTIVE,
+        )
+        if profile_id is not None:
+            member_query = member_query.filter(profile_id=profile_id)
+        elif partner_id is not None:
+            member_query = member_query.filter(partner_id=partner_id)
+        else:
+            raise ValueError('Fund contribution profile is required.')
+        member = member_query.first()
         if member is None:
             raise ValueError('Selected partner is not an active member of this fund.')
         if member.approved_amount and money(member.confirmed_amount) + amount > money(member.approved_amount):
@@ -472,7 +554,7 @@ def add_fund_contribution(
         if fund.target_amount is not None and _confirmed_capital(fund) + amount > money(fund.target_amount):
             raise ValueError('Fund hard cap would be exceeded. Amend terms before accepting more capital.')
         contribution = FundContribution.objects.create(
-            tenant_id=tenant_id,
+            tenant_id=fund.tenant_id,
             fund=fund,
             member=member,
             amount=amount,
@@ -482,29 +564,87 @@ def add_fund_contribution(
             notes=notes,
             client_request_id=client_request_id,
         )
-        payment = record_capital_pool_contribution(
-            tenant_id=tenant_id,
-            pool_account_id=fund.capital_account_id,
-            partner_id=member.partner_id,
-            contribution_id=contribution.pk,
-            target_type=Payment.TargetType.FUND_CONTRIBUTION,
-            amount=amount,
-            equity_account_code=equity_account_code(role=member.partner.role, legal_mode=None),
-            currency=currency,
-            fx_rate=fx_rate,
-            paid_at=date,
-            from_cash_account_id=from_cash_account_id,
-            client_request_id=client_request_id,
-            notes=notes,
-        )
-        contribution.fx_rate = payment.fx_rate
-        contribution.fx_rate_source = payment.fx_rate_source
-        contribution.fx_rate_date = payment.fx_rate_date
-        contribution.save(update_fields=['fx_rate', 'fx_rate_source', 'fx_rate_date', 'updated_at'])
         member.confirmed_amount = money(member.confirmed_amount) + amount
         member.save(update_fields=['confirmed_amount', 'updated_at'])
         rebuild_fund_member_positions(fund)
     return contribution
+
+
+def ensure_fund_holder_partner(
+    *,
+    fund: InvestmentFund,
+    tenant_id: int,
+    created_by_id: int | None = None,
+) -> Partner:
+    """Create or reuse the business-side synthetic investor for this fund."""
+    if fund.holder_partner_id and fund.holder_partner.tenant_id == tenant_id:
+        return fund.holder_partner
+    holder = Partner.objects.create(
+        tenant_id=tenant_id,
+        role=Partner.Role.INVESTOR,
+        display_name=f'Фонд: {fund.name}',
+        is_active=True,
+    )
+    BusinessInvestorRelation.objects.get_or_create(
+        tenant_id=tenant_id,
+        partner=holder,
+        defaults={
+            'status': BusinessInvestorRelation.Status.ACTIVE,
+            'source': BusinessInvestorRelation.Source.MANUAL,
+            'created_by_id': created_by_id,
+            'notes': 'system_fund_holder',
+        },
+    )
+    fund.holder_partner = holder
+    if fund.tenant_id is None:
+        fund.tenant_id = tenant_id
+    fund.save(update_fields=['holder_partner', 'tenant', 'updated_at'])
+    return holder
+
+
+def _ensure_fund_agreement_party(
+    *,
+    agreement: InvestmentAgreement,
+    fund: InvestmentFund,
+    holder: Partner,
+    tenant_id: int,
+    created_by_id: int | None,
+) -> AgreementPartner:
+    existing = AgreementPartner.objects.filter(
+        agreement=agreement,
+        partner_id=holder.pk,
+        role=AgreementPartner.Role.INVESTOR,
+    ).first()
+    if existing is not None:
+        return existing
+
+    candidates = list(AgreementPartner.objects.select_for_update().filter(
+        agreement=agreement,
+        role=AgreementPartner.Role.INVESTOR,
+    ))
+    if len(candidates) != 1:
+        raise ValueError('Add this fund as one negotiated INVESTOR party before deployment.')
+
+    placeholder = candidates[0]
+    if agreement.contributions.filter(partner_id=placeholder.partner_id).exists():
+        raise ValueError('Cannot replace an investor that already has agreement contributions.')
+
+    placeholder_partner_id = placeholder.partner_id
+    placeholder.partner = holder
+    placeholder.save(update_fields=['partner', 'updated_at'])
+    CapitalCommitment.objects.filter(
+        agreement=agreement,
+        partner_id=placeholder_partner_id,
+    ).update(partner_id=holder.pk)
+
+    from .lifecycle_services import create_agreement_terms_version
+
+    create_agreement_terms_version(
+        agreement=agreement,
+        notes=f'Fund holder linked for deployment: fund_id={fund.pk}',
+        created_by_id=created_by_id,
+    )
+    return placeholder
 
 
 def deploy_fund_to_agreement(
@@ -516,8 +656,9 @@ def deploy_fund_to_agreement(
     date=None,
     notes: str = '',
     client_request_id=None,
+    created_by_id: int | None = None,
 ) -> FundDeployment:
-    """Move real fund-pool cash into an agreement and close the fund to new capital."""
+    """Deploy confirmed fund capital into a business agreement."""
     from .workspace_support import add_agreement_contribution
 
     amount = money(amount)
@@ -531,9 +672,7 @@ def deploy_fund_to_agreement(
             ).first()
             if existing is not None:
                 return existing
-        fund = InvestmentFund.objects.select_for_update().select_related('capital_account').get(
-            pk=fund_id, tenant_id=tenant_id,
-        )
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id)
         if fund.status not in {InvestmentFund.Status.RAISING, InvestmentFund.Status.DEPLOYED}:
             raise ValueError('Only an open fund can make a deployment.')
         if FundApplication.objects.filter(fund=fund, status=FundApplication.Status.PENDING).exists():
@@ -543,26 +682,35 @@ def deploy_fund_to_agreement(
         )
         if str(fund.currency).upper() != str(agreement.currency).upper():
             raise ValueError('Fund and agreement currencies must match in MVP.')
-        if Decimal(str(fund.capital_account.balance)) < amount:
-            raise ValueError('Fund capital pool has insufficient available cash.')
-        if not AgreementPartner.objects.filter(
+        deployed_total = sum(
+            (money(row.amount) for row in FundDeployment.objects.filter(fund=fund, currency=fund.currency)),
+            ZERO,
+        )
+        if _confirmed_capital(fund) - deployed_total < amount:
+            raise ValueError('Fund confirmed capital is insufficient for this deployment.')
+        holder = ensure_fund_holder_partner(
+            fund=fund,
+            tenant_id=tenant_id,
+            created_by_id=created_by_id,
+        )
+        _ensure_fund_agreement_party(
             agreement=agreement,
-            partner_id=fund.holder_partner_id,
-            role=AgreementPartner.Role.INVESTOR,
-        ).exists():
-            raise ValueError('Add this fund as an INVESTOR party to the agreement before deployment.')
+            fund=fund,
+            holder=holder,
+            tenant_id=tenant_id,
+            created_by_id=created_by_id,
+        )
         contribution = add_agreement_contribution(
             tenant_id=tenant_id,
             agreement_id=agreement.pk,
-            partner_id=fund.holder_partner_id,
+            partner_id=holder.pk,
             amount=amount,
             currency=fund.currency,
             fx_rate=Decimal('1'),
             date=date,
             notes=f'fund_deployment:{fund.pk} {notes}'.strip(),
             client_request_id=client_request_id,
-            from_cash_account_id=fund.capital_account_id,
-            allow_restricted_source=True,
+            created_by_id=created_by_id,
         )
         deployment = FundDeployment.objects.create(
             tenant_id=tenant_id,
@@ -584,9 +732,10 @@ def deploy_fund_to_agreement(
 
 def exit_fund_member(
     *,
-    tenant_id: int,
+    tenant_id: int | None = None,
     fund_id: int,
-    partner_id: int,
+    profile_id: int | None = None,
+    partner_id: int | None = None,
     reason: str,
     notes: str = '',
     client_request_id=None,
@@ -601,17 +750,20 @@ def exit_fund_member(
             ).first()
             if existing is not None:
                 return existing
-        fund = InvestmentFund.objects.select_for_update().select_related('capital_account').get(
-            pk=fund_id,
-            tenant_id=tenant_id,
-        )
+        fund = InvestmentFund.objects.select_for_update().get(pk=fund_id)
         if fund.status != InvestmentFund.Status.RAISING:
             raise ValueError('Members cannot exit or be removed after fund deployment.')
-        member = FundMember.objects.select_for_update().get(
+        member_query = FundMember.objects.select_for_update().filter(
             fund=fund,
-            partner_id=partner_id,
             status=FundMember.Status.ACTIVE,
         )
+        if profile_id is not None:
+            member_query = member_query.filter(profile_id=profile_id)
+        elif partner_id is not None:
+            member_query = member_query.filter(partner_id=partner_id)
+        else:
+            raise ValueError('Fund member profile is required.')
+        member = member_query.get()
         refund_amount = sum(
             (money(row.amount) for row in FundContribution.objects.filter(fund=fund, member=member, currency=fund.currency)),
             ZERO,
@@ -622,7 +774,7 @@ def exit_fund_member(
         refund_amount = money(max(ZERO, refund_amount))
         refunded_at = timezone.now()
         exit_row = FundMemberExit.objects.create(
-            tenant_id=tenant_id,
+            tenant_id=fund.tenant_id,
             fund=fund,
             member=member,
             reason=reason,
@@ -632,16 +784,6 @@ def exit_fund_member(
             notes=notes,
             client_request_id=client_request_id,
         )
-        if refund_amount > ZERO:
-            create_cash_entry(
-                tenant_id=tenant_id,
-                account=fund.capital_account,
-                direction=CashEntry.Direction.OUT,
-                amount=refund_amount,
-                date=refunded_at,
-                source_ref_type='fund_member_exit',
-                source_ref_id=exit_row.pk,
-            )
         member.status = (
             FundMember.Status.EXITED
             if reason == FundMemberExit.Reason.MEMBER_EXIT
@@ -656,7 +798,7 @@ def exit_fund_member(
 
 def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
     """Fold fund contributions and E18 holder positions into member-facing rows."""
-    members = list(FundMember.objects.filter(fund=fund, status=FundMember.Status.ACTIVE).select_related('partner'))
+    members = list(FundMember.objects.filter(fund=fund, status=FundMember.Status.ACTIVE).select_related('partner', 'profile'))
     currency = str(fund.currency or 'UZS').upper()
     paid_by_member = {
         member.pk: money(sum(
@@ -673,21 +815,15 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
         (money(row.amount) for row in FundDeployment.objects.filter(fund=fund, currency=currency)),
         ZERO,
     )
-    agreement_rows = PartnerPositionReadModel.objects.filter(
-        tenant_id=fund.tenant_id,
-        agreement__fund_deployments__fund=fund,
-        partner_id=fund.holder_partner_id,
-        procurement__isnull=True,
-        currency=currency,
-    ).distinct()
-    external_available = max(ZERO, sum((money(row.available) for row in agreement_rows), ZERO))
-    venture_rows = PartnerPositionReadModel.objects.filter(
-        tenant_id=fund.tenant_id,
-        agreement__fund_deployments__fund=fund,
-        partner_id=fund.holder_partner_id,
-        procurement__isnull=False,
-        currency='UZS',
-    ).distinct()
+    venture_rows = PartnerPositionReadModel.objects.none()
+    if fund.holder_partner_id:
+        venture_rows = PartnerPositionReadModel.objects.filter(
+            agreement__fund_deployments__fund=fund,
+            partner_id=fund.holder_partner_id,
+            procurement__isnull=False,
+            currency='UZS',
+        ).distinct()
+    external_available = max(ZERO, money(total_paid - total_deployed))
     gross_profit = sum((money(row.provisional_profit_uzs) for row in venture_rows), ZERO)
     gross_capital_available = sum(
         (
@@ -698,14 +834,21 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
         ZERO,
     )
     capital_paid_by_partner: dict[int, Decimal] = {}
+    capital_paid_by_profile: dict[int, Decimal] = {}
     for row in PayoutObligation.objects.filter(
         fund=fund,
         kind=PayoutObligation.Kind.CAPITAL_RETURN,
-    ).values('recipient_id', 'paid_amount'):
-        partner_id = int(row['recipient_id'])
-        capital_paid_by_partner[partner_id] = money(
-            capital_paid_by_partner.get(partner_id, ZERO) + money(row['paid_amount'])
-        )
+    ).values('recipient_id', 'recipient_profile_id', 'paid_amount'):
+        if row['recipient_id']:
+            partner_id = int(row['recipient_id'])
+            capital_paid_by_partner[partner_id] = money(
+                capital_paid_by_partner.get(partner_id, ZERO) + money(row['paid_amount'])
+            )
+        elif row['recipient_profile_id']:
+            profile_id = int(row['recipient_profile_id'])
+            capital_paid_by_profile[profile_id] = money(
+                capital_paid_by_profile.get(profile_id, ZERO) + money(row['paid_amount'])
+            )
     profit_available = sum((money(row.provisional_profit_available_uzs) for row in venture_rows), ZERO)
     manager_share = Decimal(str(getattr(fund.current_terms, 'manager_profit_share', ZERO)))
     manager_fee = money(max(ZERO, profit_available) * manager_share)
@@ -714,14 +857,18 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
     for member in members:
         share = ratio(paid_by_member[member.pk] / total_paid) if total_paid > ZERO else ZERO
         gross_member_capital = money(gross_capital_available * share)
-        paid_to_member = capital_paid_by_partner.get(member.partner_id, ZERO)
+        paid_to_member = (
+            capital_paid_by_partner.get(member.partner_id, ZERO)
+            if member.partner_id
+            else capital_paid_by_profile.get(member.profile_id, ZERO)
+        )
         capital_available_by_member[member.pk] = max(ZERO, money(gross_member_capital - paid_to_member))
     capital_available = sum(capital_available_by_member.values(), ZERO)
     now = timezone.now()
     FundPositionReadModel.all_objects.update_or_create(
-        tenant_id=fund.tenant_id,
         fund=fund,
         defaults={
+            'tenant_id': fund.tenant_id,
             'currency': currency,
             'paid_in': total_paid,
             'deployed': total_deployed,
@@ -737,13 +884,17 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
     keep_ids: list[int] = []
     for member in members:
         share = ratio(paid_by_member[member.pk] / total_paid) if total_paid > ZERO else ZERO
-        member_fee = manager_fee if member.partner_id == fund.manager_partner_id else ZERO
+        member_fee = manager_fee if (
+            member.profile_id and member.profile_id == fund.manager_profile_id
+        ) or (
+            member.partner_id and member.partner_id == fund.manager_partner_id
+        ) else ZERO
         row, _ = FundMemberPositionReadModel.all_objects.update_or_create(
-            tenant_id=fund.tenant_id,
             fund=fund,
             member=member,
             currency=currency,
             defaults={
+                'tenant_id': fund.tenant_id,
                 'capital_share': share,
                 'paid_in': paid_by_member[member.pk],
                 'deployed': money(total_deployed * share),
@@ -757,7 +908,7 @@ def rebuild_fund_member_positions(fund: InvestmentFund) -> None:
             },
         )
         keep_ids.append(row.pk)
-    stale = FundMemberPositionReadModel.all_objects.filter(tenant_id=fund.tenant_id, fund=fund)
+    stale = FundMemberPositionReadModel.all_objects.filter(fund=fund)
     if keep_ids:
         stale = stale.exclude(pk__in=keep_ids)
     stale.delete()

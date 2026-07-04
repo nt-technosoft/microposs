@@ -249,33 +249,42 @@ class FundTermsVersionSerializer(serializers.ModelSerializer):
 
 
 class FundMemberSerializer(serializers.ModelSerializer):
-    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    profile_name = serializers.CharField(source='profile.display_name', read_only=True)
+    partner_name = serializers.SerializerMethodField()
 
     class Meta:
         model = FundMember
         fields = [
-            'id', 'partner', 'partner_name', 'application', 'status',
+            'id', 'profile', 'profile_name', 'partner', 'partner_name', 'application', 'status',
             'approved_amount', 'confirmed_amount', 'joined_at', 'exited_at',
             'offline_agreed_at', 'offline_agreement_reference',
         ]
         read_only_fields = fields
 
+    def get_partner_name(self, obj):
+        return obj.profile.display_name if obj.profile_id else (obj.partner.display_name if obj.partner_id else '')
+
 
 class FundApplicationSerializer(serializers.ModelSerializer):
-    partner_name = serializers.CharField(source='partner.display_name', read_only=True)
+    profile_name = serializers.CharField(source='profile.display_name', read_only=True)
+    partner_name = serializers.SerializerMethodField()
 
     class Meta:
         model = FundApplication
         fields = [
-            'id', 'fund', 'partner', 'partner_name', 'requested_amount',
+            'id', 'fund', 'profile', 'profile_name', 'partner', 'partner_name', 'requested_amount',
             'approved_amount', 'currency', 'status', 'message', 'decided_at',
             'decided_by', 'created_at',
         ]
         read_only_fields = fields
 
+    def get_partner_name(self, obj):
+        return obj.profile.display_name if obj.profile_id else (obj.partner.display_name if obj.partner_id else '')
+
 
 class FundApplicationCreateSerializer(serializers.Serializer):
-    partner_id = serializers.IntegerField()
+    partner_id = serializers.IntegerField(required=False)
+    invite_token = serializers.CharField(required=False, default='', allow_blank=True)
     requested_amount = serializers.DecimalField(max_digits=20, decimal_places=2)
     message = serializers.CharField(required=False, default='', allow_blank=True)
 
@@ -295,16 +304,21 @@ class FundApplicationApprovalPreviewSerializer(serializers.Serializer):
 
 class FundContributionSerializer(serializers.ModelSerializer):
     partner = serializers.IntegerField(source='member.partner_id', read_only=True)
-    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+    profile = serializers.IntegerField(source='member.profile_id', read_only=True)
+    partner_name = serializers.SerializerMethodField()
 
     class Meta:
         model = FundContribution
         fields = [
-            'id', 'member', 'partner', 'partner_name', 'amount', 'currency',
+            'id', 'member', 'profile', 'partner', 'partner_name', 'amount', 'currency',
             'fx_rate', 'fx_rate_source', 'fx_rate_date', 'date', 'notes',
             'client_request_id',
         ]
         read_only_fields = fields
+
+    def get_partner_name(self, obj):
+        member = obj.member
+        return member.profile.display_name if member.profile_id else (member.partner.display_name if member.partner_id else '')
 
 
 class FundDeploymentSerializer(serializers.ModelSerializer):
@@ -324,20 +338,26 @@ class FundDeploymentSerializer(serializers.ModelSerializer):
 
 class FundMemberExitSerializer(serializers.ModelSerializer):
     partner = serializers.IntegerField(source='member.partner_id', read_only=True)
-    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+    profile = serializers.IntegerField(source='member.profile_id', read_only=True)
+    partner_name = serializers.SerializerMethodField()
 
     class Meta:
         model = FundMemberExit
         fields = [
-            'id', 'fund', 'member', 'partner', 'partner_name', 'reason',
+            'id', 'fund', 'member', 'profile', 'partner', 'partner_name', 'reason',
             'refund_amount', 'currency', 'refunded_at', 'notes',
             'client_request_id',
         ]
         read_only_fields = fields
 
+    def get_partner_name(self, obj):
+        member = obj.member
+        return member.profile.display_name if member.profile_id else (member.partner.display_name if member.partner_id else '')
+
 
 class FundMemberExitCreateSerializer(serializers.Serializer):
-    partner_id = serializers.IntegerField()
+    partner_id = serializers.IntegerField(required=False)
+    profile_id = serializers.IntegerField(required=False)
     reason = serializers.ChoiceField(choices=FundMemberExit.Reason.choices)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     client_request_id = serializers.UUIDField(required=False, allow_null=True)
@@ -345,17 +365,22 @@ class FundMemberExitCreateSerializer(serializers.Serializer):
 
 class FundMemberPositionSerializer(serializers.ModelSerializer):
     partner = serializers.IntegerField(source='member.partner_id', read_only=True)
-    partner_name = serializers.CharField(source='member.partner.display_name', read_only=True)
+    profile = serializers.IntegerField(source='member.profile_id', read_only=True)
+    partner_name = serializers.SerializerMethodField()
 
     class Meta:
         model = FundMemberPositionReadModel
         fields = [
-            'id', 'member', 'partner', 'partner_name', 'currency', 'capital_share',
+            'id', 'member', 'profile', 'partner', 'partner_name', 'currency', 'capital_share',
             'paid_in', 'deployed', 'available', 'provisional_profit_uzs',
             'capital_return_available_uzs', 'profit_available_uzs',
             'manager_fee_accrued_uzs', 'computed_at',
         ]
         read_only_fields = fields
+
+    def get_partner_name(self, obj):
+        member = obj.member
+        return member.profile.display_name if member.profile_id else (member.partner.display_name if member.partner_id else '')
 
 
 class FundPositionSerializer(serializers.ModelSerializer):
@@ -370,8 +395,11 @@ class FundPositionSerializer(serializers.ModelSerializer):
 
 
 class InvestmentFundSerializer(serializers.ModelSerializer):
-    manager_partner_name = serializers.CharField(source='manager_partner.display_name', read_only=True)
-    holder_partner_name = serializers.CharField(source='holder_partner.display_name', read_only=True)
+    manager_profile_name = serializers.CharField(source='manager_profile.display_name', read_only=True)
+    manager_partner_name = serializers.SerializerMethodField()
+    holder_partner_name = serializers.SerializerMethodField()
+    active_members_count = serializers.SerializerMethodField()
+    pending_applications_count = serializers.SerializerMethodField()
     current_terms = FundTermsVersionSerializer(read_only=True)
     members = FundMemberSerializer(many=True, read_only=True)
     applications = FundApplicationSerializer(many=True, read_only=True)
@@ -381,28 +409,122 @@ class InvestmentFundSerializer(serializers.ModelSerializer):
     positions = FundMemberPositionSerializer(source='member_position_rows', many=True, read_only=True)
     position = FundPositionSerializer(source='position_row', read_only=True)
     invite_path = serializers.SerializerMethodField()
+    viewer_role = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentFund
         fields = [
-            'id', 'name', 'status', 'manager_partner', 'manager_partner_name',
+            'id', 'name', 'status', 'manager_profile', 'manager_profile_name',
+            'manager_partner', 'manager_partner_name',
             'holder_partner', 'holder_partner_name', 'capital_account', 'currency',
             'visibility', 'invite_token', 'invite_path', 'target_amount',
             'min_contribution_amount', 'opened_at', 'closed_at', 'current_terms', 'members',
             'applications', 'contributions', 'deployments', 'member_exits', 'positions',
-            'position',
+            'position', 'active_members_count', 'pending_applications_count',
+            'viewer_role', 'permissions',
         ]
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        role = data.get('viewer_role')
+        if role != 'MANAGER':
+            viewer_profile_id = self._viewer_profile_id()
+            self._redact_public_terms_snapshot(data)
+            data['members'] = [
+                row for row in data.get('members', [])
+                if role == 'MEMBER' and row.get('profile') and row.get('profile') == viewer_profile_id
+            ]
+            data['applications'] = [
+                row for row in data.get('applications', [])
+                if row.get('profile') and row.get('profile') == viewer_profile_id
+            ]
+            data['contributions'] = []
+            data['deployments'] = []
+            data['member_exits'] = []
+            data['positions'] = [
+                row for row in data.get('positions', [])
+                if row.get('profile') and row.get('profile') == viewer_profile_id
+            ]
+        return data
+
+    def _redact_public_terms_snapshot(self, data):
+        current_terms = data.get('current_terms')
+        if not isinstance(current_terms, dict):
+            return
+        snapshot = current_terms.get('terms_snapshot')
+        if not isinstance(snapshot, dict):
+            return
+        allowed_keys = {
+            'name',
+            'currency',
+            'target_amount',
+            'min_contribution_amount',
+            'visibility',
+            'manager_profit_share',
+            'waterfall',
+        }
+        current_terms['terms_snapshot'] = {
+            key: value for key, value in snapshot.items() if key in allowed_keys
+        }
+
+    def _viewer_profile_id(self):
+        request = self.context.get('request')
+        try:
+            profile = getattr(getattr(request, 'user', None), 'investment_profile', None)
+        except Exception:
+            profile = None
+        return getattr(profile, 'pk', None)
+
+    def get_manager_partner_name(self, obj):
+        return obj.manager_profile.display_name if obj.manager_profile_id else (obj.manager_partner.display_name if obj.manager_partner_id else '')
+
+    def get_holder_partner_name(self, obj):
+        return obj.holder_partner.display_name if obj.holder_partner_id else ''
+
+    def get_active_members_count(self, obj):
+        return obj.members.filter(status=FundMember.Status.ACTIVE).count()
+
+    def get_pending_applications_count(self, obj):
+        return obj.applications.filter(status=FundApplication.Status.PENDING).count()
 
     def get_invite_path(self, obj):
         if not obj.invite_token:
             return ''
         return f'/investor/funds/join/{obj.invite_token}'
 
+    def get_viewer_role(self, obj):
+        request = self.context.get('request')
+        if not request or not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return 'PUBLIC'
+        if request.user.is_staff:
+            return 'MANAGER'
+        profile_id = self._viewer_profile_id()
+        if profile_id and obj.manager_profile_id == profile_id:
+            return 'MANAGER'
+        if profile_id and obj.members.filter(profile_id=profile_id, status=FundMember.Status.ACTIVE).exists():
+            return 'MEMBER'
+        if profile_id and obj.applications.filter(profile_id=profile_id).exists():
+            return 'APPLICANT'
+        return 'PUBLIC'
+
+    def get_permissions(self, obj):
+        role = self.get_viewer_role(obj)
+        raising = obj.status == InvestmentFund.Status.RAISING
+        return {
+            'can_apply': role in {'PUBLIC', 'APPLICANT'} and raising,
+            'can_manage_applications': role == 'MANAGER' and raising,
+            'can_confirm_contribution': role == 'MANAGER' and raising,
+            'can_amend_terms': role == 'MANAGER' and raising,
+            'can_deploy': role == 'MANAGER' and obj.status in {InvestmentFund.Status.RAISING, InvestmentFund.Status.DEPLOYED},
+            'can_record_payout': role == 'MANAGER',
+        }
+
 
 class InvestmentFundCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
-    manager_partner_id = serializers.IntegerField()
+    manager_partner_id = serializers.IntegerField(required=False)
     member_partner_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     target_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
@@ -433,11 +555,11 @@ class FundTermsAmendSerializer(serializers.Serializer):
 
 
 class FundContributionCreateSerializer(serializers.Serializer):
-    partner_id = serializers.IntegerField()
+    partner_id = serializers.IntegerField(required=False)
+    profile_id = serializers.IntegerField(required=False)
     amount = serializers.DecimalField(max_digits=20, decimal_places=2)
     currency = serializers.CharField(max_length=3, required=False, default='UZS')
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
-    from_cash_account_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, default='', allow_blank=True)
     client_request_id = serializers.UUIDField(required=False, allow_null=True)
 
@@ -460,34 +582,49 @@ class PayoutSettlementSerializer(serializers.ModelSerializer):
 
 
 class PayoutObligationSerializer(serializers.ModelSerializer):
-    recipient_name = serializers.CharField(source='recipient.display_name', read_only=True)
+    recipient_name = serializers.SerializerMethodField()
     settlements = PayoutSettlementSerializer(many=True, read_only=True)
 
     class Meta:
         model = PayoutObligation
         fields = [
-            'id', 'agreement', 'fund', 'recipient', 'recipient_name', 'procurement',
+            'id', 'agreement', 'fund', 'recipient', 'recipient_profile', 'recipient_name', 'procurement',
             'kind', 'amount', 'paid_amount', 'currency', 'due_at', 'status', 'recorded_at',
             'confirmed_at', 'dividend_payment', 'capital_withdrawal', 'notes',
             'settlements',
         ]
         read_only_fields = fields
 
+    def get_recipient_name(self, obj):
+        if obj.recipient_id:
+            return obj.recipient.display_name
+        if obj.recipient_profile_id:
+            return obj.recipient_profile.display_name
+        return ''
+
 
 class DisputeCaseSerializer(serializers.ModelSerializer):
-    raised_by_name = serializers.CharField(source='raised_by.display_name', read_only=True)
+    raised_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = DisputeCase
         fields = [
-            'id', 'agreement', 'fund', 'obligation', 'raised_by', 'raised_by_name',
+            'id', 'agreement', 'fund', 'obligation', 'raised_by', 'raised_by_profile', 'raised_by_name',
             'status', 'statement', 'evidence', 'resolved_at', 'resolution_notes',
         ]
         read_only_fields = fields
 
+    def get_raised_by_name(self, obj):
+        if obj.raised_by_id:
+            return obj.raised_by.display_name
+        if obj.raised_by_profile_id:
+            return obj.raised_by_profile.display_name
+        return ''
+
 
 class DisputeCreateSerializer(serializers.Serializer):
-    raised_by_id = serializers.IntegerField()
+    raised_by_id = serializers.IntegerField(required=False, allow_null=True)
+    raised_by_profile_id = serializers.IntegerField(required=False, allow_null=True)
     statement = serializers.CharField()
     evidence = serializers.CharField(required=False, default='', allow_blank=True)
 

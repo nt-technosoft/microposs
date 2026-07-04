@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from apps.core.models import BusinessInvestorRelation, Partner
 from apps.core.exceptions import ImmutableRecordError
+from apps.core.services import get_or_create_investment_profile
 from apps.partnerships.fund_services import (
     add_fund_contribution,
     amend_fundraising_terms,
@@ -35,6 +36,7 @@ from apps.partnerships.lifecycle_services import (
 )
 from apps.partnerships.models import (
     AgreementPartner,
+    CapitalCommitment,
     FundApplication,
     FundMember,
     FundMemberExit,
@@ -50,8 +52,6 @@ from apps.partnerships.serializers import (
     InvestmentAgreementDetailSerializer,
     InvestmentAgreementListSerializer,
 )
-from apps.finance.models import Payment
-from apps.finance.services import record_generic_cash_payment
 from apps.partnerships.workspace_support import (
     add_agreement_contribution,
     create_investment_agreement,
@@ -216,7 +216,8 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         fund.refresh_from_db()
         self.assertEqual(fund.status, InvestmentFund.Status.DEPLOYED)
         self.assertEqual(deployment.agreement_contribution.partner_id, fund.holder_partner_id)
-        self.assertEqual(fund.capital_account.balance, Decimal('200.00'))
+        self.assertIsNone(fund.capital_account_id)
+        self.assertEqual(fund.position_row.available, Decimal('200.00'))
         self.assertEqual(fund.member_position_rows.get(member__partner=self.investor).capital_share, Decimal('0.600000000'))
         with self.assertRaisesMessage(ValueError, 'closed for new capital'):
             add_fund_contribution(
@@ -303,7 +304,7 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
 
         rebuild_fund_member_positions(fund)
         fund.position_row.refresh_from_db()
-        self.assertEqual(fund.position_row.available, Decimal('0.00'))
+        self.assertEqual(fund.position_row.available, Decimal('200.00'))
         self.assertEqual(fund.position_row.capital_return_available_uzs, Decimal('80.00'))
         self.assertEqual(
             FundMemberPositionReadModel.objects.get(fund=fund, member__partner=self.investor).capital_return_available_uzs,
@@ -319,7 +320,7 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         venture_row.save(update_fields=['capital_return_available_uzs', 'capital_returned_uzs', 'updated_at'])
         rebuild_fund_member_positions(fund)
         fund.position_row.refresh_from_db()
-        self.assertEqual(fund.position_row.available, Decimal('0.00'))
+        self.assertEqual(fund.position_row.available, Decimal('200.00'))
         self.assertEqual(fund.position_row.capital_return_available_uzs, Decimal('80.00'))
         self.assertEqual(
             FundMemberPositionReadModel.objects.get(fund=fund, member__partner=self.investor).capital_return_available_uzs,
@@ -396,7 +397,8 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
             currency='UZS',
         )
         fund.refresh_from_db()
-        self.assertEqual(fund.capital_account.balance, Decimal('600.00'))
+        self.assertIsNone(fund.capital_account_id)
+        self.assertEqual(fund.contributions.get(member=member).amount, Decimal('600.00'))
 
         exit_row = exit_fund_member(
             tenant_id=self.business.id,
@@ -404,10 +406,10 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
             partner_id=self.investor.id,
             reason=FundMemberExit.Reason.MEMBER_EXIT,
         )
-        fund.capital_account.refresh_from_db()
         member.refresh_from_db()
+        fund.position_row.refresh_from_db()
         self.assertEqual(exit_row.refund_amount, Decimal('600.00'))
-        self.assertEqual(fund.capital_account.balance, Decimal('0.00'))
+        self.assertEqual(fund.position_row.available, Decimal('0.00'))
         self.assertEqual(member.status, FundMember.Status.EXITED)
 
     def test_fund_approval_preview_and_terms_amendment_allow_explicit_target_change(self):
@@ -636,15 +638,7 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
             currency='UZS',
             manager_profit_share=Decimal('0.10'),
         )
-        with self.assertRaisesMessage(ValueError, 'restricted capital pool'):
-            record_generic_cash_payment(
-                tenant_id=self.business.id,
-                cash_account_id=fund.capital_account_id,
-                target_type=Payment.TargetType.PROCUREMENT_COST,
-                target_id=1,
-                amount=Decimal('1'),
-                counterpart_account_code='1100',
-            )
+        self.assertIsNone(fund.capital_account_id)
         FundPositionReadModel.objects.filter(fund=fund).update(
             manager_fee_accrued_uzs=Decimal('10.00'),
         )
@@ -654,6 +648,51 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         rows = evaluate_fund_payout_obligations(fund=fund)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].recipient_id, self.operator.id)
+        self.assertEqual(rows[0].amount, Decimal('10.00'))
+
+    def test_profile_fund_nonmember_manager_fee_uses_manager_profile(self):
+        manager_profile = get_or_create_investment_profile(self.operator.user, self.operator.display_name)
+        investor_user = User.objects.create_user(username='profile_fee_member', password='x')
+        investor_profile = get_or_create_investment_profile(investor_user, 'Profile fee member')
+        fund = create_investment_fund(
+            name='Profile manager outside fund',
+            manager_profile_id=manager_profile.id,
+            currency='UZS',
+            manager_profit_share=Decimal('0.10'),
+        )
+        application = submit_fund_application(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            requested_amount=Decimal('100'),
+        )
+        approve_fund_application(
+            fund_id=fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('100'),
+        )
+        add_fund_contribution(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            amount=Decimal('100'),
+            currency='UZS',
+        )
+        fund.tenant = self.business
+        fund.save(update_fields=['tenant', 'updated_at'])
+        FundMemberPositionReadModel.objects.filter(fund=fund).update(tenant_id=self.business.id)
+        FundPositionReadModel.objects.filter(fund=fund).update(
+            tenant_id=self.business.id,
+            manager_fee_accrued_uzs=Decimal('10.00'),
+        )
+        PayoutPolicy.objects.filter(fund_terms_id=fund.current_terms_id).update(
+            tenant_id=self.business.id,
+            minimum_available_amount=Decimal('1'),
+        )
+
+        rows = evaluate_fund_payout_obligations(fund=fund)
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0].recipient_id)
+        self.assertEqual(rows[0].recipient_profile_id, manager_profile.id)
         self.assertEqual(rows[0].amount, Decimal('10.00'))
 
     def test_active_payout_obligation_is_unique_while_pending(self):
@@ -726,6 +765,152 @@ class E20MultiPartyFundsLifecycleTests(TestCase):
         )
         self.assertEqual(first.pk, duplicate.pk)
         self.assertEqual(fund.contributions.count(), 1)
+
+    def test_profile_fund_contributions_are_idempotent_without_tenant(self):
+        investor_user = User.objects.create_user(username='profile_contributor', password='x')
+        manager_profile = get_or_create_investment_profile(self.operator.user, self.operator.display_name)
+        investor_profile = get_or_create_investment_profile(investor_user, 'Profile contributor')
+        fund = create_investment_fund(
+            name='Tenantless idempotent fund',
+            manager_profile_id=manager_profile.id,
+            currency='UZS',
+            target_amount=Decimal('1000'),
+        )
+        application = submit_fund_application(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            requested_amount=Decimal('100'),
+        )
+        approve_fund_application(
+            fund_id=fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('100'),
+        )
+
+        request_id = uuid4()
+        first = add_fund_contribution(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            amount=Decimal('100'),
+            currency='UZS',
+            client_request_id=request_id,
+        )
+        duplicate = add_fund_contribution(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            amount=Decimal('100'),
+            currency='UZS',
+            client_request_id=request_id,
+        )
+
+        self.assertEqual(first.pk, duplicate.pk)
+        self.assertEqual(fund.contributions.count(), 1)
+
+    def test_profile_owned_fund_deployment_creates_business_aggregate_party(self):
+        manager_profile = get_or_create_investment_profile(self.operator.user, self.operator.display_name)
+        investor_user = User.objects.create_user(username='fund_member_profile', password='x')
+        investor_profile = get_or_create_investment_profile(investor_user, 'Fund member profile')
+        fund = create_investment_fund(
+            name='Profile owned deploy fund',
+            manager_profile_id=manager_profile.id,
+            currency='UZS',
+            target_amount=Decimal('500'),
+        )
+        application = submit_fund_application(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            requested_amount=Decimal('500'),
+        )
+        approve_fund_application(
+            fund_id=fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('500'),
+        )
+        add_fund_contribution(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            amount=Decimal('500'),
+            currency='UZS',
+        )
+        agreement = create_investment_agreement(
+            tenant_id=self.business.id,
+            mudaraba_ratio=Decimal('0.50'),
+            planned_budget=Decimal('1000'),
+            partners=[
+                {'partner_id': self.investor.id, 'role': 'INVESTOR', 'planned_capital_share': '500', 'profit_share': '0.25'},
+                {'partner_id': self.operator.id, 'role': 'OPERATOR', 'planned_capital_share': '500', 'profit_share': '0.75'},
+            ],
+        )
+
+        deployment = deploy_fund_to_agreement(
+            tenant_id=self.business.id,
+            fund_id=fund.id,
+            agreement_id=agreement.id,
+            amount=Decimal('500'),
+        )
+        fund.refresh_from_db()
+
+        self.assertEqual(deployment.agreement_contribution.partner_id, fund.holder_partner_id)
+        self.assertEqual(fund.holder_partner.display_name, 'Фонд: Profile owned deploy fund')
+        holder_party = AgreementPartner.objects.get(
+            agreement=agreement,
+            partner_id=fund.holder_partner_id,
+            role=AgreementPartner.Role.INVESTOR,
+        )
+        self.assertEqual(holder_party.planned_capital_share, Decimal('500.00'))
+        self.assertEqual(holder_party.profit_share, Decimal('0.250000'))
+        self.assertTrue(CapitalCommitment.objects.filter(
+            agreement=agreement,
+            partner_id=fund.holder_partner_id,
+            amount=Decimal('500.00'),
+        ).exists())
+        self.assertFalse(AgreementPartner.objects.filter(agreement=agreement, partner=self.investor).exists())
+        self.assertEqual(fund.status, InvestmentFund.Status.DEPLOYED)
+
+    def test_profile_only_fund_members_get_profile_payout_obligations(self):
+        manager_profile = get_or_create_investment_profile(self.operator.user, self.operator.display_name)
+        investor_user = User.objects.create_user(username='profile_payout_member', password='x')
+        investor_profile = get_or_create_investment_profile(investor_user, 'Profile payout member')
+        fund = create_investment_fund(
+            name='Profile payout fund',
+            manager_profile_id=manager_profile.id,
+            currency='UZS',
+            target_amount=Decimal('1000'),
+        )
+        application = submit_fund_application(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            requested_amount=Decimal('100'),
+        )
+        approve_fund_application(
+            fund_id=fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('100'),
+        )
+        add_fund_contribution(
+            fund_id=fund.id,
+            profile_id=investor_profile.id,
+            amount=Decimal('100'),
+            currency='UZS',
+        )
+        fund.tenant = self.business
+        fund.save(update_fields=['tenant', 'updated_at'])
+        member = FundMember.objects.get(fund=fund, profile=investor_profile)
+        FundMemberPositionReadModel.objects.filter(fund=fund, member=member).update(
+            tenant_id=self.business.id,
+            profit_available_uzs=Decimal('25'),
+            capital_return_available_uzs=Decimal('50'),
+        )
+        PayoutPolicy.objects.filter(fund_terms_id=fund.current_terms_id).update(
+            tenant_id=self.business.id,
+            minimum_available_amount=Decimal('1'),
+        )
+
+        rows = evaluate_fund_payout_obligations(fund=fund)
+
+        self.assertEqual({row.kind for row in rows}, {PayoutObligation.Kind.PROFIT, PayoutObligation.Kind.CAPITAL_RETURN})
+        self.assertTrue(all(row.recipient_profile_id == investor_profile.id for row in rows))
+        self.assertTrue(all(row.recipient_id is None for row in rows))
 
     def test_review_records_buyout_and_writeoff_decisions_without_auto_liquidation(self):
         agreement = create_investment_agreement(
@@ -902,6 +1087,78 @@ class E21FundPermissionApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], self.fund.id)
         self.assertEqual(response.data['invite_path'], f'/investor/funds/join/{self.fund.invite_token}')
+        self.assertEqual(response.data['viewer_role'], 'PUBLIC')
+        self.assertEqual(response.data['members'], [])
+
+    def test_invite_lookup_is_public_summary_only(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            f'/api/v1/partnerships/funds/by-invite/{self.fund.invite_token}/',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], self.fund.id)
+        self.assertEqual(response.data['viewer_role'], 'PUBLIC')
+        self.assertIn('active_members_count', response.data)
+        self.assertEqual(response.data['members'], [])
+        self.assertEqual(response.data['applications'], [])
+        self.assertEqual(response.data['contributions'], [])
+        snapshot = response.data['current_terms']['terms_snapshot']
+        self.assertIn('manager_profit_share', snapshot)
+        self.assertNotIn('member_profiles', snapshot)
+        self.assertNotIn('legacy_member_partners', snapshot)
+        self.assertNotIn('manager_profile_id', snapshot)
+        self.assertNotIn('manager_partner_id', snapshot)
+
+    def test_private_fund_application_requires_invite_token(self):
+        private_fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Private invite fund',
+            manager_partner_id=self.manager_partner.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+            visibility=InvestmentFund.Visibility.PRIVATE_INVITE,
+        )
+        outside_user = User.objects.create_user(username='private_invite_applicant', password='x')
+        self.client.force_authenticate(user=outside_user)
+
+        blocked = self.client.post(
+            f'/api/v1/partnerships/funds/{private_fund.id}/applications/',
+            {'requested_amount': '100'},
+            format='json',
+        )
+        allowed = self.client.post(
+            f'/api/v1/partnerships/funds/{private_fund.id}/applications/',
+            {'requested_amount': '100', 'invite_token': private_fund.invite_token},
+            format='json',
+        )
+
+        self.assertEqual(blocked.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(allowed.status_code, status.HTTP_201_CREATED)
+
+    def test_fund_list_does_not_match_null_profile_branches(self):
+        private_fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Legacy private null-profile fund',
+            manager_partner_id=self.manager_partner.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+            visibility=InvestmentFund.Visibility.PRIVATE_INVITE,
+        )
+        InvestmentFund.objects.filter(pk=private_fund.pk).update(manager_profile=None)
+        outside_user = User.objects.create_user(username='no_profile_list_viewer', password='x')
+        self.client.force_authenticate(user=outside_user)
+
+        response = self.client.get('/api/v1/partnerships/funds/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data.get('results', response.data)
+        ids = {row['id'] for row in rows}
+        self.assertIn(self.fund.id, ids)
+        self.assertNotIn(private_fund.id, ids)
 
     def test_investor_fund_list_and_create_work_without_active_business_context(self):
         investor_user = User.objects.create_user(username='standalone_fund_investor', password='x')
@@ -935,13 +1192,162 @@ class E21FundPermissionApiTests(APITestCase):
         )
 
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(create_response.data['manager_partner'], investor_partner.id)
-        self.assertEqual(create_response.data['manager_partner_name'], investor_partner.display_name)
-        self.assertEqual(InvestmentFund.objects.get(pk=create_response.data['id']).tenant_id, self.business.id)
+        self.assertIsNone(create_response.data['manager_partner'])
+        self.assertEqual(create_response.data['manager_profile_name'], investor_partner.display_name)
+        self.assertIsNone(InvestmentFund.objects.get(pk=create_response.data['id']).tenant_id)
 
         detail_response = self.client.get(f'/api/v1/partnerships/funds/{create_response.data["id"]}/')
         self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
         self.assertEqual(detail_response.data['id'], create_response.data['id'])
+
+    def test_investor_fund_create_rejects_review_before_business_deployment(self):
+        investor_user = User.objects.create_user(username='tenantless_review_investor', password='x')
+        Partner.objects.create(
+            tenant=self.business,
+            role=Partner.Role.INVESTOR,
+            display_name='Tenantless review investor',
+            user=investor_user,
+            is_active=True,
+        )
+        self.client.force_authenticate(user=investor_user)
+
+        response = self.client.post(
+            '/api/v1/partnerships/funds/',
+            {
+                'name': 'Tenantless review fund',
+                'currency': 'UZS',
+                'target_amount': '5000',
+                'visibility': InvestmentFund.Visibility.PRIVATE_INVITE,
+                'review_at': (timezone.now() + timedelta(days=30)).isoformat(),
+                'manager_profit_share': '0',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(InvestmentFund.objects.filter(name='Tenantless review fund').exists())
+
+    def test_profile_fund_payout_action_works_without_request_tenant(self):
+        manager_profile = self.fund.manager_profile
+        obligation = PayoutObligation.objects.create(
+            tenant=self.business,
+            fund=self.fund,
+            recipient_profile=manager_profile,
+            kind=PayoutObligation.Kind.PROFIT,
+            amount=Decimal('100'),
+            currency='UZS',
+            due_at=timezone.now(),
+        )
+        self.client.force_authenticate(user=self.manager_user)
+
+        response = self.client.post(
+            f'/api/v1/partnerships/payout-obligations/{obligation.id}/record/',
+            {'amount': '100', 'evidence': 'offline receipt'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        obligation.refresh_from_db()
+        self.assertEqual(obligation.status, PayoutObligation.Status.RECORDED)
+        self.assertEqual(obligation.paid_amount, Decimal('100.00'))
+
+    def test_fund_deployment_api_resolves_tenant_after_force_authentication(self):
+        application = submit_fund_application(
+            tenant_id=self.business.id,
+            fund_id=self.fund.id,
+            partner_id=self.investor.id,
+            requested_amount=Decimal('100'),
+        )
+        approve_fund_application(
+            tenant_id=self.business.id,
+            fund_id=self.fund.id,
+            application_id=application.id,
+            approved_amount=Decimal('100'),
+        )
+        add_fund_contribution(
+            tenant_id=self.business.id,
+            fund_id=self.fund.id,
+            partner_id=self.investor.id,
+            amount=Decimal('100'),
+            currency='UZS',
+        )
+        agreement = create_investment_agreement(
+            tenant_id=self.business.id,
+            mudaraba_ratio=Decimal('0.50'),
+            planned_budget=Decimal('100'),
+            partners=[
+                {'partner_id': self.investor.id, 'role': 'INVESTOR', 'planned_capital_share': '100', 'profit_share': '0.50'},
+                {'partner_id': self.operator.id, 'role': 'OPERATOR', 'planned_capital_share': '0', 'profit_share': '0.50'},
+            ],
+        )
+        self.client.force_authenticate(user=self.manager_user)
+
+        response = self.client.post(
+            f'/api/v1/partnerships/funds/{self.fund.id}/deployments/',
+            {'agreement_id': agreement.id, 'amount': '100'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.fund.refresh_from_db()
+        self.assertEqual(response.data['amount'], '100.00')
+        self.assertEqual(response.data['agreement'], agreement.id)
+        self.assertEqual(response.data['agreement_contribution'], self.fund.deployments.get().agreement_contribution_id)
+
+    def test_investor_action_queue_does_not_leak_tenant_wide_payouts(self):
+        other_fund = create_investment_fund(
+            tenant_id=self.business.id,
+            name='Other investor private queue',
+            manager_partner_id=self.other_partner.id,
+            member_partner_ids=[],
+            currency='UZS',
+            target_amount=Decimal('1000'),
+        )
+        leaked_obligation = PayoutObligation.objects.create(
+            tenant=self.business,
+            fund=other_fund,
+            recipient=self.other_partner,
+            kind=PayoutObligation.Kind.PROFIT,
+            amount=Decimal('100'),
+            currency='UZS',
+            due_at=timezone.now(),
+        )
+        own_obligation = PayoutObligation.objects.create(
+            tenant=self.business,
+            fund=self.fund,
+            recipient=self.manager_partner,
+            kind=PayoutObligation.Kind.PROFIT,
+            amount=Decimal('50'),
+            currency='UZS',
+            due_at=timezone.now(),
+        )
+        self.client.force_authenticate(user=self.manager_user)
+
+        response = self.client.get('/api/v1/partnerships/funds/action-queue/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row_ids = {row['id'] for row in response.data}
+        self.assertIn(f'payout-{own_obligation.id}', row_ids)
+        self.assertNotIn(f'payout-{leaked_obligation.id}', row_ids)
+
+    def test_plain_authenticated_user_cannot_create_fund_without_investor_entitlement(self):
+        plain_user = User.objects.create_user(username='plain_fund_creator', password='x')
+        self.client.force_authenticate(user=plain_user)
+
+        response = self.client.post(
+            '/api/v1/partnerships/funds/',
+            {
+                'name': 'Plain user fund',
+                'currency': 'UZS',
+                'target_amount': '5000',
+                'visibility': InvestmentFund.Visibility.PRIVATE_INVITE,
+                'manager_profit_share': '0',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(InvestmentFund.objects.filter(name='Plain user fund').exists())
 
     def test_business_operator_profile_cannot_create_fund(self):
         self.client.force_authenticate(user=self.ctx['owner'])

@@ -43,6 +43,12 @@
 | **E19** | POS Integration Platform | 🟡 IN_PROGRESS | 15% | E08 | [→](./roadmap/E19-integration-platform.md) |
 | **E20** | Multi-Party Investment, Closed Funds & Contract Lifecycle | 🔵 IN_REVIEW | 100% implementation | E04, E18 | [→](./roadmap/E20-multi-party-investment-and-managed-funds.md) |
 | **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | follow-ups implemented | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
+| **E22** | Investor-Owned Funds + E21 UX Correction | 🔵 IN_REVIEW | 100% implementation | E18, E20, E21 | [→](./roadmap/E22-investor-owned-funds-e21-correction.md) |
+
+**Future item — full business switcher:** не входит в E22/MVP. Текущий MVP
+остаётся `one owner -> one business`; полноценный multi-business switcher нужен
+отдельным эпиком, когда появится реальный multi-business операторский сценарий.
+
 **⚠️ НЕ ЗАБЫТЬ — E13 (отложен намеренно):** система ОБЯЗАНА уметь
 мультивалютный приход (товары/расходы в разных валютах в одном приходе; классика
 импорта USD-товар + UZS-таможня). Сейчас заблокировано на фронте и бэке
@@ -156,6 +162,10 @@ pilot-ready состояния. Follow-up hardening фиксирует прав�
 не допускает partial receive, чтобы один procurement не распадался на несколько
 share-profile/tranches; для partial receive и быстрых продаж используется
 `AGREED`.
+
+E22 supersedes tenant-scoped fund ownership из E21: фонд принадлежит глобальному
+`InvestmentProfile`, а business получает только synthetic holder `Фонд: X` в
+момент deployment.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации
