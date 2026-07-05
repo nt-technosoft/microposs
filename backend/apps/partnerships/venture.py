@@ -716,6 +716,7 @@ def procurement_venture_positions(
             'capital_returned_uzs': _ZERO,
             'dividends_paid_uzs': _ZERO,
             'profit_to_capital_uzs': _ZERO,
+            'capital_rolled_to_pool_uzs': _ZERO,
             'remaining_inventory_capital_uzs': _ZERO,
             'liability_capital_recovered_uzs': _ZERO,
             'capital_return_available_uzs': _ZERO,
@@ -797,6 +798,16 @@ def procurement_venture_positions(
             Decimal(str(withdrawal.amount)) * Decimal(str(withdrawal.fx_rate or 1)),
         )
 
+    from .models import CapitalRollover
+    rollover_rows = (
+        CapitalRollover.objects
+        .filter(tenant_id=procurement.tenant_id, procurement=procurement)
+        .values('partner_id')
+        .annotate(total=Sum('amount_uzs'))
+    )
+    for item in rollover_rows:
+        row(item['partner_id'])['capital_rolled_to_pool_uzs'] += _money(item['total'])
+
     # E17 T-5.3: partner venture-debt repayments (append-only), per component.
     from .models import ProcurementPartnerVentureDebtRepayment
     repaid_by_partner: dict[int, dict] = {
@@ -842,7 +853,12 @@ def procurement_venture_positions(
         repaid_capital = _money(repaid.get('capital'))
         repaid_dividend = _money(repaid.get('dividend'))
 
-        capital_delta = _money(r['capital_recovered_uzs'] - r['capital_returned_uzs'] + repaid_capital)
+        capital_delta = _money(
+            r['capital_recovered_uzs']
+            - r['capital_returned_uzs']
+            - r['capital_rolled_to_pool_uzs']
+            + repaid_capital
+        )
         r['capital_return_available_uzs'] = max(_ZERO, capital_delta)
         # E18 Phase 1: subtract profit_to_capital_uzs explicitly (separate bucket).
         profit_delta = _money(

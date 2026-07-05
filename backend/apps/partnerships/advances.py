@@ -274,6 +274,7 @@ def partner_capital_positions(agreement) -> dict:
                 'capital_returned_uzs': Decimal('0.00'),
                 'dividends_paid_uzs': Decimal('0.00'),
                 'profit_to_capital_uzs': Decimal('0.00'),
+                'capital_rolled_to_pool_uzs': Decimal('0.00'),
                 'capital_return_available_uzs': Decimal('0.00'),
                 'provisional_profit_available_uzs': Decimal('0.00'),
                 'negative_position_uzs': Decimal('0.00'),

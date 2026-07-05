@@ -208,6 +208,7 @@ class PartnerPositionReadModel(TenantModel):
     capital_returned_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     dividends_paid_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     profit_to_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_rolled_to_pool_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     remaining_inventory_capital_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     liability_capital_recovered_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     capital_return_available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
@@ -235,6 +236,7 @@ class PartnerPositionReadModel(TenantModel):
         'capital_returned_uzs',
         'dividends_paid_uzs',
         'profit_to_capital_uzs',
+        'capital_rolled_to_pool_uzs',
         'remaining_inventory_capital_uzs',
         'liability_capital_recovered_uzs',
         'capital_return_available_uzs',
@@ -559,6 +561,10 @@ class FundTermsVersion(TenantModel):
 class PayoutPolicy(TenantModel):
     """Eligibility policy; it creates obligations but never moves money automatically."""
 
+    class TriggerMode(models.TextChoices):
+        ANY = 'ANY', 'Interval OR threshold'
+        ALL = 'ALL', 'Interval AND threshold'
+
     tenant = models.ForeignKey(
         'core.Business',
         on_delete=models.PROTECT,
@@ -587,6 +593,7 @@ class PayoutPolicy(TenantModel):
     reserve_amount = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
     grace_period_days = models.PositiveIntegerField(default=0)
     allow_partial = models.BooleanField(default=True)
+    trigger_mode = models.CharField(max_length=8, choices=TriggerMode.choices, default=TriggerMode.ANY)
     last_evaluated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -608,10 +615,187 @@ class PayoutPolicy(TenantModel):
                 'agreement_terms_id', 'fund_terms_id', 'review_interval_days',
                 'minimum_available_amount', 'minimum_days_between_payouts',
                 'reserve_amount', 'grace_period_days', 'allow_partial',
+                'trigger_mode',
             )
             if any(getattr(self, field) != getattr(original, field) for field in immutable_fields):
                 raise ImmutableRecordError('PayoutPolicy is fixed by its terms version. Create amended terms instead.')
         return super().save(*args, **kwargs)
+
+
+class PayoutDecision(TenantModel):
+    """Policy-gated group decision for recovered money in an agreement.
+
+    This is the agreement-level decision. The immutable economic facts remain
+    per-procurement: `AgreementWithdrawal` for PAY_OUT and `CapitalRollover`
+    for ROLL_OVER_CAPITAL.
+    """
+
+    class DecisionType(models.TextChoices):
+        PAY_OUT = 'PAY_OUT', 'Pay out recovered capital'
+        ROLL_OVER_CAPITAL = 'ROLL_OVER_CAPITAL', 'Roll recovered capital into pool'
+        CAPITALIZE_PROFIT = 'CAPITALIZE_PROFIT', 'Capitalize profit'
+
+    class Status(models.TextChoices):
+        CONFIRMED = 'CONFIRMED', 'Confirmed'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.PROTECT,
+        related_name='payout_decisions',
+    )
+    decision_type = models.CharField(max_length=24, choices=DecisionType.choices)
+    amount_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    source_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payout_decisions',
+    )
+    decided_at = models.DateTimeField()
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CONFIRMED)
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_payout_decision'
+        ordering = ['-decided_at', '-id']
+        indexes = [
+            models.Index(fields=['agreement', 'decision_type', 'status'], name='pdec_agreement_type_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_payout_decision_idempotent',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('PayoutDecision is append-only. Record a new decision instead.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('PayoutDecision is append-only.')
+
+
+class CapitalRollover(TenantModel):
+    """Append-only fact: recovered operating cash is moved into agreement pool."""
+
+    decision = models.ForeignKey(
+        PayoutDecision,
+        on_delete=models.PROTECT,
+        related_name='capital_rollovers',
+        null=True,
+        blank=True,
+    )
+    agreement = models.ForeignKey(
+        InvestmentAgreement,
+        on_delete=models.PROTECT,
+        related_name='capital_rollovers',
+    )
+    procurement = models.ForeignKey(
+        'Procurement',
+        on_delete=models.PROTECT,
+        related_name='capital_rollovers',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='capital_rollovers',
+    )
+    from_account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        related_name='capital_rollovers',
+    )
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
+    amount_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        db_table = 'partnerships_capital_rollover'
+        ordering = ['-date', '-id']
+        indexes = [
+            models.Index(fields=['agreement', 'partner'], name='croll_agreement_partner_idx'),
+            models.Index(fields=['procurement', 'partner'], name='croll_proc_partner_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_capital_rollover_idempotent',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('CapitalRollover is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('CapitalRollover is append-only.')
+
+
+class PayoutDecisionAllocation(TenantModel):
+    """Per-procurement/partner allocation row under a group payout decision."""
+
+    decision = models.ForeignKey(
+        PayoutDecision,
+        on_delete=models.PROTECT,
+        related_name='allocations',
+    )
+    procurement = models.ForeignKey(
+        'Procurement',
+        on_delete=models.PROTECT,
+        related_name='payout_decision_allocations',
+    )
+    partner = models.ForeignKey(
+        'core.Partner',
+        on_delete=models.PROTECT,
+        related_name='payout_decision_allocations',
+    )
+    amount_uzs = models.DecimalField(max_digits=20, decimal_places=2)
+    available_uzs = models.DecimalField(max_digits=20, decimal_places=2, default=Decimal('0'))
+    capital_withdrawal = models.OneToOneField(
+        'AgreementWithdrawal',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payout_decision_allocation',
+    )
+    capital_rollover = models.OneToOneField(
+        CapitalRollover,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payout_decision_allocation',
+    )
+
+    class Meta:
+        db_table = 'partnerships_payout_decision_allocation'
+        ordering = ['decision_id', 'id']
+        indexes = [
+            models.Index(fields=['decision', 'partner'], name='pdec_alloc_partner_idx'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ImmutableRecordError('PayoutDecisionAllocation is immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableRecordError('PayoutDecisionAllocation is append-only.')
 
 
 class FundMember(TenantModel):

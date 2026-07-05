@@ -207,6 +207,7 @@ def create_investment_fund(
             reserve_amount=money(policy_values.get('reserve_amount', ZERO)),
             grace_period_days=int(policy_values.get('grace_period_days', 0)),
             allow_partial=bool(policy_values.get('allow_partial', True)),
+            trigger_mode=str(policy_values.get('trigger_mode') or PayoutPolicy.TriggerMode.ANY).upper(),
         )
         fund.current_terms = terms
         fund.save(update_fields=['current_terms', 'updated_at'])

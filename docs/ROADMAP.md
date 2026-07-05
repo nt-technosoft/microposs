@@ -44,6 +44,7 @@
 | **E20** | Multi-Party Investment, Closed Funds & Contract Lifecycle | 🔵 IN_REVIEW | 100% implementation | E04, E18 | [→](./roadmap/E20-multi-party-investment-and-managed-funds.md) |
 | **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | follow-ups implemented | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 | **E22** | Investor-Owned Funds + E21 UX Correction | 🔵 IN_REVIEW | 100% implementation | E18, E20, E21 | [→](./roadmap/E22-investor-owned-funds-e21-correction.md) |
+| **E23** | Capital Rollover & Real Reinvestment | 🟡 IN_PROGRESS | 95% | E18, E21 | [→](./roadmap/E23-capital-rollover-reinvestment.md) |
 
 **Future item — full business switcher:** не входит в E22/MVP. Текущий MVP
 остаётся `one owner -> one business`; полноценный multi-business switcher нужен
@@ -166,6 +167,14 @@ share-profile/tranches; для partial receive и быстрых продаж и
 E22 supersedes tenant-scoped fund ownership из E21: фонд принадлежит глобальному
 `InvestmentProfile`, а business получает только synthetic holder `Фонд: X` в
 момент deployment.
+
+E23 закрепляет честный повторный оборот восстановленного капитала:
+`PROFIT_REINVEST` остаётся только погашением capital shortfall из прибыли, а
+recovered capital может быть `PAY_OUT` или `ROLL_OVER_CAPITAL` только через
+policy-gated group decision. `external paid-in`, `rolled capital`,
+`active capital at risk` и `cumulative deployed` показываются раздельно.
+D-001/U-001 replay path переписан на rollover facts; destructive
+`--apply --wipe` остаётся отдельным verification gate.
 
 E07 + E08 закрыли controlled radical reset партнёрского трека и
 source-of-truth consolidation. E09 достраивает остальные комбинации

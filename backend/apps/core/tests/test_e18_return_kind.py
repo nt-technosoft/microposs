@@ -167,7 +167,7 @@ class AgreementWithdrawalReturnKindTests(TestCase):
 
 
 class AgreementAggregatePayoutApiTests(APITestCase):
-    def test_aggregate_payout_preview_blocks_operator_and_executes_per_procurement_capital_returns(self):
+    def test_aggregate_payout_preview_and_execute_are_superseded_by_group_decision(self):
         ctx = build_tenant()
         first, _ = seed_received_procurement(ctx)
         _sell(ctx, first)
@@ -197,8 +197,8 @@ class AgreementAggregatePayoutApiTests(APITestCase):
             format='json',
         )
         self.assertEqual(preview.status_code, status.HTTP_200_OK)
-        self.assertTrue(preview.data['allowed'])
-        self.assertEqual(preview.data['breakdown'][0]['procurement_id'], first.id)
+        self.assertFalse(preview.data['allowed'])
+        self.assertIn('superseded by E23 policy group decision', str(preview.data['blocking_reasons']))
 
         execute = self.client.post(
             f'/api/v1/partnerships/agreements/{first.agreement_id}/aggregate-payouts/',
@@ -210,9 +210,9 @@ class AgreementAggregatePayoutApiTests(APITestCase):
             },
             format='json',
         )
-        self.assertEqual(execute.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(execute.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(AgreementWithdrawal.objects.filter(
             agreement_id=first.agreement_id,
             procurement__isnull=False,
             return_kind=AgreementWithdrawal.ReturnKind.FROM_PROCEEDS,
-        ).count(), execute.data['created_count'])
+        ).count(), 0)

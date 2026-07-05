@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import { useToast } from '@/composables/useToast'
-import { payDividend, type AgreementProfitRow } from '@/api/partnerships'
+import { payDividend, type AgreementProfitRow, type PayoutObligation } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { getApiErrorMessage } from '@/utils/errors'
 
@@ -15,6 +15,7 @@ interface OperatingAccount {
 const props = defineProps<{
   open: boolean
   rows: AgreementProfitRow[]
+  obligations: PayoutObligation[]
   accounts: OperatingAccount[]
 }>()
 
@@ -40,6 +41,17 @@ function keyOf(row: AgreementProfitRow): string {
 const selectedRow = computed(() => props.rows.find((r) => keyOf(r) === selectedKey.value) ?? null)
 const pending = computed(() => Number(selectedRow.value?.pending ?? 0) || 0)
 const amountValue = computed(() => Number.parseFloat(String(amount.value).replace(',', '.')) || 0)
+const selectedObligation = computed(() => {
+  const row = selectedRow.value
+  if (!row) return null
+  return props.obligations.find((obligation) =>
+    obligation.kind === 'PROFIT'
+    && obligation.procurement === row.procurement_id
+    && obligation.recipient === row.partner_id
+    && obligation.status !== 'CONFIRMED'
+    && obligation.status !== 'WAIVED',
+  ) ?? null
+})
 
 watch(
   () => props.open,
@@ -76,6 +88,10 @@ async function submit() {
     error.value = 'Выберите операционный счёт-источник'
     return
   }
+  if (!selectedObligation.value) {
+    error.value = 'Сначала проверьте выплаты: нужна policy obligation для этой прибыли.'
+    return
+  }
   isSaving.value = true
   error.value = null
   try {
@@ -85,6 +101,7 @@ async function submit() {
       amount: String(amountValue.value),
       currency: 'UZS',
       paid_from_account_id: fromAccountId.value,
+      payout_obligation_id: selectedObligation.value.id,
     })
     toast.success('Прибыль выплачена')
     emit('paid')
@@ -134,6 +151,9 @@ async function submit() {
             inputmode="decimal"
           />
           <p class="hint">Накоплено к выплате: {{ formatPrice(pending, 'UZS') }}</p>
+          <p v-if="!selectedObligation" class="warning-text">
+            Сначала нажмите «Проверить выплаты» на странице договора.
+          </p>
         </div>
 
         <p v-if="error" class="error-text">{{ error }}</p>
@@ -153,6 +173,7 @@ async function submit() {
 .field-label { font-size: var(--text-sm); color: var(--color-text-secondary); }
 .field-input { padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-base); background: var(--color-bg-base); }
 .hint { font-size: var(--text-xs); color: var(--color-text-tertiary); }
+.warning-text { font-size: var(--text-xs); color: var(--color-warning-600, var(--color-text-secondary)); }
 .error-text { color: var(--color-danger-500); font-size: var(--text-sm); }
 .btn-primary { padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-primary, var(--color-brand-600)); color: #fff; font-weight: var(--font-semibold); }
 .btn-primary:disabled { opacity: 0.6; }

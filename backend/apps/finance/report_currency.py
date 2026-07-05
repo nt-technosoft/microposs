@@ -128,6 +128,7 @@ REPORT_AMOUNT_KEYS = [
     'pending_prepaid_cost',
     'venture_deployed_uzs',
     'venture_capital_recovered_uzs',
+    'venture_capital_rolled_to_pool_uzs',
     'venture_capital_return_available_uzs',
     'venture_provisional_profit_available_uzs',
     'venture_loss_uzs',

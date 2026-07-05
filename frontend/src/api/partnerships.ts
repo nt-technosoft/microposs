@@ -711,6 +711,7 @@ export interface PayoutPolicy {
   reserve_amount: string
   grace_period_days: number
   allow_partial: boolean
+  trigger_mode: 'ANY' | 'ALL'
 }
 
 export interface AgreementTermsVersion {
@@ -1108,6 +1109,7 @@ export interface CapitalPositionRow {
   partner_liability_loss_uzs?: string
   capital_returned_uzs?: string
   dividends_paid_uzs?: string
+  capital_rolled_to_pool_uzs?: string
   capital_return_available_uzs?: string
   provisional_profit_available_uzs?: string
   negative_position_uzs?: string
@@ -1127,6 +1129,7 @@ export interface ProcurementVenturePosition {
   partner_liability_loss_uzs: string
   capital_returned_uzs: string
   dividends_paid_uzs: string
+  capital_rolled_to_pool_uzs: string
   capital_return_available_uzs: string
   provisional_profit_available_uzs: string
   negative_position_uzs: string
@@ -1170,6 +1173,60 @@ export interface AgreementPayoutPreview {
   functional_amount_uzs: string
   available_uzs: string
   blocking_reasons: string[]
+}
+
+export type PayoutDecisionType = 'PAY_OUT' | 'ROLL_OVER_CAPITAL' | 'CAPITALIZE_PROFIT'
+
+export interface PayoutDecisionAllocation {
+  procurement_id: number
+  partner_id: number
+  partner_name?: string
+  amount_uzs: string
+  available_uzs?: string
+}
+
+export interface PayoutDecisionPreview {
+  allowed: boolean
+  agreement_id: number
+  decision_type: PayoutDecisionType
+  currency: 'UZS'
+  amount_uzs: string
+  total_available_uzs: string
+  eligible_total_uzs: string
+  reserve_amount_uzs: string
+  trigger_mode: 'ANY' | 'ALL'
+  interval_ready: boolean
+  threshold_ready: boolean
+  spacing_ready: boolean
+  last_decision_id: number | null
+  source_account: { id: number; name: string; currency: string; balance: string; required_amount?: string } | null
+  allocations: PayoutDecisionAllocation[]
+  constraints: Array<{
+    procurement_id: number
+    partner_id: number
+    available_uzs: string
+    negative_position_uzs: string
+  }>
+  blocking_reasons: string[]
+}
+
+export interface PayoutDecisionResult {
+  id: number
+  agreement_id: number
+  decision_type: PayoutDecisionType
+  amount_uzs: string
+  currency: 'UZS'
+  source_account_id: number | null
+  decided_at: string
+  confirmed_at: string | null
+  status: 'CONFIRMED' | 'CANCELLED'
+  notes: string
+  allocations: Array<PayoutDecisionAllocation & {
+    id: number
+    capital_withdrawal_id: number | null
+    capital_rollover_id: number | null
+  }>
+  created?: Array<{ type: string; id?: number; count?: number }>
 }
 
 export interface ProcurementVentureSettlement {
@@ -1222,6 +1279,7 @@ export interface PayDividendPayload {
   amount: string
   currency?: string
   paid_from_account_id: number
+  payout_obligation_id?: number
 }
 
 export async function fetchAgreementProfitSummary(id: number): Promise<AgreementProfitRow[]> {
@@ -1443,6 +1501,40 @@ export async function addAgreementWithdrawal(
   payload: Required<Pick<ProcurementWithdrawalPayload, 'partner_id'>> & ProcurementWithdrawalPayload,
 ): Promise<InvestmentAgreementDetail['withdrawals'][number]> {
   const { data } = await api.post(`/api/v1/partnerships/agreements/${id}/withdrawals/`, payload)
+  return data
+}
+
+export async function previewPayoutDecision(
+  id: number,
+  payload: {
+    decision_type: PayoutDecisionType
+    amount_uzs?: string | number | null
+    from_account_id?: number | null
+    allocations?: Array<{ procurement_id: number; partner_id: number; amount_uzs: string | number }>
+  },
+): Promise<PayoutDecisionPreview> {
+  const { data } = await api.post<PayoutDecisionPreview>(
+    `/api/v1/partnerships/agreements/${id}/payout-decision-preview/`,
+    payload,
+  )
+  return data
+}
+
+export async function executePayoutDecision(
+  id: number,
+  payload: {
+    decision_type: PayoutDecisionType
+    amount_uzs: string | number
+    from_account_id?: number | null
+    allocations?: Array<{ procurement_id: number; partner_id: number; amount_uzs: string | number }>
+    client_request_id?: string
+    notes?: string
+  },
+): Promise<PayoutDecisionResult> {
+  const { data } = await api.post<PayoutDecisionResult>(
+    `/api/v1/partnerships/agreements/${id}/payout-decisions/`,
+    payload,
+  )
   return data
 }
 

@@ -35,6 +35,8 @@ import {
   evaluateAgreementPayouts,
   fetchAgreementPayoutObligations,
   fetchProcurementVentureSummary,
+  previewPayoutDecision,
+  executePayoutDecision,
   resolveAgreementReview,
   type AgreementAllocationPreview,
   type AgreementProfitRow,
@@ -43,11 +45,15 @@ import {
   type InvestmentAgreementDetail,
   type ProcurementVentureSummary,
   type PayoutObligation,
+  type PayoutDecisionPreview,
+  type PayoutDecisionType,
 } from '@/api/partnerships'
 import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
 import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
 import VentureCloseCard from '@/modules/intake/components/workspace/VentureCloseCard.vue'
-import AgreementRecoveredCapitalCard from '@/modules/intake/components/agreement/AgreementRecoveredCapitalCard.vue'
+import AgreementPayoutDecisionPanel, {
+  type AgreementRecoveredCapitalDecisionRow,
+} from '@/modules/intake/components/agreement/AgreementPayoutDecisionPanel.vue'
 import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
 import RepayDebtSheet from '@/modules/intake/components/agreement/RepayDebtSheet.vue'
 import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
@@ -86,7 +92,9 @@ const withdrawalPartnerId = ref<number | null>(null)
 const withdrawalAmount = ref('')
 const withdrawalCurrency = ref<SupportedCurrency>('UZS')
 const savingWithdrawal = ref(false)
-const savingRecoveredCapital = ref(false)
+const savingPayoutDecision = ref(false)
+const previewingPayoutDecision = ref(false)
+const payoutDecisionPreview = ref<PayoutDecisionPreview | null>(null)
 const withdrawalError = ref('')
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
@@ -99,17 +107,6 @@ const {
   error: latestUsdRateError,
   load: loadLatestUsdRate,
 } = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
-
-interface RecoveredCapitalRow {
-  key: string
-  procurementId: number
-  partnerId: number
-  partnerName: string
-  role: string
-  availableUzs: number
-  recoveredUzs: number
-  returnedUzs: number
-}
 
 const agreementId = computed(() => Number(route.params.id))
 const activeProcurements = computed(() => (agreement.value?.procurements ?? []).filter((item) => item.status === 'OPEN' || item.status === 'PARTIALLY_RECEIVED'))
@@ -166,7 +163,7 @@ const partyRows = computed(() => {
     }
   })
 })
-const recoveredCapitalRows = computed<RecoveredCapitalRow[]>(() =>
+const recoveredCapitalRows = computed<AgreementRecoveredCapitalDecisionRow[]>(() =>
   ventureSummaries.value.flatMap((summary) =>
     summary.positions
       .filter((row) => row.role !== 'OPERATOR' && Number(row.capital_return_available_uzs || 0) > 0.01)
@@ -179,6 +176,7 @@ const recoveredCapitalRows = computed<RecoveredCapitalRow[]>(() =>
         availableUzs: Number(row.capital_return_available_uzs || 0),
         recoveredUzs: Number(row.capital_recovered_uzs || 0),
         returnedUzs: Number(row.capital_returned_uzs || 0),
+        rolledUzs: Number(row.capital_rolled_to_pool_uzs || 0),
       })),
   ),
 )
@@ -332,60 +330,53 @@ async function saveWithdrawal(): Promise<void> {
   }
 }
 
-async function returnRecoveredCapital(payload: {
-  row: RecoveredCapitalRow
-  amount: string
-  currency: 'UZS' | 'USD'
-  fxRate: string
+async function previewRecoveredCapitalDecision(payload: {
+  decisionType: PayoutDecisionType
+  amountUzs: string
   accountId: number
 }): Promise<void> {
   if (!agreement.value) return
-  savingRecoveredCapital.value = true
+  previewingPayoutDecision.value = true
   try {
-    await addAgreementWithdrawal(agreement.value.id, {
-      partner_id: payload.row.partnerId,
-      procurement_id: payload.row.procurementId,
+    payoutDecisionPreview.value = await previewPayoutDecision(agreement.value.id, {
+      decision_type: payload.decisionType,
+      amount_uzs: payload.amountUzs,
       from_account_id: payload.accountId,
-      amount: payload.amount,
-      currency: payload.currency,
-      fx_rate: payload.fxRate,
-      reason: `Возврат восстановленного капитала по приходу #${payload.row.procurementId}`,
     })
-    toast.success(t('procurements.withdrawalAdded'))
-    await load()
+    if (payoutDecisionPreview.value.allowed) {
+      toast.success('Policy gate пройден')
+    }
   } catch (err: unknown) {
-    toast.error(getApiErrorMessage(err, t('procurements.withdrawalAddFailed')))
+    toast.error(getApiErrorMessage(err, 'Не удалось проверить решение'))
   } finally {
-    savingRecoveredCapital.value = false
+    previewingPayoutDecision.value = false
   }
 }
 
-async function returnRecoveredCapitalBatch(payload: {
-  entries: Array<{ row: RecoveredCapitalRow; amount: string }>
-  currency: 'UZS' | 'USD'
-  fxRate: string
+async function executeRecoveredCapitalDecision(payload: {
+  decisionType: PayoutDecisionType
+  amountUzs: string
   accountId: number
+  allocations: Array<{ procurement_id: number; partner_id: number; amount_uzs: string }>
 }): Promise<void> {
   if (!agreement.value) return
-  savingRecoveredCapital.value = true
+  savingPayoutDecision.value = true
   try {
-    for (const entry of payload.entries) {
-      await addAgreementWithdrawal(agreement.value.id, {
-        partner_id: entry.row.partnerId,
-        procurement_id: entry.row.procurementId,
-        from_account_id: payload.accountId,
-        amount: entry.amount,
-        currency: payload.currency,
-        fx_rate: payload.fxRate,
-        reason: `Групповой возврат восстановленного капитала по приходу #${entry.row.procurementId}`,
-      })
-    }
-    toast.success(t('procurements.withdrawalAdded'))
+    await executePayoutDecision(agreement.value.id, {
+      decision_type: payload.decisionType,
+      amount_uzs: payload.amountUzs,
+      from_account_id: payload.accountId,
+      allocations: payload.allocations,
+      client_request_id: crypto.randomUUID(),
+      notes: payload.decisionType === 'ROLL_OVER_CAPITAL' ? 'capital rollover group decision' : 'capital payout group decision',
+    })
+    payoutDecisionPreview.value = null
+    toast.success(payload.decisionType === 'ROLL_OVER_CAPITAL' ? 'Капитал оставлен в деле' : 'Капитал выплачен')
     await load()
   } catch (err: unknown) {
-    toast.error(getApiErrorMessage(err, t('procurements.withdrawalAddFailed')))
+    toast.error(getApiErrorMessage(err, 'Не удалось исполнить решение'))
   } finally {
-    savingRecoveredCapital.value = false
+    savingPayoutDecision.value = false
   }
 }
 
@@ -429,7 +420,7 @@ function openSettle(position: CapitalPositionRow): void {
 
 // E17 Bug-2 fix: creditor's excess must return via POOL path (not recovered).
 // Pre-fill the pool withdrawal form so the operator doesn't reach for
-// AgreementRecoveredCapitalCard by mistake.
+// recovered-capital decision panel by mistake.
 function openPoolWithdrawal(position: CapitalPositionRow): void {
   withdrawalPartnerId.value = position.partner_id
   withdrawalCurrency.value = ((position.currency || agreement.value?.currency || 'UZS').toUpperCase()) as 'UZS' | 'USD'
@@ -670,15 +661,15 @@ onMounted(async () => {
           </CardContent>
         </Card>
 
-        <AgreementRecoveredCapitalCard
+        <AgreementPayoutDecisionPanel
           v-if="!isClosed"
           :rows="recoveredCapitalRows"
           :accounts="operatingAccounts"
-          :usd-rate="latestUsdRate"
-          :agreement-currency="primaryCurrency"
-          :saving="savingRecoveredCapital"
-          @return-capital="returnRecoveredCapital"
-          @return-capital-batch="returnRecoveredCapitalBatch"
+          :preview="payoutDecisionPreview"
+          :previewing="previewingPayoutDecision"
+          :saving="savingPayoutDecision"
+          @preview="previewRecoveredCapitalDecision"
+          @execute="executeRecoveredCapitalDecision"
         />
 
         <!-- Распределение прибыли — только когда есть что распределять -->
@@ -916,6 +907,7 @@ onMounted(async () => {
     <DividendPaySheet
       :open="dividendOpen"
       :rows="profitRows"
+      :obligations="payoutObligations"
       :accounts="operatingAccounts"
       @close="dividendOpen = false"
       @paid="onDividendPaid"

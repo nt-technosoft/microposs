@@ -54,6 +54,9 @@ dokploy.env
 # Local Graphify artifacts
 graphify-out/
 
+# Local Codex/runtime artifacts
+.codex/
+
 # E2E artifacts
 test-results/
 playwright-report/

@@ -27,6 +27,7 @@ from .models import (
     PartnerLedgerEntry,
     InvestmentFund,
     PayoutObligation,
+    PayoutDecision,
     PayoutPolicy,
     PayoutSettlement,
     ContractReview,
@@ -211,17 +212,22 @@ class PayoutPolicySerializer(serializers.ModelSerializer):
         fields = [
             'review_interval_days', 'minimum_available_amount',
             'minimum_days_between_payouts', 'reserve_amount',
-            'grace_period_days', 'allow_partial', 'last_evaluated_at',
+            'grace_period_days', 'allow_partial', 'trigger_mode',
+            'last_evaluated_at',
         ]
 
 
 class PayoutPolicyInputSerializer(serializers.Serializer):
-    review_interval_days = serializers.IntegerField(required=False, min_value=1, default=30)
-    minimum_available_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, default='0')
-    minimum_days_between_payouts = serializers.IntegerField(required=False, min_value=0, default=30)
-    reserve_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, default='0')
-    grace_period_days = serializers.IntegerField(required=False, min_value=0, default=0)
-    allow_partial = serializers.BooleanField(required=False, default=True)
+    review_interval_days = serializers.IntegerField(required=False, min_value=1)
+    minimum_available_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    minimum_days_between_payouts = serializers.IntegerField(required=False, min_value=0)
+    reserve_amount = serializers.DecimalField(max_digits=20, decimal_places=2, required=False)
+    grace_period_days = serializers.IntegerField(required=False, min_value=0)
+    allow_partial = serializers.BooleanField(required=False)
+    trigger_mode = serializers.ChoiceField(
+        choices=PayoutPolicy.TriggerMode.choices,
+        required=False,
+    )
 
 
 class AgreementTermsVersionSerializer(serializers.ModelSerializer):
@@ -601,6 +607,25 @@ class PayoutObligationSerializer(serializers.ModelSerializer):
         if obj.recipient_profile_id:
             return obj.recipient_profile.display_name
         return ''
+
+
+class PayoutDecisionAllocationInputSerializer(serializers.Serializer):
+    procurement_id = serializers.IntegerField()
+    partner_id = serializers.IntegerField()
+    amount_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
+class PayoutDecisionPreviewSerializer(serializers.Serializer):
+    decision_type = serializers.ChoiceField(choices=PayoutDecision.DecisionType.choices)
+    amount_uzs = serializers.DecimalField(max_digits=20, decimal_places=2, required=False, allow_null=True)
+    from_account_id = serializers.IntegerField(required=False, allow_null=True)
+    allocations = PayoutDecisionAllocationInputSerializer(many=True, required=False)
+
+
+class PayoutDecisionExecuteSerializer(PayoutDecisionPreviewSerializer):
+    amount_uzs = serializers.DecimalField(max_digits=20, decimal_places=2)
+    client_request_id = serializers.UUIDField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, default='', allow_blank=True)
 
 
 class DisputeCaseSerializer(serializers.ModelSerializer):
@@ -1369,6 +1394,7 @@ class AgreementWithdrawalCreateSerializer(serializers.Serializer):
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     reason = serializers.CharField(required=False, default='', allow_blank=True)
     payout_obligation_id = serializers.IntegerField(required=False, allow_null=True)
+    payout_decision_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class ReceiveProcurementSerializer(serializers.Serializer):
@@ -1476,3 +1502,4 @@ class DividendPaymentCreateSerializer(serializers.Serializer):
     fx_rate = serializers.DecimalField(max_digits=14, decimal_places=6, required=False, allow_null=True)
     paid_from_account_id = serializers.IntegerField(required=False, allow_null=True)
     payout_obligation_id = serializers.IntegerField(required=False, allow_null=True)
+    payout_decision_id = serializers.IntegerField(required=False, allow_null=True)

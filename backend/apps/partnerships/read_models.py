@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from .models import InvestmentAgreement, PartnerPositionReadModel, Procurement
@@ -100,6 +100,7 @@ def _apply_tag_realized_venture_fields(
         target['capital_returned_uzs'] = _ZERO
         target['dividends_paid_uzs'] = _ZERO
         target['profit_to_capital_uzs'] = _ZERO
+        target['capital_rolled_to_pool_uzs'] = _ZERO
         target['debt_repaid_uzs'] = _ZERO
 
     realized: dict[tuple[int, int], dict[str, Decimal]] = {}
@@ -109,6 +110,7 @@ def _apply_tag_realized_venture_fields(
             'capital_returned_uzs': _ZERO,
             'dividends_paid_uzs': _ZERO,
             'profit_to_capital_uzs': _ZERO,
+            'capital_rolled_to_pool_uzs': _ZERO,
             'repaid_liability_uzs': _ZERO,
             'repaid_capital_uzs': _ZERO,
             'repaid_dividend_uzs': _ZERO,
@@ -154,11 +156,24 @@ def _apply_tag_realized_venture_fields(
         )
     }
     realized_keys.update(realized.keys())
+    from .models import CapitalRollover
+    rollover_rows = (
+        CapitalRollover.objects
+        .filter(tenant_id=agreement.tenant_id, agreement=agreement)
+        .values('procurement_id', 'partner_id')
+        .annotate(total=models.Sum('amount_uzs'))
+    )
+    for item in rollover_rows:
+        values = bucket(item['procurement_id'], item['partner_id'])
+        values['capital_rolled_to_pool_uzs'] += _money(item['total'])
+        realized_keys.add((item['procurement_id'], item['partner_id']))
+
     for procurement_id, partner_id in realized_keys:
         values = realized.get((procurement_id, partner_id), {
             'capital_returned_uzs': _ZERO,
             'dividends_paid_uzs': _ZERO,
             'profit_to_capital_uzs': _ZERO,
+            'capital_rolled_to_pool_uzs': _ZERO,
             'repaid_liability_uzs': _ZERO,
             'repaid_capital_uzs': _ZERO,
             'repaid_dividend_uzs': _ZERO,
@@ -172,6 +187,7 @@ def _apply_tag_realized_venture_fields(
         target['capital_returned_uzs'] = _money(values['capital_returned_uzs'])
         target['dividends_paid_uzs'] = _money(values['dividends_paid_uzs'])
         target['profit_to_capital_uzs'] = _money(values['profit_to_capital_uzs'])
+        target['capital_rolled_to_pool_uzs'] = _money(values['capital_rolled_to_pool_uzs'])
 
         repaid_liability = _money(values['repaid_liability_uzs'])
         repaid_capital = _money(values['repaid_capital_uzs'])
@@ -180,6 +196,7 @@ def _apply_tag_realized_venture_fields(
         capital_delta = _money(
             target['capital_recovered_uzs']
             - target['capital_returned_uzs']
+            - target['capital_rolled_to_pool_uzs']
             + repaid_capital
         )
         profit_delta = _money(

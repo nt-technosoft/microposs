@@ -199,6 +199,7 @@ export interface ProcurementProfitabilityRow {
   draft_items_count?: number
   venture_deployed_uzs?: string
   venture_capital_recovered_uzs?: string
+  venture_capital_rolled_to_pool_uzs?: string
   venture_capital_return_available_uzs?: string
   venture_provisional_profit_available_uzs?: string
   venture_loss_uzs?: string
@@ -286,6 +287,13 @@ export interface AgreementProfitabilityDetail {
     losses_incurred: string
     dividends_paid: string
     profit_pending_payout: string
+    venture_capital_recovered_uzs?: string
+    venture_capital_rolled_to_pool_uzs?: string
+    venture_capital_return_available_uzs?: string
+    venture_provisional_profit_uzs?: string
+    venture_provisional_profit_available_uzs?: string
+    venture_loss_uzs?: string
+    venture_negative_position_uzs?: string
     display?: ReportDisplay
   }>
   procurements: ProcurementProfitabilityRow[]

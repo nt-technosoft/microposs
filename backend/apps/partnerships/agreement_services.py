@@ -375,11 +375,11 @@ def pay_dividend(
 
 def agreement_pool_reconciliation_residual(agreement) -> Decimal:
     """Pool reconciliation (agreement currency): pool.balance must equal
-    Σ contributions − Σ pool-funded receives − Σ pool capital returns.
+    Σ contributions + Σ capital rollovers − Σ pool-funded receives − Σ pool capital returns.
     Returns balance − expected (0 = reconciled). Recovered-capital returns leave
     the operating cash, not the pool, so they are excluded (matching the net fix)."""
     from apps.finance.models import Payment
-    from .models import AgreementWithdrawal
+    from .models import AgreementWithdrawal, CapitalRollover
 
     pool = agreement.capital_account
     if pool is None:
@@ -402,6 +402,16 @@ def agreement_pool_reconciliation_residual(agreement) -> Decimal:
         )),
         _ZERO,
     )
+    rollovers = sum(
+        (
+            Decimal(str(r.amount))
+            for r in CapitalRollover.objects.filter(
+                agreement=agreement,
+                currency=ccy,
+            )
+        ),
+        _ZERO,
+    )
     pool_returns = sum(
         (
             Decimal(str(w.amount))
@@ -412,7 +422,7 @@ def agreement_pool_reconciliation_residual(agreement) -> Decimal:
         ),
         _ZERO,
     )
-    expected = _q(contrib - deployed - pool_returns)
+    expected = _q(contrib + rollovers - deployed - pool_returns)
     return _q(Decimal(str(pool.balance)) - expected)
 
 
@@ -421,15 +431,23 @@ def agreement_profit_reinvestment_residual(agreement) -> Decimal:
     Σ AgreementContribution.PROFIT_REINVEST for the same agreement.
     Both tables are written together in _settle_partner_from_profit; drift means
     a write was orphaned or incomplete.
-    Returns ledger_sum − contrib_sum (0 = reconciled). UZS agreements only."""
+    Returns ledger_sum − contrib_sum (0 = reconciled). FROM_PROFIT is UZS-only;
+    any non-UZS PROFIT_REINVEST contribution is treated as an orphan and blocks close."""
     from .models import AgreementActionSource, AgreementContribution, PartnerLedgerEntry
 
     ccy = str(agreement.currency or 'UZS').upper()
+    contrib_sum = sum(
+        (
+            Decimal(str(c.amount))
+            for c in AgreementContribution.objects.filter(
+                agreement=agreement,
+                source=AgreementActionSource.PROFIT_REINVEST,
+            )
+        ),
+        _ZERO,
+    )
     if ccy != 'UZS':
-        raise ValueError(
-            f'agreement_profit_reinvestment_residual: non-UZS agreement {agreement.id} '
-            f'({ccy}) — cross-check not yet supported. Surface to lead.'
-        )
+        return _q(-contrib_sum)
 
     ledger_sum = sum(
         (
@@ -437,16 +455,6 @@ def agreement_profit_reinvestment_residual(agreement) -> Decimal:
             for e in PartnerLedgerEntry.objects.filter(
                 ledger__procurement__agreement=agreement,
                 entry_type=PartnerLedgerEntry.EntryType.PROFIT_TO_CAPITAL,
-            )
-        ),
-        _ZERO,
-    )
-    contrib_sum = sum(
-        (
-            Decimal(str(c.amount))
-            for c in AgreementContribution.objects.filter(
-                agreement=agreement,
-                source=AgreementActionSource.PROFIT_REINVEST,
             )
         ),
         _ZERO,
@@ -495,15 +503,12 @@ def agreement_close_blocking_reasons(*, agreement) -> list[str]:
             f'Капитал-пул договора не сведён (residual={residual} {agreement.currency}).'
         )
 
-    try:
-        reinvest_residual = agreement_profit_reinvestment_residual(agreement)
-        if reinvest_residual != _ZERO:
-            reasons.append(
-                f'Реинвестирование прибыли не сведено: PLR.PROFIT_TO_CAPITAL − '
-                f'contribution(PROFIT_REINVEST) = {reinvest_residual} UZS.'
-            )
-    except ValueError:
-        pass  # non-UZS agreement: skip until multi-currency reinvestment is supported
+    reinvest_residual = agreement_profit_reinvestment_residual(agreement)
+    if reinvest_residual != _ZERO:
+        reasons.append(
+            f'Реинвестирование прибыли не сведено: PLR.PROFIT_TO_CAPITAL − '
+            f'contribution(PROFIT_REINVEST) = {reinvest_residual} UZS.'
+        )
 
     merged = ConservationReport()
     for procurement in procurements:

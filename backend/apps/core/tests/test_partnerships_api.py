@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 from apps.finance.fx_rates import upsert_exchange_rate
 from apps.finance.models import CashEntry, ExchangeRate, JournalEntry, JournalLine, Payment
 from apps.core.models import BusinessInvestorRelation, Partner
-from apps.partnerships.models import PartnerLedgerEntry, Procurement
+from apps.partnerships.models import PartnerLedgerEntry, PayoutObligation, Procurement
 
 from ._helpers import build_tenant, seed_received_procurement
 
@@ -591,6 +591,16 @@ class PartnershipsApiTests(APITestCase):
                 'amount': '50.00',
                 'currency': 'UZS',
                 'paid_from_account_id': self.ctx['cash_account'].id,
+                'payout_obligation_id': PayoutObligation.objects.create(
+                    tenant=self.ctx['business'],
+                    agreement=procurement.agreement,
+                    procurement=procurement,
+                    recipient=self.ctx['investor'],
+                    kind=PayoutObligation.Kind.PROFIT,
+                    amount=Decimal('50.00'),
+                    currency='UZS',
+                    due_at=timezone.now(),
+                ).id,
             },
             format='json',
         )

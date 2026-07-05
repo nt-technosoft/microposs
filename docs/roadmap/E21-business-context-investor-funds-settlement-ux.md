@@ -136,6 +136,10 @@ gross-цифр, а business context перестаёт молча выбират
 - Agreement-level aggregate payout — UX-удобство, не новый факт. Перед
   подтверждением система показывает preview разбивки по eligible procurements
   default order: oldest eligible first.
+- Superseded by E23: aggregate payout/rollover больше не является
+  per-investor shortcut. Целевой путь — policy-gated group decision с общей
+  eligible-суммой, editable allocation и раздельным отображением external
+  paid-in, rolled capital и active capital at risk.
 
 ## План реализации
 
@@ -298,6 +302,8 @@ guard на receive: `FACTUAL` требует full receive; `AGREED` остаёт
   видит фонд только как одного economic holder в invest agreement.
 - ✓ 2026-06-25: Agreement-level payout aggregate — только wizard/preview; источник
   истины остаётся per-procurement append-only facts.
+- ✓ 2026-07-04: E23 supersedes E21 aggregate payout UX: payout/rollover идёт
+  через group decision и не должен обходить payout policy per-investor кнопками.
 - ✓ 2026-06-25: Operator/business proceeds в UI — отчётность, не обычная кнопка
   payout самому себе.
 - ✓ 2026-06-25: Cashier/warehouse tenant fallback допустим только если в системе

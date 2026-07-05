@@ -2201,6 +2201,7 @@ def get_procurement_profitability_rows(
                 'projected_business_profit': Decimal('0.00'),
                 'venture_deployed_uzs': Decimal('0.00'),
                 'venture_capital_recovered_uzs': Decimal('0.00'),
+                'venture_capital_rolled_to_pool_uzs': Decimal('0.00'),
                 'venture_capital_return_available_uzs': Decimal('0.00'),
                 'venture_provisional_profit_available_uzs': Decimal('0.00'),
                 'venture_loss_uzs': Decimal('0.00'),
@@ -2275,6 +2276,10 @@ def get_procurement_profitability_rows(
             ))
             row['venture_capital_recovered_uzs'] = _money(sum(
                 (Decimal(str(pos.get('capital_recovered_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_rolled_to_pool_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_rolled_to_pool_uzs', '0'))) for pos in venture_positions.values()),
                 Decimal('0.00'),
             ))
             row['venture_capital_return_available_uzs'] = _money(sum(
@@ -2818,6 +2823,7 @@ def get_agreement_profitability_detail(
 
     _venture_keys = (
         'capital_recovered_uzs',
+        'capital_rolled_to_pool_uzs',
         'capital_return_available_uzs',
         'provisional_profit_uzs',
         'provisional_profit_available_uzs',
@@ -2875,6 +2881,7 @@ def get_agreement_profitability_detail(
                 'dividends_paid',
                 'profit_pending_payout',
                 'venture_capital_recovered_uzs',
+                'venture_capital_rolled_to_pool_uzs',
                 'venture_capital_return_available_uzs',
                 'venture_provisional_profit_uzs',
                 'venture_provisional_profit_available_uzs',

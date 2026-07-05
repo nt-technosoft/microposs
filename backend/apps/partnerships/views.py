@@ -8,7 +8,8 @@ from rest_framework.response import Response
 from apps.core.permissions import IsOwner, IsWarehouse
 
 from .models import (
-    AgreementPartner, DividendPayment, InvestmentAgreement, InvestmentFund, PayoutObligation,
+    AgreementPartner, DividendPayment, InvestmentAgreement, InvestmentFund,
+    PayoutObligation,
     Procurement, DisputeCase, ContractReview,
 )
 from .serializers import (
@@ -34,6 +35,8 @@ from .serializers import (
     InvestmentAgreementDetailSerializer,
     InvestmentAgreementListSerializer,
     PayoutObligationSerializer,
+    PayoutDecisionExecuteSerializer,
+    PayoutDecisionPreviewSerializer,
     ContractReviewResolveSerializer,
     ContractReviewSerializer,
     TermsVersionCreateSerializer,
@@ -165,6 +168,42 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         ).prefetch_related('settlements')
         return Response(PayoutObligationSerializer(rows, many=True).data)
 
+    @action(detail=True, methods=['post'], url_path='payout-decision-preview')
+    def payout_decision_preview(self, request, pk=None):
+        from .lifecycle_services import build_payout_decision_preview
+        agreement = self.get_object()
+        serializer = PayoutDecisionPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = build_payout_decision_preview(
+            agreement=agreement,
+            decision_type=serializer.validated_data['decision_type'],
+            amount_uzs=serializer.validated_data.get('amount_uzs'),
+            allocations=serializer.validated_data.get('allocations'),
+            from_account_id=serializer.validated_data.get('from_account_id'),
+        )
+        return Response(payload)
+
+    @action(detail=True, methods=['post'], url_path='payout-decisions')
+    def payout_decisions(self, request, pk=None):
+        from .lifecycle_services import execute_payout_decision
+        agreement = self.get_object()
+        serializer = PayoutDecisionExecuteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            payload = execute_payout_decision(
+                agreement=agreement,
+                decision_type=serializer.validated_data['decision_type'],
+                amount_uzs=serializer.validated_data['amount_uzs'],
+                allocations=serializer.validated_data.get('allocations'),
+                from_account_id=serializer.validated_data.get('from_account_id'),
+                client_request_id=serializer.validated_data.get('client_request_id'),
+                notes=serializer.validated_data.get('notes', ''),
+                created_by_id=request.user.id if request.user.is_authenticated else None,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(payload, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=['post'], url_path='review')
     def review(self, request, pk=None):
         from .lifecycle_services import ensure_contract_review, resolve_contract_review
@@ -211,6 +250,14 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         try:
             with transaction.atomic():
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                decision_id = serializer.validated_data.get('payout_decision_id')
+                is_recovered_return = (
+                    serializer.validated_data.get('procurement_id') is not None
+                    and serializer.validated_data.get('from_account_id') is not None
+                )
+                if is_recovered_return or decision_id:
+                    raise ValueError('Use the policy group decision endpoint to execute recovered capital payouts.')
                 withdrawal = add_agreement_withdrawal(
                     tenant_id=request.tenant_id,
                     agreement_id=agreement.id,
@@ -223,7 +270,6 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                     reason=serializer.validated_data.get('reason', ''),
                     created_by_id=request.user.id if request.user.is_authenticated else None,
                 )
-                obligation_id = serializer.validated_data.get('payout_obligation_id')
                 if obligation_id:
                     from .lifecycle_services import record_payout_obligation
                     obligation = PayoutObligation.objects.get(
@@ -335,6 +381,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'partner_liability_loss_uzs': Decimal('0.00'),
                 'capital_returned_uzs': Decimal('0.00'),
                 'dividends_paid_uzs': Decimal('0.00'),
+                'capital_rolled_to_pool_uzs': Decimal('0.00'),
                 'capital_return_available_uzs': Decimal('0.00'),
                 'provisional_profit_available_uzs': Decimal('0.00'),
                 'negative_position_uzs': Decimal('0.00'),
@@ -356,6 +403,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                     'partner_liability_loss_uzs': Decimal('0.00'),
                     'capital_returned_uzs': Decimal('0.00'),
                     'dividends_paid_uzs': Decimal('0.00'),
+                    'capital_rolled_to_pool_uzs': Decimal('0.00'),
                     'capital_return_available_uzs': Decimal('0.00'),
                     'provisional_profit_available_uzs': Decimal('0.00'),
                     'negative_position_uzs': Decimal('0.00'),
@@ -571,7 +619,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             if remaining > 0:
                 reasons.append(f'Доступно только {total_available} UZS.')
         return Response({
-            'allowed': not reasons,
+            'allowed': False,
             'agreement_id': agreement.id,
             'partner_id': partner_id or None,
             'payout_type': payout_type,
@@ -579,7 +627,9 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
             'available_uzs': str(total_available),
             'remaining_uzs': str(remaining),
             'breakdown': breakdown,
-            'blocking_reasons': reasons,
+            'blocking_reasons': reasons + [
+                'Agreement aggregate payout is superseded by E23 policy group decision.',
+            ],
         })
 
     @action(detail=True, methods=['post'], url_path='aggregate-payouts')
@@ -656,6 +706,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 'partner_liability_loss_uzs': str(pos.get('partner_liability_loss_uzs', '0.00')),
                 'capital_returned_uzs': str(pos.get('capital_returned_uzs', '0.00')),
                 'dividends_paid_uzs': str(pos.get('dividends_paid_uzs', '0.00')),
+                'capital_rolled_to_pool_uzs': str(pos.get('capital_rolled_to_pool_uzs', '0.00')),
                 'capital_return_available_uzs': str(pos.get('capital_return_available_uzs', '0.00')),
                 'provisional_profit_available_uzs': str(pos.get('provisional_profit_available_uzs', '0.00')),
                 'negative_position_uzs': str(pos.get('negative_position_uzs', '0.00')),
@@ -741,6 +792,7 @@ class ProcurementViewSet(viewsets.ModelViewSet):
             'partner_liability_loss_uzs': Decimal('0.00'),
             'capital_returned_uzs': Decimal('0.00'),
             'dividends_paid_uzs': Decimal('0.00'),
+            'capital_rolled_to_pool_uzs': Decimal('0.00'),
             'capital_return_available_uzs': Decimal('0.00'),
             'provisional_profit_available_uzs': Decimal('0.00'),
             'negative_position_uzs': Decimal('0.00'),
@@ -1185,6 +1237,12 @@ class DividendPaymentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         try:
             with transaction.atomic():
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                decision_id = serializer.validated_data.get('payout_decision_id')
+                if not obligation_id and not decision_id:
+                    raise ValueError('Profit payout requires a policy payout decision.')
+                if decision_id:
+                    raise ValueError('Use the policy group decision endpoint to execute profit payout decisions.')
                 payment = pay_dividend(
                     tenant_id=request.tenant_id,
                     partner_id=serializer.validated_data['partner_id'],
@@ -1194,7 +1252,6 @@ class DividendPaymentViewSet(viewsets.ModelViewSet):
                     fx_rate=serializer.validated_data.get('fx_rate'),
                     from_account_id=serializer.validated_data.get('paid_from_account_id'),
                 )
-                obligation_id = serializer.validated_data.get('payout_obligation_id')
                 if obligation_id:
                     from .lifecycle_services import record_payout_obligation
                     obligation = PayoutObligation.objects.get(

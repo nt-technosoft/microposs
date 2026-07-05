@@ -20,6 +20,7 @@ const totals = computed(() => props.summary?.totals ?? null)
 const hasFacts = computed(() => {
   if (!totals.value) return false
   return Number(totals.value.capital_recovered_uzs || 0) > 0
+    || Number(totals.value.capital_rolled_to_pool_uzs || 0) > 0
     || Number(totals.value.provisional_profit_uzs || 0) > 0
     || Number(totals.value.loss_uzs || 0) > 0
 })
@@ -57,6 +58,10 @@ const participantRows = computed(() => (props.summary?.positions ?? []).filter((
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.capital_recovered_uzs || 0, 'UZS') }}</span>
         </div>
         <div>
+          <span class="block text-muted-foreground">Оставлено в деле</span>
+          <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.capital_rolled_to_pool_uzs || 0, 'UZS') }}</span>
+        </div>
+        <div>
           <span class="block text-muted-foreground">К возврату</span>
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.capital_return_available_uzs || 0, 'UZS') }}</span>
         </div>
@@ -68,7 +73,7 @@ const participantRows = computed(() => (props.summary?.positions ?? []).filter((
           <span class="block text-muted-foreground">Убытки</span>
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.loss_uzs || 0, 'UZS') }}</span>
         </div>
-        <div class="sm:col-span-2">
+        <div>
           <span class="block text-muted-foreground">Остаток в товаре</span>
           <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(totals?.remaining_inventory_capital_uzs || 0, 'UZS') }}</span>
         </div>
@@ -82,7 +87,8 @@ const participantRows = computed(() => (props.summary?.positions ?? []).filter((
           </span>
           <span class="text-left tabular-nums text-foreground sm:text-right">
             <strong class="block">{{ formatPrice(row.capital_return_available_uzs, 'UZS') }}</strong>
-            <span class="block text-muted-foreground">капитал · прибыль {{ formatPrice(row.provisional_profit_available_uzs, 'UZS') }}</span>
+            <span class="block text-muted-foreground">к возврату · оставлено {{ formatPrice(row.capital_rolled_to_pool_uzs, 'UZS') }}</span>
+            <span class="block text-muted-foreground">прибыль {{ formatPrice(row.provisional_profit_available_uzs, 'UZS') }}</span>
           </span>
         </div>
       </div>

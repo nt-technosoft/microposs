@@ -205,6 +205,10 @@ def add_agreement_contribution(
     currency = str(currency or 'UZS').upper()
     if amount <= 0:
         raise ValueError('Contribution amount must be > 0.')
+    if source == AgreementActionSource.PROFIT_REINVEST:
+        raise ValueError(
+            'PROFIT_REINVEST contributions must be created by settle_partner_capital(FROM_PROFIT).'
+        )
     if date is None:
         date = timezone.now()
 

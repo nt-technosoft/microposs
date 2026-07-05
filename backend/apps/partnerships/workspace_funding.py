@@ -80,6 +80,7 @@ def create_and_link_workspace_agreement(
         reconciliation_mode=payload.get('reconciliation_mode') or 'FACTUAL',
         client_request_id=client_request_id,
         created_by_id=user_id,
+        payout_policy=payload.get('payout_policy'),
         partners=payload.get('partners') or [],
     )
     if payload.get('legal_mode'):
@@ -687,7 +688,22 @@ def _auto_capital_amounts(required: Decimal, members: list, available: dict[int,
                 break
     if abs(sum(amounts.values(), Decimal('0')) - required) <= Decimal('0.01') and members:
         residue = (required - sum(amounts.values(), Decimal('0'))).quantize(Decimal('0.01'))
-        amounts[members[-1].partner_id] = (amounts.get(members[-1].partner_id, Decimal('0')) + residue).quantize(Decimal('0.01'))
+        if residue > 0:
+            for member in reversed(members):
+                current = amounts.get(member.partner_id, Decimal('0'))
+                headroom = (
+                    max(available.get(member.partner_id, Decimal('0')), Decimal('0'))
+                    - current
+                ).quantize(Decimal('0.01'))
+                if headroom + Decimal('0.01') >= residue:
+                    amounts[member.partner_id] = (current + residue).quantize(Decimal('0.01'))
+                    break
+        elif residue < 0:
+            for member in reversed(members):
+                current = amounts.get(member.partner_id, Decimal('0'))
+                if current + residue >= 0:
+                    amounts[member.partner_id] = (current + residue).quantize(Decimal('0.01'))
+                    break
     return amounts
 
 

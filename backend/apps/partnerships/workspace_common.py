@@ -20,6 +20,8 @@ from apps.suppliers.models import SupplierPayable
 from .models import (
     AgreementAllocation,
     AgreementWithdrawal,
+    CapitalRollover,
+    CurrencyConversionLot,
     InvestmentAgreement,
     Procurement,
     ProcurementExpense,
@@ -290,6 +292,39 @@ def _agreement_available_by_partner(agreement: InvestmentAgreement) -> dict[int,
     available: dict[int, dict[str, Decimal]] = {}
     for contribution in agreement.contributions.all():
         _add_amount(available, contribution.partner_id, contribution.currency, contribution.amount)
+    rollovers = list(CapitalRollover.objects.filter(agreement=agreement).select_related('decision'))
+    conversion_lots = {}
+    for lot in CurrencyConversionLot.objects.filter(
+        agreement=agreement,
+        source_ref__startswith='capital_rollover:',
+    ):
+        try:
+            decision_id = int(str(lot.source_ref).split(':', 1)[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        conversion_lots[decision_id] = lot
+    decision_uzs_totals: dict[int, Decimal] = {}
+    for rollover in rollovers:
+        decision_uzs_totals[rollover.decision_id] = (
+            decision_uzs_totals.get(rollover.decision_id, Decimal('0'))
+            + Decimal(str(rollover.amount_uzs))
+        )
+    agreement_currency = str(agreement.currency or 'UZS').upper()
+    for rollover in rollovers:
+        rollover_currency = str(rollover.currency or 'UZS').upper()
+        if rollover_currency == agreement_currency:
+            amount = Decimal(str(rollover.amount))
+        else:
+            lot = conversion_lots.get(rollover.decision_id)
+            total_uzs = decision_uzs_totals.get(rollover.decision_id, Decimal('0'))
+            if lot is None or total_uzs <= Decimal('0'):
+                continue
+            amount = (
+                Decimal(str(lot.base_cost_initial))
+                * Decimal(str(rollover.amount_uzs))
+                / total_uzs
+            )
+        _add_amount(available, rollover.partner_id, agreement_currency, amount)
     for withdrawal in agreement.withdrawals.all():
         if withdrawal.return_kind != AgreementWithdrawal.ReturnKind.FROM_POOL:
             continue
