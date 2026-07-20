@@ -45,7 +45,7 @@
 | **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | follow-ups implemented | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 | **E22** | Investor-Owned Funds + E21 UX Correction | 🔵 IN_REVIEW | 100% implementation | E18, E20, E21 | [→](./roadmap/E22-investor-owned-funds-e21-correction.md) |
 | **E23** | Capital Rollover & Real Reinvestment | 🟡 IN_PROGRESS | 95% | E18, E21 | [→](./roadmap/E23-capital-rollover-reinvestment.md) |
-| **E31** | Business Workspace Desktop Refit | 🟡 IN_PROGRESS | 5% | E23-compatible baseline | [→](./roadmap/E31-business-workspace-desktop-refit.md) |
+| **E31** | Business Workspace Desktop Refit | 🟡 IN_PROGRESS | 15% | Historical Vue baseline | [→](./roadmap/E31-business-workspace-desktop-refit.md) |
 
 **Future item — full business switcher:** не входит в E22/MVP. Текущий MVP
 остаётся `one owner -> one business`; полноценный multi-business switcher нужен
@@ -96,7 +96,7 @@ fair-residue в `formulas.py`. **Не сейчас** — впереди прио
 **🔥 Активный P0 (frontend, с 2026-07-20):** E31 — Business Workspace Desktop
 Refit. Существующий Vue Business Workspace получает desktop-first,
 task-adaptive shell и последовательную адаптацию страниц на отдельной
-E23-compatible базе. E10 приостановлен как директива, но его готовые экраны и
+изолированной исторической Vue-базе со схемой `e506691`. E10 приостановлен как директива, но его готовые экраны и
 метод «сохранить контракт, пересобрать презентацию» остаются reference.
 
 **Backend P0 — ЗАКРЫТО (2026-06-16):** E17 (Production Lifecycle Readiness,
@@ -142,7 +142,7 @@ E07 + E08 (DONE 2026-05-19) ──→ E09 (Procurement Completeness) ──→ E
                                          └──→ E31 (Vue Business desktop track)
 ```
 
-E31 идёт параллельным frontend-треком поверх E23-compatible baseline и не
+E31 идёт параллельным frontend-треком поверх восстановленного Vue baseline и не
 меняет backend-последовательность. E10 остаётся историей уже реализованных
 экранов и решений, но больше не задаёт обязательный mobile-first layout.
 
