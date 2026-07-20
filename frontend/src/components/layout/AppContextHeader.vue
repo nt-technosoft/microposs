@@ -42,6 +42,8 @@ const eyebrow = computed(() => {
       <Menu />
     </Button>
 
+    <div id="app-context-leading" class="flex shrink-0 items-center" />
+
     <div class="min-w-0 flex-1">
       <p class="truncate text-xs text-muted-foreground">{{ eyebrow }}</p>
       <div class="flex min-w-0 items-center gap-2">

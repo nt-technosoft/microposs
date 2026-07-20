@@ -32,6 +32,12 @@ onBeforeUnmount(() => clearPageChrome(owner))
 
 <template>
   <header class="page-chrome">
+    <Teleport defer to="#app-context-leading" :disabled="!usesAppHeader">
+      <div v-if="$slots.back" class="page-chrome__back">
+        <slot name="back" />
+      </div>
+    </Teleport>
+
     <div class="page-chrome__heading">
       <p v-if="eyebrow" class="page-chrome__eyebrow">{{ eyebrow }}</p>
       <div class="page-chrome__title-row">
@@ -57,15 +63,27 @@ onBeforeUnmount(() => clearPageChrome(owner))
 
 <style scoped>
 .page-chrome {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
   display: flex;
+  min-height: var(--header-height);
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-bg-primary) 94%, white 6%);
   padding: var(--space-4);
+  backdrop-filter: blur(12px);
 }
 
 .page-chrome__heading {
   min-width: 0;
+  flex: 1;
+}
+
+.page-chrome__back {
+  flex: none;
 }
 
 .page-chrome__eyebrow {
@@ -130,7 +148,12 @@ onBeforeUnmount(() => clearPageChrome(owner))
 
 @media (min-width: 768px) {
   .page-chrome {
+    position: static;
+    min-height: 0;
+    border-bottom: 0;
+    background: transparent;
     padding: 0;
+    backdrop-filter: none;
   }
 
   .page-chrome__heading {
