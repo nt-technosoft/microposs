@@ -2,15 +2,19 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import AppBottomNav from '@/components/layout/AppBottomNav.vue'
 import AppFloatingCart from '@/components/layout/AppFloatingCart.vue'
+import AppShell from '@/components/layout/AppShell.vue'
 import AppToastContainer from '@/components/feedback/AppToastContainer.vue'
+import { isBusinessWorkspaceRole } from '@/components/layout/navigation'
 
 const route = useRoute()
 const auth = useAuthStore()
 
-const showNav = computed(() => {
-  return auth.isAuthenticated && route.meta.layout !== 'blank' && route.meta.layout !== 'investor'
+const showBusinessShell = computed(() => {
+  return auth.isAuthenticated
+    && isBusinessWorkspaceRole(auth.role)
+    && route.meta.layout !== 'blank'
+    && route.meta.layout !== 'investor'
 })
 
 const showCart = computed(() => {
@@ -25,21 +29,24 @@ const isFullBleedWhitePage = computed(() => route.name === 'procurement-list')
 </script>
 
 <template>
-  <div class="app-root">
+  <AppShell v-if="showBusinessShell" :full-bleed="isFullBleedWhitePage">
+    <RouterView />
+  </AppShell>
+
+  <div v-else class="app-root">
     <main
       class="app-main"
       :class="{
-        'has-bottom-nav': showNav,
         'app-main--full-white': isFullBleedWhitePage,
       }"
     >
       <RouterView />
     </main>
 
-    <AppFloatingCart v-if="showCart" />
-    <AppBottomNav v-if="showNav" />
-    <AppToastContainer />
   </div>
+
+  <AppFloatingCart v-if="showCart" />
+  <AppToastContainer />
 </template>
 
 <style scoped>
@@ -61,7 +68,4 @@ const isFullBleedWhitePage = computed(() => route.name === 'procurement-list')
   background: #fff;
 }
 
-.app-main.has-bottom-nav {
-  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
-}
 </style>

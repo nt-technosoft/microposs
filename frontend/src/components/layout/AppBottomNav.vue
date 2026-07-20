@@ -6,14 +6,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import {
-  ShoppingBag,
-  Package,
-  Download,
-  BarChart3,
-  Wallet,
-  Settings,
-} from 'lucide-vue-next'
+import type { AppNavItem } from './navigation'
+import { getBusinessNavigation, isBusinessNavigationItemActive } from './navigation'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,38 +15,19 @@ const { t } = useI18n()
 const auth = useAuthStore()
 const ui = useUIStore()
 
-interface NavItem {
-  name: string
-  labelKey: string
-  icon: typeof ShoppingBag
-  path: string
-  roles: string[]
-}
-
-const allTabs: NavItem[] = [
-  { name: 'sales', labelKey: 'nav.sales', icon: ShoppingBag, path: '/sales', roles: ['owner', 'cashier'] },
-  { name: 'products', labelKey: 'nav.products', icon: Package, path: '/products', roles: ['owner', 'warehouse'] },
-  { name: 'procurements', labelKey: 'nav.procurements', icon: Download, path: '/procurements', roles: ['owner', 'warehouse'] },
-  { name: 'reports', labelKey: 'nav.reports', icon: BarChart3, path: '/reports', roles: ['owner'] },
-  { name: 'cash', labelKey: 'nav.cash', icon: Wallet, path: '/finance/cash', roles: ['owner'] },
-  { name: 'more', labelKey: 'nav.more', icon: Settings, path: '/settings', roles: ['owner', 'cashier', 'warehouse'] },
-]
-
 const visibleTabs = computed(() => {
-  if (ui.simpleSellerMode) {
-    return allTabs.filter((tab) => tab.name === 'sales')
-  }
-
-  const role = auth.role
-  if (!role) return allTabs.filter((tab) => tab.name === 'sales')
-  return allTabs.filter((tab) => tab.roles.includes(role))
+  return getBusinessNavigation({
+    role: auth.role,
+    simpleSellerMode: ui.simpleSellerMode,
+    surface: 'mobile',
+  })
 })
 
-function isActive(tab: NavItem): boolean {
-  return route.path.startsWith(tab.path)
+function isActive(tab: AppNavItem): boolean {
+  return isBusinessNavigationItemActive(tab, route.name, 'mobile')
 }
 
-function tabClass(tab: NavItem): string {
+function tabClass(tab: AppNavItem): string {
   return cn(
     'nav-tab relative h-14 min-w-0 flex-1 flex-col gap-1 rounded-lg px-1 pt-2.5 pb-1.5 text-muted-foreground',
     'hover:bg-muted/70 hover:text-foreground',
@@ -61,8 +36,8 @@ function tabClass(tab: NavItem): string {
   )
 }
 
-function navigate(tab: NavItem) {
-  router.push(tab.path)
+function navigate(tab: AppNavItem) {
+  router.push(tab.to)
 }
 </script>
 
@@ -74,11 +49,11 @@ function navigate(tab: NavItem) {
     <div class="flex h-[var(--bottom-nav-height)] w-full items-center justify-center gap-1 px-1 sm:gap-2 sm:px-4">
       <Button
         v-for="tab in visibleTabs"
-        :key="tab.name"
+        :key="tab.id"
         variant="ghost"
         size="sm"
         :class="tabClass(tab)"
-        :aria-label="t(tab.labelKey)"
+        :aria-label="t(tab.mobileLabelKey ?? tab.labelKey)"
         :aria-current="isActive(tab) ? 'page' : undefined"
         :data-active="isActive(tab) ? 'true' : undefined"
         @click="navigate(tab)"
@@ -90,7 +65,7 @@ function navigate(tab: NavItem) {
         />
         <component :is="tab.icon" :stroke-width="1.9" data-icon="inline-start" />
         <span class="max-w-full truncate text-xs font-medium leading-none">
-          {{ t(tab.labelKey) }}
+          {{ t(tab.mobileLabelKey ?? tab.labelKey) }}
         </span>
       </Button>
     </div>
@@ -98,8 +73,18 @@ function navigate(tab: NavItem) {
 </template>
 
 <style scoped>
+.safe-area-bottom {
+  display: block;
+}
+
 .nav-tab :deep(svg) {
   width: 22px;
   height: 22px;
+}
+
+@media (min-width: 768px) {
+  .safe-area-bottom {
+    display: none;
+  }
 }
 </style>

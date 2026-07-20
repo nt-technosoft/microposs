@@ -1,7 +1,7 @@
 # E31 — Business Workspace Desktop Refit
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** 15%
+**Прогресс:** 28%
 **Зависит от:** Historical Vue data baseline restored on the `e506691` schema
 **Блокирует:** —
 
@@ -53,10 +53,10 @@ task-adaptive интерфейса, сохранив бизнес-логику, 
 
 ### Фаза 1 — app shell
 
-- [ ] Единый typed navigation registry и role filtering.
-- [ ] Desktop sidebar, tablet drawer, mobile bottom navigation.
-- [ ] Contextual header, account menu, sticky offsets и scroll ownership.
-- [ ] Проверка shell на четырёх целевых viewport.
+- [x] Единый typed navigation registry и role filtering.
+- [x] Desktop sidebar, tablet drawer, mobile bottom navigation.
+- [x] Contextual header, account menu, sticky offsets и scroll ownership.
+- [x] Проверка shell на четырёх целевых viewport.
 
 ### Фаза 2 — presentation foundation
 

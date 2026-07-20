@@ -114,17 +114,21 @@
 
   /* === Z-Index Scale === */
   --z-base: 0;
-  --z-dropdown: 100;
-  --z-sticky: 200;
-  --z-overlay: 300;
-  --z-modal: 400;
-  --z-toast: 500;
-  --z-float: 600;
+  --z-dropdown: 20;
+  --z-sticky: 30;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-float: 70;
 
   /* === Layout === */
   --bottom-nav-height: 64px;
   --header-height: 56px;
-  --sidebar-width: 260px;
+  --app-header-height: 64px;
+  --sticky-offset: var(--app-header-height);
+  --desktop-sidebar-expanded: 248px;
+  --desktop-sidebar-collapsed: 72px;
+  --sidebar-width: var(--desktop-sidebar-expanded);
   --max-content-width: 1200px;
 
   /* ============================================================
