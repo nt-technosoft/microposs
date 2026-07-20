@@ -20,7 +20,9 @@ import CategoryChips from '@/components/forms/CategoryChips.vue'
 import ProductCard from '@/components/data/ProductCard.vue'
 import AppSkeletonCard from '@/components/feedback/AppSkeletonCard.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
-import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import ResponsiveOverlay from '@/components/layout/ResponsiveOverlay.vue'
 import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
@@ -550,6 +552,20 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="catalog-page">
+    <PageChrome class="desktop-page-chrome" :title="t('sales.catalogTitle')">
+      <template #primary>
+        <button
+          class="cart-btn"
+          :aria-label="t('sales.cartAria', { count: cartItemCount })"
+          @click="goToCart"
+        >
+          <ShoppingCart :size="22" :stroke-width="1.75" />
+          <span v-if="cartItemCount > 0" class="cart-badge" aria-hidden="true">
+            {{ cartItemCount > 99 ? '99+' : cartItemCount }}
+          </span>
+        </button>
+      </template>
+    </PageChrome>
 
     <!-- ===== Sticky header ===== -->
     <header class="catalog-header">
@@ -569,6 +585,7 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
+    <PageContainer class="catalog-container" size="wide" :padded="false">
     <!-- ===== Sticky search + category chips ===== -->
     <div class="sticky-filters">
       <div class="toolbar-row">
@@ -713,6 +730,7 @@ onBeforeUnmount(() => {
         </template>
       </section>
 
+      <div class="catalog-results">
       <!-- Loading skeleton grid (initial load) -->
       <div
         v-if="productsStore.isLoading && productsStore.products.length === 0"
@@ -863,10 +881,12 @@ onBeforeUnmount(() => {
         <!-- Invisible sentinel element for IntersectionObserver -->
         <div ref="sentinelRef" class="scroll-sentinel" aria-hidden="true" />
       </template>
+      </div>
 
     </main>
+    </PageContainer>
 
-    <AppBottomSheet :open="openSheetOpen" :title="t('sales.openShift')" @close="closeOpenSessionSheet">
+    <ResponsiveOverlay :open="openSheetOpen" :title="t('sales.openShift')" @close="closeOpenSessionSheet">
       <form class="session-sheet" @submit.prevent="submitOpenSession">
         <BaseSelect
           v-model="openForm.locationId"
@@ -891,9 +911,9 @@ onBeforeUnmount(() => {
           {{ t('sales.openShift') }}
         </BaseButton>
       </form>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
 
-    <AppBottomSheet :open="closeSheetOpen" :title="t('sales.closeShift')" @close="closeCloseSessionSheet">
+    <ResponsiveOverlay :open="closeSheetOpen" :title="t('sales.closeShift')" @close="closeCloseSessionSheet">
       <form class="session-sheet" @submit.prevent="submitCloseSession">
         <div class="close-summary">
           <div class="close-summary__row">
@@ -959,7 +979,7 @@ onBeforeUnmount(() => {
           {{ t('sales.closeShift') }}
         </BaseButton>
       </form>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
   </div>
 </template>
 
@@ -971,6 +991,10 @@ onBeforeUnmount(() => {
   min-height: 100dvh;
   background: var(--color-bg-primary);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-4));
+}
+
+.desktop-page-chrome {
+  display: none;
 }
 
 /* ===== Sticky header ===== */
@@ -1316,6 +1340,46 @@ onBeforeUnmount(() => {
 }
 
 @media (min-width: 768px) {
+  .catalog-page {
+    min-height: 100%;
+    padding-bottom: var(--space-6);
+  }
+
+  .desktop-page-chrome {
+    display: block;
+  }
+
+  .catalog-header {
+    display: none;
+  }
+
+  .catalog-container {
+    padding: 0 clamp(var(--space-5), 3vw, var(--space-8)) var(--space-6);
+  }
+
+  .sticky-filters {
+    top: var(--sticky-offset);
+    padding: var(--space-3) 0;
+  }
+
+  .catalog-content {
+    display: grid;
+    grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+    align-items: start;
+    gap: clamp(var(--space-5), 3vw, var(--space-8));
+    padding: var(--space-5) 0 0;
+  }
+
+  .session-card {
+    position: sticky;
+    top: calc(var(--sticky-offset) + 72px);
+    margin-bottom: 0;
+  }
+
+  .catalog-results {
+    min-width: 0;
+  }
+
   .product-grid {
     grid-template-columns: repeat(3, 1fr);
     gap: var(--space-4);

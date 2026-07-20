@@ -17,6 +17,8 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { useToast } from '@/composables/useToast'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 
 interface CharacteristicRow {
   key: number
@@ -216,64 +218,67 @@ onMounted(loadData)
 
 <template>
   <div class="edit-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('products.editTitle') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('products.editTitle')">
+      <template #back>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
-    <div v-if="isLoading" class="loading-wrap" aria-busy="true">
-      <div class="skeleton skeleton-line" />
-      <div class="skeleton skeleton-line" />
-      <div class="skeleton skeleton-line-lg" />
-    </div>
+    <PageContainer size="wide">
+      <div v-if="isLoading" class="loading-wrap" aria-busy="true">
+        <div class="skeleton skeleton-line" />
+        <div class="skeleton skeleton-line" />
+        <div class="skeleton skeleton-line-lg" />
+      </div>
 
     <form v-else class="form" @submit.prevent="saveProduct">
       <div v-if="errorMessage" class="error-banner" role="alert">
         <span>{{ errorMessage }}</span>
       </div>
 
-      <BaseInput v-model="name" :label="`${t('products.nameLabel')} *`" :placeholder="t('products.namePlaceholder')" />
+      <div class="form-details">
+        <BaseInput v-model="name" :label="`${t('products.nameLabel')} *`" :placeholder="t('products.namePlaceholder')" />
 
-      <div class="field-group">
-        <label class="input-label">{{ t('products.description') }}</label>
-        <textarea
-          v-model="description"
-          class="textarea-field"
-          rows="3"
-          :placeholder="t('products.descriptionPlaceholder')"
+        <div class="field-group">
+          <label class="input-label">{{ t('products.description') }}</label>
+          <textarea
+            v-model="description"
+            class="textarea-field"
+            rows="3"
+            :placeholder="t('products.descriptionPlaceholder')"
+          />
+        </div>
+
+        <div class="field-group">
+          <label class="input-label">{{ t('products.categoryFilter') }}</label>
+          <BaseSelect
+            v-model="selectedCategory"
+            :options="categoryOptions"
+            :title="t('products.chooseCategory')"
+            :placeholder="t('products.noCategory')"
+          />
+        </div>
+
+        <div class="field-group">
+          <label class="input-label">{{ t('products.priceType') }}</label>
+          <BaseSelect
+            v-model="pricingMode"
+            :options="pricingModeOptions"
+            :title="t('products.choosePriceType')"
+            :placeholder="t('products.priceType')"
+          />
+        </div>
+
+        <BaseInput
+          v-if="showBasePrice"
+          v-model="basePrice"
+          :label="t('products.basePrice')"
+          type="number"
+          placeholder="0"
         />
       </div>
-
-      <div class="field-group">
-        <label class="input-label">{{ t('products.categoryFilter') }}</label>
-        <BaseSelect
-          v-model="selectedCategory"
-          :options="categoryOptions"
-          :title="t('products.chooseCategory')"
-          :placeholder="t('products.noCategory')"
-        />
-      </div>
-
-      <div class="field-group">
-        <label class="input-label">{{ t('products.priceType') }}</label>
-        <BaseSelect
-          v-model="pricingMode"
-          :options="pricingModeOptions"
-          :title="t('products.choosePriceType')"
-          :placeholder="t('products.priceType')"
-        />
-      </div>
-
-      <BaseInput
-        v-if="showBasePrice"
-        v-model="basePrice"
-        :label="t('products.basePrice')"
-        type="number"
-        placeholder="0"
-      />
 
       <div class="photo-block">
         <label class="input-label">{{ t('products.productPhoto') }}</label>
@@ -323,6 +328,7 @@ onMounted(loadData)
         {{ t('common.save') }}
       </BaseButton>
     </form>
+    </PageContainer>
   </div>
 </template>
 
@@ -330,36 +336,13 @@ onMounted(loadData)
 .edit-page {
   min-height: 100%;
   background: var(--color-bg-primary);
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  height: var(--header-height);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  flex: 1;
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-}
-
-.back-btn,
-.header-spacer {
-  width: 40px;
-  height: 40px;
+  position: relative;
 }
 
 .back-btn {
   display: inline-flex;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-md);
@@ -371,6 +354,11 @@ onMounted(loadData)
   gap: var(--space-3);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+.form-details {
+  display: grid;
+  gap: var(--space-3);
 }
 
 .field-group {
@@ -533,5 +521,66 @@ onMounted(loadData)
 @keyframes shimmer {
   from { background-position: 0 0; }
   to { background-position: 200% 0; }
+}
+
+@media (min-width: 768px) {
+  .edit-page {
+    min-height: 0;
+    padding-bottom: var(--space-8);
+  }
+
+  .form,
+  .loading-wrap {
+    max-width: 1120px;
+    margin-inline: auto;
+  }
+
+  .form {
+    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    align-items: start;
+    gap: var(--space-5);
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-6);
+  }
+
+  .error-banner,
+  .section-title-row,
+  .characteristic-row,
+  .toggle-row,
+  .form > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .form-details {
+    grid-column: 1;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-4);
+  }
+
+  .form-details > :first-child,
+  .form-details > :nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  .photo-block {
+    grid-column: 2;
+    grid-row: 2 / span 2;
+  }
+
+  .photo-preview {
+    width: min(100%, 280px);
+    aspect-ratio: 1 / 1;
+  }
+
+  .characteristic-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .form > :last-child {
+    width: min(280px, 100%);
+    justify-self: end;
+  }
 }
 </style>

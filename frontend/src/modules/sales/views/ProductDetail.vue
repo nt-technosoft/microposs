@@ -17,7 +17,9 @@ import QuantityControl from '@/components/forms/QuantityControl.vue'
 import PriceDisplay from '@/components/data/PriceDisplay.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import ResponsiveOverlay from '@/components/layout/ResponsiveOverlay.vue'
 import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 
@@ -582,6 +584,16 @@ onMounted(() => {
 
 <template>
   <div class="detail-page">
+    <PageChrome
+      class="desktop-page-chrome"
+      :title="product?.name ?? t('products.product')"
+    >
+      <template #primary>
+        <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
+          <ArrowLeft :size="20" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <!-- ===== Header ===== -->
     <header class="detail-header">
@@ -594,6 +606,7 @@ onMounted(() => {
       <div class="header-spacer" aria-hidden="true" />
     </header>
 
+    <PageContainer class="detail-container" size="wide" :padded="false">
     <!-- ===== Loading state ===== -->
     <div v-if="isLoading" class="detail-loading" aria-busy="true" :aria-label="t('products.loadingProduct')">
       <div class="skeleton-hero" />
@@ -878,8 +891,9 @@ onMounted(() => {
 
       </div>
     </template>
+    </PageContainer>
 
-    <AppBottomSheet
+    <ResponsiveOverlay
       :open="variantSheetOpen"
       :title="t('products.variantsTitle')"
       @close="variantSheetOpen = false"
@@ -908,9 +922,9 @@ onMounted(() => {
           <PriceDisplay :amount="variant.effective_price" size="sm" />
         </button>
       </div>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
 
-    <AppBottomSheet
+    <ResponsiveOverlay
       :open="writeoffSheetOpen"
       :title="t('products.writeoffTitle')"
       @close="closeWriteoffSheet"
@@ -986,7 +1000,7 @@ onMounted(() => {
           <span v-else>{{ t('products.confirmWriteoff') }}</span>
         </button>
       </div>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
 
   </div>
 </template>
@@ -999,6 +1013,10 @@ onMounted(() => {
   min-height: 100dvh;
   background: var(--color-bg-primary);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-4));
+}
+
+.desktop-page-chrome {
+  display: none;
 }
 
 /* ===== Header ===== */
@@ -1828,47 +1846,48 @@ onMounted(() => {
 
 /* ===== Responsive ===== */
 @media (min-width: 768px) {
-  .product-hero {
-    max-height: 360px;
-    padding-top: 0;
-    height: 360px;
+  .detail-page {
+    min-height: 100%;
+    padding-bottom: var(--space-6);
   }
-}
 
-@media (min-width: 1024px) {
+  .desktop-page-chrome {
+    display: block;
+  }
+
+  .detail-header {
+    display: none;
+  }
+
+  .detail-container {
+    padding: var(--space-6) clamp(var(--space-5), 3vw, var(--space-8));
+  }
+
   .detail-body {
     display: grid;
-    grid-template-columns: 1fr 400px;
-    grid-template-rows: auto auto auto auto;
-    gap: 0;
-    max-width: var(--max-content-width);
-    margin: 0 auto;
-    padding: var(--space-6);
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+    grid-template-rows: auto auto auto auto auto;
     align-items: start;
+    gap: 0 clamp(var(--space-5), 3vw, var(--space-8));
   }
 
   .product-hero {
     grid-column: 1;
-    grid-row: 1 / 3;
+    grid-row: 1 / span 4;
+    height: min(420px, 52vw);
+    padding-top: 0;
     border-radius: var(--radius-xl);
-    overflow: hidden;
-    padding-top: 56.25%;
-    height: auto;
-    max-height: unset;
-    margin-right: var(--space-6);
   }
 
   .product-info-section {
     grid-column: 2;
     grid-row: 1;
     padding: 0 0 var(--space-4);
-    border-top: none;
   }
 
   .variants-section {
     grid-column: 2;
     grid-row: 2;
-    border-top: 1px solid var(--color-border-subtle);
     padding: var(--space-4) 0;
   }
 
@@ -1882,6 +1901,22 @@ onMounted(() => {
     grid-column: 2;
     grid-row: 4;
     padding: var(--space-4) 0 0;
+  }
+
+  .supplier-history-section {
+    grid-column: 1;
+    grid-row: 5;
+    margin-top: var(--space-5);
+  }
+}
+
+@media (min-width: 1024px) {
+  .detail-body {
+    grid-template-columns: minmax(0, 1fr) minmax(380px, 440px);
+  }
+
+  .product-hero {
+    height: min(520px, 48vw);
   }
 }
 

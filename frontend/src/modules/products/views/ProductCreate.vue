@@ -16,6 +16,8 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useToast } from '@/composables/useToast'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 
 interface SelectedAttribute {
   attributeId: number
@@ -291,14 +293,15 @@ onMounted(async () => {
 
 <template>
   <div class="create-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="20" :stroke-width="1.75" />
-      </button>
-      <h1 class="page-title">{{ t('products.create') }}</h1>
-      <div class="header-spacer" aria-hidden="true" />
-    </header>
+    <PageChrome :title="t('products.create')">
+      <template #back>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="20" :stroke-width="1.75" />
+        </button>
+      </template>
+    </PageChrome>
 
+    <PageContainer size="wide">
     <form class="form-content" @submit.prevent="handleSubmit">
       <div v-if="errorMessage" class="error-banner" role="alert">
         {{ errorMessage }}
@@ -468,6 +471,7 @@ onMounted(async () => {
         </BaseButton>
       </div>
     </form>
+    </PageContainer>
   </div>
 </template>
 
@@ -476,41 +480,17 @@ onMounted(async () => {
   min-height: 100dvh;
   background: var(--color-bg-primary);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-4);
-  background: var(--color-bg-primary);
-  border-bottom: 1px solid var(--color-border-subtle);
-  height: var(--header-height);
-}
-
-.back-btn,
-.header-spacer {
-  width: 40px;
-  height: 40px;
+  position: relative;
 }
 
 .back-btn {
   display: inline-flex;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
   color: var(--color-text-secondary);
-}
-
-.page-title {
-  flex: 1;
-  text-align: center;
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
 }
 
 .form-content {
@@ -766,5 +746,66 @@ onMounted(async () => {
   display: grid;
   gap: var(--space-2);
   margin-top: var(--space-2);
+}
+
+@media (min-width: 768px) {
+  .create-page {
+    min-height: 0;
+    padding-bottom: var(--space-8);
+  }
+
+  .form-content {
+    grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+    align-items: start;
+    gap: var(--space-5);
+    max-width: 1120px;
+    margin-inline: auto;
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-6);
+  }
+
+  .form-section {
+    padding: var(--space-5);
+  }
+
+  .form-section:first-of-type {
+    grid-column: 1;
+  }
+
+  .form-section:nth-of-type(2) {
+    grid-column: 1;
+  }
+
+  .form-section:nth-of-type(3) {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .form-section:first-of-type {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 0.72fr);
+    align-items: start;
+  }
+
+  .form-section:first-of-type > :first-child,
+  .form-section:first-of-type > .input-group:nth-of-type(3),
+  .form-section:first-of-type > .photo-block {
+    grid-column: 1 / -1;
+  }
+
+  .photo-preview {
+    width: min(100%, 280px);
+    aspect-ratio: 1 / 1;
+  }
+
+  .characteristic-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .footer-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 180px) minmax(220px, 280px);
+    justify-content: end;
+  }
 }
 </style>

@@ -27,6 +27,8 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import { intlLocale } from '@/i18n/format'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 
 type CategoryRecord = Category & {
   parent?: number | null
@@ -311,17 +313,21 @@ onMounted(async () => {
 
 <template>
   <div class="categories-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('products.categories') }}</h1>
-      <button class="add-btn" type="button" :aria-label="t('products.addCategory')" @click="openCreateSheet">
-        <Plus :size="18" :stroke-width="2" />
-      </button>
-    </header>
+    <PageChrome :title="t('products.categories')">
+      <template #back>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+      <template #primary>
+        <button class="add-btn" type="button" :aria-label="t('products.addCategory')" @click="openCreateSheet">
+          <Plus :size="18" :stroke-width="2" />
+          <span class="add-btn-label">{{ t('common.add') }}</span>
+        </button>
+      </template>
+    </PageChrome>
 
-    <main class="content">
+    <PageContainer size="default" class="content">
       <div v-if="isLoading" class="loading-grid" aria-busy="true">
         <div class="skeleton-row" />
         <div class="skeleton-row" />
@@ -367,7 +373,7 @@ onMounted(async () => {
           </div>
         </article>
       </div>
-    </main>
+    </PageContainer>
 
     <button class="fab" type="button" :aria-label="t('products.addCategory')" @click="openCreateSheet">
       <Plus :size="24" :stroke-width="2.2" />
@@ -474,27 +480,7 @@ onMounted(async () => {
 .categories-page {
   min-height: 100%;
   background: var(--color-bg-primary);
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  text-align: center;
-  font-size: var(--text-lg);
-  color: var(--color-text-primary);
-  font-weight: var(--font-semibold);
+  position: relative;
 }
 
 .back-btn,
@@ -508,8 +494,16 @@ onMounted(async () => {
   border-radius: var(--radius-md);
 }
 
+.back-btn {
+  flex: none;
+}
+
+.add-btn-label {
+  display: none;
+}
+
 .content {
-  padding: var(--space-4);
+  padding-top: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + 88px);
 }
 
@@ -667,5 +661,59 @@ onMounted(async () => {
 @keyframes shimmer {
   from { background-position: 0 0; }
   to { background-position: 200% 0; }
+}
+
+@media (min-width: 768px) {
+  .categories-page {
+    min-height: 0;
+  }
+
+  .add-btn {
+    gap: var(--space-2);
+    width: auto;
+    padding-inline: var(--space-3);
+    background: var(--color-brand-500);
+    color: var(--color-text-inverse);
+  }
+
+  .add-btn-label {
+    display: inline;
+  }
+
+  .content {
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+
+  .category-list {
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+  }
+
+  .category-row {
+    min-height: 56px;
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+  }
+
+  .category-row + .category-row {
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .category-row:hover {
+    background: var(--color-bg-secondary);
+  }
+
+  .fab {
+    display: none;
+  }
+
+  .template-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: end;
+  }
 }
 </style>

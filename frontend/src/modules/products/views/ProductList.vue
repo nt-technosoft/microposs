@@ -9,6 +9,9 @@ import BaseSearch from '@/components/base/BaseSearch.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import ListWorkbench from '@/components/layout/ListWorkbench.vue'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -183,10 +186,9 @@ onMounted(async () => {
 
 <template>
   <div class="product-list-page">
-    <!-- Header -->
-    <header class="page-header">
-      <h1 class="page-title">{{ t('products.title') }}</h1>
-      <div class="header-actions">
+    <PageChrome :title="t('products.title')">
+      <template #primary>
+        <div class="header-actions">
         <button
           class="header-icon-btn"
           :aria-label="t('products.manageCategories')"
@@ -209,61 +211,77 @@ onMounted(async () => {
           <Plus :size="20" :stroke-width="2" />
           <span class="header-add-label">{{ t('common.add') }}</span>
         </button>
-      </div>
-    </header>
-
-    <!-- Filters -->
-    <div class="filters-bar">
-      <BaseSearch
-        v-model="searchQuery"
-        :placeholder="t('products.searchPlaceholder')"
-        :debounce="300"
-        @search="onSearch"
-      />
-      <BaseSelect
-        v-model="selectedCategory"
-        class="category-select"
-        :options="categoryOptions"
-        :title="t('products.categoryFilter')"
-        :placeholder="t('products.allCategories')"
-        @update:model-value="onCategoryChange"
-      />
-    </div>
-
-    <!-- Error -->
-    <div v-if="errorMessage" class="error-banner" role="alert">
-      {{ errorMessage }}
-    </div>
-
-    <!-- Loading skeletons -->
-    <ul v-if="isLoading" class="product-list" aria-busy="true">
-      <li v-for="n in 8" :key="n" class="product-row skeleton-row">
-        <div class="skeleton-icon" />
-        <div class="skeleton-content">
-          <div class="skeleton-line skeleton-line--name" />
-          <div class="skeleton-line skeleton-line--sub" />
         </div>
-        <div class="skeleton-chevron" />
-      </li>
-    </ul>
+      </template>
+    </PageChrome>
+
+    <PageContainer size="wide" class="products-workspace">
+      <ListWorkbench aside="narrow" sticky-aside>
+        <template #toolbar>
+          <div class="filters-bar">
+            <BaseSearch
+              v-model="searchQuery"
+              :placeholder="t('products.searchPlaceholder')"
+              :debounce="300"
+              @search="onSearch"
+            />
+            <BaseSelect
+              v-model="selectedCategory"
+              class="category-select mobile-category-select"
+              :options="categoryOptions"
+              :title="t('products.categoryFilter')"
+              :placeholder="t('products.allCategories')"
+              @update:model-value="onCategoryChange"
+            />
+          </div>
+        </template>
+
+        <template #aside>
+          <div class="category-filter-panel desktop-category-filter">
+            <span class="category-filter-label">{{ t('products.categoryFilter') }}</span>
+            <BaseSelect
+              v-model="selectedCategory"
+              class="category-select"
+              :options="categoryOptions"
+              :title="t('products.categoryFilter')"
+              :placeholder="t('products.allCategories')"
+              @update:model-value="onCategoryChange"
+            />
+          </div>
+        </template>
+
+        <div v-if="errorMessage" class="error-banner" role="alert">
+          {{ errorMessage }}
+        </div>
+
+        <ul v-if="isLoading" class="product-list" aria-busy="true">
+          <li v-for="n in 8" :key="n" class="product-row skeleton-row">
+            <div class="skeleton-icon" />
+            <div class="skeleton-content">
+              <div class="skeleton-line skeleton-line--name" />
+              <div class="skeleton-line skeleton-line--sub" />
+            </div>
+            <div class="skeleton-chevron" />
+          </li>
+        </ul>
 
     <!-- Empty state -->
-    <AppEmptyState
-      v-else-if="isEmpty"
+        <AppEmptyState
+          v-else-if="isEmpty"
       :title="t('products.noProducts')"
       :description="t('products.noProductsDescription')"
       :action-label="t('products.add')"
       @action="navigateToCreate"
-    >
-      <template #illustration>
-        <div class="empty-icon-wrap">
-          <Package :size="40" :stroke-width="1.25" />
-        </div>
-      </template>
-    </AppEmptyState>
+        >
+          <template #illustration>
+            <div class="empty-icon-wrap">
+              <Package :size="40" :stroke-width="1.25" />
+            </div>
+          </template>
+        </AppEmptyState>
 
     <!-- Product list -->
-    <ul v-else class="product-list">
+        <ul v-else class="product-list">
       <li
         v-for="product in products"
         :key="product.id"
@@ -312,10 +330,10 @@ onMounted(async () => {
           aria-hidden="true"
         />
       </li>
-    </ul>
+        </ul>
 
     <!-- Load more -->
-    <div v-if="hasMore && !isLoading" class="load-more-wrap">
+        <div v-if="hasMore && !isLoading" class="load-more-wrap">
       <button
         class="load-more-btn"
         :disabled="isLoadingMore"
@@ -324,7 +342,9 @@ onMounted(async () => {
         <span v-if="isLoadingMore" class="load-more-spinner" aria-hidden="true" />
         <span v-else>{{ t('products.loadMore') }}</span>
       </button>
-    </div>
+        </div>
+      </ListWorkbench>
+    </PageContainer>
 
     <!-- FAB -->
     <button
@@ -344,27 +364,11 @@ onMounted(async () => {
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8) + 72px);
 }
 
+.products-workspace {
+  padding-top: var(--space-4);
+}
+
 /* Header */
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  background: var(--color-bg-primary);
-  border-bottom: 1px solid var(--color-border-subtle);
-  min-height: var(--header-height);
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--color-text-primary);
-  line-height: var(--leading-tight);
-}
-
 .header-add-btn {
   display: inline-flex;
   align-items: center;
@@ -422,7 +426,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-5) var(--space-3);
+  padding: 0;
 }
 
 @media (min-width: 640px) {
@@ -436,8 +440,21 @@ onMounted(async () => {
   }
 }
 
+.category-filter-panel {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.category-filter-label {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .category-select {
-  min-width: 160px;
+  min-width: 0;
 }
 
 .category-select :deep(.select-trigger) {
@@ -463,7 +480,7 @@ onMounted(async () => {
 
 /* Error */
 .error-banner {
-  margin: 0 var(--space-5) var(--space-4);
+  margin-bottom: var(--space-4);
   padding: var(--space-3) var(--space-4);
   background: var(--color-error-bg);
   color: var(--color-error);
@@ -474,7 +491,7 @@ onMounted(async () => {
 /* Product list */
 .product-list {
   list-style: none;
-  padding: 0 var(--space-5);
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -744,6 +761,60 @@ onMounted(async () => {
   .skeleton-chevron {
     animation: none;
     transition: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .product-list-page {
+    min-height: 0;
+    padding-bottom: var(--space-8);
+  }
+
+  .header-add-label {
+    display: inline;
+  }
+
+  .mobile-category-select {
+    display: none;
+  }
+
+  .product-row {
+    min-height: 64px;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .product-list {
+    gap: 0;
+    overflow: hidden;
+    border-radius: var(--radius-lg);
+  }
+
+  .product-row + .product-row {
+    border-top: 0;
+  }
+
+  .product-row:hover {
+    background: var(--color-bg-secondary);
+    box-shadow: none;
+  }
+
+  .product-icon {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+  }
+
+  .fab {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .desktop-category-filter {
+    display: none;
   }
 }
 </style>
