@@ -126,8 +126,8 @@
   --header-height: 56px;
   --app-header-height: 64px;
   --sticky-offset: var(--app-header-height);
-  --desktop-sidebar-expanded: 248px;
-  --desktop-sidebar-collapsed: 72px;
+  --desktop-sidebar-expanded: 232px;
+  --desktop-sidebar-collapsed: 64px;
   --sidebar-width: var(--desktop-sidebar-expanded);
   --max-content-width: 1200px;
 

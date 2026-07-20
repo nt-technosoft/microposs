@@ -62,12 +62,12 @@ const STOCK_ROLES = [UserRole.OWNER, UserRole.WAREHOUSE] as const
 const OWNER_ONLY = [UserRole.OWNER] as const
 
 export const businessNavigationSections: readonly AppNavSection[] = [
-  { id: 'sales', labelKey: 'nav.sales' },
-  { id: 'products', labelKey: 'nav.products' },
-  { id: 'procurements', labelKey: 'nav.procurements' },
-  { id: 'finance', labelKey: 'nav.finance' },
-  { id: 'relationships', labelKey: 'settings.management' },
-  { id: 'settings', labelKey: 'nav.settings' },
+  { id: 'sales', labelKey: 'nav.sections.sales' },
+  { id: 'products', labelKey: 'nav.sections.products' },
+  { id: 'procurements', labelKey: 'nav.sections.procurements' },
+  { id: 'finance', labelKey: 'nav.sections.finance' },
+  { id: 'relationships', labelKey: 'nav.sections.relationships' },
+  { id: 'settings', labelKey: 'nav.sections.settings' },
 ]
 
 /**

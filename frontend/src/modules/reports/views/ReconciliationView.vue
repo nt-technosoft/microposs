@@ -749,6 +749,11 @@ onMounted(load)
   }
 }
 
+@media (min-width: 1280px) {
+  .reconcile-page { background: transparent; }
+  .content { max-width: none; margin: 0; padding-inline: var(--space-8); }
+}
+
 @media (max-width: 640px) {
   .content {
     padding: var(--space-3);

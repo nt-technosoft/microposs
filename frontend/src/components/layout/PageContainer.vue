@@ -31,4 +31,11 @@ withDefaults(defineProps<{
 .page-container--padded {
   padding-inline: clamp(1rem, 2vw, 2rem);
 }
+
+@media (min-width: 1280px) {
+  .page-container--wide,
+  .page-container--full {
+    max-width: none;
+  }
+}
 </style>

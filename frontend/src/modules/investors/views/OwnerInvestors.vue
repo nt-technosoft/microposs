@@ -189,4 +189,8 @@ onMounted(loadData)
   .invite-form { grid-template-columns:repeat(2, minmax(0, 1fr)); }
   .invite-form .primary-btn { grid-column:1 / -1; justify-self:end; padding-inline:var(--space-5); }
 }
+@media (min-width:1280px) {
+  .investors-page { background:transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
 </style>

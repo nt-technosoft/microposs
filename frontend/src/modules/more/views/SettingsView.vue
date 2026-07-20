@@ -363,6 +363,22 @@ async function changeLocale(locale: Locale): Promise<void> {
   .content > .card:first-child,.content > .card.danger { grid-column:1 / -1; }
 }
 
+@media (min-width: 1280px) {
+  .settings-page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+  .content > .card:first-child .setting-row.vertical {
+    grid-template-columns: minmax(13rem, 0.35fr) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-6);
+  }
+  .content > .card:first-child .identity-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .content > .card:first-child .tenant-warning {
+    grid-column: 1 / -1;
+  }
+}
+
 .card {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-subtle);

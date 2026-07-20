@@ -60,7 +60,9 @@ const eyebrow = computed(() => {
 
     <div id="app-context-actions" class="flex shrink-0 items-center gap-2" />
 
-    <AppAccountMenu compact />
+    <div class="xl:hidden">
+      <AppAccountMenu compact />
+    </div>
   </header>
 </template>
 
@@ -74,7 +76,7 @@ const eyebrow = computed(() => {
   align-items: center;
   gap: var(--space-3);
   border-bottom: 1px solid var(--border);
-  background: color-mix(in oklch, var(--background) 92%, transparent);
+  background: color-mix(in srgb, var(--color-bg-primary) 94%, transparent);
   padding: 0 clamp(1rem, 2vw, 2rem);
   backdrop-filter: blur(16px);
 }

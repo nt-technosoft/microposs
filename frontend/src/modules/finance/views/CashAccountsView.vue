@@ -304,4 +304,8 @@ function sourceLabel(source?: string): string {
   .card-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
   .account-card { min-width:0; }
 }
+
+@media (min-width: 1280px) {
+  .cash-view { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
 </style>

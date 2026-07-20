@@ -97,7 +97,10 @@ fair-residue в `formulas.py`. **Не сейчас** — впереди прио
 завершён. Vue Business Workspace получил desktop-first task-adaptive shell и
 адаптацию страниц на отдельной исторической Vue-базе со схемой `e506691`. E10
 остаётся приостановленным как директива, но его готовые экраны и метод
-«сохранить контракт, пересобрать презентацию» остаются reference.
+«сохранить контракт, пересобрать презентацию» остаются reference. Повторный
+visual-convergence проход открыл desktop canvas на всю доступную ширину,
+уплотнил sidebar и убрал локальные центрированные острова без изменения mobile
+и бизнес-контракта.
 
 **Backend P0 — ЗАКРЫТО (2026-06-16):** E17 (Production Lifecycle Readiness,
 acceptance 11/11) → **E18 (Money Model Consolidation, Ф1–Ф8 IN_REVIEW)**. E18

@@ -530,6 +530,11 @@ onMounted(async () => {
   .footer { position:static; max-width:1120px; margin:0 auto; padding:0 var(--space-6) var(--space-8); background:none; }
   .submit-btn { width:auto; min-width:220px; margin-left:auto; padding:0 var(--space-6); }
 }
+@media (min-width: 1280px) {
+  .exchange-page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+  .footer { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
 @media (max-width: 520px) {
   .field-row { grid-template-columns: 1fr; }
   .account-row,

@@ -66,6 +66,14 @@ const ru = {
     more: 'Ещё',
     settings: 'Настройки',
     main: 'Основная навигация',
+    sections: {
+      sales: 'Продажи',
+      products: 'Товары',
+      procurements: 'Приходы',
+      finance: 'Деньги',
+      relationships: 'Контрагенты',
+      settings: 'Система',
+    },
   },
   auth: {
     tagline: 'Умный учёт для вашего бизнеса',

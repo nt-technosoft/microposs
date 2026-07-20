@@ -764,4 +764,9 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+@media (min-width: 1280px) {
+  .page { background: transparent; }
+  .content { max-width: none; margin: 0; padding-inline: var(--space-8); }
+}
 </style>

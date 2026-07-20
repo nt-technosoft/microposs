@@ -431,6 +431,11 @@ onMounted(async () => {
   .list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-3); }
 }
 
+@media (min-width: 1280px) {
+  .page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
+
 .filters {
   display: grid;
   gap: var(--space-2);

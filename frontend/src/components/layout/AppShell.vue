@@ -8,12 +8,6 @@ import AppContextHeader from './AppContextHeader.vue'
 import AppNavigationDrawer from './AppNavigationDrawer.vue'
 import AppSidebar from './AppSidebar.vue'
 
-withDefaults(defineProps<{
-  fullBleed?: boolean
-}>(), {
-  fullBleed: false,
-})
-
 const auth = useAuthStore()
 const ui = useUIStore()
 const drawerOpen = ref(false)
@@ -41,7 +35,7 @@ watch(sidebarCollapsed, (value) => {
 
     <div class="app-shell__content">
       <AppContextHeader @open-navigation="drawerOpen = true" />
-      <main class="app-shell__main" :class="{ 'app-shell__main--full-bleed': fullBleed }">
+      <main class="app-shell__main">
         <slot />
       </main>
     </div>
@@ -53,7 +47,7 @@ watch(sidebarCollapsed, (value) => {
 <style scoped>
 .app-shell {
   min-height: 100dvh;
-  background: var(--background);
+  background: var(--color-bg-primary);
 }
 
 .app-shell__content {
@@ -64,15 +58,10 @@ watch(sidebarCollapsed, (value) => {
 
 .app-shell__main {
   width: 100%;
-  max-width: var(--max-content-width);
-  min-height: calc(100dvh - var(--app-header-height));
-  margin: 0 auto;
-  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
-}
-
-.app-shell__main--full-bleed {
   max-width: none;
-  background: var(--surface);
+  min-height: calc(100dvh - var(--app-header-height));
+  background: var(--color-bg-primary);
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
 }
 
 @media (min-width: 768px) {

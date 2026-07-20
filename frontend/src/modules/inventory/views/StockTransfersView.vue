@@ -491,6 +491,11 @@ onMounted(async () => {
   .content { max-width:1120px; margin:0 auto; grid-template-columns:minmax(0, 1fr) minmax(320px, .8fr); padding:var(--space-6); padding-bottom:var(--space-8); }
 }
 
+@media (min-width: 1280px) {
+  .transfer-page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
+
 .panel {
   display: grid;
   gap: var(--space-4);

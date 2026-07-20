@@ -253,6 +253,10 @@ h2 { margin:0; font-size:var(--text-base); font-weight:var(--font-semibold); }
   .currency-switch { grid-column:2; grid-row:1 / span 3; align-self:start; }
   .procurement-detail { grid-template-columns:repeat(4, minmax(0, 1fr)); }
 }
+@media (min-width: 1280px) {
+  .page { background:transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
 @media (max-width: 520px) {
   .procurement-toggle { grid-template-columns:minmax(0, 1fr) 18px; align-items:start; }
   .procurement-toggle .row-side { grid-column:1; justify-items:start; text-align:left; }

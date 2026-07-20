@@ -68,6 +68,14 @@ const uz: typeof ru = {
     more: 'Yana',
     settings: 'Sozlamalar',
     main: 'Asosiy navigatsiya',
+    sections: {
+      sales: 'Sotuvlar',
+      products: 'Tovarlar',
+      procurements: 'Kirimlar',
+      finance: 'Moliya',
+      relationships: 'Hamkorlar',
+      settings: 'Tizim',
+    },
   },
   auth: {
     tagline: 'Biznesingiz uchun aqlli hisob',

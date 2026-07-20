@@ -327,7 +327,7 @@ onMounted(async () => {
       </template>
     </PageChrome>
 
-    <PageContainer size="default" class="content">
+    <PageContainer size="wide" class="content">
       <div v-if="isLoading" class="loading-grid" aria-busy="true">
         <div class="skeleton-row" />
         <div class="skeleton-row" />
@@ -714,6 +714,12 @@ onMounted(async () => {
   .template-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     align-items: end;
+  }
+}
+
+@media (min-width: 1280px) {
+  .categories-page {
+    background: transparent;
   }
 }
 </style>

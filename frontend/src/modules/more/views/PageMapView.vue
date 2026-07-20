@@ -270,6 +270,11 @@ function openItem(item: PageMapItem): void {
   .intro { grid-column:1 / -1; }
 }
 
+@media (min-width: 1280px) {
+  .page-map { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
+
 .intro {
   display: flex;
   gap: var(--space-3);

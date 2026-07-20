@@ -68,6 +68,14 @@ const en: typeof ru = {
     more: 'More',
     settings: 'Settings',
     main: 'Main navigation',
+    sections: {
+      sales: 'Sales',
+      products: 'Products',
+      procurements: 'Intake',
+      finance: 'Money',
+      relationships: 'Partners',
+      settings: 'System',
+    },
   },
   auth: {
     tagline: 'Smart operations for your business',

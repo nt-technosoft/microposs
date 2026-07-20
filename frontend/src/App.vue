@@ -25,21 +25,15 @@ const showCart = computed(() => {
   return route.name === 'product-detail'
 })
 
-const isFullBleedWhitePage = computed(() => route.name === 'procurement-list')
 </script>
 
 <template>
-  <AppShell v-if="showBusinessShell" :full-bleed="isFullBleedWhitePage">
+  <AppShell v-if="showBusinessShell">
     <RouterView />
   </AppShell>
 
   <div v-else class="app-root">
-    <main
-      class="app-main"
-      :class="{
-        'app-main--full-white': isFullBleedWhitePage,
-      }"
-    >
+    <main class="app-main">
       <RouterView />
     </main>
 
@@ -61,11 +55,6 @@ const isFullBleedWhitePage = computed(() => route.name === 'procurement-list')
   width: 100%;
   max-width: var(--max-content-width);
   margin: 0 auto;
-}
-
-.app-main--full-white {
-  max-width: none;
-  background: #fff;
 }
 
 </style>
