@@ -7,6 +7,7 @@ import { fetchAgreementProfitabilityDetail, type AgreementProfitabilityDetail } 
 import { formatPrice } from '@/utils/currency'
 import { intlLocale } from '@/i18n/format'
 import { partnerRoleLabel, procurementStatusLabel as domainProcurementStatusLabel } from '@/utils/domainLabels'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -107,15 +108,18 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <header class="topbar">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" />
-      </button>
-      <h1>{{ t('reports.agreementReport') }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('reports.agreementLabel')" @click="router.push({ name: 'agreement-detail', params: { id: route.params.id } })">
-        <ExternalLink :size="17" />
-      </button>
-    </header>
+    <PageChrome :title="t('reports.agreementReport')" :eyebrow="t('reports.title')">
+      <template #primary>
+        <div class="topbar-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+            <ArrowLeft :size="18" />
+          </button>
+          <button class="icon-btn" type="button" :aria-label="t('reports.agreementLabel')" @click="router.push({ name: 'agreement-detail', params: { id: route.params.id } })">
+            <ExternalLink :size="17" />
+          </button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section v-if="loading" class="state">{{ t('common.loading') }}</section>
@@ -207,8 +211,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page { min-height:100%; background: var(--color-bg-primary); }
-.topbar { position:sticky; top:0; z-index:var(--z-sticky); min-height:var(--header-height); display:grid; grid-template-columns:40px 1fr 40px; align-items:center; padding:0 var(--space-4); border-bottom:1px solid var(--color-border-subtle); background:var(--color-bg-primary); }
-h1 { margin:0; text-align:center; font-size:var(--text-lg); font-weight:var(--font-semibold); }
+.topbar-actions { display:flex; align-items:center; gap:var(--space-2); }
 .icon-btn { width:40px; height:40px; display:grid; place-items:center; color:var(--color-text-primary); }
 .content { display:grid; gap:var(--space-3); padding:var(--space-4); padding-bottom:calc(var(--bottom-nav-height) + var(--space-5)); }
 .hero { display:grid; gap:4px; padding:var(--space-4); border-radius:var(--radius-lg); background:var(--color-brand-800); color:white; }
@@ -242,6 +245,14 @@ h2 { margin:0; font-size:var(--text-base); font-weight:var(--font-semibold); }
 .open-report-btn { grid-column:1 / -1; min-height:36px; border-radius:var(--radius-md); background:var(--color-bg-primary); border:1px solid var(--color-border-subtle); color:var(--color-brand-700); font-size:var(--text-sm); font-weight:var(--font-semibold); }
 .state { min-height:180px; display:grid; place-items:center; color:var(--color-text-secondary); }
 .state-error { color:var(--color-error); }
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+  .metric-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+  .hero { grid-template-columns:minmax(0, 1fr) auto; align-items:end; }
+  .hero strong,.hero small { grid-column:1; }
+  .currency-switch { grid-column:2; grid-row:1 / span 3; align-self:start; }
+  .procurement-detail { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+}
 @media (max-width: 520px) {
   .procurement-toggle { grid-template-columns:minmax(0, 1fr) 18px; align-items:start; }
   .procurement-toggle .row-side { grid-column:1; justify-items:start; text-align:left; }

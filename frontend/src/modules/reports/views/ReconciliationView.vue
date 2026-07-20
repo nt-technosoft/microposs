@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { fetchLatestReconciliation, type ReconciliationSummary } from '@/api/analytics'
 import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -190,15 +191,18 @@ onMounted(load)
 
 <template>
   <div class="reconcile-page">
-    <header class="page-header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="title">{{ t('reports.reconciliation') }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="load">
-        <RefreshCcw :size="18" :stroke-width="2" />
-      </button>
-    </header>
+    <PageChrome :title="t('reports.reconciliation')" :eyebrow="t('reports.title')">
+      <template #primary>
+        <div class="page-header-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+            <ArrowLeft :size="18" :stroke-width="2" />
+          </button>
+          <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="load">
+            <RefreshCcw :size="18" :stroke-width="2" />
+          </button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section v-if="loading" class="panel">
@@ -379,19 +383,7 @@ onMounted(load)
     var(--color-bg-primary);
 }
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: color-mix(in srgb, var(--color-bg-primary) 92%, white 8%);
-  backdrop-filter: blur(10px);
-}
+.page-header-actions { display:flex; align-items:center; gap:var(--space-2); }
 
 .title {
   text-align: center;
@@ -742,6 +734,19 @@ onMounted(load)
   font-family: var(--font-family-mono);
   color: var(--color-text-primary);
   text-align: right;
+}
+
+@media (min-width: 768px) {
+  .content {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+
+  .summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {

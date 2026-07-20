@@ -14,6 +14,7 @@ import {
 } from '@/api/finance'
 import { formatPrice } from '@/utils/currency'
 import { useFxRate } from '@/composables/useFxRate'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -264,13 +265,13 @@ onMounted(async () => {
 
 <template>
   <div class="exchange-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('finance.exchange') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('finance.exchange')" :eyebrow="t('nav.finance')">
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="card intro-card">
@@ -488,9 +489,7 @@ onMounted(async () => {
 
 <style scoped>
 .exchange-page { min-height: 100%; background: var(--color-bg-primary); }
-.page-header { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: var(--space-3); height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-.page-title { flex: 1; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.back-btn, .header-spacer { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-text-primary); }
+.back-btn { width:40px; height:40px; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-md); color:var(--color-text-primary); }
 .content { display: grid; gap: var(--space-4); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-12)); }
 .card { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--color-border-subtle); background: var(--color-bg-elevated); }
 .intro-card p, .empty-state p { color: var(--color-text-secondary); line-height: 1.45; }
@@ -523,6 +522,14 @@ onMounted(async () => {
 .sheet-form { display:grid; gap: var(--space-3); padding-bottom: var(--space-4); }
 .footer { position: sticky; bottom: 0; padding: var(--space-4); background: linear-gradient(to top, var(--color-bg-primary), transparent); }
 .submit-btn { width: 100%; height: 48px; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); }
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr); padding:var(--space-6); padding-bottom:var(--space-6); }
+  .intro-card,.content > .muted,.content > .empty-state { grid-column:1 / -1; }
+  .form-card { grid-column:1; grid-row:2 / span 2; }
+  .account-card { grid-column:2; }
+  .footer { position:static; max-width:1120px; margin:0 auto; padding:0 var(--space-6) var(--space-8); background:none; }
+  .submit-btn { width:auto; min-width:220px; margin-left:auto; padding:0 var(--space-6); }
+}
 @media (max-width: 520px) {
   .field-row { grid-template-columns: 1fr; }
   .account-row,

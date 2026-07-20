@@ -24,6 +24,7 @@ import {
   procurementStatusLabel as domainProcurementStatusLabel,
   procurementTypeLabel as domainProcurementTypeLabel,
 } from '@/utils/domainLabels'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -668,11 +669,9 @@ function openProcurementAudit(procurementId: number): void {
 <template>
   <div class="reports-page">
 
-    <!-- ── Header ─────────────────────────────────────────────── -->
-    <header class="page-header">
-      <h1 class="page-title">{{ t('reports.title') }}</h1>
-
-      <div class="period-selector">
+    <PageChrome :title="t('reports.title')" :eyebrow="t('nav.finance')">
+      <template #primary>
+        <div class="period-selector">
         <button
           class="period-btn"
           :class="{ open: periodMenuOpen }"
@@ -699,8 +698,9 @@ function openProcurementAudit(procurementId: number): void {
             </li>
           </ul>
         </Transition>
-      </div>
-    </header>
+        </div>
+      </template>
+    </PageChrome>
 
     <section v-if="period === 'custom'" class="custom-range">
       <div class="custom-range-fields">
@@ -1416,26 +1416,6 @@ function openProcurementAudit(procurementId: number): void {
     radial-gradient(circle at top right, color-mix(in srgb, var(--color-brand-50) 70%, transparent) 0, transparent 32%),
     var(--color-bg-primary);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  background: color-mix(in srgb, var(--color-bg-primary) 92%, white);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
 }
 
 .period-selector { position: relative; }
@@ -2208,8 +2188,41 @@ function openProcurementAudit(procurementId: number): void {
   }
 }
 
+@media (min-width: 1024px) {
+  .reports-page {
+    padding-bottom: var(--space-8);
+  }
+
+  .content {
+    gap: var(--space-5);
+    padding: clamp(1.25rem, 2vw, 2rem);
+  }
+
+  .overview-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .overview-primary {
+    grid-column: span 2;
+    grid-row: span 2;
+    align-content: center;
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .summary-footer {
+    grid-column: 1 / -1;
+  }
+
+  .analytics-toggle {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+    padding: var(--space-4) var(--space-5);
+  }
+}
+
 @media (max-width: 640px) {
-  .page-header,
   .custom-range,
   .content {
     padding-left: var(--space-4);

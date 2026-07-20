@@ -15,6 +15,7 @@ import { formatPrice } from '@/utils/currency'
 import CashDepositSheet from './CashDepositSheet.vue'
 import CashWithdrawSheet from './CashWithdrawSheet.vue'
 import CashTransferSheet from './CashTransferSheet.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 
@@ -134,12 +135,13 @@ function sourceLabel(source?: string): string {
 
 <template>
   <div class="cash-view">
-    <header class="page-header">
-      <h1 class="page-title">Кассы</h1>
-      <button class="icon-btn" :disabled="isLoading" aria-label="Обновить" @click="load">
-        <RefreshCcw :size="20" :stroke-width="1.75" :class="{ spinning: isLoading }" />
-      </button>
-    </header>
+    <PageChrome title="Кассы" eyebrow="Деньги">
+      <template #primary>
+        <button class="icon-btn" :disabled="isLoading" aria-label="Обновить" @click="load">
+          <RefreshCcw :size="20" :stroke-width="1.75" :class="{ spinning: isLoading }" />
+        </button>
+      </template>
+    </PageChrome>
 
     <section class="fx-strip" aria-label="Курс валют">
       <div>
@@ -247,9 +249,7 @@ function sourceLabel(source?: string): string {
 </template>
 
 <style scoped>
-.cash-view { padding: var(--space-4); max-width: 600px; margin: 0 auto; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
-.page-title { font-size: var(--text-xl); font-weight: var(--font-bold); }
+.cash-view { width:100%; max-width:1120px; margin:0 auto; padding:var(--space-4); }
 .icon-btn { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-md); color: var(--color-text-secondary); transition: background var(--duration-fast) var(--ease-out); }
 .icon-btn:hover { background: var(--color-bg-subtle); }
 .spinning { animation: spin 1s linear infinite; }
@@ -298,4 +298,10 @@ function sourceLabel(source?: string): string {
 .capital-link-row { border-top: 1px solid var(--color-border-subtle); padding: var(--space-3) var(--space-4); font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-brand-600); text-align: left; }
 
 .error-text { color: var(--color-danger-500); text-align: center; padding: var(--space-6); }
+
+@media (min-width: 768px) {
+  .cash-view { padding:var(--space-6); }
+  .card-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .account-card { min-width:0; }
+}
 </style>
