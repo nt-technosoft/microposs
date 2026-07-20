@@ -341,6 +341,16 @@ facts. Replay должен проверять, хватает ли восста�
 - [x] T-4.1 Переписать `sherik_excel_replay` с provisional top-up на rollover.
 - [ ] T-4.2 Переприменить D-001/U-001 и проверить отсутствие hanging/double-count
   claims. Требует явного разрешения на destructive `--apply --wipe`.
+  - **Data gate 2026-07-20:** apply в отдельной fresh-базе остановился на U-001
+    row 9. Общий `apply_credit_term_receive_deferrals()` перенёс COD-покупку
+    `814` с 2025-11-02 на 2026-02-08 и создал потребность в 105.20 USD при
+    59.44 USD eligible recovered capital. Этот перенос не входит в утверждённые
+    source corrections.
+  - Полный replay также требует явного terms/amendment для капитализации
+    21,491,409.44 UZS investor profit. Рабочая модель и событийный график:
+    [`docs/replay/u001-date-shift-model.md`](../replay/u001-date-shift-model.md).
+    До founder decision нельзя закрывать gap synthetic contribution, скрытым
+    переносом дат или обходом payout policy.
 - [x] T-4.3 Обновить `docs/testing-data-workflow.md` после non-destructive
   preflight и E23 replay path.
 

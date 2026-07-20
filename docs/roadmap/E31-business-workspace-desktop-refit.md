@@ -94,9 +94,12 @@ task-adaptive интерфейса, сохранив бизнес-логику, 
   generic `CAPITALIZE_PROFIT`.
 
 До продуктового решения UI-фазы остановлены. Корректный путь — отдельный E23
-slice с явным schedule и terms/amendment. Допустимый временный путь для E31 —
-отдельная явно неполная UI-база без U-001; она не является canonical investor
-baseline и не может использоваться для проверки Uygun/инвесторских расчётов.
+slice с денежным schedule из `XARAJAT`, сохранением физических product/FIFO дат
+и явным terms/amendment для капитализации заработанной investor profit; расчёт
+зафиксирован в [`u001-date-shift-model.md`](../replay/u001-date-shift-model.md).
+Допустимый временный путь для E31 — отдельная явно неполная UI-база без U-001;
+она не является canonical investor baseline и не может использоваться для
+проверки Uygun/инвесторских расчётов.
 
 ## Критерии завершения
 
