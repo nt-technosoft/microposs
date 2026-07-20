@@ -88,8 +88,8 @@ function filterClass(value: ProcurementView): string {
 </script>
 
 <template>
-  <section class="flex flex-col gap-3">
-    <div class="grid grid-cols-3 gap-2">
+  <section class="procurement-workbench flex flex-col gap-3">
+    <div class="procurement-workbench__signals grid grid-cols-3 gap-2">
       <button
         v-for="tile in tiles"
         :key="tile.key"
@@ -109,13 +109,13 @@ function filterClass(value: ProcurementView): string {
       </button>
     </div>
 
-    <div class="flex items-center gap-2">
-      <div class="flex flex-1 gap-2 overflow-x-auto pb-1 scrollbar-none" role="group" aria-label="Фильтр приходов">
+    <div class="procurement-workbench__filters flex items-center gap-2">
+      <div class="flex flex-1 gap-2 overflow-x-auto pb-1 scrollbar-none lg:flex-col lg:items-stretch lg:overflow-visible" role="group" aria-label="Фильтр приходов">
         <Button
           v-for="chip in filters"
           :key="chip.value"
           variant="ghost"
-          :class="filterClass(chip.value)"
+          :class="[filterClass(chip.value), 'lg:justify-start']"
           @click="emit('selectView', chip.value)"
         >
           {{ chip.label }}
@@ -124,7 +124,7 @@ function filterClass(value: ProcurementView): string {
 
       <Button
         variant="ghost"
-        class="h-9 shrink-0 gap-1 rounded-full px-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-foreground"
+        class="h-9 shrink-0 gap-1 rounded-full px-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-foreground lg:w-full lg:justify-start"
         @click="emit('openAgreements')"
       >
         <Handshake class="size-4" />
@@ -134,3 +134,16 @@ function filterClass(value: ProcurementView): string {
     </div>
   </section>
 </template>
+
+<style scoped>
+@media (min-width: 1024px) {
+  .procurement-workbench__signals {
+    grid-template-columns: 1fr;
+  }
+
+  .procurement-workbench__filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

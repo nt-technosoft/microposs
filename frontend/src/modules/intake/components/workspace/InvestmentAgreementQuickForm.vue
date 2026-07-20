@@ -237,8 +237,8 @@ onMounted(loadPartners)
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
-    <Card class="rounded-2xl bg-background">
+  <div class="agreement-form">
+    <Card class="agreement-form__wide rounded-2xl bg-background">
       <CardHeader class="gap-3">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
@@ -379,7 +379,7 @@ onMounted(loadPartners)
     </Card>
 
     <!-- План-факт: только при пересчёте по факту (при «держим доли» он не нужен) -->
-    <Card v-if="reconciliationMode === 'FACTUAL'" class="rounded-2xl bg-background">
+    <Card v-if="reconciliationMode === 'FACTUAL'" class="agreement-form__wide rounded-2xl bg-background">
       <CardHeader>
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -444,7 +444,7 @@ onMounted(loadPartners)
       </CardContent>
     </Card>
 
-    <Card class="rounded-2xl bg-background">
+    <Card class="agreement-form__wide rounded-2xl bg-background">
       <CardContent class="flex flex-col gap-2 pt-4">
         <label class="flex flex-col gap-2">
           <span class="text-sm font-medium text-muted-foreground">Дата пересмотра договора</span>
@@ -470,10 +470,10 @@ onMounted(loadPartners)
       </CardContent>
     </Card>
 
-    <Alert v-if="error" variant="destructive">
+    <Alert v-if="error" variant="destructive" class="agreement-form__wide">
       <AlertDescription>{{ error }}</AlertDescription>
     </Alert>
-    <Button size="lg" type="button" :disabled="saving" class="h-11 rounded-xl" @click="submit">
+    <Button size="lg" type="button" :disabled="saving" class="agreement-form__wide h-11 rounded-xl" @click="submit">
       {{ saving ? 'Создание…' : 'Создать договор' }}
     </Button>
 
@@ -502,3 +502,21 @@ onMounted(loadPartners)
     </AppBottomSheet>
   </div>
 </template>
+
+<style scoped>
+.agreement-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+@media (min-width: 1024px) {
+  .agreement-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .agreement-form__wide {
+    grid-column: 1 / -1;
+  }
+}
+</style>

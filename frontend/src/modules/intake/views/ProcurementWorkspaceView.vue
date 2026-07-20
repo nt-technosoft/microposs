@@ -5,6 +5,7 @@ import { useProcurementWorkspaceStore } from '@/modules/intake/stores/procuremen
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import { useProcurementReadiness } from '@/modules/intake/composables/useProcurementReadiness'
+import PageContainer from '@/components/layout/PageContainer.vue'
 import ProcurementHeader from '@/modules/intake/components/workspace/ProcurementHeader.vue'
 import ProcurementCardSupplier from '@/modules/intake/components/workspace/ProcurementCardSupplier.vue'
 import ProcurementCardItems from '@/modules/intake/components/workspace/ProcurementCardItems.vue'
@@ -273,9 +274,10 @@ onBeforeUnmount(() => store.$reset())
       <div v-else-if="error" class="state state-error">{{ error }}</div>
       <div v-else-if="!procurement" class="state">Нет данных</div>
 
-      <div v-else class="mx-auto w-full max-w-[1200px] px-4 py-4 pb-10 sm:px-6">
-        <!-- Mobile stepper -->
-        <div class="sticky top-0 z-10 -mx-4 mb-4 border-b border-neutral-200 bg-background/90 px-4 py-2 backdrop-blur lg:hidden">
+      <PageContainer v-else size="full" :padded="false">
+        <div class="px-4 py-4 pb-10 sm:px-6 lg:px-8">
+        <!-- Compact/tablet stepper -->
+        <div class="-mx-4 mb-4 border-b border-neutral-200 bg-background/90 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 md:sticky md:top-[var(--sticky-offset)] md:z-10 lg:-mx-8 lg:px-8 xl:hidden">
           <WorkspaceFlowNav
             variant="stepper"
             :steps="flowSteps"
@@ -284,10 +286,14 @@ onBeforeUnmount(() => store.$reset())
           />
         </div>
 
-        <div class="lg:grid lg:grid-cols-[200px_minmax(0,1fr)_300px] lg:gap-6">
-          <!-- Desktop rail -->
-          <aside class="hidden lg:block">
-            <div class="sticky top-4">
+        <div class="mb-4 hidden md:block lg:hidden">
+          <WorkspaceSummaryRail :procurement="procurement" @navigate="scrollToStep" />
+        </div>
+
+        <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-5 xl:grid-cols-[190px_minmax(0,1fr)_280px] xl:gap-6">
+          <!-- Three-column flow rail starts at the E31 desktop breakpoint. -->
+          <aside class="hidden xl:block">
+            <div class="sticky top-[calc(var(--sticky-offset)+var(--space-4))]">
               <WorkspaceFlowNav
                 variant="rail"
                 :steps="flowSteps"
@@ -407,14 +413,15 @@ onBeforeUnmount(() => store.$reset())
             </section>
           </div>
 
-          <!-- Desktop summary -->
+          <!-- Tablet inspector / desktop summary rail -->
           <aside class="hidden lg:block">
-            <div class="sticky top-4">
+            <div class="sticky top-[calc(var(--sticky-offset)+var(--space-4))]">
               <WorkspaceSummaryRail :procurement="procurement" @navigate="scrollToStep" />
             </div>
           </aside>
         </div>
-      </div>
+        </div>
+      </PageContainer>
     </main>
 
     <WorkspaceSupplierPickerSheet
@@ -450,13 +457,11 @@ onBeforeUnmount(() => store.$reset())
 <style scoped>
 .workspace {
   min-height: 100dvh;
-  display: grid;
-  grid-template-rows: auto 1fr;
   background: var(--bg);
 }
 
 .workspace-body {
-  overflow-y: auto;
+  min-width: 0;
 }
 
 .state {

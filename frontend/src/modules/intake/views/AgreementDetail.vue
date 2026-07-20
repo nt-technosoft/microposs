@@ -63,6 +63,8 @@ import { useFxRate } from '@/composables/useFxRate'
 import { partnerRoleLabel, procurementStatusLabel } from '@/utils/domainLabels'
 import { intlLocale } from '@/i18n/format'
 import { getApiErrorMessage } from '@/utils/errors'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -79,6 +81,12 @@ const ventureSummaries = ref<ProcurementVentureSummary[]>([])
 const closePreview = ref<ClosePreview | null>(null)
 const closingAgreement = ref(false)
 const isClosed = computed(() => agreement.value?.status === 'CLOSED')
+const agreementStatusTone = computed<'neutral' | 'positive' | 'warning' | 'negative'>(() => {
+  if (agreement.value?.status === 'ACTIVE' || agreement.value?.status === 'OPEN') return 'positive'
+  if (agreement.value?.status === 'DRAFT') return 'warning'
+  if (agreement.value?.status === 'CANCELLED') return 'negative'
+  return 'neutral'
+})
 const operatingAccounts = ref<CashAccountRecord[]>([])
 const settleOpen = ref(false)
 const activePosition = ref<CapitalPositionRow | null>(null)
@@ -528,32 +536,33 @@ onMounted(async () => {
 
 <template>
   <main class="min-h-dvh bg-background pb-[calc(var(--bottom-nav-height)+1rem)]">
-    <header class="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-      <div class="mx-auto flex min-h-14 w-full max-w-6xl items-center gap-3 px-4">
-        <Button variant="ghost" size="icon" type="button" :aria-label="t('common.back')" @click="router.back()">
-          <ArrowLeft />
-        </Button>
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-lg font-semibold text-foreground">
-            {{ t('procurements.agreementTitle', { id: route.params.id }) }}
-          </p>
-          <p v-if="agreement" class="truncate text-xs text-muted-foreground">
-            {{ investorName }} · {{ dateOnly(agreement.opened_at) }}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="icon"
-          type="button"
-          :aria-label="t('procurements.report')"
-          @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })"
-        >
-          <BarChart3 />
-        </Button>
-      </div>
-    </header>
+    <PageContainer size="wide" :padded="false" class="py-4 sm:py-6">
+      <PageChrome
+        :title="t('procurements.agreementTitle', { id: route.params.id })"
+        eyebrow="Инвестиционный договор"
+        :description="agreement ? `${investorName} · ${dateOnly(agreement.opened_at)}` : ''"
+        :status="agreement ? agreementStatusLabel(agreement.status) : ''"
+        :status-tone="agreementStatusTone"
+      >
+        <template #primary>
+          <div class="flex items-center gap-2">
+            <Button variant="outline" size="icon" type="button" :aria-label="t('common.back')" @click="router.back()">
+              <ArrowLeft />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              type="button"
+              :aria-label="t('procurements.report')"
+              @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })"
+            >
+              <BarChart3 />
+            </Button>
+          </div>
+        </template>
+      </PageChrome>
 
-    <section class="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4">
+    <section class="flex w-full flex-col gap-4 px-4 sm:px-6 lg:px-8">
       <div v-if="loading" class="grid gap-3">
         <Skeleton class="h-40 rounded-2xl" />
         <Skeleton class="h-32 rounded-2xl" />
@@ -565,13 +574,6 @@ onMounted(async () => {
 
       <template v-else-if="agreement">
         <Card class="overflow-hidden rounded-2xl bg-background">
-          <CardHeader class="pb-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <CardTitle class="text-lg">Инвестдоговор #{{ agreement.id }}</CardTitle>
-              <Badge variant="secondary">{{ agreementStatusLabel(agreement.status) }}</Badge>
-            </div>
-            <CardDescription class="mt-1">{{ investorName }} · {{ dateOnly(agreement.opened_at) }}</CardDescription>
-          </CardHeader>
           <CardContent class="flex flex-col gap-3 pt-4">
             <div class="min-w-0">
               <p class="text-xs text-muted-foreground">{{ t('procurements.freeBalance') }}</p>
@@ -591,7 +593,7 @@ onMounted(async () => {
 
         <Card class="rounded-2xl bg-background">
           <CardHeader>
-            <div class="flex items-start justify-between gap-3">
+            <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <CardTitle class="text-base">Условия, выплаты и пересмотр</CardTitle>
                 <CardDescription class="mt-1">
@@ -600,7 +602,7 @@ onMounted(async () => {
                   Выплаты создают обязательство, но не переводятся автоматически.
                 </CardDescription>
               </div>
-              <Button variant="outline" size="sm" type="button" @click="evaluatePayouts">Проверить выплаты</Button>
+              <Button variant="outline" size="sm" type="button" class="self-start" @click="evaluatePayouts">Проверить выплаты</Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -691,8 +693,8 @@ onMounted(async () => {
                 <Users class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
               </div>
             </CardHeader>
-            <CardContent class="flex flex-col gap-4">
-              <div class="grid grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+            <CardContent class="flex flex-col gap-4 overflow-x-auto">
+              <div class="grid min-w-[32rem] grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
                 <span />
                 <span class="text-right text-xs text-muted-foreground">план</span>
                 <span class="text-right text-xs text-muted-foreground">капитал</span>
@@ -707,7 +709,7 @@ onMounted(async () => {
 
               <Separator />
 
-              <div class="grid grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+              <div class="grid min-w-[32rem] grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
                 <span />
                 <span class="text-right text-xs text-muted-foreground">внёс</span>
                 <span class="text-right text-xs text-muted-foreground">капитал</span>
@@ -800,12 +802,12 @@ onMounted(async () => {
         <div class="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
           <Card class="rounded-2xl bg-background">
             <CardHeader>
-              <div class="flex items-start justify-between gap-3">
+              <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
                   <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
                 </div>
-                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="shrink-0" @click="router.push({ name: 'procurement-create', query: { mode: 'partnership', agreement: agreement.id } })">
+                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="self-start" @click="router.push({ name: 'procurement-create', query: { mode: 'partnership', agreement: agreement.id } })">
                   <Plus data-icon="inline-start" />
                   Новый приход
                 </Button>
@@ -894,6 +896,7 @@ onMounted(async () => {
         </Card>
       </template>
     </section>
+    </PageContainer>
 
     <AdvanceSettleSheet
       :open="settleOpen"

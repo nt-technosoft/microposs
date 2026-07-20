@@ -48,7 +48,7 @@ function settlementLabel(type: string | null | undefined): string {
   <div
     role="button"
     tabindex="0"
-    class="group grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3.5 transition-colors hover:bg-neutral-50 focus-visible:bg-neutral-50 focus-visible:outline-none sm:px-5"
+    class="group grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-4 py-3.5 transition-colors hover:bg-neutral-50 focus-visible:bg-neutral-50 focus-visible:outline-none sm:items-center sm:px-5"
     @click="$emit('open', procurement.id)"
     @keydown.enter="$emit('open', procurement.id)"
     @keydown.space.prevent="$emit('open', procurement.id)"
@@ -59,34 +59,36 @@ function settlementLabel(type: string | null | undefined): string {
       aria-hidden="true"
     />
 
-    <div class="min-w-0">
-      <p class="truncate text-sm font-medium text-foreground">
-        {{ supplier }}
-      </p>
-      <div class="mt-1 flex items-center gap-1.5 text-xs text-neutral-500">
-        <span class="font-mono">#{{ procurement.id }}</span>
-        <span aria-hidden="true">·</span>
-        <span class="inline-flex items-center gap-1" :class="fundingToneClass(procurement.policy.funding_source)">
-          <component :is="isPartnership ? Handshake : Wallet" class="size-3.5" />
-          {{ fundingLabel(procurement.policy.funding_source) }}
+    <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4">
+      <div class="min-w-0">
+        <p class="truncate text-sm font-medium text-foreground">
+          {{ supplier }}
+        </p>
+        <div class="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-neutral-500">
+          <span class="font-mono">#{{ procurement.id }}</span>
+          <span aria-hidden="true">·</span>
+          <span class="inline-flex shrink-0 items-center gap-1" :class="fundingToneClass(procurement.policy.funding_source)">
+            <component :is="isPartnership ? Handshake : Wallet" class="size-3.5" />
+            {{ fundingLabel(procurement.policy.funding_source) }}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span class="truncate">{{ settlementLabel(procurement.policy.settlement_type) }}</span>
+          <span class="hidden sm:inline" aria-hidden="true">·</span>
+          <span class="hidden whitespace-nowrap sm:inline">{{ itemCount }}</span>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 sm:flex-col sm:items-end sm:text-right">
+        <strong class="text-sm font-semibold tabular-nums text-foreground">{{ total }}</strong>
+        <span v-if="overdue" class="text-xs font-medium text-negative">Просрочено</span>
+        <span v-else class="text-xs text-neutral-400">
+          {{ statusLabel(procurement.status) }} · {{ updatedAt }}
         </span>
-        <span aria-hidden="true">·</span>
-        <span class="truncate">{{ settlementLabel(procurement.policy.settlement_type) }}</span>
-        <span class="hidden sm:inline" aria-hidden="true">·</span>
-        <span class="hidden whitespace-nowrap sm:inline">{{ itemCount }}</span>
       </div>
     </div>
 
-    <div class="flex flex-col items-end gap-1 text-right">
-      <strong class="text-sm font-semibold tabular-nums text-foreground">{{ total }}</strong>
-      <span v-if="overdue" class="text-xs font-medium text-negative">Просрочено</span>
-      <span v-else class="text-xs text-neutral-400">
-        {{ statusLabel(procurement.status) }} · {{ updatedAt }}
-      </span>
-    </div>
-
     <ChevronRight
-      class="size-4 shrink-0 text-neutral-300 transition-transform group-hover:translate-x-0.5 group-hover:text-neutral-500"
+      class="mt-0.5 size-4 shrink-0 text-neutral-300 transition-transform group-hover:translate-x-0.5 group-hover:text-neutral-500 sm:mt-0"
     />
   </div>
 </template>

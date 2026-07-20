@@ -2,11 +2,15 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { Handshake, Plus, RefreshCcw } from 'lucide-vue-next'
 import { fetchProcurementWorkspaces, type ProcurementWorkspacePayload } from '@/api/partnerships'
 import { useToast } from '@/composables/useToast'
 import { ProcurementStatus } from '@/types/enums'
+import ListWorkbench from '@/components/layout/ListWorkbench.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import { Button } from '@/components/ui/button'
 import ProcurementListCard from '@/modules/intake/components/list/ProcurementListCard.vue'
-import ProcurementListHeader from '@/modules/intake/components/list/ProcurementListHeader.vue'
 import ProcurementListStates from '@/modules/intake/components/list/ProcurementListStates.vue'
 import ProcurementListWorkbench from '@/modules/intake/components/list/ProcurementListWorkbench.vue'
 import type { FilterChip, ProcurementView } from '@/modules/intake/components/list/types'
@@ -92,52 +96,79 @@ function onSelectView(value: ProcurementView): void {
 
 <template>
   <main class="min-h-dvh bg-background pb-[calc(var(--bottom-nav-height)+1rem)]">
-    <ProcurementListHeader
-      :is-loading="isLoading"
-      @refresh="loadProcurementList"
-      @create="goToCreate"
-      @create-partnership="goToPartnershipCreate"
-    />
+    <PageContainer size="wide" :padded="false" class="py-4 sm:py-6">
+      <PageChrome title="Приходы" description="Закупка, финансирование, оплата и приёмка товара в одном рабочем потоке.">
+        <template #primary>
+          <div class="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              :disabled="isLoading"
+              aria-label="Обновить приходы"
+              @click="loadProcurementList"
+            >
+              <RefreshCcw :class="{ 'animate-spin': isLoading }" />
+            </Button>
+            <Button
+              variant="outline"
+              class="hidden sm:inline-flex"
+              @click="goToPartnershipCreate"
+            >
+              <Handshake data-icon="inline-start" />
+              Партнёрский
+            </Button>
+            <Button @click="goToCreate">
+              <Plus data-icon="inline-start" />
+              Новый
+            </Button>
+          </div>
+        </template>
+      </PageChrome>
 
-    <section class="mx-auto flex w-full max-w-[var(--max-content-width)] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-      <ProcurementListWorkbench
-        :active-view="activeView"
-        :filters="filterChips"
-        :signals="signals"
-        @select-view="onSelectView"
-        @open-agreements="goToAgreements"
-      />
+      <div class="px-4 sm:px-6 lg:px-8">
+      <ListWorkbench aside="wide" sticky-aside>
+        <template #aside>
+          <ProcurementListWorkbench
+            :active-view="activeView"
+            :filters="filterChips"
+            :signals="signals"
+            @select-view="onSelectView"
+            @open-agreements="goToAgreements"
+          />
+        </template>
 
-      <ProcurementListStates
-        v-if="isLoading && procurements.length === 0"
-        state="loading"
-      />
-
-      <ProcurementListStates
-        v-else-if="error && filteredProcurements.length === 0"
-        state="error"
-        :error="error"
-        @retry="loadProcurementList"
-      />
-
-      <ProcurementListStates
-        v-else-if="filteredProcurements.length === 0"
-        state="empty"
-        :can-create="activeView === 'all'"
-        @create="goToCreate"
-      />
-
-      <div
-        v-else
-        class="divide-y divide-neutral-200 overflow-hidden rounded-[14px] border border-neutral-200 bg-surface"
-      >
-        <ProcurementListCard
-          v-for="procurement in filteredProcurements"
-          :key="procurement.id"
-          :procurement="procurement"
-          @open="goToDetail"
+        <ProcurementListStates
+          v-if="isLoading && procurements.length === 0"
+          state="loading"
         />
+
+        <ProcurementListStates
+          v-else-if="error && filteredProcurements.length === 0"
+          state="error"
+          :error="error"
+          @retry="loadProcurementList"
+        />
+
+        <ProcurementListStates
+          v-else-if="filteredProcurements.length === 0"
+          state="empty"
+          :can-create="activeView === 'all'"
+          @create="goToCreate"
+        />
+
+        <div
+          v-else
+          class="divide-y divide-neutral-200 overflow-hidden rounded-[14px] border border-neutral-200 bg-surface"
+        >
+          <ProcurementListCard
+            v-for="procurement in filteredProcurements"
+            :key="procurement.id"
+            :procurement="procurement"
+            @open="goToDetail"
+          />
+        </div>
+      </ListWorkbench>
       </div>
-    </section>
+    </PageContainer>
   </main>
 </template>

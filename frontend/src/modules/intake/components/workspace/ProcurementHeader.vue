@@ -9,15 +9,15 @@ import {
   type LucideIcon,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import PageChrome from '@/components/layout/PageChrome.vue'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { procurementReceiveBadgeLabel, procurementStatusMeta } from '@/utils/domainLabels'
+import { procurementReceiveBadgeLabel } from '@/utils/domainLabels'
 import { ProcurementStatus } from '@/types/enums'
 import type { ProcurementWorkspacePayload } from '@/api/partnerships'
 
@@ -50,10 +50,6 @@ function onMenuAction(key: string): void {
   emit('menu-action', key)
 }
 
-function statusColorClass(status: string | null): string | undefined {
-  return status ? procurementStatusMeta[status as ProcurementStatus]?.colorClass : undefined
-}
-
 const badgeLabel = computed(() => {
   if (!props.status) return ''
   return procurementReceiveBadgeLabel(
@@ -61,6 +57,13 @@ const badgeLabel = computed(() => {
     props.procurement?.documents.items ?? [],
     props.procurement?.documents.expenses ?? [],
   )
+})
+
+const statusTone = computed<'neutral' | 'positive' | 'warning' | 'negative'>(() => {
+  if (props.status === ProcurementStatus.CLOSED || props.status === ProcurementStatus.RECEIVED) return 'positive'
+  if (props.status === ProcurementStatus.PARTIALLY_RECEIVED) return 'warning'
+  if (props.status === ProcurementStatus.CANCELLED) return 'negative'
+  return 'neutral'
 })
 
 const menuActions = computed<MenuAction[]>(() => {
@@ -106,42 +109,29 @@ const menuActions = computed<MenuAction[]>(() => {
 </script>
 
 <template>
-  <header class="sticky top-0 z-40 border-b border-border/70 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-    <div class="mx-auto grid min-h-14 w-full max-w-[1200px] grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 px-3 sm:px-6">
+  <PageChrome
+    :title="title"
+    :eyebrow="procurementId ? `Приход #${procurementId}` : 'Новый приход'"
+    :description="subtitle ?? ''"
+    :status="badgeLabel"
+    :status-tone="statusTone"
+  >
+    <template #primary>
+      <div class="flex items-center gap-2">
       <Button
-        variant="ghost"
+        variant="outline"
         size="icon"
-        class="size-10 rounded-full"
         aria-label="Назад"
         @click="emit('back')"
       >
         <ArrowLeft class="size-5" />
       </Button>
 
-      <div class="min-w-0 text-center">
-        <div class="flex min-w-0 items-center justify-center gap-2">
-          <h1 class="truncate text-base font-semibold leading-tight text-foreground sm:text-lg">
-            {{ title }}
-          </h1>
-          <Badge
-            v-if="status && statusColorClass(status)"
-            variant="outline"
-            :class="cn('h-6 shrink-0 rounded-full px-2 text-[11px] font-medium', statusColorClass(status))"
-          >
-            {{ badgeLabel }}
-          </Badge>
-        </div>
-        <p v-if="subtitle" class="mt-0.5 truncate text-xs text-muted-foreground">
-          {{ subtitle }}
-        </p>
-      </div>
-
       <DropdownMenu v-model:open="menuOpen">
         <DropdownMenuTrigger as-child>
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon"
-            class="size-10 rounded-full"
             aria-label="Действия"
           >
             <MoreHorizontal class="size-5" />
@@ -171,6 +161,7 @@ const menuActions = computed<MenuAction[]>(() => {
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
-  </header>
+      </div>
+    </template>
+  </PageChrome>
 </template>
