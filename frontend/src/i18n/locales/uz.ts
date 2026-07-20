@@ -9,6 +9,7 @@ const uz: typeof ru = {
     saved: 'Saqlandi',
     cancel: 'Bekor qilish',
     close: 'Yopish',
+    dialog: 'Muloqot oynasi',
     back: 'Orqaga',
     next: 'Keyingi',
     create: 'Yaratish',

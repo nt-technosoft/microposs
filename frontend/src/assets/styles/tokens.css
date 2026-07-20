@@ -116,10 +116,10 @@
   --z-base: 0;
   --z-dropdown: 20;
   --z-sticky: 30;
+  --z-float: 35;
   --z-overlay: 40;
   --z-modal: 50;
   --z-toast: 60;
-  --z-float: 70;
 
   /* === Layout === */
   --bottom-nav-height: 64px;

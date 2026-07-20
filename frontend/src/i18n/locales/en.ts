@@ -9,6 +9,7 @@ const en: typeof ru = {
     saved: 'Saved',
     cancel: 'Cancel',
     close: 'Close',
+    dialog: 'Dialog',
     back: 'Back',
     next: 'Next',
     create: 'Create',

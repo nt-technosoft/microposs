@@ -1,7 +1,7 @@
 # E31 — Business Workspace Desktop Refit
 
 **Статус:** `IN_PROGRESS`
-**Прогресс:** 28%
+**Прогресс:** 42%
 **Зависит от:** Historical Vue data baseline restored on the `e506691` schema
 **Блокирует:** —
 
@@ -60,10 +60,10 @@ task-adaptive интерфейса, сохранив бизнес-логику, 
 
 ### Фаза 2 — presentation foundation
 
-- [ ] `PageChrome` / `PageContainer`.
-- [ ] `ResponsiveOverlay`.
-- [ ] `ListWorkbench`.
-- [ ] Точечные unit/component tests общих контрактов.
+- [x] `PageChrome` / `PageContainer`.
+- [x] `ResponsiveOverlay`.
+- [x] `ListWorkbench`.
+- [x] Точечные unit/component tests общих контрактов.
 
 ### Фаза 3 — страницы
 

@@ -7,6 +7,7 @@ const ru = {
     saved: 'Сохранено',
     cancel: 'Отмена',
     close: 'Закрыть',
+    dialog: 'Диалог',
     back: 'Назад',
     next: 'Дальше',
     create: 'Создать',

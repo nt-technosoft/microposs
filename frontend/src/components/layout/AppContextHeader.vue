@@ -6,6 +6,7 @@ import { Menu } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
 import { businessNavigationSections, findBusinessNavigationItem } from './navigation'
+import { pageChromeState } from './pageChrome'
 import AppAccountMenu from './AppAccountMenu.vue'
 
 const emit = defineEmits<{
@@ -21,8 +22,12 @@ const currentSection = computed(() => {
   const item = currentItem.value
   return item ? businessNavigationSections.find((section) => section.id === item.section) : undefined
 })
-const title = computed(() => currentItem.value ? t(currentItem.value.labelKey) : auth.user?.tenant_name || 'MicroPOS')
+const title = computed(() => pageChromeState.title || (currentItem.value ? t(currentItem.value.labelKey) : auth.user?.tenant_name || 'MicroPOS'))
 const businessName = computed(() => auth.user?.active_business?.name || auth.user?.tenant_name || '')
+const eyebrow = computed(() => {
+  if (pageChromeState.eyebrow) return pageChromeState.eyebrow
+  return currentSection.value ? `${businessName.value} · ${t(currentSection.value.labelKey)}` : businessName.value
+})
 </script>
 
 <template>
@@ -38,12 +43,20 @@ const businessName = computed(() => auth.user?.active_business?.name || auth.use
     </Button>
 
     <div class="min-w-0 flex-1">
-      <p class="truncate text-xs text-muted-foreground">
-        {{ businessName }}
-        <template v-if="currentSection"> · {{ t(currentSection.labelKey) }}</template>
-      </p>
-      <p class="truncate text-sm font-semibold text-foreground">{{ title }}</p>
+      <p class="truncate text-xs text-muted-foreground">{{ eyebrow }}</p>
+      <div class="flex min-w-0 items-center gap-2">
+        <h1 class="truncate text-sm font-semibold text-foreground">{{ title }}</h1>
+        <span
+          v-if="pageChromeState.status"
+          class="app-context-header__status"
+          :data-tone="pageChromeState.statusTone"
+        >
+          {{ pageChromeState.status }}
+        </span>
+      </div>
     </div>
+
+    <div id="app-context-actions" class="flex shrink-0 items-center gap-2" />
 
     <AppAccountMenu compact />
   </header>
@@ -63,6 +76,20 @@ const businessName = computed(() => auth.user?.active_business?.name || auth.use
   padding: 0 clamp(1rem, 2vw, 2rem);
   backdrop-filter: blur(16px);
 }
+
+.app-context-header__status {
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--neutral-100);
+  padding: 0.15rem 0.45rem;
+  color: var(--neutral-600);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+}
+
+.app-context-header__status[data-tone="positive"] { color: var(--positive); }
+.app-context-header__status[data-tone="warning"] { color: color-mix(in oklch, var(--warning) 72%, var(--neutral-900)); }
+.app-context-header__status[data-tone="negative"] { color: var(--negative); }
 
 @media (min-width: 768px) {
   .app-context-header {
