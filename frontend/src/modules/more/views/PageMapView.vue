@@ -22,6 +22,7 @@ import {
 
 import { useAuthStore } from '@/stores/auth'
 import { UserRole } from '@/types/enums'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 interface PageMapItem {
   title: string
@@ -170,13 +171,13 @@ function openItem(item: PageMapItem): void {
 
 <template>
   <div class="page-map">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('pageMap.title') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('pageMap.title')" :eyebrow="t('nav.settings')">
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="intro">
@@ -242,26 +243,6 @@ function openItem(item: PageMapItem): void {
   background: var(--color-bg-primary);
 }
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  text-align: center;
-}
 
 .back-btn,
 .header-spacer {
@@ -282,6 +263,11 @@ function openItem(item: PageMapItem): void {
   gap: var(--space-3);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; grid-template-columns:repeat(2, minmax(0, 1fr)); padding:var(--space-6); padding-bottom:var(--space-8); align-items:start; }
+  .intro { grid-column:1 / -1; }
 }
 
 .intro {

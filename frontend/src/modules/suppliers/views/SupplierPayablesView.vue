@@ -9,6 +9,7 @@ import type { Supplier } from '@/types/models'
 import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import SupplierPaymentForm from '@/modules/suppliers/components/SupplierPaymentForm.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 type FilterMode = 'open' | 'burning' | 'overdue' | 'all'
 
@@ -115,13 +116,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <header class="header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1>{{ t('suppliers.payablesPageTitle') }}</h1>
-      <span />
-    </header>
+    <PageChrome :title="t('suppliers.payablesPageTitle')" :eyebrow="t('suppliers.title')">
+      <template #primary>
+        <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="hero">
@@ -219,26 +220,6 @@ onBeforeUnmount(() => {
   background: var(--color-bg-primary);
 }
 
-.header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.header h1 {
-  text-align: center;
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-}
-
 .icon-btn {
   width: 40px;
   height: 40px;
@@ -281,6 +262,11 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
   font-size: var(--text-xl);
   font-weight: var(--font-bold);
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+  .payable-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-3); }
 }
 
 .filters {

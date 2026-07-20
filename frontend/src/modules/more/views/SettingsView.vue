@@ -26,6 +26,7 @@ import { supportedLocales, type Locale } from '@/i18n/keys'
 import { updateUserPreferences } from '@/api/auth'
 import { useToast } from '@/composables/useToast'
 import BaseButton from '@/components/base/BaseButton.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -140,13 +141,13 @@ async function changeLocale(locale: Locale): Promise<void> {
 
 <template>
   <div class="settings-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('settings.title') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('settings.title')" :eyebrow="t('nav.settings')">
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="card">
@@ -335,26 +336,6 @@ async function changeLocale(locale: Locale): Promise<void> {
   line-height: 1.45;
 }
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  text-align: center;
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-}
 
 .back-btn,
 .header-spacer {
@@ -375,6 +356,11 @@ async function changeLocale(locale: Locale): Promise<void> {
   gap: var(--space-3);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; grid-template-columns:repeat(2, minmax(0, 1fr)); padding:var(--space-6); padding-bottom:var(--space-8); align-items:start; }
+  .content > .card:first-child,.content > .card.danger { grid-column:1 / -1; }
 }
 
 .card {

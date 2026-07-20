@@ -12,6 +12,7 @@ import {
 } from '@/api/core'
 import { useToast } from '@/composables/useToast'
 import { intlLocale } from '@/i18n/format'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -92,15 +93,14 @@ onMounted(loadData)
 
 <template>
   <div class="investors-page">
-    <header class="page-header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('investors.ownerTitle') }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="loadData">
-        <RefreshCcw :size="16" :stroke-width="1.75" />
-      </button>
-    </header>
+    <PageChrome :title="t('investors.ownerTitle')" :eyebrow="t('settings.management')">
+      <template #primary>
+        <div class="page-header-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()"><ArrowLeft :size="18" :stroke-width="2" /></button>
+          <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="loadData"><RefreshCcw :size="16" :stroke-width="1.75" /></button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="invite-panel">
@@ -164,8 +164,7 @@ onMounted(loadData)
 
 <style scoped>
 .investors-page { min-height: 100%; background: var(--color-bg-primary); }
-.page-header { position: sticky; top: 0; z-index: var(--z-sticky); display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: var(--space-3); min-height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-.page-title { text-align: center; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
+.page-header-actions { display:flex; align-items:center; gap:var(--space-2); }
 .icon-btn { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-text-primary); }
 .content { display: grid; gap: var(--space-4); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-8)); }
 .invite-panel { display: grid; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle); }
@@ -183,4 +182,11 @@ onMounted(loadData)
 .status.active { color: var(--color-success); background: var(--color-success-bg); }
 .note-row { display: flex; align-items: center; gap: var(--space-2); margin-top: 0; }
 .error-box { border-radius: var(--radius-md); border: 1px solid var(--color-error); background: var(--color-error-bg); color: var(--color-error); padding: var(--space-3); font-size: var(--text-sm); }
+@media (min-width:768px) {
+  .content { max-width:1120px; margin:0 auto; grid-template-columns:repeat(2, minmax(0, 1fr)); padding:var(--space-6); padding-bottom:var(--space-8); }
+  .invite-panel,.error-box,.section:last-child { grid-column:1 / -1; }
+  .invite-panel { grid-template-columns:minmax(220px, .7fr) minmax(0, 1.3fr); align-items:start; }
+  .invite-form { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .invite-form .primary-btn { grid-column:1 / -1; justify-self:end; padding-inline:var(--space-5); }
+}
 </style>

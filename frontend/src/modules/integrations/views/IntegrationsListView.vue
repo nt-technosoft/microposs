@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { useIntegrationsStore } from '@/stores/integrations'
 import CreateKeyModal from '../components/CreateKeyModal.vue'
 import RevokeConfirmDialog from '../components/RevokeConfirmDialog.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const store = useIntegrationsStore()
 
@@ -39,14 +40,15 @@ async function onRevoke(): Promise<void> {
 </script>
 
 <template>
-  <div class="mx-auto flex max-w-[680px] flex-col gap-4 p-4">
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-foreground">Интеграции</h1>
-      <Button class="gap-1.5" @click="createOpen = true">
-        <Plus :size="18" :stroke-width="2" />
-        Добавить ключ
-      </Button>
-    </header>
+  <div class="mx-auto flex max-w-[1120px] flex-col gap-4 p-4 md:p-6">
+    <PageChrome title="Интеграции" eyebrow="Настройки">
+      <template #primary>
+        <Button class="gap-1.5" @click="createOpen = true">
+          <Plus :size="18" :stroke-width="2" />
+          Добавить ключ
+        </Button>
+      </template>
+    </PageChrome>
 
     <p v-if="store.isLoading" class="py-10 text-center text-sm text-neutral-500">Загрузка…</p>
     <p v-else-if="store.error" class="py-10 text-center text-sm text-negative">{{ store.error }}</p>
@@ -54,7 +56,7 @@ async function onRevoke(): Promise<void> {
       Нет ключей. Создайте первый.
     </p>
 
-    <div v-else class="flex flex-col gap-2.5">
+    <div v-else class="grid gap-2.5 lg:grid-cols-2">
       <div
         v-for="c in store.credentials"
         :key="c.id"

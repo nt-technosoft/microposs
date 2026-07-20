@@ -11,6 +11,7 @@ import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import { useToast } from '@/composables/useToast'
 import { intlLocale } from '@/i18n/format'
 import { getApiErrorMessage } from '@/utils/errors'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -300,15 +301,17 @@ onMounted(async () => {
 
 <template>
   <div class="transfer-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="goBack">
-        <ArrowLeft :size="20" :stroke-width="2" />
-      </button>
-      <div class="page-headings">
-        <h1 class="page-title">{{ t('inventory.transferTitle') }}</h1>
-        <p class="page-subtitle">{{ t('inventory.transferSubtitle') }}</p>
-      </div>
-    </header>
+    <PageChrome
+      :title="t('inventory.transferTitle')"
+      :eyebrow="t('nav.products')"
+      :description="t('inventory.transferSubtitle')"
+    >
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="goBack">
+          <ArrowLeft :size="20" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <div class="content">
       <section class="panel">
@@ -464,15 +467,6 @@ onMounted(async () => {
   background: var(--color-bg-primary);
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
 .back-btn {
   width: 40px;
   height: 40px;
@@ -486,28 +480,15 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.page-headings {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--color-text-primary);
-}
-
-.page-subtitle {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
 .content {
   display: grid;
   gap: var(--space-4);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; grid-template-columns:minmax(0, 1fr) minmax(320px, .8fr); padding:var(--space-6); padding-bottom:var(--space-8); }
 }
 
 .panel {

@@ -21,6 +21,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import SupplierPaymentForm from '@/modules/suppliers/components/SupplierPaymentForm.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -182,15 +183,14 @@ onMounted(async () => {
 
 <template>
   <div class="page">
-    <header class="header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="title">{{ t('suppliers.title') }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('common.add')" @click="openCreate">
-        <Plus :size="18" :stroke-width="2" />
-      </button>
-    </header>
+    <PageChrome :title="t('suppliers.title')" :eyebrow="t('settings.management')">
+      <template #primary>
+        <div class="header-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()"><ArrowLeft :size="18" :stroke-width="2" /></button>
+          <button class="icon-btn" type="button" :aria-label="t('common.add')" @click="openCreate"><Plus :size="18" :stroke-width="2" /></button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="filters">
@@ -407,26 +407,7 @@ onMounted(async () => {
   background: var(--color-bg-primary);
 }
 
-.header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.title {
-  text-align: center;
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
-}
+.header-actions { display:flex; align-items:center; gap:var(--space-2); }
 
 .icon-btn {
   width: 40px;
@@ -443,6 +424,11 @@ onMounted(async () => {
   padding-bottom: calc(var(--bottom-nav-height) + 90px);
   display: grid;
   gap: var(--space-3);
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+  .list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-3); }
 }
 
 .filters {
@@ -705,6 +691,10 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+@media (min-width: 768px) {
+  .fab { display:none; }
 }
 
 .sheet-form {
