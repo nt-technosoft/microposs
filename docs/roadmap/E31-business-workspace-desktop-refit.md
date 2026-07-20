@@ -1,7 +1,7 @@
 # E31 — Business Workspace Desktop Refit
 
-**Статус:** `IN_PROGRESS`
-**Прогресс:** 42%
+**Статус:** `DONE`
+**Прогресс:** 100%
 **Зависит от:** Historical Vue data baseline restored on the `e506691` schema
 **Блокирует:** —
 
@@ -67,17 +67,17 @@ task-adaptive интерфейса, сохранив бизнес-логику, 
 
 ### Фаза 3 — страницы
 
-- [ ] Волна A: sales, products, procurement, agreements, reports.
-- [ ] Волна B: history/checkout, finance, reconciliation, transfers,
+- [x] Волна A: sales, products, procurement, agreements, reports.
+- [x] Волна B: history/checkout, finance, reconciliation, transfers,
   categories и payables.
-- [ ] Волна C: customers, suppliers, partner management, settings,
+- [x] Волна C: customers, suppliers, partner management, settings,
   integrations и page map.
 
 ### Фаза 4 — сходимость
 
-- [ ] Устранить P0/P1 layout/accessibility/responsive проблемы.
-- [ ] Typecheck, lint, build, focused Vitest и browser-smoke ролей.
-- [ ] Fresh read-only review и финальный E31 checkpoint.
+- [x] Устранить P0/P1 layout/accessibility/responsive проблемы.
+- [x] Typecheck, lint, build, focused Vitest и browser-smoke ролей.
+- [x] Fresh read-only review и финальный E31 checkpoint.
 
 ## Historical Vue baseline — 2026-07-20
 
@@ -96,6 +96,25 @@ task-adaptive интерфейса, сохранив бизнес-логику, 
   это отдельный data-correction вопрос, а не блокер app-shell реконструкции.
 - Неуспешный E23 replay и расчёт U-001 сохранены как отдельное исследование, но
   по решению владельца не являются acceptance gate этой UI-итерации.
+
+## Финальный checkpoint — 2026-07-20
+
+- Все бизнес-маршруты переведены на единый responsive shell и presentation
+  primitives без изменения API, моделей, маршрутов или финансовых вычислений.
+- Owner проверен на `1440×900`, `1280×800`, `1024×768` и `390×844`; cashier,
+  warehouse, investor, auth и platform admin прошли role-smoke. Временные QA-
+  ограничения tenant-контекста и admin-учётка после проверки удалены, исходные
+  два активных бизнеса и investor relations восстановлены.
+- Typecheck, production build, 23 Vitest и Django check проходят. ESLint 9
+  впервые получил рабочий read-only flat-config: 0 ошибок, 53 предупреждения
+  существующего legacy-кода сохранены как некритичный техдолг.
+- Fresh read-only review после исправления mobile stepper и desktop back-action
+  не обнаружил P0/P1. Горизонтального overflow и persistent console errors в
+  browser-smoke нет.
+- Ограничение baseline: на двух активных бизнесах старый E21 auth-контракт не
+  умеет однозначно выбрать tenant для общих cashier/warehouse и старого investor
+  dashboard. Это не вызвано E31 и сознательно не исправляется presentation-only
+  итерацией.
 
 ## Критерии завершения
 

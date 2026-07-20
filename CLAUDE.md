@@ -14,9 +14,10 @@ MicroPOS / **Sherik POS** — task-adaptive POS platform for small retail busine
 - 🎯 **[AGENTS.md](./AGENTS.md)** — entrypoint для всех LLM-инструментов (Cursor/Codex/etc.)
 - 💼 **[presentation/](./presentation/)** — pitch-материалы и стратегические документы (Sharia certification research, Billz proposal)
 
-## Active P0
+## Branch frontend baseline
 
-**E31 — Business Workspace Desktop Refit** is the current frontend priority:
+**E31 — Business Workspace Desktop Refit** is completed in this branch and is
+the current Vue presentation baseline:
 [`docs/roadmap/E31-business-workspace-desktop-refit.md`](./docs/roadmap/E31-business-workspace-desktop-refit.md)
 
 E10 is historical partial implementation: its completed screens and
@@ -156,7 +157,7 @@ Cleanliness without over-engineering. Apply pragmatically — simple is better t
 - Canonical procurement UX order: goods/expenses → supplier/settlement →
   funding → payment/obligation → receipt → history
   (`docs/roadmap/E07-canonical-workspace-flow.md`). API order ≠ UX order.
-- Active screen adaptation runs under **E31**. E10 remains the historical source
+- Completed screen adaptation is recorded under **E31**. E10 remains the historical source
   of the "preserve contract, rebuild presentation" method; `DESIGN.md` and
   `tokens.css` are visual reference/runtime mechanism, not IA authority.
 - PR-12 (Excel mapping/final cleanup) stays a separate discovery/design track.
