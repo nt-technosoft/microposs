@@ -4,6 +4,11 @@
 > code — the existing UI is explicitly not the target system). Re-run
 > `/impeccable document` once target components exist to capture real tokens.
 
+> **E31 scope:** deep emerald, warm neutrals, typography and semantic colors are
+> the starting visual basis. This document does not prescribe information
+> architecture, navigation, layout, breakpoints or component composition;
+> those decisions follow the active workflow and E31 acceptance criteria.
+
 ## Theme
 
 **Light primary.** Operational, daytime use: owner glancing in the morning,
@@ -120,7 +125,8 @@ through weight+scale contrast (≥1.25), never flat. Body line length ≤ 70ch.
 
 ## Spacing & Layout
 
-Mobile-first: 375px → 768px → 1024px → 1440px. 4px base unit.
+Task-adaptive: compact `<768px`, drawer `768–1279px`, desktop workspace
+`>=1280px`. 4px base unit.
 
 ```
 --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;

@@ -1,6 +1,6 @@
 # MicroPOS / Sherik POS — Operating Contract for Codex and Other Agents
 
-MicroPOS is a mobile-first financial-partnership layer for retail businesses:
+MicroPOS is a task-adaptive financial-partnership layer for retail businesses:
 Mudaraba, Musharaka, consignment, multi-location and multi-currency. It is not
 another POS: it records the economic terms of a partnership, fixes factual
 capital snapshots at receipt, and makes FIFO profit/loss distribution auditable.
@@ -74,15 +74,17 @@ Route work once per phase, not once per message:
    isolated implementation track.
 4. Resume a worker only while its context remains fresh; otherwise start a fresh
    worker with a compact delta from the epic and git state.
-5. Run independent review in a fresh Codex context: use app `/review` or CLI
-   `codex exec review`. Give it the epic, the diff, acceptance criteria and
-   verification output — not the executor's private reasoning.
+5. Use independent review where risk justifies it. For E31 it is required after
+   the shared shell and before final convergence, not after every page slice.
+   Give the reviewer the epic, diff, criteria and verification output — not the
+   executor's private reasoning.
 6. Handoff files under `.agents/handoffs/` are fallback only for an unwired
    external session, a long auditable task or durable trace. Follow its template.
 
-The reviewer reports findings first. The orchestrator decides fixes, reruns the
-relevant checks, and only then treats the slice as complete. A reviewer does
-not write production changes unless assigned a separate execution task.
+The reviewer reports findings first. The orchestrator decides fixes and reruns
+relevant checks. Ordinary bounded UI slices may finish with proportional local
+verification; a reviewer never writes production changes unless separately
+assigned as executor.
 
 ## Documentation discipline
 
@@ -106,10 +108,13 @@ not write production changes unless assigned a separate execution task.
   domain logic must not directly import another domain's models.
 - Use append-only economic events and derived read models; never mutate
   confirmed financial history to make a later number fit.
-- Frontend is mobile-first. Use Composition API, typed clients in `src/api/`,
-  domain stores, shared controls, Lucide icons and 150–300ms accessible motion.
-- Any frontend/design change must apply
-  `.agents/skills/microposs-frontend-design/SKILL.md` and `frontend-skill`.
+- Frontend follows the active epic. In E31, data-dense Business Workspace flows
+  are desktop-first and compact screens preserve the same states and actions.
+  Use Composition API, typed clients in `src/api/`, domain stores, shared
+  controls, Lucide icons and 150–300ms accessible motion.
+- Apply `.agents/skills/microposs-frontend-design/SKILL.md` for product UI.
+  Generic `frontend-skill` is optional and mainly relevant to public/marketing
+  surfaces; it is not an authority over operational IA.
 
 ## Navigation and verification
 

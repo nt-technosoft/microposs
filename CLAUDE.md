@@ -1,7 +1,7 @@
 # MicroPOS — Project Instructions
 
 ## Overview
-MicroPOS / **Sherik POS** — mobile-first POS platform for small retail businesses with Islamic partnership financing support (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
+MicroPOS / **Sherik POS** — task-adaptive POS platform for small retail businesses with Islamic partnership financing support (Mudaraba, Musharaka), consignment trading, and multi-location inventory.
 
 **Positioning:** не «ещё один POS», а финансово-партнёрский слой поверх ритейла. Автоматический partnership accounting, FIFO-распределение прибыли/убытков, прозрачные dashboards для инвесторов и партнёров.
 
@@ -16,12 +16,13 @@ MicroPOS / **Sherik POS** — mobile-first POS platform for small retail busines
 
 ## Active P0
 
-**E10 — Frontend Design System & Screen Redesign** is the current priority:
-[`docs/roadmap/E10-frontend-redesign.md`](./docs/roadmap/E10-frontend-redesign.md)
+**E31 — Business Workspace Desktop Refit** is the current frontend priority:
+[`docs/roadmap/E31-business-workspace-desktop-refit.md`](./docs/roadmap/E31-business-workspace-desktop-refit.md)
 
-E07/E08 are **DONE** (procurement/investment/payment core shipped as target
-architecture) and E09 is **IN_REVIEW** — treat them as completed, not active
-work. The queued backend P0 behind E10 is **E03 — Real Value Reporting**.
+E10 is historical partial implementation: its completed screens and
+"preserve contract, rebuild presentation" method remain reference, but E31
+supersedes its mobile-first/layout-canon direction. The queued backend P0 is
+still **E03 — Real Value Reporting**.
 [`docs/ROADMAP.md`](./docs/ROADMAP.md) is the live status source; do not infer
 the current epic from this file alone.
 
@@ -114,7 +115,9 @@ reference this section, not redefine the rules.
 - `CELERY_TASK_ALWAYS_EAGER=True` in development settings — tasks run synchronously in dev/test
 
 ## Frontend Conventions
-- Mobile-first, responsive (375px → 768px → 1024px → 1440px)
+- Task-adaptive responsive UI. Under E31, full Business Workspace is
+  desktop-first (`>=1280px`), tablet uses a drawer (`768–1279px`), and compact
+  screens retain equivalent states/actions with bottom navigation (`<768px`).
 - Vue 3 Composition API + `<script setup>` syntax
 - Pinia stores per domain
 - API layer in `src/api/` with typed clients
@@ -122,10 +125,9 @@ reference this section, not redefine the rules.
 - Reuse shared controls before creating new UI controls: `MoneyCurrencyInput` for amount+currency, `BaseSelect` for mobile-friendly selects.
 - Design system foundation: MicroPOS CSS tokens + Tailwind CSS v4 + shadcn-vue
   + Reka UI. See `docs/frontend-design-system.md`.
-- For any frontend design/redesign, apply the project frontend workflow in
-  `.agents/skills/microposs-frontend-design/SKILL.md`: mobile-first, not
-  mobile-only; workflow before components; shadcn-vue primitives through domain
-  wrappers.
+- For product UI, apply `.agents/skills/microposs-frontend-design/SKILL.md`:
+  workflow and state/action contract before components. `DESIGN.md` supplies
+  palette, typography and semantics, not mandatory IA or layout.
 - Lucide icons (no emojis as structural icons)
 - All animations 150-300ms, respect prefers-reduced-motion
 - AbortController pattern for all data-loading functions; cancel in onBeforeUnmount
@@ -154,9 +156,9 @@ Cleanliness without over-engineering. Apply pragmatically — simple is better t
 - Canonical procurement UX order: goods/expenses → supplier/settlement →
   funding → payment/obligation → receipt → history
   (`docs/roadmap/E07-canonical-workspace-flow.md`). API order ≠ UX order.
-- Active screen redesign now runs under **E10**; see its epic for the current
-  "preserve contract, rebuild presentation" method and the design-system
-  source-of-truth (`DESIGN.md` canon → `tokens.css` mechanism).
+- Active screen adaptation runs under **E31**. E10 remains the historical source
+  of the "preserve contract, rebuild presentation" method; `DESIGN.md` and
+  `tokens.css` are visual reference/runtime mechanism, not IA authority.
 - PR-12 (Excel mapping/final cleanup) stays a separate discovery/design track.
 
 ## Roadmap Protocol
@@ -292,9 +294,9 @@ Pick the first rule that matches:
 5. **Long mechanical execution / parallel isolated tracks** → background
    subagent in a git worktree.
 6. **Other model needed — fast-impl / UI / browser-like / bug-hunt /
-   independent review** → **Codex plugin** (`/codex:rescue`, `/codex:review`,
-   `/codex:adversarial-review`). Independent review belongs to Codex, not a
-   self-subagent — a different model is real independence.
+   independent review** → use an appropriate fresh Codex context. Under E31,
+   independent review is required for the shared shell, financial-risk changes
+   and final convergence, not for every small presentation slice.
 7. **Sonnet executor stuck on a local (non-architectural) design fork** →
    Advisor (consult Opus on-demand), not a human escalation.
 8. **Handoff file** (`.agents/handoffs/`) → ONLY when (a) an external session

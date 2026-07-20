@@ -16,14 +16,16 @@ MicroPOS / Sherik POS.
   Reka = headless behaviour/a11y primitives, shadcn-vue = the Tailwind-styled
   copy vendored into `src/components/ui/`. Use as low-level primitives.
 - Lucide icons through `lucide-vue-next`.
-- MicroPOS CSS tokens remain the visual source of truth. Design intent canon
-  is `DESIGN.md` (OKLCH "calm confidence"); `tokens.css` is the runtime
-  mechanism aligned to it.
+- MicroPOS CSS tokens remain the runtime visual source. `DESIGN.md` supplies the
+  starting palette, typography and semantic intent; it does not dictate IA,
+  shell, breakpoint or component decisions.
 
 ## Workflow
 
 1. Start from the business workflow and the most common user path.
-2. Design mobile-first, but never mobile-only.
+2. Design task-adaptively from the dominant workflow and viewport. E31 Business
+   Workspace screens are desktop-first; compact screens remain intentional and
+   equivalent in state and action semantics.
 3. Pick shadcn-vue primitives only after the workflow is clear.
 4. Compose primitives into domain wrappers instead of scattering raw shadcn-vue
    everywhere.
@@ -44,22 +46,20 @@ out (you risk re-deriving business rules and breaking Key Business Rules).
    so it is not sacred: old blocks may survive, merge, split, or die. Sketch
    2-3 layout directions, pick one, before touching blocks.
 3. **Rebuild per-block.** Keep the `<script setup>` logic (composables, state
-   derivation, API, events); rebuild `<template>` + `<style scoped>` on
-   shadcn-vue/Tailwind + domain wrappers against `DESIGN.md`. One block at a
-   time, not the whole page at once.
+   derivation, API, events); rebuild `<template>` + `<style scoped>` with the
+   existing token system, shadcn-vue/Tailwind and domain wrappers. One block at
+   a time, not the whole page at once.
 4. **Verify.** Mobile + desktop widths, every state, and contrast of
    brand-green (hue 165) vs positive-green (hue 145) in dense data.
 
 ## Responsive Rules
 
-- Mobile is the primary design target for data entry and quick operational work.
-- Desktop must be planned for data-heavy screens: procurement, sales/POS,
-  reports, finance, inventory and supplier/payable flows.
+- `>=1280px`: fixed desktop shell for data-heavy Business Workspace flows.
+- `768–1279px`: sticky header and accessible navigation drawer.
+- `<768px`: compact layout and bottom navigation from the same route registry.
 - Do not stretch mobile cards into desktop. Use split workspace layouts where
   they improve scanning and repeated action.
 - Keep one business state model per screen; adapt layout by viewport.
-- Navigation is currently bottom-nav-first across authenticated app screens
-  until a dedicated desktop shell is designed.
 
 ## Design-System Rules
 
@@ -81,4 +81,3 @@ out (you risk re-deriving business rules and breaking Key Business Rules).
   as a temporary bridge during a focused migration.
 - Remove obsolete scoped CSS only after the section has fully moved to the new
   approach.
-

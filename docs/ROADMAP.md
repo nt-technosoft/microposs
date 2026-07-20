@@ -31,7 +31,7 @@
 | **E07** | Procurement & Investment Workspace Re-architecture | 🟢 DONE | 100% | E01, E04 | [→](./roadmap/E07-procurement-workspace.md) |
 | **E08** | Architecture Cleanup & Source-of-Truth Consolidation | 🟢 DONE | 100% | E07 | [→](./roadmap/E08-architecture-cleanup.md) |
 | **E09** | Procurement Completeness (non-PREPAID, ON_SALE, returnability) | 🔵 IN_REVIEW | ~95% | E07, E08 | [→](./roadmap/E09-procurement-completeness.md) |
-| **E10** | Frontend Design System & Screen Redesign | 🟡 IN_PROGRESS | ~35% | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
+| **E10** | Frontend Design System & Screen Redesign | ⏸️ PAUSED | historical partial | E07, E08, E09 | [→](./roadmap/E10-frontend-redesign.md) |
 | **E11** | Partnership Capital as Real Agreement Account (money source-of-truth) | 🟢 DONE | 100% | E07, E08 | [→](./roadmap/E11-partnership-capital-pool.md) |
 | **E12** | Multi-currency Capital (FIFO cost-basis) + Calc Precision | 🟢 DONE | 100% | E11 | [→](./roadmap/E12-multicurrency-capital-and-precision.md) |
 | **E13** | ⚠️ Mixed-currency procurement (затраты в разных валютах в одном приходе) | ⏸️ BLOCKED | 0% | E11, E12 + verified приход | [→](./roadmap/E13-multicurrency-procurement.md) |
@@ -45,6 +45,7 @@
 | **E21** | Business Context, Investor-Led Funds & Settlement UX Hardening | 🔵 IN_REVIEW | follow-ups implemented | E18, E20 | [→](./roadmap/E21-business-context-investor-funds-settlement-ux.md) |
 | **E22** | Investor-Owned Funds + E21 UX Correction | 🔵 IN_REVIEW | 100% implementation | E18, E20, E21 | [→](./roadmap/E22-investor-owned-funds-e21-correction.md) |
 | **E23** | Capital Rollover & Real Reinvestment | 🟡 IN_PROGRESS | 95% | E18, E21 | [→](./roadmap/E23-capital-rollover-reinvestment.md) |
+| **E31** | Business Workspace Desktop Refit | 🟡 IN_PROGRESS | 5% | E23-compatible baseline | [→](./roadmap/E31-business-workspace-desktop-refit.md) |
 
 **Future item — full business switcher:** не входит в E22/MVP. Текущий MVP
 остаётся `one owner -> one business`; полноценный multi-business switcher нужен
@@ -92,10 +93,11 @@ partnership: исторический курс строки, курс оплат
 распределение — largest-remainder, не дамп на оператора. Малый первый слайс (когда возьмём):
 fair-residue в `formulas.py`. **Не сейчас** — впереди приоритетнее закрыть E18-трек.
 
-**🔥 Активный P0 (frontend, с 2026-05-29):** E10 — Frontend Design System &
-Screen Redesign. Единый визуальный язык (`DESIGN.md` OKLCH) поверх
-Tailwind v4 + shadcn-vue; редизайн screen-by-screen, старт с детальной
-страницы прихода. Фаза 0 — выровнять источник правды (tokens.css → DESIGN.md).
+**🔥 Активный P0 (frontend, с 2026-07-20):** E31 — Business Workspace Desktop
+Refit. Существующий Vue Business Workspace получает desktop-first,
+task-adaptive shell и последовательную адаптацию страниц на отдельной
+E23-compatible базе. E10 приостановлен как директива, но его готовые экраны и
+метод «сохранить контракт, пересобрать презентацию» остаются reference.
 
 **Backend P0 — ЗАКРЫТО (2026-06-16):** E17 (Production Lifecycle Readiness,
 acceptance 11/11) → **E18 (Money Model Consolidation, Ф1–Ф8 IN_REVIEW)**. E18
@@ -137,11 +139,12 @@ E04 — связанный архитектурный контекст. E03/E05/
 ```
 E07 + E08 (DONE 2026-05-19) ──→ E09 (Procurement Completeness) ──→ E03 → E05 → E06
                                          │
-                                         └──→ E10 (Frontend Redesign, parallel track)
+                                         └──→ E31 (Vue Business desktop track)
 ```
 
-E10 идёт параллельным frontend-треком: не блокирует backend-последовательность,
-переводит экраны на единый визуальный язык начиная с приходов.
+E31 идёт параллельным frontend-треком поверх E23-compatible baseline и не
+меняет backend-последовательность. E10 остаётся историей уже реализованных
+экранов и решений, но больше не задаёт обязательный mobile-first layout.
 
 E17 — production-readiness слой поверх E16. Это не новая математика, а закрытие
 рисковых швов перед пилотным клиентом: нельзя оставлять два источника прибыли,
