@@ -93,14 +93,16 @@ partnership: исторический курс строки, курс оплат
 распределение — largest-remainder, не дамп на оператора. Малый первый слайс (когда возьмём):
 fair-residue в `formulas.py`. **Не сейчас** — впереди приоритетнее закрыть E18-трек.
 
-**Frontend checkpoint (2026-07-20):** E31 — Business Workspace Desktop Refit
+**Frontend checkpoint (2026-07-22):** E31 — Business Workspace Desktop Refit
 завершён. Vue Business Workspace получил desktop-first task-adaptive shell и
 адаптацию страниц на отдельной исторической Vue-базе со схемой `e506691`. E10
 остаётся приостановленным как директива, но его готовые экраны и метод
 «сохранить контракт, пересобрать презентацию» остаются reference. Повторный
 visual-convergence проход открыл desktop canvas на всю доступную ширину,
 уплотнил sidebar и убрал локальные центрированные острова без изменения mobile
-и бизнес-контракта.
+и бизнес-контракта. Фаза 6 добавила сворачиваемые desktop-секции навигации,
+компактные панели продаж/каталога и независимые по высоте split/flow-композиции
+для операционных, партнёрских и системных страниц.
 
 **Backend P0 — ЗАКРЫТО (2026-06-16):** E17 (Production Lifecycle Readiness,
 acceptance 11/11) → **E18 (Money Model Consolidation, Ф1–Ф8 IN_REVIEW)**. E18

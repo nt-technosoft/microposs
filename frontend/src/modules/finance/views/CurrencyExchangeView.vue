@@ -523,10 +523,17 @@ onMounted(async () => {
 .footer { position: sticky; bottom: 0; padding: var(--space-4); background: linear-gradient(to top, var(--color-bg-primary), transparent); }
 .submit-btn { width: 100%; height: 48px; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); }
 @media (min-width: 768px) {
-  .content { max-width:1120px; margin:0 auto; grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr); padding:var(--space-6); padding-bottom:var(--space-6); }
+  .content {
+    max-width:1120px;
+    margin:0 auto;
+    grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr);
+    align-items:start;
+    padding:var(--space-6);
+    padding-bottom:var(--space-6);
+  }
   .intro-card,.content > .muted,.content > .empty-state { grid-column:1 / -1; }
-  .form-card { grid-column:1; grid-row:2 / span 2; }
-  .account-card { grid-column:2; }
+  .form-card { grid-column:1; align-self:start; }
+  .account-card { grid-column:2; align-self:start; }
   .footer { position:static; max-width:1120px; margin:0 auto; padding:0 var(--space-6) var(--space-8); background:none; }
   .submit-btn { width:auto; min-width:220px; margin-left:auto; padding:0 var(--space-6); }
 }

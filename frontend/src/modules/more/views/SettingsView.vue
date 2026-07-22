@@ -27,6 +27,7 @@ import { updateUserPreferences } from '@/api/auth'
 import { useToast } from '@/composables/useToast'
 import BaseButton from '@/components/base/BaseButton.vue'
 import PageChrome from '@/components/layout/PageChrome.vue'
+import ResponsiveFlowColumns from '@/components/layout/ResponsiveFlowColumns.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -181,110 +182,112 @@ async function changeLocale(locale: Locale): Promise<void> {
         </div>
       </section>
 
-      <section class="card">
-        <h2 class="section-title">{{ t('settings.appearance') }}</h2>
-        <div class="setting-row">
-          <div class="setting-meta">
-            <div class="setting-name">{{ t('settings.theme') }}</div>
-            <div class="setting-desc">{{ t('settings.themeDescription') }}</div>
-          </div>
-          <button class="toggle-btn" type="button" @click="ui.toggleTheme()">
-            <Sun v-if="!isDark" :size="16" :stroke-width="1.75" />
-            <Moon v-else :size="16" :stroke-width="1.75" />
-            <span>{{ isDark ? t('settings.darkTheme') : t('settings.lightTheme') }}</span>
-          </button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="section-title">{{ t('settings.localization') }}</h2>
-        <div class="setting-row vertical">
-          <div class="setting-meta">
-            <div class="setting-name">{{ t('settings.language') }}</div>
-            <div class="setting-desc">{{ t('settings.languageDescription') }}</div>
-          </div>
-          <div class="locale-grid" role="group" :aria-label="t('settings.language')">
-            <button
-              v-for="option in localeOptions"
-              :key="option.value"
-              class="locale-btn"
-              :class="{ active: ui.locale === option.value }"
-              type="button"
-              @click="changeLocale(option.value)"
-            >
-              <Languages :size="14" :stroke-width="1.75" />
-              {{ option.label }}
+      <ResponsiveFlowColumns class="settings-flow">
+        <section class="card">
+          <h2 class="section-title">{{ t('settings.appearance') }}</h2>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">{{ t('settings.theme') }}</div>
+              <div class="setting-desc">{{ t('settings.themeDescription') }}</div>
+            </div>
+            <button class="toggle-btn" type="button" @click="ui.toggleTheme()">
+              <Sun v-if="!isDark" :size="16" :stroke-width="1.75" />
+              <Moon v-else :size="16" :stroke-width="1.75" />
+              <span>{{ isDark ? t('settings.darkTheme') : t('settings.lightTheme') }}</span>
             </button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="card">
-        <h2 class="section-title">{{ t('settings.modes') }}</h2>
-        <div class="setting-row">
-          <div class="setting-meta">
-            <div class="setting-name">{{ t('settings.cashierMode') }}</div>
-            <div class="setting-desc">{{ t('settings.cashierModeDescription') }}</div>
+        <section class="card">
+          <h2 class="section-title">{{ t('settings.localization') }}</h2>
+          <div class="setting-row vertical">
+            <div class="setting-meta">
+              <div class="setting-name">{{ t('settings.language') }}</div>
+              <div class="setting-desc">{{ t('settings.languageDescription') }}</div>
+            </div>
+            <div class="locale-grid" role="group" :aria-label="t('settings.language')">
+              <button
+                v-for="option in localeOptions"
+                :key="option.value"
+                class="locale-btn"
+                :class="{ active: ui.locale === option.value }"
+                type="button"
+                @click="changeLocale(option.value)"
+              >
+                <Languages :size="14" :stroke-width="1.75" />
+                {{ option.label }}
+              </button>
+            </div>
           </div>
-          <label class="switch">
-            <input
-              :checked="ui.simpleSellerMode"
-              type="checkbox"
-              @change="ui.setSimpleSellerMode(($event.target as HTMLInputElement).checked)"
-            />
-            <span class="slider" />
-          </label>
-        </div>
-      </section>
+        </section>
 
-      <section v-if="workspaceLinks.length > 0" class="card">
-        <h2 class="section-title">{{ t('settings.workspace') }}</h2>
-        <div class="nav-list">
-          <button
-            v-for="link in workspaceLinks"
-            :key="link.routeName"
-            class="nav-row"
-            type="button"
-            @click="openQuickLink(link.routeName)"
-          >
-            <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
+        <section class="card">
+          <h2 class="section-title">{{ t('settings.modes') }}</h2>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">{{ t('settings.cashierMode') }}</div>
+              <div class="setting-desc">{{ t('settings.cashierModeDescription') }}</div>
+            </div>
+            <label class="switch">
+              <input
+                :checked="ui.simpleSellerMode"
+                type="checkbox"
+                @change="ui.setSimpleSellerMode(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="slider" />
+            </label>
+          </div>
+        </section>
+
+        <section v-if="workspaceLinks.length > 0" class="card">
+          <h2 class="section-title">{{ t('settings.workspace') }}</h2>
+          <div class="nav-list">
+            <button
+              v-for="link in workspaceLinks"
+              :key="link.routeName"
+              class="nav-row"
+              type="button"
+              @click="openQuickLink(link.routeName)"
+            >
+              <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
+              <span class="setting-meta">
+                <span class="setting-name">{{ link.name }}</span>
+                <span class="setting-desc">{{ link.description }}</span>
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <section v-if="managementLinks.length > 0" class="card">
+          <h2 class="section-title">{{ t('settings.management') }}</h2>
+          <div class="nav-list">
+            <button
+              v-for="link in managementLinks"
+              :key="link.routeName"
+              class="nav-row"
+              type="button"
+              @click="openQuickLink(link.routeName)"
+            >
+              <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
+              <span class="setting-meta">
+                <span class="setting-name">{{ link.name }}</span>
+                <span class="setting-desc">{{ link.description }}</span>
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <section v-if="auth.isOwner" class="card">
+          <h2 class="section-title">{{ t('settings.partnership') }}</h2>
+          <button class="nav-row" type="button" @click="router.push({ name: 'owner-investors' })">
+            <span class="nav-icon"><Users :size="16" :stroke-width="1.75" /></span>
             <span class="setting-meta">
-              <span class="setting-name">{{ link.name }}</span>
-              <span class="setting-desc">{{ link.description }}</span>
+              <span class="setting-name">{{ t('settings.quickLinks.investors') }}</span>
+              <span class="setting-desc">{{ t('settings.quickLinks.investorsDescription') }}</span>
             </span>
           </button>
-        </div>
-      </section>
-
-      <section v-if="managementLinks.length > 0" class="card">
-        <h2 class="section-title">{{ t('settings.management') }}</h2>
-        <div class="nav-list">
-          <button
-            v-for="link in managementLinks"
-            :key="link.routeName"
-            class="nav-row"
-            type="button"
-            @click="openQuickLink(link.routeName)"
-          >
-            <span class="nav-icon"><component :is="link.icon" :size="16" :stroke-width="1.75" /></span>
-            <span class="setting-meta">
-              <span class="setting-name">{{ link.name }}</span>
-              <span class="setting-desc">{{ link.description }}</span>
-            </span>
-          </button>
-        </div>
-      </section>
-
-      <section v-if="auth.isOwner" class="card">
-        <h2 class="section-title">{{ t('settings.partnership') }}</h2>
-        <button class="nav-row" type="button" @click="router.push({ name: 'owner-investors' })">
-          <span class="nav-icon"><Users :size="16" :stroke-width="1.75" /></span>
-          <span class="setting-meta">
-            <span class="setting-name">{{ t('settings.quickLinks.investors') }}</span>
-            <span class="setting-desc">{{ t('settings.quickLinks.investorsDescription') }}</span>
-          </span>
-        </button>
-      </section>
+        </section>
+      </ResponsiveFlowColumns>
 
       <section class="card danger">
         <h2 class="section-title">{{ t('settings.session') }}</h2>
@@ -359,8 +362,7 @@ async function changeLocale(locale: Locale): Promise<void> {
 }
 
 @media (min-width: 768px) {
-  .content { max-width:1120px; margin:0 auto; grid-template-columns:repeat(2, minmax(0, 1fr)); padding:var(--space-6); padding-bottom:var(--space-8); align-items:start; }
-  .content > .card:first-child,.content > .card.danger { grid-column:1 / -1; }
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
 }
 
 @media (min-width: 1280px) {

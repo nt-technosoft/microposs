@@ -77,7 +77,10 @@ describe('desktop navigation sections', () => {
     expect(productsToggle.attributes('aria-expanded')).toBe('true')
     await productsToggle.trigger('click')
     expect(productsToggle.attributes('aria-expanded')).toBe('false')
-    expect(wrapper.get('[data-section-items="products"]').attributes('data-collapsed')).toBe('true')
+    const productsContent = wrapper.get('[data-section-items="products"]')
+    expect(productsContent.attributes('data-collapsed')).toBe('true')
+    expect(productsContent.attributes('aria-hidden')).toBe('true')
+    expect(productsContent.attributes('inert')).toBeDefined()
     expect(window.localStorage.getItem('microposs:desktop-nav-sections:v1')).toContain('products')
   })
 
@@ -88,7 +91,10 @@ describe('desktop navigation sections', () => {
     const productsToggle = wrapper.get('button[data-section-id="products"]')
     expect(productsToggle.attributes('aria-expanded')).toBe('true')
     expect(productsToggle.attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-section-items="products"]').attributes('data-collapsed')).toBe('false')
+    const productsContent = wrapper.get('[data-section-items="products"]')
+    expect(productsContent.attributes('data-collapsed')).toBe('false')
+    expect(productsContent.attributes('aria-hidden')).toBeUndefined()
+    expect(productsContent.attributes('inert')).toBeUndefined()
   })
 
   it('does not expose section toggles in the non-collapsible drawer contract', async () => {

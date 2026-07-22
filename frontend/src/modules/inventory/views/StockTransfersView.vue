@@ -12,6 +12,7 @@ import { useToast } from '@/composables/useToast'
 import { intlLocale } from '@/i18n/format'
 import { getApiErrorMessage } from '@/utils/errors'
 import PageChrome from '@/components/layout/PageChrome.vue'
+import WorkspaceSplit from '@/components/layout/WorkspaceSplit.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -314,6 +315,7 @@ onMounted(async () => {
     </PageChrome>
 
     <div class="content">
+      <WorkspaceSplit class="transfer-workspace" sticky-main>
       <section class="panel">
         <div class="section-title-row">
           <h2 class="section-title">{{ t('inventory.newOperation') }}</h2>
@@ -330,12 +332,14 @@ onMounted(async () => {
             <span>{{ directionLabel }}</span>
           </div>
 
-          <BaseSelect
-            v-model="form.fromWarehouseId"
-            :options="sourceOptions"
-            :title="t('inventory.source')"
-            :placeholder="t('inventory.chooseSource')"
-          />
+          <div class="form-field form-field--source">
+            <BaseSelect
+              v-model="form.fromWarehouseId"
+              :options="sourceOptions"
+              :title="t('inventory.source')"
+              :placeholder="t('inventory.chooseSource')"
+            />
+          </div>
 
           <div class="swap-row">
             <button class="swap-btn" type="button" @click="swapWarehouses">
@@ -343,27 +347,33 @@ onMounted(async () => {
             </button>
           </div>
 
-          <BaseSelect
-            v-model="form.toWarehouseId"
-            :options="destinationOptions"
-            :title="t('inventory.destination')"
-            :placeholder="t('inventory.chooseDestination')"
-          />
+          <div class="form-field form-field--destination">
+            <BaseSelect
+              v-model="form.toWarehouseId"
+              :options="destinationOptions"
+              :title="t('inventory.destination')"
+              :placeholder="t('inventory.chooseDestination')"
+            />
+          </div>
 
-          <BaseSelect
-            v-model="form.lotId"
-            :options="lotOptions"
-            :title="t('inventory.batch')"
-            :placeholder="t('inventory.chooseLot')"
-            :disabled="isLoadingLots || lotOptions.length === 0"
-          />
+          <div class="form-field form-field--lot">
+            <BaseSelect
+              v-model="form.lotId"
+              :options="lotOptions"
+              :title="t('inventory.batch')"
+              :placeholder="t('inventory.chooseLot')"
+              :disabled="isLoadingLots || lotOptions.length === 0"
+            />
+          </div>
 
-          <BaseInput
-            v-model="form.quantity"
-            :label="t('common.quantity')"
-            type="number"
-            :placeholder="t('inventory.quantityExample')"
-          />
+          <div class="form-field form-field--quantity">
+            <BaseInput
+              v-model="form.quantity"
+              :label="t('common.quantity')"
+              type="number"
+              :placeholder="t('inventory.quantityExample')"
+            />
+          </div>
 
           <p v-if="selectedLot" class="helper-text">
             {{ t('inventory.availableToMove', { count: selectedLotAvailable }) }}
@@ -394,7 +404,8 @@ onMounted(async () => {
         </AppEmptyState>
       </section>
 
-      <section class="panel">
+      <template #aside>
+        <section class="panel">
         <div class="section-title-row">
           <div class="section-heading">
             <h2 class="section-title">{{ t('inventory.historyTitle') }}</h2>
@@ -456,7 +467,9 @@ onMounted(async () => {
         >
           {{ isLoadingMoreTransfers ? t('common.loadingMore') : t('common.loadMore') }}
         </button>
-      </section>
+        </section>
+      </template>
+      </WorkspaceSplit>
     </div>
   </div>
 </template>
@@ -481,14 +494,30 @@ onMounted(async () => {
 }
 
 .content {
-  display: grid;
-  gap: var(--space-4);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
 }
 
-@media (min-width: 768px) {
-  .content { max-width:1120px; margin:0 auto; grid-template-columns:minmax(0, 1fr) minmax(320px, .8fr); padding:var(--space-6); padding-bottom:var(--space-8); }
+@media (min-width: 1024px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .direction-strip,
+  .helper-text,
+  .inline-error,
+  .primary-btn {
+    grid-column: 1 / -1;
+  }
+
+  .form-field--source { grid-column: 1; }
+  .swap-row { grid-column: 2; margin: 0; padding-bottom: 2px; }
+  .form-field--destination { grid-column: 3; }
+  .form-field--lot { grid-column: 1 / 3; }
+  .form-field--quantity { grid-column: 3; }
 }
 
 @media (min-width: 1280px) {

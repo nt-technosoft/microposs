@@ -682,7 +682,7 @@ onMounted(async () => {
           </Button>
         </div>
 
-        <div class="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div class="grid items-start gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Card class="rounded-2xl bg-background">
             <CardHeader>
               <div class="flex items-start justify-between gap-3">
@@ -799,7 +799,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+        <div class="grid items-start gap-4 lg:grid-cols-[1fr_0.9fr]">
           <Card class="rounded-2xl bg-background">
             <CardHeader>
               <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">

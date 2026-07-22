@@ -1,16 +1,18 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
   aside?: 'narrow' | 'default' | 'balanced'
+  stickyMain?: boolean
   stickyAside?: boolean
 }>(), {
   aside: 'default',
+  stickyMain: false,
   stickyAside: false,
 })
 </script>
 
 <template>
   <div class="workspace-split" :data-aside="aside">
-    <div class="workspace-split__main">
+    <div class="workspace-split__main" :class="{ 'workspace-split__main--sticky': stickyMain }">
       <slot />
     </div>
     <aside class="workspace-split__aside" :class="{ 'workspace-split__aside--sticky': stickyAside }">
@@ -46,6 +48,11 @@ withDefaults(defineProps<{
   }
 
   .workspace-split__aside--sticky {
+    position: sticky;
+    top: calc(var(--sticky-offset) + var(--space-4));
+  }
+
+  .workspace-split__main--sticky {
     position: sticky;
     top: calc(var(--sticky-offset) + var(--space-4));
   }

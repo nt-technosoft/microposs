@@ -98,6 +98,7 @@ describe('responsive presentation primitives', () => {
       },
     })
     const split = mount(WorkspaceSplit, {
+      props: { stickyMain: true },
       slots: {
         default: '<div data-test="main">Работа</div>',
         aside: '<div data-test="aside">Контекст</div>',
@@ -107,5 +108,6 @@ describe('responsive presentation primitives', () => {
     expect(flow.findAll('section').map((node) => node.attributes('data-test'))).toEqual(['first', 'second'])
     expect(split.find('[data-test="main"]').exists()).toBe(true)
     expect(split.find('[data-test="aside"]').exists()).toBe(true)
+    expect(split.find('.workspace-split__main--sticky').exists()).toBe(true)
   })
 })

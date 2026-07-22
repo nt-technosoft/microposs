@@ -1440,9 +1440,13 @@ onBeforeUnmount(() => {
   }
 
   .session-card__compact-note {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-text-primary);
     font-size: var(--text-sm);
     font-weight: var(--font-medium);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

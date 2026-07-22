@@ -123,6 +123,8 @@ function itemClass(item: AppNavItem): string {
         class="app-navigation__section-content"
         :data-collapsed="groupIsCollapsed(group.section.id) ? 'true' : 'false'"
         :data-section-items="group.section.id"
+        :aria-hidden="groupIsCollapsed(group.section.id) ? 'true' : undefined"
+        :inert="groupIsCollapsed(group.section.id) ? true : undefined"
       >
         <div class="app-navigation__section-inner">
           <RouterLink

@@ -26,7 +26,7 @@ withDefaults(defineProps<{
     column-gap: var(--space-3);
   }
 
-  .responsive-flow-columns :slotted(*) {
+  .responsive-flow-columns > :slotted(*) {
     width: 100%;
     margin: 0 0 var(--space-3);
     break-inside: avoid;
