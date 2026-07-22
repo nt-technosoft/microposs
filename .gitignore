@@ -5,6 +5,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/coverage/
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+**/output/playwright/
 frontend/.eslintcache
 frontend/.cache/
 dist/
@@ -56,6 +61,10 @@ graphify-out/
 
 # Local Codex/runtime artifacts
 .codex/
+
+# Linked worktrees are local checkouts, never repository content
+/.worktrees/
+/.claude/worktrees/
 
 # E2E artifacts
 test-results/

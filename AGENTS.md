@@ -86,6 +86,24 @@ relevant checks. Ordinary bounded UI slices may finish with proportional local
 verification; a reviewer never writes production changes unless separately
 assigned as executor.
 
+## Git and worktree hygiene
+
+- Keep the repository root as the clean checkout of the current integration
+  branch. Do not place experiments or linked worktrees in tracked directories.
+- Every isolated track uses a purpose-named `codex/<topic>` branch and a linked
+  worktree under ignored `/.worktrees/<topic>` (or a sibling directory). Never
+  use `/.claude/worktrees/`, anonymous names such as `work3`, or add a worktree
+  path to the index as a gitlink.
+- A worktree is a disposable checkout, not the only copy of work. Before pausing
+  or removing it, commit meaningful changes to its branch. Remove clean inactive
+  worktrees while retaining their branches so they can be recreated later.
+- `node_modules`, build output, caches and browser-test screenshots are
+  reproducible artifacts. Keep them ignored and never copy them into the root
+  checkout as a way to preserve an experiment.
+- Before merge or handoff, inspect `git worktree list` and `git status` in every
+  retained worktree. If unrelated dirty work exists, checkpoint it on a dedicated
+  archive branch before cleaning the integration checkout.
+
 ## Documentation discipline
 
 - New large direction → one epic based on `docs/roadmap/_template.md` plus a
