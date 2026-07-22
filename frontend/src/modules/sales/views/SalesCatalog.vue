@@ -280,6 +280,7 @@ const sessionCompactNote = computed(() => {
 const sessionToggleLabel = computed(() =>
   sessionDetailsExpanded.value ? t('sales.hideShiftDetails') : t('sales.showShiftDetails'),
 )
+const sessionDetailsId = 'sales-shift-details'
 
 function triggerFlash(productId: number) {
   if (flashTimers[productId] !== undefined) {
@@ -640,15 +641,22 @@ onBeforeUnmount(() => {
               {{ activeSession ? t('sales.sessionOpen') : t('sales.sessionClosed') }}
             </h2>
             <p class="session-card__compact-note">{{ sessionCompactNote }}</p>
+            <span
+              class="session-badge session-badge--desktop"
+              :class="{ 'session-badge--open': !!activeSession }"
+            >
+              {{ activeSession ? t('sales.openBadge') : t('sales.closedBadge') }}
+            </span>
           </div>
           <div class="session-card__header-actions">
-            <span class="session-badge" :class="{ 'session-badge--open': !!activeSession }">
+            <span class="session-badge session-badge--mobile" :class="{ 'session-badge--open': !!activeSession }">
               {{ activeSession ? t('sales.openBadge') : t('sales.closedBadge') }}
             </span>
             <button
               class="session-toggle-btn"
               type="button"
               :aria-expanded="sessionDetailsExpanded"
+              :aria-controls="sessionDetailsId"
               :aria-label="sessionToggleLabel"
               @click="sessionDetailsExpanded = !sessionDetailsExpanded"
             >
@@ -670,7 +678,7 @@ onBeforeUnmount(() => {
           </div>
 
           <Transition name="session-collapse">
-            <div v-if="sessionDetailsExpanded" class="session-details">
+            <div v-if="sessionDetailsExpanded" :id="sessionDetailsId" class="session-details">
               <div class="session-meta">
                 <span class="session-meta__item">
                   <Store :size="16" :stroke-width="1.8" />
@@ -718,7 +726,7 @@ onBeforeUnmount(() => {
           </div>
 
           <Transition name="session-collapse">
-            <div v-if="sessionDetailsExpanded" class="session-details">
+            <div v-if="sessionDetailsExpanded" :id="sessionDetailsId" class="session-details">
               <p class="session-card__description">
                 {{ t('sales.shiftDescription') }}
               </p>
@@ -1234,6 +1242,10 @@ onBeforeUnmount(() => {
   color: var(--color-brand-600);
 }
 
+.session-badge--desktop {
+  display: none;
+}
+
 .session-card__header-actions {
   display: inline-flex;
   align-items: center;
@@ -1387,6 +1399,81 @@ onBeforeUnmount(() => {
 }
 
 @media (min-width: 1024px) {
+  .catalog-content {
+    display: block;
+    padding-top: var(--space-5);
+  }
+
+  .session-card {
+    position: static;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    column-gap: var(--space-3);
+    row-gap: var(--space-3);
+    margin-bottom: var(--space-5);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .session-card__header {
+    display: contents;
+  }
+
+  .session-card__title-wrap {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .session-card__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .session-card__compact-note {
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    white-space: nowrap;
+  }
+
+  .session-badge--desktop {
+    display: inline-flex;
+  }
+
+  .session-badge--mobile {
+    display: none;
+  }
+
+  .session-card__header-actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .session-action-row {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .session-action-row :deep(.btn) {
+    width: auto;
+  }
+
+  .session-details {
+    grid-column: 1 / -1;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
   .product-grid {
     grid-template-columns: repeat(4, 1fr);
   }
@@ -1694,7 +1781,9 @@ onBeforeUnmount(() => {
   .cart-btn,
   .added-overlay,
   .added-overlay-enter-active,
-  .added-overlay-leave-active {
+  .added-overlay-leave-active,
+  .session-collapse-enter-active,
+  .session-collapse-leave-active {
     transition: none;
     animation: none;
   }

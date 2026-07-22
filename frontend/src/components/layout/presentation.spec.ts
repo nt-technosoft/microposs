@@ -2,7 +2,9 @@ import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { afterEach, describe, expect, it } from 'vitest'
 import ListWorkbench from './ListWorkbench.vue'
+import ResponsiveFlowColumns from './ResponsiveFlowColumns.vue'
 import ResponsiveOverlay from './ResponsiveOverlay.vue'
+import WorkspaceSplit from './WorkspaceSplit.vue'
 import { clearPageChrome, pageChromeState, registerPageChrome } from './pageChrome'
 
 const i18n = createI18n({
@@ -87,5 +89,23 @@ describe('responsive presentation primitives', () => {
     expect(wrapper.find('[data-test="aside"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="content"]').exists()).toBe(true)
     expect(wrapper.find('.list-workbench__body--with-aside').exists()).toBe(true)
+  })
+
+  it('keeps independent flow and split regions in one DOM order', () => {
+    const flow = mount(ResponsiveFlowColumns, {
+      slots: {
+        default: '<section data-test="first">Первый</section><section data-test="second">Второй</section>',
+      },
+    })
+    const split = mount(WorkspaceSplit, {
+      slots: {
+        default: '<div data-test="main">Работа</div>',
+        aside: '<div data-test="aside">Контекст</div>',
+      },
+    })
+
+    expect(flow.findAll('section').map((node) => node.attributes('data-test'))).toEqual(['first', 'second'])
+    expect(split.find('[data-test="main"]').exists()).toBe(true)
+    expect(split.find('[data-test="aside"]').exists()).toBe(true)
   })
 })

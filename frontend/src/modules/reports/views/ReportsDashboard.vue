@@ -268,8 +268,8 @@ function reportFxSourceLabel(source: string | null | undefined): string {
   return 'курс'
 }
 
-const reportCurrencyHint = computed(() => {
-  if (reportCurrency.value === 'UZS') return 'Функциональная валюта учёта'
+const reportUsdProvenance = computed(() => {
+  if (reportCurrency.value !== 'USD') return null
   const meta = reportCurrencyMeta.value
   if (meta?.currency !== 'USD' || !meta.fx_rate) return 'Курс для отображения не загружен'
   const date = meta.rate_date
@@ -754,6 +754,7 @@ function openProcurementAudit(procurementId: number): void {
                     type="button"
                     class="currency-switch__btn"
                     :class="{ active: reportCurrency === 'UZS' }"
+                    :aria-pressed="reportCurrency === 'UZS'"
                     @click="setReportCurrency('UZS')"
                   >
                     UZS
@@ -762,12 +763,21 @@ function openProcurementAudit(procurementId: number): void {
                     type="button"
                     class="currency-switch__btn"
                     :class="{ active: reportCurrency === 'USD' }"
+                    :aria-pressed="reportCurrency === 'USD'"
+                    :aria-describedby="reportUsdProvenance ? 'report-usd-provenance' : undefined"
                     @click="setReportCurrency('USD')"
                   >
                     USD
                   </button>
                 </div>
-                <span class="report-currency-hint">{{ reportCurrencyHint }}</span>
+                <p
+                  v-if="reportUsdProvenance"
+                  id="report-usd-provenance"
+                  class="report-usd-provenance"
+                  aria-live="polite"
+                >
+                  {{ reportUsdProvenance }}
+                </p>
               </div>
               <button class="action-pill" type="button" @click="openCurrencyExchange">
                 {{ t('finance.exchange') }}
@@ -1628,7 +1638,8 @@ function openProcurementAudit(procurementId: number): void {
   gap: 4px;
 }
 
-.report-currency-hint {
+.report-usd-provenance {
+  margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
   line-height: 1.25;
@@ -2259,7 +2270,7 @@ function openProcurementAudit(procurementId: number): void {
     flex: 1 1 112px;
   }
 
-  .report-currency-hint {
+  .report-usd-provenance {
     max-width: 156px;
     white-space: nowrap;
     overflow: hidden;

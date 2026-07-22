@@ -11,7 +11,6 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import PageChrome from '@/components/layout/PageChrome.vue'
 import PageContainer from '@/components/layout/PageContainer.vue'
-import ListWorkbench from '@/components/layout/ListWorkbench.vue'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -216,39 +215,23 @@ onMounted(async () => {
     </PageChrome>
 
     <PageContainer size="wide" class="products-workspace">
-      <ListWorkbench aside="narrow" sticky-aside>
-        <template #toolbar>
-          <div class="filters-bar">
-            <BaseSearch
-              v-model="searchQuery"
-              :placeholder="t('products.searchPlaceholder')"
-              :debounce="300"
-              @search="onSearch"
-            />
-            <BaseSelect
-              v-model="selectedCategory"
-              class="category-select mobile-category-select"
-              :options="categoryOptions"
-              :title="t('products.categoryFilter')"
-              :placeholder="t('products.allCategories')"
-              @update:model-value="onCategoryChange"
-            />
-          </div>
-        </template>
-
-        <template #aside>
-          <div class="category-filter-panel desktop-category-filter">
-            <span class="category-filter-label">{{ t('products.categoryFilter') }}</span>
-            <BaseSelect
-              v-model="selectedCategory"
-              class="category-select"
-              :options="categoryOptions"
-              :title="t('products.categoryFilter')"
-              :placeholder="t('products.allCategories')"
-              @update:model-value="onCategoryChange"
-            />
-          </div>
-        </template>
+      <section class="products-workbench">
+        <div class="filters-bar">
+          <BaseSearch
+            v-model="searchQuery"
+            :placeholder="t('products.searchPlaceholder')"
+            :debounce="300"
+            @search="onSearch"
+          />
+          <BaseSelect
+            v-model="selectedCategory"
+            class="category-select"
+            :options="categoryOptions"
+            :title="t('products.categoryFilter')"
+            :placeholder="t('products.allCategories')"
+            @update:model-value="onCategoryChange"
+          />
+        </div>
 
         <div v-if="errorMessage" class="error-banner" role="alert">
           {{ errorMessage }}
@@ -343,7 +326,7 @@ onMounted(async () => {
         <span v-else>{{ t('products.loadMore') }}</span>
       </button>
         </div>
-      </ListWorkbench>
+      </section>
     </PageContainer>
 
     <!-- FAB -->
@@ -366,6 +349,10 @@ onMounted(async () => {
 
 .products-workspace {
   padding-top: var(--space-4);
+}
+
+.products-workbench {
+  min-width: 0;
 }
 
 /* Header */
@@ -426,7 +413,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: 0;
+  margin-bottom: var(--space-4);
 }
 
 @media (min-width: 640px) {
@@ -437,20 +424,8 @@ onMounted(async () => {
 
   .filters-bar > :first-child {
     flex: 1;
+    min-width: 0;
   }
-}
-
-.category-filter-panel {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.category-filter-label {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  font-weight: var(--font-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .category-select {
@@ -774,8 +749,9 @@ onMounted(async () => {
     display: inline;
   }
 
-  .mobile-category-select {
-    display: none;
+  .category-select {
+    flex: 0 0 min(18rem, 34%);
+    max-width: 18rem;
   }
 
   .product-row {
@@ -812,9 +788,4 @@ onMounted(async () => {
   }
 }
 
-@media (max-width: 767px) {
-  .desktop-category-filter {
-    display: none;
-  }
-}
 </style>

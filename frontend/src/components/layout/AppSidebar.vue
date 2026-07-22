@@ -44,7 +44,7 @@ const businessName = computed(() => auth.user?.active_business?.name || auth.use
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
-      <AppNavigationPanel :items="items" :collapsed="collapsed" />
+      <AppNavigationPanel :items="items" :collapsed="collapsed" :collapsible-sections="true" />
     </div>
 
     <div class="shrink-0 border-t border-border/70 p-2">
