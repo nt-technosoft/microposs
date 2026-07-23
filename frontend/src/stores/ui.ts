@@ -56,7 +56,7 @@ export const useUIStore = defineStore('ui', () => {
   function loadTheme(): Theme {
     const stored = localStorage.getItem('microposs_theme') as Theme | null
     if (stored) return stored
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    return 'light'
   }
 
   function loadLocale(): Locale {

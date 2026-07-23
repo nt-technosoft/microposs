@@ -60,6 +60,10 @@ class JournalEntry(ImmutableMixin, TenantModel):
         WRITEOFF = 'writeoff', 'Списание'
         TRANSFER = 'transfer', 'Перемещение'
         DEBT_PAYMENT = 'debt_payment', 'Погашение долга'
+        ADVANCE_SETTLE = 'advance_settle', 'Погашение капитального аванса'
+        CAPITAL_RETURN = 'capital_return', 'Возврат капитала'
+        PROFIT_DISTRIBUTION = 'profit_distrib', 'Распределение прибыли'
+        VENTURE_DEBT_REPAY = 'venture_debt_repay', 'Погашение долга венчуру'
 
     operation_type = models.CharField(
         max_length=20,
@@ -155,6 +159,8 @@ class Expense(TenantModel):
         null=True,
         blank=True,
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     functional_amount_uzs = models.DecimalField(max_digits=16, decimal_places=2)
     occurred_at = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
@@ -266,6 +272,8 @@ class CashAccount(TenantModel):
         CASH = 'cash', 'Касса наличных'
         CARD_TERMINAL = 'card_terminal', 'Карт-терминал'
         BANK = 'bank', 'Банковский счёт'
+        AGREEMENT_CAPITAL = 'agreement_capital', 'Капитал инвест-договора (пул)'
+        FUND_CAPITAL = 'fund_capital', 'Капитал инвестиционного фонда (пул)'
 
     name = models.CharField(max_length=120)
     currency = models.CharField(max_length=3, default='UZS')
@@ -345,6 +353,116 @@ class CashEntry(TenantModel):
         return f"CashEntry {self.direction} {self.amount} ({self.account})"
 
 
+class Payment(TenantModel):
+    """
+    Generic append-only money document.
+
+    E07 target: procurement, supplier, capital and dividend payments should use
+    one explicit payment fact instead of hiding financial truth inside line
+    statuses or domain-specific payment rows.
+    """
+
+    class SourceType(models.TextChoices):
+        CASH_ACCOUNT = 'CASH_ACCOUNT', 'Cash account'
+        CAPITAL_POOL = 'CAPITAL_POOL', 'Capital pool'
+        EXTERNAL_PARTNER = 'EXTERNAL_PARTNER', 'External partner'
+
+    class TargetType(models.TextChoices):
+        PROCUREMENT_COST = 'PROCUREMENT_COST', 'Procurement cost'
+        SUPPLIER_PAYABLE = 'SUPPLIER_PAYABLE', 'Supplier payable'
+        CAPITAL_CONTRIBUTION = 'CAPITAL_CONTRIBUTION', 'Capital contribution'
+        FUND_CONTRIBUTION = 'FUND_CONTRIBUTION', 'Fund contribution'
+        DIVIDEND = 'DIVIDEND', 'Dividend'
+
+    class Status(models.TextChoices):
+        POSTED = 'POSTED', 'Posted'
+        REVERSED = 'REVERSED', 'Reversed'
+
+    source_type = models.CharField(max_length=24, choices=SourceType.choices)
+    source_id = models.PositiveIntegerField()
+    target_type = models.CharField(max_length=32, choices=TargetType.choices)
+    target_id = models.PositiveIntegerField()
+    amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+    fx_rate = models.DecimalField(max_digits=16, decimal_places=6, default=Decimal('1'))
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.POSTED)
+    paid_at = models.DateTimeField()
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
+    journal_entry = models.ForeignKey(
+        JournalEntry,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payments',
+    )
+    reversed_payment = models.ForeignKey(
+        'self',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='reversal_payments',
+    )
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'finance_payment'
+        indexes = [
+            models.Index(fields=['tenant', 'paid_at']),
+            models.Index(fields=['tenant', 'source_type', 'source_id']),
+            models.Index(fields=['tenant', 'target_type', 'target_id']),
+            models.Index(fields=['tenant', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'client_request_id'],
+                condition=models.Q(client_request_id__isnull=False),
+                name='uq_finance_payment_idempotent',
+            ),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('Payment is append-only. Use reversal instead of delete.')
+
+
+class PaymentAllocation(TenantModel):
+    """
+    Optional split allocation for a logical payment.
+
+    MVP may use one target per Payment, but this keeps the model ready for
+    multi-target payments without changing the public contract later.
+    """
+
+    payment = models.ForeignKey(
+        Payment,
+        on_delete=models.PROTECT,
+        related_name='allocations',
+    )
+    target_type = models.CharField(max_length=32, choices=Payment.TargetType.choices)
+    target_id = models.PositiveIntegerField()
+    amount = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+
+    class Meta:
+        db_table = 'finance_payment_allocation'
+        indexes = [
+            models.Index(fields=['payment']),
+            models.Index(fields=['tenant', 'target_type', 'target_id']),
+        ]
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('PaymentAllocation is append-only. Use reversal instead of delete.')
+
+
 class CurrencyExchange(TenantModel):
     """
     Atomic currency exchange between two CashAccounts.
@@ -366,6 +484,8 @@ class CurrencyExchange(TenantModel):
     to_amount = models.DecimalField(max_digits=14, decimal_places=2)
     to_currency = models.CharField(max_length=3)
     effective_rate = models.DecimalField(max_digits=14, decimal_places=6)
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
 
@@ -409,6 +529,8 @@ class Refund(TenantModel):
         decimal_places=6,
         default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     account = models.ForeignKey(
         CashAccount,
         on_delete=models.PROTECT,
@@ -465,3 +587,72 @@ class OwnerContribution(TenantModel):
 
     def __str__(self):
         return f"OwnerContribution {self.amount}{self.currency} → {self.to_account}"
+
+
+class OwnerDrawing(TenantModel):
+    """
+    Owner withdrawal from a CashAccount.
+    DR Owner Drawings (3001) | CR CashAccount.
+    Symmetric to OwnerContribution — a separate accounting fact.
+    """
+
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='UZS')
+    from_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='drawings',
+    )
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        db_table = 'finance_owner_drawing'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return f"OwnerDrawing {self.amount}{self.currency} ← {self.from_account}"
+
+
+class CashTransfer(TenantModel):
+    """
+    Same-currency transfer between two CashAccounts.
+    DR to_account linked | CR from_account linked.
+    For cross-currency movements use CurrencyExchange instead.
+    """
+
+    from_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='transfers_out',
+    )
+    to_account = models.ForeignKey(
+        CashAccount,
+        on_delete=models.PROTECT,
+        related_name='transfers_in',
+    )
+    amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3)
+    date = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        db_table = 'finance_cash_transfer'
+        indexes = [
+            models.Index(fields=['tenant', 'date']),
+        ]
+
+    def __str__(self):
+        return f"CashTransfer {self.amount}{self.currency} {self.from_account} → {self.to_account}"

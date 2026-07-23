@@ -57,6 +57,18 @@ modules/sales/
 
 ---
 
+## Shared UI-компоненты
+
+Перед созданием нового поля или селекта проверяй `src/components/`.
+
+- Для суммы с переключением валюты используй `src/components/forms/MoneyCurrencyInput.vue`. Не собирай заново отдельный `input + currency select/button` внутри доменных экранов.
+- Для выбора из короткого списка используй `src/components/base/BaseSelect.vue`, особенно на mobile-first экранах. Он даёт единый trigger и bottom-sheet вместо браузерного select.
+- Если один и тот же паттерн повторяется в 2-3 местах, выноси его в `src/components/base`, `src/components/forms` или `src/components/feedback`.
+- Domain-компоненты в `modules/<domain>/components` должны отвечать за бизнес-сценарий, а не переизобретать базовые контролы.
+- Старые intake/procurement компоненты можно использовать как UX-reference, но новый общий UI-паттерн должен жить в shared-компонентах.
+
+---
+
 ## API-слой
 
 ### `src/api/client.ts`
@@ -237,10 +249,14 @@ if (result.is_computing) {
 ## Дизайн-система
 
 - **Точки останова:** 375px → 768px → 1024px → 1440px (mobile-first)
-- **Дизайн-токены:** CSS custom properties в `src/assets/tokens.css`
+- **Дизайн-токены:** CSS custom properties в `src/assets/styles/tokens.css`
+- **UI foundation:** Tailwind CSS v4 + shadcn-vue + Reka UI, подключены
+  инкрементально поверх существующих MicroPOS tokens.
 - **Иконки:** Lucide Vue Next (никаких эмодзи как структурных иконок)
 - **Анимации:** 150–300мс; `prefers-reduced-motion` поддерживается
 - **Компоненты:** `<script setup>` + Composition API везде
+
+Подробнее: [`frontend-design-system.md`](./frontend-design-system.md).
 
 ---
 

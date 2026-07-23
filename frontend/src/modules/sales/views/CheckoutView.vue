@@ -13,6 +13,8 @@ import { PaymentMethod } from '@/types/enums'
 import type { Customer } from '@/types/models'
 import { formatPrice } from '@/utils/currency'
 import BaseButton from '@/components/base/BaseButton.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 import SaleSuccessScreen from '../components/SaleSuccessScreen.vue'
 import CustomerSelectSheet from '../components/CustomerSelectSheet.vue'
 
@@ -187,6 +189,14 @@ function goToHistory(): void {
 
 <template>
   <div class="checkout-view">
+    <PageChrome class="desktop-page-chrome" :title="t('sales.checkoutTitle')">
+      <template #primary>
+        <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
+          <ArrowLeft :size="20" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
+
     <!-- Success screen overlay -->
     <Transition name="success-screen">
       <SaleSuccessScreen
@@ -208,6 +218,7 @@ function goToHistory(): void {
         <div class="header-spacer" />
       </header>
 
+      <PageContainer class="checkout-shell" size="wide" :padded="false">
       <main class="checkout-content">
         <!-- Amount hero -->
         <section class="amount-section" :aria-label="t('sales.amountDue')">
@@ -222,7 +233,6 @@ function goToHistory(): void {
             </strong>
           </div>
           <p class="amount-meta">
-            {{ cartStore.itemCount }}
             {{ t('sales.itemCount', { count: cartStore.itemCount }) }}
           </p>
         </section>
@@ -372,6 +382,7 @@ function goToHistory(): void {
           {{ t('sales.confirmSale') }}
         </BaseButton>
       </footer>
+      </PageContainer>
     </template>
 
     <!-- Customer selection sheet -->
@@ -393,6 +404,10 @@ function goToHistory(): void {
   flex-direction: column;
   min-height: 100dvh;
   background: var(--color-bg-primary);
+}
+
+.desktop-page-chrome {
+  display: none;
 }
 
 /* ==============================
@@ -875,24 +890,78 @@ function goToHistory(): void {
    ============================== */
 @media (min-width: 768px) {
   .checkout-view {
-    max-width: 540px;
-    margin: 0 auto;
+    min-height: 100%;
   }
 
-  .checkout-footer {
-    left: 50%;
-    transform: translateX(-50%);
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  .desktop-page-chrome {
+    display: block;
   }
-}
 
-@media (min-width: 1024px) {
+  .checkout-header {
+    display: none;
+  }
+
+  .checkout-shell {
+    padding: var(--space-6) clamp(var(--space-5), 3vw, var(--space-8));
+  }
+
   .checkout-content {
-    padding-bottom: calc(var(--space-4) + 88px);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.82fr);
+    align-items: start;
+    gap: var(--space-5) clamp(var(--space-5), 3vw, var(--space-8));
+    padding: 0;
+  }
+
+  .amount-section,
+  .session-alert {
+    grid-column: 1 / -1;
+  }
+
+  .section[aria-labelledby="payment-heading"],
+  .section[aria-labelledby="customer-heading"] {
+    grid-column: 1;
+  }
+
+  .section[aria-labelledby="order-heading"] {
+    grid-column: 2;
+    grid-row: 3 / span 2;
+  }
+
+  .amount-section {
+    align-items: flex-start;
+    padding: var(--space-5) var(--space-6);
+    text-align: left;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .amount-totals {
+    justify-items: start;
+  }
+
+  .amount-total {
+    font-size: clamp(1.75rem, 3vw, 2.5rem);
+  }
+
+  .session-alert {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
   .checkout-footer {
-    bottom: 0;
+    position: static;
+    width: min(420px, calc(50% - var(--space-4)));
+    max-width: none;
+    margin: var(--space-5) 0 0 auto;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-4);
+  }
+
+  .order-lines {
+    max-height: 420px;
+    overflow-y: auto;
   }
 }
 

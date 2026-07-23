@@ -5,7 +5,7 @@ from decimal import Decimal
 from apps.core.models import Partner
 from apps.customers.models import ReceivableEntry
 from apps.finance.models import CashEntry, JournalEntry
-from apps.partnerships.models import PartnerLedgerEntry
+from apps.partnerships.models import ProcurementSaleRealization
 from apps.sales.currency import payment_functional_amount_uzs
 
 
@@ -36,27 +36,44 @@ def _contract_partner_meta(line) -> dict[str, dict]:
     }
 
 
-def _line_partner_split(line, partners_by_id: dict[int, Partner]) -> list[dict]:
+def _line_partner_split(line, partners_by_id: dict[int, Partner], realization_rows: list) -> list[dict]:
+    """E17 T-1.4: per-partner split from venture realization events (single
+    source of truth), net of any reversals. Shows recovered capital, provisional
+    profit and loss — not the legacy per-line gross-profit-by-profit-share."""
     gross_profit = _money(line.gross_profit)
-    snapshot = line.profit_distribution_snapshot or {}
     partner_meta = _contract_partner_meta(line)
+
+    agg: dict[int, dict] = {}
+    for event in realization_rows:
+        sign = (
+            Decimal('-1')
+            if event.event_type == ProcurementSaleRealization.EventType.REVERSAL
+            else Decimal('1')
+        )
+        bucket = agg.setdefault(event.partner_id, {
+            'role': event.role,
+            'capital_recovered': _ZERO,
+            'provisional_profit': _ZERO,
+            'loss': _ZERO,
+        })
+        bucket['capital_recovered'] += sign * _money(event.capital_recovered_uzs)
+        bucket['provisional_profit'] += sign * _money(event.provisional_profit_uzs)
+        bucket['loss'] += _money(event.loss_uzs)
+
     rows: list[dict] = []
-
-    for partner_id_str, amount in snapshot.items():
-        try:
-            partner_id = int(partner_id_str)
-        except (TypeError, ValueError):
-            partner_id = None
-
-        meta = partner_meta.get(str(partner_id_str), {})
-        partner = partners_by_id.get(partner_id) if partner_id is not None else None
+    for partner_id, values in agg.items():
+        meta = partner_meta.get(str(partner_id), {})
+        partner = partners_by_id.get(partner_id)
         rows.append({
             'partner_id': partner_id,
-            'partner_name': partner.display_name if partner is not None else f'Партнёр #{partner_id_str}',
-            'role': meta.get('role') or (partner.role if partner is not None else 'UNKNOWN'),
+            'partner_name': partner.display_name if partner is not None else f'Партнёр #{partner_id}',
+            'role': meta.get('role') or values['role'] or (partner.role if partner is not None else 'UNKNOWN'),
             'capital_share': str(meta.get('capital_share')) if meta.get('capital_share') is not None else None,
             'profit_share': str(meta.get('profit_share')) if meta.get('profit_share') is not None else None,
-            'profit_amount': str(_money(amount)),
+            'capital_recovered': str(_money(values['capital_recovered'])),
+            'provisional_profit': str(_money(values['provisional_profit'])),
+            'loss': str(_money(values['loss'])),
+            'profit_amount': str(_money(values['provisional_profit'])),
         })
 
     if not rows and gross_profit != _ZERO:
@@ -66,6 +83,9 @@ def _line_partner_split(line, partners_by_id: dict[int, Partner]) -> list[dict]:
             'role': 'OPERATOR',
             'capital_share': None,
             'profit_share': None,
+            'capital_recovered': str(_ZERO),
+            'provisional_profit': str(gross_profit),
+            'loss': str(_ZERO),
             'profit_amount': str(gross_profit),
         })
 
@@ -80,9 +100,7 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
     lines = sorted(list(sale.lines.all()), key=lambda line: line.id)
 
     partner_ids: set[int] = set()
-    line_source_refs: list[str] = []
     for line in lines:
-        line_source_refs.append(f'sale_line:{line.id}')
         for partner_id_str in (line.profit_distribution_snapshot or {}).keys():
             try:
                 partner_ids.add(int(partner_id_str))
@@ -132,14 +150,18 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
         .order_by('date', 'id')
     )
 
-    ledger_entries = list(
-        PartnerLedgerEntry.objects.filter(
+    line_ids = [line.id for line in lines]
+    realization_entries = list(
+        ProcurementSaleRealization.objects.filter(
             tenant_id=tenant_id,
-            source_ref__in=line_source_refs,
+            sale_line_id__in=line_ids,
         )
-        .select_related('ledger__partner', 'ledger__procurement')
-        .order_by('date', 'id')
-    ) if line_source_refs else []
+        .select_related('partner', 'procurement')
+        .order_by('created_at', 'id')
+    ) if line_ids else []
+    realizations_by_line: dict[int, list] = {}
+    for event in realization_entries:
+        realizations_by_line.setdefault(event.sale_line_id, []).append(event)
 
     sale_payment_methods: list[str] = []
     paid_total = _ZERO
@@ -162,7 +184,9 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
         margin_percent = _percent(gross_profit, revenue)
         lot = line.lot
         procurement = getattr(getattr(lot, 'procurement_item', None), 'procurement', None)
-        partner_split = _line_partner_split(line, partners_by_id)
+        partner_split = _line_partner_split(
+            line, partners_by_id, realizations_by_line.get(line.id, []),
+        )
         line_investor_profit = sum(
             (
                 _money(item['profit_amount'])
@@ -200,7 +224,7 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
             },
             'procurement': {
                 'id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,
@@ -288,21 +312,22 @@ def build_sale_explanation(*, sale, tenant_id: int) -> dict:
             }
             for journal in journal_entries
         ],
-        'ledger_entries': [
+        'realization_entries': [
             {
-                'id': entry.id,
-                'date': entry.date,
-                'entry_type': entry.entry_type,
-                'amount': str(_money(entry.amount)),
-                'currency': entry.currency,
-                'functional_amount_uzs': str(_money(entry.functional_amount_uzs)),
-                'source_ref': entry.source_ref,
-                'partner_id': entry.ledger.partner_id,
-                'partner_name': entry.ledger.partner.display_name,
-                'partner_role': entry.ledger.partner.role,
-                'procurement_id': entry.ledger.procurement_id,
+                'id': event.id,
+                'date': event.created_at,
+                'event_type': event.event_type,
+                'capital_recovered_uzs': str(_money(event.capital_recovered_uzs)),
+                'provisional_profit_uzs': str(_money(event.provisional_profit_uzs)),
+                'loss_uzs': str(_money(event.loss_uzs)),
+                'is_partner_liability': event.is_partner_liability,
+                'source_ref': event.source_ref,
+                'partner_id': event.partner_id,
+                'partner_name': event.partner.display_name if event.partner_id else None,
+                'partner_role': event.role,
+                'procurement_id': event.procurement_id,
             }
-            for entry in ledger_entries
+            for event in realization_entries
         ],
         'lines': line_rows,
     }

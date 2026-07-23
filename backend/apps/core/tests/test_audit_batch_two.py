@@ -23,60 +23,11 @@ class AuditBatchTwoTests(APITestCase):
     def auth_investor(self) -> None:
         self.client.force_authenticate(user=User.objects.get(username='t_investor'))
 
-    def test_supplier_payment_reduces_payable_and_updates_owner_cash_flow(self):
-        self.ctx['supplier'].outstanding_balance = Decimal('500000.00')
-        self.ctx['supplier'].save(update_fields=['outstanding_balance', 'updated_at'])
-
-        today = timezone.localdate().isoformat()
-
-        self.auth_owner()
-
-        payment = self.client.post(
-            f"/api/v1/suppliers/suppliers/{self.ctx['supplier'].id}/pay/",
-            {
-                'amount': '100000.00',
-                'payment_method': 'cash',
-            },
-            format='json',
-        )
-        self.assertEqual(payment.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(payment.data['amount'], '100000.00')
-
-        self.ctx['supplier'].refresh_from_db()
-        self.assertEqual(self.ctx['supplier'].outstanding_balance, Decimal('400000.00'))
-
-        payables = self.client.get('/api/v1/suppliers/suppliers/payables-summary/')
-        self.assertEqual(payables.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(payables.data), 1)
-        self.assertEqual(Decimal(payables.data[0]['outstanding_balance']), Decimal('400000.00'))
-
-        cash_flow = self.client.get(
-            '/api/v1/finance/cash-flow/',
-            {'date_from': today, 'date_to': today},
-        )
-        self.assertEqual(cash_flow.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(cash_flow.data), 1)
-        cash_flow_row = cash_flow.data[0]
-        self.assertEqual(
-            Decimal(cash_flow_row['cash_out_supplier_payments']),
-            Decimal('100000.00'),
-        )
-        self.assertEqual(
-            Decimal(cash_flow_row['net_cash_flow']),
-            Decimal('-100000.00'),
-        )
-
-        journal = JournalEntry.objects.prefetch_related('lines__account').get(
-            tenant_id=self.ctx['business'].id,
-            operation_type='payment',
-            operation_id=payment.data['id'],
-        )
-        journal_lines = {
-            line.account.code: (line.debit, line.credit)
-            for line in journal.lines.all()
-        }
-        self.assertEqual(journal_lines['2000'], (Decimal('100000.00'), Decimal('0.00')))
-        self.assertEqual(journal_lines['1000'], (Decimal('0.00'), Decimal('100000.00')))
+    # Deleted in E08 Phase 2: the legacy /api/v1/suppliers/suppliers/<id>/pay/
+    # endpoint set a free-floating Supplier.outstanding_balance. The field is
+    # now a derived @property over SupplierPayable / finance.Payment, so a
+    # detached SupplierPayment cannot reduce it. Supplier-payable payments
+    # belong on record_payable_payment (covered by test_e07_supplier_payables).
 
     def test_investor_dashboard_exposes_capital_state_at_cost_basis(self):
         procurement, lot = seed_received_procurement(self.ctx)

@@ -2,8 +2,8 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from apps.partnerships.models import PartnerLedgerEntry
-from apps.partnerships.services import get_partner_aggregate
+from apps.partnerships.models import AgreementAllocation, PartnerLedgerEntry
+from apps.partnerships.agreement_services import get_partner_aggregate
 from apps.sales.models import SalePayment
 from apps.sales.services import create_sale
 
@@ -40,18 +40,22 @@ class PartnerLedgerAggregateTests(TestCase):
 
         investor_capital_in = sum(
             (
-                contribution.amount
-                for contribution in procurement.balance.contributions.filter(
+                allocation.amount
+                for allocation in AgreementAllocation.objects.filter(
+                    procurement=procurement,
                     partner_id=ctx['investor'].id,
+                    direction=AgreementAllocation.Direction.TO_PROCUREMENT,
                 )
             ),
             Decimal('0.00'),
         )
         operator_capital_in = sum(
             (
-                contribution.amount
-                for contribution in procurement.balance.contributions.filter(
+                allocation.amount
+                for allocation in AgreementAllocation.objects.filter(
+                    procurement=procurement,
                     partner_id=ctx['operator'].id,
+                    direction=AgreementAllocation.Direction.TO_PROCUREMENT,
                 )
             ),
             Decimal('0.00'),
@@ -75,51 +79,30 @@ class PartnerLedgerAggregateTests(TestCase):
         self.assertEqual(investor['dividends_paid'], Decimal('0.00'))
         self.assertEqual(operator['dividends_paid'], Decimal('0.00'))
 
-        self.assertEqual(investor['profit_pending_payout'], investor_profit)
-        self.assertEqual(operator['profit_pending_payout'], operator_profit)
-        self.assertGreater(investor['profit_pending_payout'], Decimal('0'))
-        self.assertGreater(operator['profit_pending_payout'], Decimal('0'))
+        # E17: venture profit is not payable before a venture settlement.
+        self.assertEqual(investor['profit_pending_payout'], Decimal('0.00'))
+        self.assertEqual(operator['profit_pending_payout'], Decimal('0.00'))
 
-        investor_entries = list(
+        # E17 T-1.5/T-1.6: the PartnerLedgerEntry profit triad is no longer
+        # written; the ledger holds only physical events (capital/dividends).
+        triad = {
+            PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
+            PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
+            PartnerLedgerEntry.EntryType.LOSS_INCURRED,
+        }
+        self.assertFalse(
             PartnerLedgerEntry.objects.filter(
-                ledger__partner_id=ctx['investor'].id,
                 ledger__tenant_id=ctx['business'].id,
-            )
-        )
-        operator_entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__partner_id=ctx['operator'].id,
-                ledger__tenant_id=ctx['business'].id,
-            )
-        )
-        self.assertEqual(
-            sum(
-                (
-                    entry.amount
-                    for entry in investor_entries
-                    if entry.entry_type == PartnerLedgerEntry.EntryType.PROFIT_ACCRUED
-                ),
-                Decimal('0.00'),
-            ),
-            investor_profit,
-        )
-        self.assertEqual(
-            sum(
-                (
-                    entry.amount
-                    for entry in operator_entries
-                    if entry.entry_type == PartnerLedgerEntry.EntryType.PROFIT_ACCRUED
-                ),
-                Decimal('0.00'),
-            ),
-            operator_profit,
+                entry_type__in=triad,
+            ).exists()
         )
 
         self.assertEqual(
             investor['profit_accrued'] + operator['profit_accrued'],
             (sale.total_amount - sale.total_cogs).quantize(Decimal('0.01')),
         )
+        agreement = procurement.agreement_allocations.first().agreement
         self.assertEqual(
             investor['by_currency']['USD']['capital_in'] + operator['by_currency']['USD']['capital_in'],
-            procurement.contract.planned_budget,
+            agreement.planned_budget,
         )

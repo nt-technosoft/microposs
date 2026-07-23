@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.services import publish_event
+from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
 from apps.finance.models import CashAccount, CashEntry
 from apps.finance.services import create_cash_entry, record_journal_from_cash_entry
 
@@ -28,7 +29,9 @@ def accrue_debt(
     customer_id: int,
     amount: Decimal,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
+    fx_rate_source: str = '',
+    fx_rate_date=None,
     due_date=None,
     source_ref: str = '',
     date=None,
@@ -39,6 +42,15 @@ def accrue_debt(
     """
     if date is None:
         date = timezone.now()
+    currency = str(currency or 'UZS').upper()
+    fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=fx_rate,
+    )
+    resolved_fx_source = fx_rate_source or fx_snapshot.source
+    resolved_fx_date = fx_rate_date or fx_snapshot.rate_date
 
     with transaction.atomic():
         customer = Customer.objects.select_for_update().get(
@@ -53,7 +65,9 @@ def accrue_debt(
             date=date,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=resolved_fx_source,
+            fx_rate_date=resolved_fx_date,
             entry_type=ReceivableEntry.EntryType.DEBT_ACCRUED,
             due_date=due_date,
             source_ref=source_ref,
@@ -87,7 +101,7 @@ def record_customer_payment(
     amount: Decimal,
     payment_method: str,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
     notes: str = '',
     payment_date=None,
     account_id: int | None = None,
@@ -102,6 +116,12 @@ def record_customer_payment(
         payment_date = timezone.now()
 
     currency = currency.upper()
+    fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=payment_date,
+        fx_rate_snapshot=fx_rate,
+    )
 
     with transaction.atomic():
         customer = Customer.objects.select_for_update().get(
@@ -115,7 +135,9 @@ def record_customer_payment(
             customer=customer,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             payment_method=payment_method,
             date=payment_date,
             notes=notes,
@@ -150,7 +172,9 @@ def record_customer_payment(
             date=payment_date,
             amount=-amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             entry_type=ReceivableEntry.EntryType.REPAYMENT,
             source_ref=f'customer_payment:{payment.pk}',
         )

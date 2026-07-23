@@ -11,6 +11,16 @@ import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 import BaseButton from '@/components/base/BaseButton.vue'
 import QuantityControl from '@/components/forms/QuantityControl.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 const router = useRouter()
 const cartStore = useCartStore()
@@ -98,10 +108,33 @@ function confirmClear(): void {
 function cancelClear(): void {
   showClearConfirm.value = false
 }
+
+function updateClearConfirm(open: boolean): void {
+  showClearConfirm.value = open
+}
 </script>
 
 <template>
   <div class="cart-view">
+    <PageChrome class="desktop-page-chrome" :title="t('sales.cart')">
+      <template #primary>
+        <div class="desktop-header-actions">
+          <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
+            <ArrowLeft :size="20" :stroke-width="2" />
+          </button>
+          <button
+            v-if="!cartStore.isEmpty"
+            class="clear-btn"
+            :aria-label="t('sales.clearCart')"
+            @click="handleClearRequest"
+          >
+            <Trash2 :size="18" :stroke-width="1.75" />
+            <span>{{ t('sales.clearCart') }}</span>
+          </button>
+        </div>
+      </template>
+    </PageChrome>
+
     <!-- Header -->
     <header class="cart-header">
       <button class="back-btn" :aria-label="t('common.back')" @click="goBack">
@@ -120,6 +153,7 @@ function cancelClear(): void {
       <div v-else class="header-spacer" />
     </header>
 
+    <PageContainer class="cart-container" size="wide" :padded="false">
     <!-- No session warning -->
     <div v-if="!sessionStore.isOpen" class="session-warning">
       <div class="session-warning__icon">
@@ -134,6 +168,7 @@ function cancelClear(): void {
       </BaseButton>
     </div>
 
+    <div class="cart-workspace">
     <!-- Cart content -->
     <main class="cart-content">
       <!-- Empty state -->
@@ -251,26 +286,26 @@ function cancelClear(): void {
         {{ t('sales.checkoutOrder') }} →
       </BaseButton>
     </footer>
+    </div>
+    </PageContainer>
 
     <!-- Clear confirm dialog -->
-    <Teleport to="body">
-      <Transition name="overlay">
-        <div v-if="showClearConfirm" class="confirm-overlay" @click.self="cancelClear">
-          <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-            <h3 id="confirm-title" class="confirm-dialog__title">{{ t('sales.clearCartQuestion') }}</h3>
-            <p class="confirm-dialog__text">{{ t('sales.clearCartText') }}</p>
-            <div class="confirm-dialog__actions">
-              <BaseButton variant="ghost" size="md" @click="cancelClear">
-                {{ t('common.cancel') }}
-              </BaseButton>
-              <BaseButton variant="danger" size="md" @click="confirmClear">
-                {{ t('sales.clearCart') }}
-              </BaseButton>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <Dialog :open="showClearConfirm" @update:open="updateClearConfirm">
+      <DialogContent class="confirm-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t('sales.clearCartQuestion') }}</DialogTitle>
+          <DialogDescription>{{ t('sales.clearCartText') }}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter class="confirm-dialog__actions">
+          <BaseButton variant="ghost" size="md" @click="cancelClear">
+            {{ t('common.cancel') }}
+          </BaseButton>
+          <BaseButton variant="danger" size="md" @click="confirmClear">
+            {{ t('sales.clearCart') }}
+          </BaseButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -283,6 +318,16 @@ function cancelClear(): void {
   flex-direction: column;
   min-height: 100dvh;
   background: var(--color-bg-primary);
+}
+
+.desktop-page-chrome {
+  display: none;
+}
+
+.desktop-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* ==============================
@@ -641,44 +686,8 @@ function cancelClear(): void {
   color: var(--color-text-secondary);
 }
 
-/* ==============================
-   Confirm dialog overlay
-   ============================== */
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-}
-
 .confirm-dialog {
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
-  padding: var(--space-6);
-  width: 100%;
-  max-width: 340px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.confirm-dialog__title {
-  font-size: var(--text-lg);
-  font-weight: var(--font-bold);
-  color: var(--color-text-primary);
-  margin: 0;
-}
-
-.confirm-dialog__text {
-  font-size: var(--text-base);
-  color: var(--color-text-secondary);
-  margin: 0;
-  line-height: var(--leading-normal);
+  max-width: 380px;
 }
 
 .confirm-dialog__actions {
@@ -718,54 +727,74 @@ function cancelClear(): void {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-.overlay-enter-active,
-.overlay-leave-active {
-  transition: opacity var(--duration-fast) var(--ease-out);
-}
-
-.overlay-enter-from,
-.overlay-leave-to {
-  opacity: 0;
-}
-
-.overlay-enter-active .confirm-dialog {
-  animation: dialog-in var(--duration-normal) var(--ease-spring);
-}
-
-@keyframes dialog-in {
-  from {
-    opacity: 0;
-    transform: scale(0.92) translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
 /* ==============================
    Responsive
    ============================== */
 @media (min-width: 768px) {
   .cart-view {
-    max-width: 540px;
-    margin: 0 auto;
+    min-height: 100%;
   }
 
-  .cart-footer {
-    left: 50%;
-    transform: translateX(-50%);
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  .desktop-page-chrome {
+    display: block;
   }
-}
 
-@media (min-width: 1024px) {
+  .cart-header {
+    display: none;
+  }
+
+  .cart-container {
+    padding: var(--space-6) clamp(var(--space-5), 3vw, var(--space-8));
+  }
+
+  .session-warning {
+    margin: 0 0 var(--space-5);
+  }
+
+  .cart-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    align-items: start;
+    gap: clamp(var(--space-5), 3vw, var(--space-8));
+  }
+
   .cart-content {
-    padding-bottom: calc(var(--space-4) + 140px);
+    min-width: 0;
+    padding: 0;
+  }
+
+  .cart-list {
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-elevated);
+  }
+
+  .cart-item {
+    border: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .cart-item:last-child {
+    border-bottom: 0;
   }
 
   .cart-footer {
-    bottom: 0;
+    position: sticky;
+    top: calc(var(--sticky-offset) + var(--space-4));
+    right: auto;
+    bottom: auto;
+    left: auto;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-5);
   }
 }
 

@@ -115,11 +115,10 @@ def create_writeoff(
     Flow:
       1. Decrement LotStock at the chosen warehouse (source of stock loss).
       2. Create RiskEvent + StockDisposal(reason=WRITEOFF).
-      3. For each partner on the lot → PartnerLedgerEntry(LOSS_INCURRED, amount × capital_share).
+      3. Record the partner loss as a venture realization event (LOSS), split
+         by capital_share; negligence becomes a partner-liability position.
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
-    from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
 
     if quantity < 1:
         raise ValueError('Writeoff quantity must be >= 1.')
@@ -129,6 +128,12 @@ def create_writeoff(
             pk=lot_id,
             tenant_id=tenant_id,
         )
+
+        # E17 T-3.3: no economy-changing op on a closed procurement venture.
+        _procurement = getattr(getattr(lot, 'procurement_item', None), 'procurement', None)
+        if _procurement is not None:
+            from apps.partnerships.venture import assert_procurement_open
+            assert_procurement_open(_procurement)
 
         stock = LotStock.objects.select_for_update().get(
             tenant_id=tenant_id,
@@ -199,28 +204,22 @@ def create_writeoff(
             procurement_id = lot.procurement_item.procurement_id
 
         if procurement_id and partners_meta:
+            # E17 T-1.5: partner loss is recorded only as a venture realization
+            # event (single source of truth). The legacy LOSS_INCURRED ledger
+            # write is gone; negligence flows through is_partner_liability.
             loss_distribution = _writeoff_loss_distribution(
                 contract_snapshot=contract_snapshot,
                 loss_amount=monetary_impact,
                 negligence=negligence,
             )
-            for partner_id_str, loss_str in loss_distribution.items():
-                partner_id = int(partner_id_str)
-                loss_share = Decimal(str(loss_str))
-                if loss_share <= 0:
-                    continue
-                ledger = get_or_create_ledger(
-                    procurement_id=procurement_id,
-                    partner_id=int(partner_id),
-                    tenant_id=tenant_id,
-                )
-                append_ledger_entry(
-                    ledger=ledger,
-                    entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
-                    amount=loss_share,
-                    currency='UZS',
-                    source_ref=f'writeoff:{risk_event.pk}',
-                )
+            from apps.partnerships.venture import record_lot_loss_realization
+            record_lot_loss_realization(
+                lot=lot,
+                quantity=quantity,
+                loss_distribution=loss_distribution,
+                source_ref=f'writeoff:{risk_event.pk}',
+                is_partner_liability=negligence,
+            )
 
         # Journal entry (bookkeeping)
         from apps.finance.services import create_journal_entry

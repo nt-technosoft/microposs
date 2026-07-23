@@ -206,14 +206,21 @@ class SalePayment(TenantModel):
         decimal_places=6,
         default=Decimal('1'),
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     method = models.CharField(max_length=20, choices=Method.choices)
     role = models.CharField(
         max_length=20,
         choices=Role.choices,
         default=Role.INCOMING,
     )
-    # FK to finance.CashAccount lands in PR-7; keep as nullable int for now.
-    account_id = models.IntegerField(null=True, blank=True)
+    account = models.ForeignKey(
+        'finance.CashAccount',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
 
     class Meta:
         db_table = 'sales_sale_payment'
@@ -266,6 +273,8 @@ class SaleLine(TenantModel):
         default=Decimal('1'),
         help_text='Immutable FX snapshot used to convert operation price to UZS.',
     )
+    fx_rate_source = models.CharField(max_length=16, blank=True, default='')
+    fx_rate_date = models.DateField(null=True, blank=True)
     base_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -325,7 +334,9 @@ class Return(TenantModel):
     """
     Return operation linked to a specific sale.
     resolution RESTOCK → goods re-enter stock (LotStock += qty).
-    resolution DISPOSE → goods are disposed (StockDisposal + LOSS_INCURRED).
+    resolution DISPOSE → goods are disposed (StockDisposal + venture loss realization).
+    Idempotent on client_request_id: a repeat submit returns the existing Return
+    without creating a second one (E17 T-4.1).
     """
 
     class Resolution(models.TextChoices):
@@ -358,6 +369,7 @@ class Return(TenantModel):
     )
     date = models.DateTimeField()
     notes = models.TextField(blank=True, default='')
+    client_request_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = 'sales_return'

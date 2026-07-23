@@ -25,6 +25,14 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: false, layout: 'blank' },
   },
 
+  // Public integration docs (no auth)
+  {
+    path: '/docs/integrations',
+    name: 'integration-docs',
+    component: () => import('@/modules/docs/views/IntegrationDocsView.vue'),
+    meta: { requiresAuth: false, layout: 'blank' },
+  },
+
   // Sales (default tab)
   {
     path: '/',
@@ -93,7 +101,7 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner', 'warehouse'] },
   },
 
-  // Procurements (rendered by restored intake views until full slice rewrite)
+  // Procurements
   {
     path: '/procurements/agreements',
     name: 'agreement-list',
@@ -121,19 +129,19 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/procurements/create',
     name: 'procurement-create',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspaceView.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id/edit',
     name: 'procurement-edit',
-    component: () => import('@/modules/intake/views/IntakeCreate.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspaceView.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
     path: '/procurements/:id',
     name: 'procurement-detail',
-    component: () => import('@/modules/intake/views/IntakeDetail.vue'),
+    component: () => import('@/modules/intake/views/ProcurementWorkspaceView.vue'),
     meta: { roles: ['owner', 'warehouse'] },
   },
   {
@@ -185,6 +193,12 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['owner'] },
   },
   {
+    path: '/finance/cash',
+    name: 'cash-accounts',
+    component: () => import('@/modules/finance/views/CashAccountsView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
     path: '/finance/exchange',
     name: 'finance-exchange',
     component: () => import('@/modules/finance/views/CurrencyExchangeView.vue'),
@@ -195,6 +209,18 @@ const routes: RouteRecordRaw[] = [
     name: 'owner-investors',
     component: () => import('@/modules/investors/views/OwnerInvestors.vue'),
     meta: { roles: ['owner'] },
+  },
+  {
+    path: '/investors/funds',
+    name: 'fund-list',
+    redirect: { name: 'investor-funds' },
+    meta: { roles: ['investor'] },
+  },
+  {
+    path: '/investors/funds/:id',
+    name: 'fund-detail',
+    redirect: (to) => ({ name: 'investor-fund-detail', params: to.params }),
+    meta: { roles: ['investor'] },
   },
   {
     path: '/platform-admin',
@@ -214,6 +240,12 @@ const routes: RouteRecordRaw[] = [
     path: '/suppliers',
     name: 'suppliers',
     component: () => import('@/modules/more/views/SuppliersView.vue'),
+    meta: { roles: ['owner'] },
+  },
+  {
+    path: '/suppliers/payables',
+    name: 'supplier-payables',
+    component: () => import('@/modules/suppliers/views/SupplierPayablesView.vue'),
     meta: { roles: ['owner'] },
   },
   {
@@ -249,6 +281,24 @@ const routes: RouteRecordRaw[] = [
     meta: { roles: ['investor'], layout: 'investor' },
   },
   {
+    path: '/investor/funds',
+    name: 'investor-funds',
+    component: () => import('@/modules/investors/views/FundList.vue'),
+    meta: { roles: ['investor'], layout: 'investor' },
+  },
+  {
+    path: '/investor/funds/join/:token',
+    name: 'fund-join',
+    component: () => import('@/modules/investors/views/FundJoin.vue'),
+    meta: { requiresAuth: false, layout: 'investor' },
+  },
+  {
+    path: '/investor/funds/:id',
+    name: 'investor-fund-detail',
+    component: () => import('@/modules/investors/views/FundDetail.vue'),
+    meta: { roles: ['investor'], layout: 'investor' },
+  },
+  {
     path: '/investor/agreements/:id',
     name: 'investor-agreement',
     component: () => import('@/modules/investors/views/InvestorAgreementDetail.vue'),
@@ -263,6 +313,12 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/investor/contracts/:id',
     redirect: (to) => `/investor/procurements/${to.params.id}`,
+  },
+  {
+    path: '/settings/integrations',
+    name: 'integrations',
+    component: () => import('@/modules/integrations/views/IntegrationsListView.vue'),
+    meta: { requiresAuth: true },
   },
 ]
 

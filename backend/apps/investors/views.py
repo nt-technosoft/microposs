@@ -10,8 +10,10 @@ from rest_framework.views import APIView
 
 from apps.core.models import Partner
 from apps.core.permissions import IsOwner, IsInvestor
-from apps.partnerships.models import ProcurementPartnerLedger
-from apps.partnerships.services import get_partner_aggregate
+from apps.partnerships.models import PayoutObligation, ProcurementPartnerLedger
+from apps.partnerships.serializers import PayoutObligationSerializer, DisputeCaseSerializer
+from apps.partnerships.lifecycle_services import confirm_payout_obligation, open_dispute
+from apps.partnerships.agreement_services import get_partner_aggregate
 
 from .models import Investor, InvestorContract
 from .serializers import (
@@ -89,7 +91,7 @@ class InvestorProcurementView(APIView):
             payload = [
                 {
                     'id': ledger.procurement_id,
-                    'procurement_type': ledger.procurement.procurement_type,
+                    'procurement_type': ledger.procurement.funding_source,
                     'status': ledger.procurement.status,
                     'opened_at': ledger.procurement.opened_at,
                     'received_at': ledger.procurement.received_at,
@@ -102,7 +104,7 @@ class InvestorProcurementView(APIView):
         ledger = ledgers.prefetch_related('entries').get(procurement_id=procurement_id)
         payload = {
             'id': ledger.procurement_id,
-            'procurement_type': ledger.procurement.procurement_type,
+            'procurement_type': ledger.procurement.funding_source,
             'status': ledger.procurement.status,
             'opened_at': ledger.procurement.opened_at,
             'received_at': ledger.procurement.received_at,

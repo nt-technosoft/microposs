@@ -30,3 +30,5 @@ shortuuid>=1.0
 
 # Excel ingestion
 openpyxl>=3.1
+# argon2 for API key hashing
+argon2-cffi>=23.1

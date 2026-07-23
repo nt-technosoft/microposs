@@ -5,6 +5,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/coverage/
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+**/output/playwright/
 frontend/.eslintcache
 frontend/.cache/
 dist/
@@ -51,6 +56,41 @@ dokploy.env
 # Logs
 *.log
 
+# Local Graphify artifacts
+graphify-out/
+
+# Local Codex/runtime artifacts
+.codex/
+
+# Linked worktrees are local checkouts, never repository content
+/.worktrees/
+/.claude/worktrees/
+
 # E2E artifacts
 test-results/
 playwright-report/
+.playwright-mcp/
+
+# Screenshots and images (working files)
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/**/*.png
+!docs/**/*.jpg
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg
+
+# Office documents (working files)
+*.docx
+*.xlsx
+*.pptx
+
+# Redis dumps
+dump.rdb
+
+# Presentation materials (working files)
+presentation/
+
+# Runtime-uploaded media (not source)
+backend/media/attachments/

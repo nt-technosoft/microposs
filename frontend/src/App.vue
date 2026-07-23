@@ -2,17 +2,19 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useBreakpoint } from '@/composables/useBreakpoint'
-import AppBottomNav from '@/components/layout/AppBottomNav.vue'
 import AppFloatingCart from '@/components/layout/AppFloatingCart.vue'
+import AppShell from '@/components/layout/AppShell.vue'
 import AppToastContainer from '@/components/feedback/AppToastContainer.vue'
+import { isBusinessWorkspaceRole } from '@/components/layout/navigation'
 
 const route = useRoute()
 const auth = useAuthStore()
-const { isDesktop } = useBreakpoint()
 
-const showNav = computed(() => {
-  return auth.isAuthenticated && route.meta.layout !== 'blank' && route.meta.layout !== 'investor'
+const showBusinessShell = computed(() => {
+  return auth.isAuthenticated
+    && isBusinessWorkspaceRole(auth.role)
+    && route.meta.layout !== 'blank'
+    && route.meta.layout !== 'investor'
 })
 
 const showCart = computed(() => {
@@ -22,18 +24,23 @@ const showCart = computed(() => {
 
   return route.name === 'product-detail'
 })
+
 </script>
 
 <template>
-  <div class="app-root">
-    <main class="app-main" :class="{ 'has-bottom-nav': showNav && !isDesktop }">
+  <AppShell v-if="showBusinessShell">
+    <RouterView />
+  </AppShell>
+
+  <div v-else class="app-root">
+    <main class="app-main">
       <RouterView />
     </main>
 
-    <AppFloatingCart v-if="showCart" />
-    <AppBottomNav v-if="showNav && !isDesktop" />
-    <AppToastContainer />
   </div>
+
+  <AppFloatingCart v-if="showCart" />
+  <AppToastContainer />
 </template>
 
 <style scoped>
@@ -50,7 +57,4 @@ const showCart = computed(() => {
   margin: 0 auto;
 }
 
-.app-main.has-bottom-nav {
-  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
-}
 </style>

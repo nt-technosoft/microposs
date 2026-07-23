@@ -15,11 +15,8 @@ from apps.core.exceptions import (
     InvalidUnitPriceError,
     PricingModeViolationError,
 )
-from apps.finance.fx_rates import resolve_fx_rate_snapshot
-from apps.partnerships.formulas import (
-    calculate_lot_profit_distribution,
-    distribute_loss_by_capital_from_snapshot,
-)
+from apps.finance.fx_rates import resolve_fx_rate_snapshot, resolve_fx_rate_snapshot_details
+from apps.partnerships.formulas import calculate_lot_profit_distribution
 from apps.sales.currency import functional_amount_uzs, money
 
 from .models import (
@@ -235,10 +232,7 @@ def create_sale(
     )
     from apps.inventory.services import allocate_lot
     from apps.inventory.models import LotStock, StockMovement
-    from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import (
-        get_or_create_ledger, append_ledger_entry,
-    )
+    from apps.partnerships.venture import record_sale_line_realization
     from apps.sales.models import SalePayment
     from apps.catalog.models import ProductVariant
 
@@ -286,6 +280,7 @@ def create_sale(
 
         total_amount = Decimal('0')
         total_cogs = Decimal('0')
+        consignment_legs: list[dict] = []
 
         for line_data in lines:
             variant_id = line_data['product_variant_id']
@@ -298,7 +293,7 @@ def create_sale(
                 if operation_unit_price_raw is not None
                 else line_data['unit_price']
             ))
-            line_fx_rate = resolve_fx_rate_snapshot(
+            line_fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=operation_currency,
                 operation_at=date,
@@ -308,7 +303,7 @@ def create_sale(
                 functional_amount_uzs(
                     amount=operation_unit_price,
                     currency=operation_currency,
-                    fx_rate=line_fx_rate,
+                    fx_rate=line_fx_snapshot.rate,
                 )
                 if has_operation_price
                 else Decimal(str(line_data['unit_price'])).quantize(Decimal('0.01'))
@@ -350,7 +345,6 @@ def create_sale(
 
                 unit_landed_cost = Decimal(str(lot.landed_cost_per_unit))
                 unit_purchase = Decimal(str(lot.unit_purchase_price))
-                gross_line_profit = (unit_price - unit_landed_cost) * alloc_qty
 
                 profit_snapshot = calculate_profit_distribution(
                     lot=lot,
@@ -369,13 +363,29 @@ def create_sale(
                     base_price=base_price,
                     operation_currency=operation_currency,
                     operation_unit_price=operation_unit_price,
-                    fx_rate_snapshot=line_fx_rate,
+                    fx_rate_snapshot=line_fx_snapshot.rate,
+                    fx_rate_source=line_fx_snapshot.source,
+                    fx_rate_date=line_fx_snapshot.rate_date,
                     price_changed=price_changed,
                     discount_reason_id=resolved_discount_reason_id,
                     unit_purchase_price=unit_purchase,
                     unit_landed_cost=unit_landed_cost,
                     profit_distribution_snapshot=profit_snapshot,
                 )
+
+                # E09 Phase 2 — auto-obligation for CONSIGNED Lot sales
+                from apps.suppliers.consignment_obligations import (
+                    record_consignment_obligation_for_sale_line,
+                )
+                consignment_payable = record_consignment_obligation_for_sale_line(sale_line)
+                if consignment_payable is not None:
+                    leg_cogs_uzs = (
+                        Decimal(str(lot.landed_cost_per_unit)) * Decimal(str(alloc_qty))
+                    ).quantize(Decimal('0.01'))
+                    consignment_legs.append({
+                        'payable_id': consignment_payable.id,
+                        'amount_uzs': leg_cogs_uzs,
+                    })
 
                 locked_stock.quantity_remaining -= alloc_qty
                 locked_stock.save(update_fields=['quantity_remaining', 'updated_at'])
@@ -402,32 +412,12 @@ def create_sale(
                 total_amount += unit_price * alloc_qty
                 total_cogs += unit_landed_cost * alloc_qty
 
-                # PartnerLedger: PROFIT_ACCRUED per partner.
-                procurement_id = None
-                if lot.procurement_item_id:
-                    procurement_id = lot.procurement_item.procurement_id
-                if procurement_id and gross_line_profit > 0:
-                    for partner_id_str, amount_str in profit_snapshot.items():
-                        try:
-                            partner_id = int(partner_id_str)
-                        except (TypeError, ValueError):
-                            continue
-                        amount = Decimal(str(amount_str))
-                        if amount <= 0:
-                            continue
-                        ledger = get_or_create_ledger(
-                            procurement_id=procurement_id,
-                            partner_id=partner_id,
-                            tenant_id=tenant_id,
-                        )
-                        append_ledger_entry(
-                            ledger=ledger,
-                            entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-                            amount=amount,
-                            currency='UZS',
-                            source_ref=f'sale_line:{sale_line.pk}',
-                            date=date,
-                        )
+                # E17 T-1.5: partner profit/capital economics are recorded only
+                # as venture realization events (single source of truth). The
+                # legacy PROFIT_ACCRUED ledger write is intentionally gone — it
+                # split per-line gross profit by profit_share and ignored later
+                # losses, overstating distributable profit.
+                record_sale_line_realization(sale_line=sale_line)
 
         # SalePayments
         payment_functional_total = Decimal('0')
@@ -436,7 +426,7 @@ def create_sale(
         for pay in payments:
             amount = Decimal(str(pay['amount']))
             currency = str(pay.get('currency', 'UZS')).upper()
-            fx_rate = resolve_fx_rate_snapshot(
+            payment_fx_snapshot = resolve_fx_rate_snapshot_details(
                 tenant_id=tenant_id,
                 operation_currency=currency,
                 operation_at=date,
@@ -455,7 +445,9 @@ def create_sale(
                 date=date,
                 amount=amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=payment_fx_snapshot.rate,
+                fx_rate_source=payment_fx_snapshot.source,
+                fx_rate_date=payment_fx_snapshot.rate_date,
                 method=pay['method'],
                 role=SalePayment.Role.INCOMING,
                 account_id=account_id,
@@ -463,7 +455,7 @@ def create_sale(
             functional_amount = functional_amount_uzs(
                 amount=amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=payment_fx_snapshot.rate,
             )
             payment_functional_total += functional_amount
 
@@ -471,7 +463,9 @@ def create_sale(
                 credit_payments.append({
                     'amount': amount,
                     'currency': currency,
-                    'fx_rate': fx_rate,
+                    'fx_rate': payment_fx_snapshot.rate,
+                    'fx_rate_source': payment_fx_snapshot.source,
+                    'fx_rate_date': payment_fx_snapshot.rate_date,
                 })
                 settlement_journals.append({
                     'amount': functional_amount,
@@ -533,6 +527,8 @@ def create_sale(
                 amount=credit['amount'],
                 currency=credit['currency'],
                 fx_rate=credit['fx_rate'],
+                fx_rate_source=credit.get('fx_rate_source', ''),
+                fx_rate_date=credit.get('fx_rate_date'),
                 source_ref=f'sale:{sale.pk}',
                 date=date,
             )
@@ -569,6 +565,7 @@ def create_sale(
                 sale_id=sale.pk,
                 total_cogs=total_cogs,
                 date=date,
+                consignment_legs=consignment_legs or None,
             )
 
         publish_event(
@@ -885,7 +882,7 @@ def _issue_return_refund(
     finance_method = _refund_method_to_finance_method(payment_payload['method'])
     amount = money(payment_payload['amount'])
     currency = str(payment_payload.get('currency') or 'UZS').upper()
-    fx_rate = resolve_fx_rate_snapshot(
+    fx_snapshot = resolve_fx_rate_snapshot_details(
         tenant_id=tenant_id,
         operation_currency=currency,
         operation_at=date,
@@ -894,7 +891,7 @@ def _issue_return_refund(
     functional_amount = functional_amount_uzs(
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
     )
     if amount <= 0:
         raise ValueError('Refund amount must be > 0.')
@@ -931,7 +928,9 @@ def _issue_return_refund(
         date=date,
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
+        fx_rate_source=fx_snapshot.source,
+        fx_rate_date=fx_snapshot.rate_date,
         account=account,
         method=finance_method,
         return_ref=return_doc,
@@ -943,7 +942,9 @@ def _issue_return_refund(
         date=date,
         amount=amount,
         currency=currency,
-        fx_rate=fx_rate,
+        fx_rate=fx_snapshot.rate,
+        fx_rate_source=fx_snapshot.source,
+        fx_rate_date=fx_snapshot.rate_date,
         method=method,
         role=SalePayment.Role.REFUND,
         account_id=account.pk if account else None,
@@ -964,7 +965,9 @@ def _issue_return_refund(
             date=date,
             amount=-amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
             source_ref=f'refund:{refund.pk}',
         )
@@ -1033,19 +1036,20 @@ def process_return(
     date=None,
     refund: dict | None = None,
     refund_payments: list[dict] | None = None,
+    client_request_id=None,
 ) -> Return:
     """
     Process a return for a completed sale with shariah-correct partner impact.
 
     resolution RESTOCK:
       - LotStock at sale.location += qty, reactivate Lot.
-      - PROFIT_REVERSED per partner, proportional to returned qty.
+      - Venture realization reversed proportionally (append-only REVERSAL events).
 
     resolution DISPOSE:
       - StockDisposal record (reason=DAMAGED_RETURN).
       - Lot.quantity_initial -= qty (goods never return to stock).
-      - PROFIT_REVERSED per partner (proportional to returned qty).
-      - LOSS_INCURRED per partner distributed by capital_share from contract_snapshot.
+      - Venture realization reversed + damaged-return loss by capital share, all as
+        append-only REVERSAL events (single source of truth = venture model).
 
     Monetary refund:
       If `refund_payments` is provided, each item creates SalePayment(role=REFUND),
@@ -1055,8 +1059,7 @@ def process_return(
     Invariant: Σ ReturnLine.qty per sale_line ≤ SaleLine.qty (including prior returns).
     """
     from apps.inventory.models import Lot, LotStock, StockDisposal, StockMovement
-    from apps.partnerships.models import PartnerLedgerEntry
-    from apps.partnerships.services import append_ledger_entry, get_or_create_ledger
+    from apps.partnerships.venture import record_sale_line_return_realization
     from apps.finance.services import create_journal_entry
 
     if date is None:
@@ -1076,12 +1079,31 @@ def process_return(
         }]
 
     with transaction.atomic():
+        # E17 T-4.1: idempotent on client_request_id — a repeat submit returns the
+        # existing Return without creating a second one or re-moving any money.
+        if client_request_id:
+            existing = Return.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
         sale = Sale.objects.select_for_update().get(pk=sale.pk, tenant_id=tenant_id)
         if sale.status not in (
             Sale.SaleStatus.COMPLETED,
             Sale.SaleStatus.PARTIALLY_RETURNED,
         ):
             raise ValueError('Возврат можно оформить только по завершённой продаже.')
+
+        # E17 T-3.3: a closed procurement venture is read-only — no returns.
+        from apps.partnerships.venture import assert_procurement_open
+        for rl_data in return_lines:
+            line = SaleLine.objects.select_related('lot__procurement_item__procurement').get(
+                pk=rl_data['sale_line_id'], sale=sale, tenant_id=tenant_id,
+            )
+            procurement = getattr(getattr(line.lot, 'procurement_item', None), 'procurement', None)
+            if procurement is not None:
+                assert_procurement_open(procurement)
 
         return_doc = Return.objects.create(
             tenant_id=tenant_id,
@@ -1091,6 +1113,7 @@ def process_return(
             reason=reason,
             date=date,
             notes=notes,
+            client_request_id=str(client_request_id) if client_request_id else None,
         )
 
         total_refund = Decimal('0')
@@ -1127,43 +1150,18 @@ def process_return(
             )
 
             lot = sale_line.lot
-            qty_ratio = Decimal(qty) / Decimal(sale_line.quantity)
             line_refund = sale_line.unit_price * qty
             line_loss = sale_line.unit_landed_cost * qty
             total_refund += line_refund
 
-            # Proportional PROFIT_REVERSED per partner
-            distribution = sale_line.profit_distribution_snapshot or {}
-            contract_snapshot = lot.contract_snapshot or {}
-            procurement_id = None
-            if lot.procurement_item_id:
-                procurement_id = lot.procurement_item.procurement_id
-
-            if procurement_id and distribution:
-                for partner_id_str, profit_str in distribution.items():
-                    try:
-                        partner_id = int(partner_id_str)
-                    except (TypeError, ValueError):
-                        continue
-                    profit_amount = Decimal(str(profit_str))
-                    reversed_amount = (profit_amount * qty_ratio).quantize(Decimal('0.01'))
-                    if reversed_amount <= 0:
-                        continue
-                    ledger = get_or_create_ledger(
-                        procurement_id=procurement_id,
-                        partner_id=partner_id,
-                        tenant_id=tenant_id,
-                    )
-                    append_ledger_entry(
-                        ledger=ledger,
-                        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
-                        amount=reversed_amount,
-                        currency='UZS',
-                        source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
-                        date=date,
-                    )
+            # E17 T-1.5: returns reverse partner economics only through venture
+            # realization events (see record_sale_line_return_realization below).
+            # The legacy PROFIT_REVERSED / LOSS_INCURRED ledger writes are gone.
 
             if resolution == Return.Resolution.RESTOCK:
+                # Stock must be updated before realization so that the
+                # rebuild_agreement_positions call inside realization sees the
+                # correct LotStock.quantity_remaining for remaining_inventory_capital_uzs.
                 stock, _ = LotStock.objects.select_for_update().get_or_create(
                     tenant_id=tenant_id,
                     lot=lot,
@@ -1185,9 +1183,21 @@ def process_return(
                     reference_type='return',
                     reference_id=return_doc.pk,
                 )
+                record_sale_line_return_realization(
+                    sale_line=sale_line,
+                    quantity=qty,
+                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                    disposed=False,
+                )
                 total_restock_cogs += line_loss
 
             else:  # DISPOSE
+                record_sale_line_return_realization(
+                    sale_line=sale_line,
+                    quantity=qty,
+                    source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
+                    disposed=True,
+                )
                 StockDisposal.objects.create(
                     tenant_id=tenant_id,
                     lot=lot,
@@ -1202,33 +1212,6 @@ def process_return(
                     quantity_initial=models.F('quantity_initial') - qty,
                 )
                 total_loss += line_loss
-
-                if procurement_id:
-                    loss_distribution = distribute_loss_by_capital_from_snapshot(
-                        contract_snapshot=contract_snapshot,
-                        loss_amount=line_loss,
-                    )
-                    for partner_id_str, loss_str in loss_distribution.items():
-                        try:
-                            partner_id = int(partner_id_str)
-                        except (TypeError, ValueError):
-                            continue
-                        loss_share = Decimal(str(loss_str))
-                        if loss_share <= 0:
-                            continue
-                        ledger = get_or_create_ledger(
-                            procurement_id=procurement_id,
-                            partner_id=partner_id,
-                            tenant_id=tenant_id,
-                        )
-                        append_ledger_entry(
-                            ledger=ledger,
-                            entry_type=PartnerLedgerEntry.EntryType.LOSS_INCURRED,
-                            amount=loss_share,
-                            currency='UZS',
-                            source_ref=f'return:{return_doc.pk}:line:{sale_line.pk}',
-                            date=date,
-                        )
 
         if total_restock_cogs > 0:
             create_journal_entry(

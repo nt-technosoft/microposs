@@ -63,6 +63,13 @@ function goToCart() {
               background var(--duration-fast) var(--ease-out);
 }
 
+@media (min-width: 768px) {
+  .floating-cart {
+    bottom: var(--space-6);
+    right: var(--space-6);
+  }
+}
+
 .floating-cart:hover {
   background: var(--color-brand-600);
 }

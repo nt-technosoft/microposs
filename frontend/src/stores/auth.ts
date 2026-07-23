@@ -13,18 +13,32 @@ import { useUIStore } from './ui'
 interface User {
   id: number
   username: string
+  full_name: string
   role: UserRole | null
   active_tenant_id: number | null
   tenant_name: string
+  active_business: { id: number; name: string; currency: string } | null
+  owned_businesses: Array<{ id: number; name: string; currency: string }>
+  investment_profile: { id: number; display_name: string } | null
+  partner_profiles: Array<{ id: number; tenant_id: number; role: 'INVESTOR' | 'OPERATOR'; display_name: string }>
+  investor_relations: Array<{ id: number; tenant_id: number; tenant_name: string; partner_id: number; partner_name: string; status: string }>
+  tenant_issue: string
   locale: Locale
 }
 
 interface CurrentUserResponse {
   id: number
   username: string
+  full_name?: string
   role: string | null
   active_tenant_id: number | null
   tenant_name: string
+  active_business?: { id: number; name: string; currency: string } | null
+  owned_businesses?: Array<{ id: number; name: string; currency: string }>
+  investment_profile?: { id: number; display_name: string } | null
+  partner_profiles?: Array<{ id: number; tenant_id: number; role: 'INVESTOR' | 'OPERATOR'; display_name: string }>
+  investor_relations?: Array<{ id: number; tenant_id: number; tenant_name: string; partner_id: number; partner_name: string; status: string }>
+  tenant_issue?: string
   locale?: string
 }
 
@@ -67,9 +81,16 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = {
       id: data.id,
       username: data.username,
+      full_name: data.full_name ?? '',
       role: normalizedRole,
       active_tenant_id: data.active_tenant_id ?? null,
       tenant_name: data.tenant_name ?? '',
+      active_business: data.active_business ?? null,
+      owned_businesses: data.owned_businesses ?? [],
+      investment_profile: data.investment_profile ?? null,
+      partner_profiles: data.partner_profiles ?? [],
+      investor_relations: data.investor_relations ?? [],
+      tenant_issue: data.tenant_issue ?? '',
       locale: isLocale(data.locale) ? data.locale : 'ru',
     }
     const ui = useUIStore()

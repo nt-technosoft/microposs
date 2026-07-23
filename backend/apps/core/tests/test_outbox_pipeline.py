@@ -51,11 +51,10 @@ class OutboxPipelineTests(TestCase):
             .values_list('event_type', flat=True)
         )
         self.assertTrue({
-            'procurement.opened',
-            'procurement.contribution_added',
-            'procurement.items_paid',
-            'procurement.expenses_paid',
-            'procurement.received',
+            'investment_agreement.opened',
+            'investment_agreement.contribution_added',
+            'investment_agreement.allocated_to_procurement',
+            'procurement.receive_batch_posted',
             'lot.transfer',
             'pos_session.opened',
             'sale.completed',
@@ -94,8 +93,6 @@ class OutboxPipelineTests(TestCase):
             account_id=ctx['cash_account'].id,
         )
 
-        ctx['supplier'].outstanding_balance = Decimal('500000.00')
-        ctx['supplier'].save(update_fields=['outstanding_balance', 'updated_at'])
         record_supplier_payment(
             tenant_id=ctx['business'].id,
             supplier_id=ctx['supplier'].id,
@@ -215,7 +212,10 @@ class OutboxPipelineTests(TestCase):
             self.assertIsNone(event.failed_at, event.event_type)
             self.assertEqual(event.last_error, '', event.event_type)
 
-    def test_consumer_marks_unknown_events_failed(self):
+    def test_consumer_marks_unknown_events_as_terminal_noop(self):
+        # An unknown event type has no handler and never will at runtime, so the
+        # consumer treats it as a terminal no-op (processed), not a failure to be
+        # retried — otherwise every committed action re-attempts it forever.
         ctx = build_tenant()
         event = OutboxEvent.objects.create(
             event_type='unknown.event',
@@ -226,7 +226,5 @@ class OutboxPipelineTests(TestCase):
         process_outbox_events()
 
         event.refresh_from_db()
-        self.assertIsNone(event.processed_at)
-        self.assertIsNotNone(event.failed_at)
-        self.assertEqual(event.attempts, 1)
-        self.assertIn('Unhandled event type: unknown.event', event.last_error)
+        self.assertIsNotNone(event.processed_at)
+        self.assertIsNone(event.failed_at)

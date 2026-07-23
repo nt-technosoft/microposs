@@ -26,6 +26,7 @@ export interface CashAccountRecord {
   kind: string
   linked_account: number | null
   is_active: boolean
+  agreement_id?: number | null
 }
 
 export interface JournalEntry {
@@ -69,6 +70,8 @@ export interface ExpenseItem {
   operation_currency: string
   operation_amount: string
   fx_rate_snapshot: string | null
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs: string
   occurred_at: string
   notes: string
@@ -153,7 +156,7 @@ export interface ReportDisplay extends ReportCurrencyMeta {
 
 export interface ProcurementProfitabilityRow {
   procurement_id: number
-  procurement_type: string
+  funding_source: string
   status: string
   opened_at: string
   received_at: string | null
@@ -194,6 +197,13 @@ export interface ProcurementProfitabilityRow {
   }>
   pending_paid_items_count?: number
   draft_items_count?: number
+  venture_deployed_uzs?: string
+  venture_capital_recovered_uzs?: string
+  venture_capital_rolled_to_pool_uzs?: string
+  venture_capital_return_available_uzs?: string
+  venture_provisional_profit_available_uzs?: string
+  venture_loss_uzs?: string
+  venture_negative_position_uzs?: string
 }
 
 export interface ProcurementProfitabilityDetailItem {
@@ -277,6 +287,13 @@ export interface AgreementProfitabilityDetail {
     losses_incurred: string
     dividends_paid: string
     profit_pending_payout: string
+    venture_capital_recovered_uzs?: string
+    venture_capital_rolled_to_pool_uzs?: string
+    venture_capital_return_available_uzs?: string
+    venture_provisional_profit_uzs?: string
+    venture_provisional_profit_available_uzs?: string
+    venture_loss_uzs?: string
+    venture_negative_position_uzs?: string
     display?: ReportDisplay
   }>
   procurements: ProcurementProfitabilityRow[]
@@ -340,6 +357,22 @@ export interface OwnerContributionCreatePayload {
   currency?: string
   to_account_id: number
   notes?: string
+}
+
+export interface OwnerDrawingCreatePayload {
+  amount: string | number
+  currency?: string
+  from_account_id: number
+  notes?: string
+  client_request_id?: string
+}
+
+export interface CashTransferCreatePayload {
+  from_account_id: number
+  to_account_id: number
+  amount: string | number
+  notes?: string
+  client_request_id?: string
 }
 
 interface BackendDailySummary {
@@ -462,9 +495,10 @@ export async function fetchAccounts(): Promise<Account[]> {
   return extractList<Account>(data)
 }
 
-export async function fetchCashAccounts(): Promise<CashAccountRecord[]> {
+export async function fetchCashAccounts(signal?: AbortSignal): Promise<CashAccountRecord[]> {
   const { data } = await api.get<PaginatedResponse<CashAccountRecord> | CashAccountRecord[]>(
     '/api/v1/finance/cash-accounts/',
+    { signal },
   )
   return extractList<CashAccountRecord>(data)
 }
@@ -604,6 +638,7 @@ export async function createCurrencyExchange(
 
 export interface ReportSummaryResponse {
   is_computing: boolean
+  report_currency?: ReportCurrencyMeta
   daily_summary: DailySummary[]
   cash_flow: CashFlowItem[]
   debt: DebtSummaryItem[]
@@ -617,6 +652,7 @@ export interface ReportSummaryResponse {
 
 interface BackendReportSummaryResponse {
   is_computing: boolean
+  report_currency?: ReportCurrencyMeta
   daily_summary: BackendDailySummary[]
   cash_flow: BackendCashFlowItem[]
   debt: DebtSummaryItem[]
@@ -637,6 +673,7 @@ export interface ReportAnalyticsResponse {
 export interface FetchReportSummaryParams {
   date_from?: string
   date_to?: string
+  report_currency?: string
 }
 
 export interface FetchReportAnalyticsParams {
@@ -677,5 +714,34 @@ export async function createOwnerContribution(
   notes: string
 }> {
   const { data } = await api.post('/api/v1/finance/owner-contributions/', payload)
+  return data
+}
+
+export async function createOwnerDrawing(
+  payload: OwnerDrawingCreatePayload,
+): Promise<{
+  id: number
+  amount: string
+  currency: string
+  from_account: number
+  date: string
+  notes: string
+}> {
+  const { data } = await api.post('/api/v1/finance/owner-drawings/', payload)
+  return data
+}
+
+export async function createCashTransfer(
+  payload: CashTransferCreatePayload,
+): Promise<{
+  id: number
+  from_account: number
+  to_account: number
+  amount: string
+  currency: string
+  date: string
+  notes: string
+}> {
+  const { data } = await api.post('/api/v1/finance/cash-transfers/', payload)
   return data
 }

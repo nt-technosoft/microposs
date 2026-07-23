@@ -39,7 +39,14 @@ def process_outbox_events():
             continue
 
         if not handled:
-            event.mark_failed(f'Unhandled event type: {event.event_type}')
+            # Unknown event type will never gain a handler at runtime, so it is
+            # a terminal no-op for analytics — mark processed instead of failed,
+            # otherwise every future action retries it in an endless loop.
+            logger.warning(
+                'Outbox event %s has no analytics handler (type=%s); marking as no-op.',
+                event.pk, event.event_type,
+            )
+            event.mark_processed()
             continue
 
         event.mark_processed()
@@ -47,36 +54,61 @@ def process_outbox_events():
 
 def _dispatch_event(event):
     """Route event to the correct aggregation task."""
+    # Keys MUST match the event_type strings actually emitted by publish_event
+    # across the domains. Keep this map in sync with the event vocabulary —
+    # an emitted type missing here becomes a terminal no-op (see _dispatch
+    # caller), so a drifted name silently stops triggering its effect.
     handlers = {
+        # --- Sales: feed DailySummary + CashFlowSummary, bust profitability cache
         'sale.completed': _handle_sale_completed,
         'sale.returned': _handle_sale_returned,
-        'receipt.confirmed': _handle_receipt_confirmed,
+        'finance.refund': _handle_financial_operation,
+        # --- Risk / write-offs (feed DailySummary.total_writeoffs)
         'risk.writeoff': _handle_risk_event,
-        'risk_event.created': _handle_risk_event,
         'risk.inventory_check_completed': _handle_noop_retired,
+        # --- Cash/operations that feed the daily aggregates
         'customer.debt_accrued': _handle_financial_operation,
         'customer.payment': _handle_financial_operation,
         'supplier.payment': _handle_financial_operation,
         'expense.recorded': _handle_financial_operation,
+        # --- POS sessions
         'pos_session.opened': _handle_session_event,
         'pos_session.closed': _handle_session_event,
+        # --- Procurement receive / reversal / structural edits: no sale revenue,
+        # but landed cost & projected profit on remaining stock change, so bust
+        # the profitability cache.
+        'procurement.receive_batch_posted': _handle_procurement_received,
+        'receive_batch.reversed': _handle_procurement_received,
+        'procurement.item_split': _handle_procurement_received,
+        'procurement.cancelled': _handle_procurement_received,
+        # --- Inventory
         'lot.transfer': _handle_lot_transfer,
-        'lot.transferred': _handle_lot_transfer,
+        # --- Investors
         'investor.contract_closed': _handle_contract_closed,
         'investor.invite_created': _handle_noop_retired,
         'investor.invite_accepted': _handle_noop_retired,
-        'procurement.opened': _handle_noop_retired,
-        'procurement.updated': _handle_noop_retired,
-        'procurement.contribution_added': _handle_noop_retired,
-        'procurement.withdrawal_added': _handle_noop_retired,
-        'procurement.balance_exchanged': _handle_noop_retired,
-        'procurement.items_paid': _handle_noop_retired,
-        'procurement.expenses_paid': _handle_noop_retired,
-        'procurement.received': _handle_procurement_received,
-        'partnership.dividend_paid': _handle_noop_retired,
+        # --- No-op for the CURRENT aggregates. The finance.* cash movements below
+        # (purchases, owner draws/contributions, transfers, capital payments) do
+        # not feed today's DailySummary/CashFlowSummary (cash_out_purchases /
+        # investor flows are stubbed to 0). When E03 builds full cash flow, remap
+        # the cash-affecting ones to _handle_financial_operation.
+        'procurement.terms.amended': _handle_noop_retired,
+        'investment_agreement.opened': _handle_noop_retired,
+        'investment_agreement.contribution_added': _handle_noop_retired,
+        'investment_agreement.allocated_to_procurement': _handle_noop_retired,
+        # E15: partner outflows feed CashFlowSummary.cash_out_investor_payments.
+        'investment_agreement.withdrawal_added': _handle_financial_operation,
+        'partnership.dividend_paid': _handle_financial_operation,
         'finance.currency_exchange': _handle_noop_retired,
-        'finance.refund': _handle_financial_operation,
         'finance.owner_contribution': _handle_noop_retired,
+        'finance.owner_drawing': _handle_noop_retired,
+        'finance.cash_transfer': _handle_noop_retired,
+        'finance.payment.posted': _handle_noop_retired,
+        'finance.capital_contribution_payment.posted': _handle_noop_retired,
+        'consignment_obligation.created': _handle_noop_retired,
+        'business.registration_request_created': _handle_noop_retired,
+        'business.registration_request_approved': _handle_noop_retired,
+        'business.registration_request_rejected': _handle_noop_retired,
     }
     handler = handlers.get(event.event_type)
     if handler is None:
@@ -103,10 +135,11 @@ def _handle_sale_returned(payload, tenant_id):
 
 
 def _handle_noop_retired(payload, tenant_id):
-    logger.info(
-        'Retired analytics handler skipped for tenant=%s payload=%s',
-        tenant_id,
-        payload,
+    # Known event with no effect on the current analytics aggregates. Mapped
+    # explicitly (rather than falling through to the unknown-type path) so it is
+    # silent in normal operation; DEBUG keeps it inspectable when needed.
+    logger.debug(
+        'No-op analytics handler for tenant=%s payload=%s', tenant_id, payload,
     )
 
 
@@ -204,19 +237,20 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
 
     gross_profit = total_revenue - total_cogs
 
-    # Investor share is currently derived from partner ledger accruals.
-    from apps.partnerships.models import PartnerLedgerEntry
-    accrued_profit = PartnerLedgerEntry.objects.filter(
-        tenant_id=tenant_id,
-        entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-        date__range=(day_start, day_end),
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-    reversed_profit = PartnerLedgerEntry.objects.filter(
-        tenant_id=tenant_id,
-        entry_type=PartnerLedgerEntry.EntryType.PROFIT_REVERSED,
-        date__range=(day_start, day_end),
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-    investor_share = accrued_profit - reversed_profit
+    # E17 T-1.5: the daily provisional partner profit is derived from venture
+    # realization events (single source of truth), not the legacy ledger triad.
+    from apps.partnerships.models import ProcurementSaleRealization
+    provisional_rows = (
+        ProcurementSaleRealization.objects
+        .filter(tenant_id=tenant_id, created_at__range=(day_start, day_end))
+        .values('event_type')
+        .annotate(total=Sum('provisional_profit_uzs'))
+    )
+    provisional = {row['event_type']: row['total'] or Decimal('0') for row in provisional_rows}
+    investor_share = (
+        provisional.get(ProcurementSaleRealization.EventType.REALIZATION, Decimal('0'))
+        - provisional.get(ProcurementSaleRealization.EventType.REVERSAL, Decimal('0'))
+    )
 
     net_business_profit = gross_profit - investor_share - writeoffs - operational_expenses
 
@@ -283,7 +317,32 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
         occurred_at__range=(day_start, day_end),
     ).aggregate(total=Sum('functional_amount_uzs'))['total'] or Decimal('0')
 
-    net_cash = cash_sales + debt_payments - cash_refunds - supplier_payments - expense_outflows
+    # E15: payments OUT to partners — dividends (from operating cash) + capital
+    # returns (from the agreement pool). Surfaced as a single "to investors"
+    # outflow line so distributions/returns are visible (no longer stubbed 0).
+    # NOTE: precise operating-vs-pool cash-flow separation is E03's remap; here
+    # both are summed into the partner-outflow line and the net.
+    from apps.partnerships.models import AgreementWithdrawal, DividendPayment
+
+    def _functional(amount, fx_rate) -> Decimal:
+        return (Decimal(str(amount)) * Decimal(str(fx_rate or 1))).quantize(Decimal('0.01'))
+
+    dividends_out = sum(
+        (_functional(p.amount, p.fx_rate) for p in DividendPayment.objects.filter(
+            tenant_id=tenant_id, date__range=(day_start, day_end))),
+        Decimal('0'),
+    )
+    capital_returns_out = sum(
+        (_functional(w.amount, w.fx_rate) for w in AgreementWithdrawal.objects.filter(
+            tenant_id=tenant_id, date__range=(day_start, day_end))),
+        Decimal('0'),
+    )
+    investor_payments = (dividends_out + capital_returns_out).quantize(Decimal('0.01'))
+
+    net_cash = (
+        cash_sales + debt_payments
+        - cash_refunds - supplier_payments - expense_outflows - investor_payments
+    )
 
     CashFlowSummary.objects.update_or_create(
         tenant_id=tenant_id,
@@ -296,7 +355,7 @@ def aggregate_daily_pnl(tenant_id, date_str=None):
             'cash_out_supplier_payments': supplier_payments,
             'cash_out_expenses': expense_outflows,
             'cash_out_refunds': cash_refunds,
-            'cash_out_investor_payments': Decimal('0'),
+            'cash_out_investor_payments': investor_payments,
             'net_cash_flow': net_cash,
         },
     )
@@ -343,10 +402,23 @@ def compute_aging_reports(tenant_id):
             },
         )
 
-    # Supplier aging (A/P)
+    # Supplier aging (A/P). outstanding_balance is now derived; query
+    # suppliers with at least one OPEN/PARTIALLY_PAID payable.
+    from apps.suppliers.models import SupplierPayable
+    supplier_ids_with_debt = (
+        SupplierPayable.objects.filter(
+            tenant_id=tenant_id,
+            status__in=[
+                SupplierPayable.Status.OPEN,
+                SupplierPayable.Status.PARTIALLY_PAID,
+            ],
+        )
+        .values_list('supplier_id', flat=True)
+        .distinct()
+    )
     suppliers = Supplier.objects.filter(
         tenant_id=tenant_id,
-        outstanding_balance__gt=0,
+        pk__in=list(supplier_ids_with_debt),
     )
 
     for supplier in suppliers:
@@ -378,3 +450,28 @@ def compute_aging_reports(tenant_id):
     ).exclude(
         entity_id__in=suppliers.values_list('pk', flat=True),
     ).delete()
+
+
+# =========================================================================
+# E01 — Mark overdue payment schedule entries
+# =========================================================================
+
+
+@shared_task
+def mark_overdue_payment_schedules():
+    """
+    Sweep PaymentSchedule rows whose due_date has passed and which are still
+    PENDING — flip them to OVERDUE.
+
+    Schedule via Celery Beat (daily, e.g. at 00:05 local time).
+    """
+    from apps.suppliers.models import PaymentSchedule
+
+    today = timezone.now().date()
+    updated = PaymentSchedule.objects.filter(
+        status=PaymentSchedule.Status.PENDING,
+        due_date__lt=today,
+    ).update(status=PaymentSchedule.Status.OVERDUE)
+    if updated:
+        logger.info('Marked %d PaymentSchedule rows as OVERDUE.', updated)
+    return updated

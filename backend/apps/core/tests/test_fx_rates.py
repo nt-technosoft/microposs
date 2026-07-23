@@ -98,7 +98,7 @@ class FxRateApiTests(APITestCase):
 
     def test_latest_usd_uzs_returns_not_found_when_history_is_empty(self):
         self._auth_owner()
-        ExchangeRate.objects.filter(tenant=self.tenant, base_currency='USD', quote_currency='UZS').delete()
+        ExchangeRate.all_objects.filter(tenant=self.tenant, base_currency='USD', quote_currency='UZS').delete()
 
         response = self.client.get('/api/v1/finance/fx-rates/latest/', {
             'base_currency': 'USD',
@@ -107,6 +107,35 @@ class FxRateApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.data['code'], 'fx_rate_missing')
+
+    @patch('apps.finance.fx_rates.fetch_official_cbu_rate')
+    def test_usd_operation_auto_syncs_official_rate_when_history_is_empty(self, fetch_rate):
+        self._auth_owner()
+        target_date = timezone.localdate()
+        ExchangeRate.all_objects.filter(tenant=self.tenant, base_currency='USD', quote_currency='UZS').delete()
+        fetch_rate.return_value = (
+            Decimal('12072.960000'),
+            target_date,
+            {'Ccy': 'USD', 'Rate': '12072.96', 'Date': target_date.strftime('%d.%m.%Y')},
+        )
+
+        response = self.client.post('/api/v1/finance/expenses/', {
+            'title': 'USD expense with auto official FX',
+            'category': 'ops',
+            'payment_method': 'cash',
+            'operation_currency': 'USD',
+            'operation_amount': '10.00',
+            'occurred_at': f'{target_date.isoformat()}T10:30:00Z',
+            'notes': 'FX auto sync smoke',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        fetch_rate.assert_called_once()
+        expense = Expense.objects.get(pk=response.data['id'])
+        self.assertEqual(expense.fx_rate_snapshot, Decimal('12072.960000'))
+        self.assertEqual(expense.fx_rate_source, ExchangeRate.Source.CBU)
+        self.assertEqual(expense.fx_rate_date, target_date)
+        self.assertEqual(expense.functional_amount_uzs, Decimal('120729.60'))
 
     def test_expense_uses_stored_rate_when_fx_not_passed(self):
         self._auth_owner()
@@ -135,7 +164,11 @@ class FxRateApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         expense = Expense.objects.get(pk=response.data['id'])
         self.assertEqual(expense.fx_rate_snapshot, Decimal('12500.000000'))
+        self.assertEqual(expense.fx_rate_source, ExchangeRate.Source.MANUAL)
+        self.assertEqual(expense.fx_rate_date, date(2026, 4, 15))
         self.assertEqual(expense.functional_amount_uzs, Decimal('125000.00'))
+        self.assertEqual(response.data['fx_rate_source'], ExchangeRate.Source.MANUAL)
+        self.assertEqual(response.data['fx_rate_date'], '2026-04-15')
 
     @patch('apps.finance.fx_rates.fetch_official_cbu_rate')
     def test_daily_fx_task_keeps_manual_rate_when_overwrite_disabled(self, fetch_rate):

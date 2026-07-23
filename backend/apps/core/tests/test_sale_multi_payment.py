@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.test import TestCase
 
 from apps.finance.models import Account, CashAccount, CashEntry, JournalEntry
-from apps.partnerships.models import PartnerLedgerEntry
+from apps.partnerships.models import ProcurementSaleRealization
 from apps.sales.models import Sale, SalePayment
 from apps.sales.serializers import SaleDetailSerializer, SaleListSerializer
 from apps.sales.services import create_sale
@@ -50,11 +50,11 @@ class SaleMultiPaymentTests(TestCase):
         sale.refresh_from_db()
         line = sale.lines.get()
         payments = list(sale.payments.order_by('id'))
-        entries = list(
-            PartnerLedgerEntry.objects.filter(
-                ledger__procurement_id=procurement.id,
-                entry_type=PartnerLedgerEntry.EntryType.PROFIT_ACCRUED,
-            ).order_by('ledger__partner_id')
+        realizations = list(
+            ProcurementSaleRealization.objects.filter(
+                procurement_id=procurement.id,
+                event_type=ProcurementSaleRealization.EventType.REALIZATION,
+            ).order_by('partner_id')
         )
 
         self.assertEqual(sale.status, Sale.SaleStatus.COMPLETED)
@@ -101,14 +101,14 @@ class SaleMultiPaymentTests(TestCase):
             (sale.total_amount - sale.total_cogs).quantize(Decimal('0.01')),
         )
 
-        entry_map = {entry.ledger.partner_id: entry.amount for entry in entries}
-        self.assertEqual(len(entry_map), 2)
+        realized = {r.partner_id: r.provisional_profit_uzs for r in realizations}
+        self.assertEqual(len(realized), 2)
         self.assertEqual(
-            entry_map[ctx['investor'].id],
+            realized[ctx['investor'].id],
             Decimal(str(snapshot[str(ctx['investor'].id)])),
         )
         self.assertEqual(
-            entry_map[ctx['operator'].id],
+            realized[ctx['operator'].id],
             Decimal(str(snapshot[str(ctx['operator'].id)])),
         )
 

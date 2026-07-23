@@ -1,3 +1,5 @@
+from django.db import transaction
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -5,52 +7,67 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsOwner, IsWarehouse
 
-from .models import DividendPayment, InvestmentAgreement, Procurement, ProcurementPartnerLedger
+from .models import (
+    AgreementPartner, DividendPayment, InvestmentAgreement, InvestmentFund,
+    PayoutObligation,
+    Procurement, DisputeCase, ContractReview,
+)
 from .serializers import (
     AgreementAllocationCreateSerializer,
     AgreementAllocationSerializer,
+    AgreementTermsVersionSerializer,
     AgreementContributionSerializer,
     AgreementWithdrawalSerializer,
-    BalanceContributionCreateSerializer,
-    BalanceContributionSerializer,
-    BalanceExchangeCreateSerializer,
-    ProcurementBalanceExchangeSerializer,
-    BalanceWithdrawalCreateSerializer,
-    BalanceWithdrawalSerializer,
+    SettlePartnerCapitalSerializer,
+    AgreementContributionCreateSerializer,
+    AgreementWithdrawalCreateSerializer,
     DividendPaymentCreateSerializer,
     DividendPaymentSerializer,
+    DisputeCaseSerializer,
+    DisputeCreateSerializer,
+    FundContributionCreateSerializer,
+    FundContributionSerializer,
+    FundDeploymentCreateSerializer,
+    FundDeploymentSerializer,
+    InvestmentFundCreateSerializer,
+    InvestmentFundSerializer,
     InvestmentAgreementCreateSerializer,
     InvestmentAgreementDetailSerializer,
     InvestmentAgreementListSerializer,
+    PayoutObligationSerializer,
+    PayoutDecisionExecuteSerializer,
+    PayoutDecisionPreviewSerializer,
+    ContractReviewResolveSerializer,
+    ContractReviewSerializer,
+    TermsVersionCreateSerializer,
     ProcurementCreateSerializer,
-    ProcurementDetailSerializer,
-    ProcurementExpenseSerializer,
     ProcurementExpenseTargetsSerializer,
-    ProcurementItemSplitSerializer,
-    ProcurementLedgerSerializer,
-    ProcurementListSerializer,
     PayProcurementExpensesSerializer,
     PayProcurementItemsSerializer,
     ReceiveProcurementSerializer,
+    TermsAmendmentSerializer,
+    ProcurementTermsAmendmentSerializer,
 )
-from .services import (
-    add_agreement_contribution,
-    add_contribution,
-    add_agreement_withdrawal,
-    allocate_agreement_to_procurement,
-    create_investment_agreement,
-    exchange_procurement_balance,
-    add_withdrawal,
-    get_agreement_allocation_preview,
-    get_procurement_receive_plan,
-    open_procurement,
-    pay_procurement_expenses,
-    pay_procurement_items,
+from decimal import Decimal
+
+from .agreement_services import (
+    get_partner_aggregate,
     pay_dividend,
-    receive_procurement,
-    split_procurement_item,
-    update_procurement_expense_targets,
-    update_open_procurement,
+)
+from .advances import settle_partner_capital
+from .read_models import read_positions, read_venture_positions
+from .workspace_support import (
+    add_agreement_contribution,
+    add_agreement_withdrawal,
+    create_investment_agreement,
+)
+from .workspace import (
+    allocate_workspace_capital,
+    build_workspace_payload,
+    build_workspace_capital_allocation_preview,
+    create_workspace,
+    dispatch_workspace_action,
+    workspace_queryset,
 )
 
 
@@ -62,13 +79,25 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         return (
             InvestmentAgreement.objects
             .filter(tenant_id=self.request.tenant_id)
-            .select_related('supplier')
+            .select_related('supplier', 'current_terms')
             .prefetch_related(
+                'current_terms__payout_policy',
                 'partners__partner',
+                'commitments__partner',
+                'commitments__created_by',
+                'commitments__actor_partner',
                 'contributions__partner',
+                'contributions__created_by',
+                'contributions__actor_partner',
                 'withdrawals__partner',
+                'withdrawals__created_by',
+                'withdrawals__actor_partner',
                 'allocations__partner',
+                'allocations__created_by',
+                'allocations__actor_partner',
                 'allocations__procurement',
+                'events__actor_user',
+                'events__actor_partner',
                 'procurements__supplier',
                 'procurements__items',
                 'procurements__expenses',
@@ -94,17 +123,110 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 planned_budget=data['planned_budget'],
                 currency=data.get('currency', 'UZS'),
                 notes=data.get('notes', ''),
+                reconciliation_mode=data.get('reconciliation_mode') or 'FACTUAL',
+                review_at=data.get('review_at'),
+                offline_agreed_at=data.get('offline_agreed_at'),
+                offline_agreement_reference=data.get('offline_agreement_reference', ''),
+                payout_policy=data.get('payout_policy'),
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
+                created_by_id=request.user.id if request.user.is_authenticated else None,
                 partners=[dict(partner) for partner in data.get('partners', [])],
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(InvestmentAgreementDetailSerializer(agreement).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'], url_path='terms')
+    def terms(self, request, pk=None):
+        from .lifecycle_services import create_agreement_terms_version
+        serializer = TermsVersionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        agreement = self.get_object()
+        terms = create_agreement_terms_version(
+            agreement=agreement,
+            review_at=serializer.validated_data.get('review_at'),
+            offline_agreed_at=serializer.validated_data.get('offline_agreed_at'),
+            offline_agreement_reference=serializer.validated_data.get('offline_agreement_reference', ''),
+            notes=serializer.validated_data.get('notes', ''),
+            created_by_id=request.user.id if request.user.is_authenticated else None,
+            payout_policy=serializer.validated_data.get('payout_policy'),
+        )
+        return Response(AgreementTermsVersionSerializer(terms).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='evaluate-payouts')
+    def evaluate_payouts(self, request, pk=None):
+        from .lifecycle_services import evaluate_agreement_payout_obligations
+        agreement = self.get_object()
+        rows = evaluate_agreement_payout_obligations(agreement=agreement)
+        return Response(PayoutObligationSerializer(rows, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='payout-obligations')
+    def payout_obligations(self, request, pk=None):
+        agreement = self.get_object()
+        rows = PayoutObligation.objects.filter(agreement=agreement).select_related(
+            'recipient', 'procurement',
+        ).prefetch_related('settlements')
+        return Response(PayoutObligationSerializer(rows, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='payout-decision-preview')
+    def payout_decision_preview(self, request, pk=None):
+        from .lifecycle_services import build_payout_decision_preview
+        agreement = self.get_object()
+        serializer = PayoutDecisionPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = build_payout_decision_preview(
+            agreement=agreement,
+            decision_type=serializer.validated_data['decision_type'],
+            amount_uzs=serializer.validated_data.get('amount_uzs'),
+            allocations=serializer.validated_data.get('allocations'),
+            from_account_id=serializer.validated_data.get('from_account_id'),
+        )
+        return Response(payload)
+
+    @action(detail=True, methods=['post'], url_path='payout-decisions')
+    def payout_decisions(self, request, pk=None):
+        from .lifecycle_services import execute_payout_decision
+        agreement = self.get_object()
+        serializer = PayoutDecisionExecuteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            payload = execute_payout_decision(
+                agreement=agreement,
+                decision_type=serializer.validated_data['decision_type'],
+                amount_uzs=serializer.validated_data['amount_uzs'],
+                allocations=serializer.validated_data.get('allocations'),
+                from_account_id=serializer.validated_data.get('from_account_id'),
+                client_request_id=serializer.validated_data.get('client_request_id'),
+                notes=serializer.validated_data.get('notes', ''),
+                created_by_id=request.user.id if request.user.is_authenticated else None,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='review')
+    def review(self, request, pk=None):
+        from .lifecycle_services import ensure_contract_review, resolve_contract_review
+        agreement = self.get_object()
+        review = ensure_contract_review(agreement=agreement)
+        if review is None:
+            return Response({'detail': 'Contract review date has not arrived.'}, status=status.HTTP_400_BAD_REQUEST)
+        if request.data.get('resolution'):
+            serializer = ContractReviewResolveSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            review = resolve_contract_review(
+                review=review,
+                resolution=serializer.validated_data['resolution'],
+                resolved_by_id=request.user.id if request.user.is_authenticated else None,
+                extension_until=serializer.validated_data.get('extension_until'),
+                notes=serializer.validated_data.get('notes', ''),
+            )
+        return Response(ContractReviewSerializer(review).data)
+
     @action(detail=True, methods=['post'], url_path='contributions')
     def contributions(self, request, pk=None):
         agreement = self.get_object()
-        serializer = BalanceContributionCreateSerializer(data=request.data)
+        serializer = AgreementContributionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             contribution = add_agreement_contribution(
@@ -113,8 +235,9 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
                 partner_id=serializer.validated_data['partner_id'],
                 amount=serializer.validated_data['amount'],
                 currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
+                fx_rate=serializer.validated_data.get('fx_rate'),
                 notes=serializer.validated_data.get('notes', ''),
+                created_by_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
@@ -123,20 +246,45 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='withdrawals')
     def withdrawals(self, request, pk=None):
         agreement = self.get_object()
-        serializer = BalanceWithdrawalCreateSerializer(data=request.data)
+        serializer = AgreementWithdrawalCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            withdrawal = add_agreement_withdrawal(
-                tenant_id=request.tenant_id,
-                agreement_id=agreement.id,
-                partner_id=serializer.validated_data['partner_id'],
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
-                reason=serializer.validated_data.get('reason', ''),
-            )
+            with transaction.atomic():
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                decision_id = serializer.validated_data.get('payout_decision_id')
+                is_recovered_return = (
+                    serializer.validated_data.get('procurement_id') is not None
+                    and serializer.validated_data.get('from_account_id') is not None
+                )
+                if is_recovered_return or decision_id:
+                    raise ValueError('Use the policy group decision endpoint to execute recovered capital payouts.')
+                withdrawal = add_agreement_withdrawal(
+                    tenant_id=request.tenant_id,
+                    agreement_id=agreement.id,
+                    partner_id=serializer.validated_data['partner_id'],
+                    procurement_id=serializer.validated_data.get('procurement_id'),
+                    from_account_id=serializer.validated_data.get('from_account_id'),
+                    amount=serializer.validated_data['amount'],
+                    currency=serializer.validated_data['currency'],
+                    fx_rate=serializer.validated_data.get('fx_rate'),
+                    reason=serializer.validated_data.get('reason', ''),
+                    created_by_id=request.user.id if request.user.is_authenticated else None,
+                )
+                if obligation_id:
+                    from .lifecycle_services import record_payout_obligation
+                    obligation = PayoutObligation.objects.get(
+                        tenant_id=request.tenant_id,
+                        pk=obligation_id,
+                        agreement=agreement,
+                        recipient_id=withdrawal.partner_id,
+                        procurement_id=withdrawal.procurement_id,
+                        kind=PayoutObligation.Kind.CAPITAL_RETURN,
+                    )
+                    record_payout_obligation(obligation=obligation, withdrawal=withdrawal)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
+        except PayoutObligation.DoesNotExist as error:
+            raise ValidationError({'payout_obligation_id': 'Payout obligation was not found for this agreement.'}) from error
         return Response(AgreementWithdrawalSerializer(withdrawal).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='allocation-preview')
@@ -146,7 +294,7 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         if not procurement_id:
             raise ValidationError({'procurement_id': 'This query parameter is required.'})
         try:
-            payload = get_agreement_allocation_preview(
+            payload = build_workspace_capital_allocation_preview(
                 tenant_id=request.tenant_id,
                 agreement_id=agreement.id,
                 procurement_id=int(procurement_id),
@@ -161,59 +309,632 @@ class InvestmentAgreementViewSet(viewsets.ModelViewSet):
         serializer = AgreementAllocationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            allocations = allocate_agreement_to_procurement(
+            procurement = Procurement.objects.filter(
                 tenant_id=request.tenant_id,
-                agreement_id=agreement.id,
-                procurement_id=serializer.validated_data['procurement_id'],
-                allocations=[dict(row) for row in serializer.validated_data['allocations']],
+                pk=serializer.validated_data['procurement_id'],
+                agreement=agreement,
+            ).first()
+            if procurement is None:
+                raise ValueError('Procurement is not linked to this agreement.')
+            allocations = allocate_workspace_capital(
+                tenant_id=request.tenant_id,
+                procurement=procurement,
+                payload={'allocations': [dict(row) for row in serializer.validated_data['allocations']]},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
         return Response(AgreementAllocationSerializer(allocations, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='profit-summary')
+    def profit_summary(self, request, pk=None):
+        """Per-partner, per-procurement undistributed profit (UZS) — payable rows
+        for the dividend sheet. Only rows with pending > 0."""
+        agreement = self.get_object()
+        procurements = list(Procurement.objects.filter(
+            tenant_id=request.tenant_id, agreement=agreement,
+        ))
+        members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
+        rows = []
+        for proc in procurements:
+            venture_positions = read_venture_positions(proc)
+            has_venture_facts = any(
+                Decimal(str(pos.get('capital_recovered_uzs', '0.00'))) != 0
+                or Decimal(str(pos.get('provisional_profit_uzs', '0.00'))) != 0
+                or Decimal(str(pos.get('loss_uzs', '0.00'))) != 0
+                for pos in venture_positions.values()
+            )
+            for partner_id, member in members.items():
+                if has_venture_facts:
+                    pending = venture_positions.get(partner_id, {}).get(
+                        'provisional_profit_available_uzs', Decimal('0'),
+                    )
+                else:
+                    agg = get_partner_aggregate(partner_id, request.tenant_id, proc.id)
+                    pending = agg.get('profit_pending_payout') or Decimal('0')
+                if pending and Decimal(pending) > 0:
+                    rows.append({
+                        'procurement_id': proc.id,
+                        'partner_id': partner_id,
+                        'partner_name': getattr(member.partner, 'display_name', str(partner_id)),
+                        'role': member.role,
+                        'pending': str(pending),
+                    })
+        return Response(rows)
+
+    @action(detail=True, methods=['get'], url_path='venture-summary')
+    def venture_summary(self, request, pk=None):
+        """E16 agreement-level partner proceeds summary across linked procurements."""
+        agreement = self.get_object()
+        members = {
+            member.partner_id: member
+            for member in agreement.partners.select_related('partner').all()
+        }
+        totals: dict[int, dict[str, Decimal]] = {
+            partner_id: {
+                'deployed_uzs': Decimal('0.00'),
+                'capital_recovered_uzs': Decimal('0.00'),
+                'remaining_inventory_capital_uzs': Decimal('0.00'),
+                'liability_capital_recovered_uzs': Decimal('0.00'),
+                'provisional_profit_uzs': Decimal('0.00'),
+                'loss_uzs': Decimal('0.00'),
+                'partner_liability_loss_uzs': Decimal('0.00'),
+                'capital_returned_uzs': Decimal('0.00'),
+                'dividends_paid_uzs': Decimal('0.00'),
+                'capital_rolled_to_pool_uzs': Decimal('0.00'),
+                'capital_return_available_uzs': Decimal('0.00'),
+                'provisional_profit_available_uzs': Decimal('0.00'),
+                'negative_position_uzs': Decimal('0.00'),
+            }
+            for partner_id in members
+        }
+        procurement_rows = []
+        for procurement in Procurement.objects.filter(tenant_id=request.tenant_id, agreement=agreement):
+            positions = read_venture_positions(procurement)
+            procurement_total = Decimal('0.00')
+            for partner_id, pos in positions.items():
+                target = totals.setdefault(partner_id, {
+                    'deployed_uzs': Decimal('0.00'),
+                    'capital_recovered_uzs': Decimal('0.00'),
+                    'remaining_inventory_capital_uzs': Decimal('0.00'),
+                    'liability_capital_recovered_uzs': Decimal('0.00'),
+                    'provisional_profit_uzs': Decimal('0.00'),
+                    'loss_uzs': Decimal('0.00'),
+                    'partner_liability_loss_uzs': Decimal('0.00'),
+                    'capital_returned_uzs': Decimal('0.00'),
+                    'dividends_paid_uzs': Decimal('0.00'),
+                    'capital_rolled_to_pool_uzs': Decimal('0.00'),
+                    'capital_return_available_uzs': Decimal('0.00'),
+                    'provisional_profit_available_uzs': Decimal('0.00'),
+                    'negative_position_uzs': Decimal('0.00'),
+                })
+                for key in target:
+                    target[key] += Decimal(str(pos.get(key, '0.00')))
+                procurement_total += Decimal(str(pos.get('capital_return_available_uzs', '0.00')))
+            procurement_rows.append({
+                'procurement_id': procurement.id,
+                'status': procurement.status,
+                'capital_return_available_uzs': str(procurement_total.quantize(Decimal('0.01'))),
+            })
+        rows = []
+        for partner_id, values in totals.items():
+            member = members.get(partner_id)
+            rows.append({
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+                **{key: str(value.quantize(Decimal('0.01'))) for key, value in values.items()},
+            })
+        rows.sort(key=lambda item: item['partner_id'])
+        return Response({
+            'agreement_id': agreement.id,
+            'currency': 'UZS',
+            'positions': rows,
+            'procurements': procurement_rows,
+        })
+
+    @action(detail=True, methods=['get'], url_path='close-preview')
+    def close_preview(self, request, pk=None):
+        """E17: derived close read-model — show_close (all procurements closed),
+        closeable, and the remaining steps. Gates live on the backend."""
+        from .agreement_services import agreement_close_state
+
+        agreement = self.get_object()
+        return Response({
+            'agreement_id': agreement.id,
+            'status': agreement.status,
+            **agreement_close_state(agreement=agreement),
+        })
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        """E17: close the investment agreement once every gate passes. Idempotent;
+        blocking reasons surface as HTTP 400."""
+        from .agreement_services import agreement_close_blocking_reasons, close_investment_agreement
+
+        agreement = self.get_object()
+        if agreement.status == InvestmentAgreement.Status.CLOSED:
+            return Response({
+                'agreement_id': agreement.id,
+                'status': agreement.status,
+                'closed_at': agreement.closed_at,
+            })
+        try:
+            closed = close_investment_agreement(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement.id,
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            return Response(
+                {
+                    'detail': str(error),
+                    'blocking_reasons': agreement_close_blocking_reasons(agreement=agreement),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({
+            'agreement_id': closed.id,
+            'status': closed.status,
+            'closed_at': closed.closed_at,
+        })
+
+    @action(detail=True, methods=['post'], url_path='payout-preview')
+    def payout_preview(self, request, pk=None):
+        """E16 preview for capital/profit payouts with blocking reasons."""
+        from apps.finance.models import CashAccount
+        from apps.finance.fx_rates import resolve_fx_rate_snapshot_details
+        agreement = self.get_object()
+        partner_id = int(request.data.get('partner_id') or 0)
+        procurement_id = request.data.get('procurement_id')
+        payout_type = str(request.data.get('payout_type') or 'CAPITAL_RETURN').upper()
+        amount = Decimal(str(request.data.get('amount') or '0')).quantize(Decimal('0.01'))
+        currency = str(request.data.get('currency') or 'UZS').upper()
+        from_account_id = request.data.get('from_account_id')
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=request.tenant_id,
+            operation_currency=currency,
+            operation_at=None,
+            fx_rate_snapshot=request.data.get('fx_rate'),
+        )
+        functional = (amount * Decimal(str(fx_snapshot.rate))).quantize(Decimal('0.01'))
+        reasons = []
+        available = Decimal('0.00')
+
+        procurement = None
+        position = {}
+        if procurement_id:
+            procurement = Procurement.objects.filter(
+                tenant_id=request.tenant_id,
+                agreement=agreement,
+                pk=procurement_id,
+            ).first()
+            if procurement is None:
+                reasons.append('Приход не найден в этом договоре.')
+            else:
+                position = read_venture_positions(procurement).get(partner_id, {})
+                if payout_type == 'PROFIT':
+                    available = Decimal(str(position.get('provisional_profit_available_uzs', '0.00')))
+                else:
+                    available = Decimal(str(position.get('capital_return_available_uzs', '0.00')))
+                if Decimal(str(position.get('negative_position_uzs', '0.00'))) > 0:
+                    reasons.append('Есть отрицательная позиция партнёра; сначала погасите её.')
+        else:
+            positions = read_positions(agreement)
+            if payout_type == 'PROFIT':
+                reasons.append('Выплата прибыли требует выбрать конкретный приход.')
+            else:
+                available = Decimal(str(positions.get(partner_id, {}).get('withdrawable', '0.00')))
+
+        if partner_id <= 0:
+            reasons.append('Выберите участника договора.')
+        if amount <= 0:
+            reasons.append('Укажите сумму выплаты.')
+        if amount > 0 and available < functional:
+            reasons.append(f'Доступно только {available.quantize(Decimal("0.01"))} UZS.')
+        if from_account_id:
+            account = CashAccount.objects.filter(
+                tenant_id=request.tenant_id,
+                pk=from_account_id,
+                is_active=True,
+            ).first()
+            if account is None:
+                reasons.append('Касса не найдена.')
+            elif str(account.currency).upper() != currency:
+                reasons.append('Для выплаты в другой валюте сначала сделайте явную конвертацию.')
+            elif Decimal(str(account.balance)) < amount:
+                reasons.append(f'В кассе доступно только {account.balance} {currency}.')
+
+        return Response({
+            'allowed': not reasons,
+            'payout_type': payout_type,
+            'partner_id': partner_id or None,
+            'procurement_id': int(procurement_id) if procurement_id else None,
+            'amount': str(amount),
+            'currency': currency,
+            'fx_rate': str(fx_snapshot.rate),
+            'fx_rate_source': fx_snapshot.source,
+            'fx_rate_date': fx_snapshot.rate_date,
+            'functional_amount_uzs': str(functional),
+            'available_uzs': str(available.quantize(Decimal('0.01'))),
+            'blocking_reasons': reasons,
+        })
+
+    def _aggregate_payout_breakdown(self, *, agreement, partner_id: int, payout_type: str, amount: Decimal):
+        remaining = amount.quantize(Decimal('0.01'))
+        rows = []
+        total_available = Decimal('0.00')
+        for procurement in Procurement.objects.filter(
+            tenant_id=self.request.tenant_id,
+            agreement=agreement,
+        ).order_by('opened_at', 'id'):
+            position = read_venture_positions(procurement).get(partner_id, {})
+            if Decimal(str(position.get('negative_position_uzs', '0.00'))) > 0:
+                continue
+            key = (
+                'provisional_profit_available_uzs'
+                if payout_type == 'PROFIT'
+                else 'capital_return_available_uzs'
+            )
+            available = Decimal(str(position.get(key, '0.00'))).quantize(Decimal('0.01'))
+            total_available += available
+            take = min(remaining, available) if remaining > 0 else Decimal('0.00')
+            if take > 0:
+                rows.append({
+                    'procurement_id': procurement.id,
+                    'available_uzs': str(available),
+                    'amount_uzs': str(take),
+                })
+                remaining -= take
+        return rows, total_available.quantize(Decimal('0.01')), remaining.quantize(Decimal('0.01'))
+
+    @action(detail=True, methods=['post'], url_path='aggregate-payout-preview')
+    def aggregate_payout_preview(self, request, pk=None):
+        """Agreement-level UX preview; facts are still per-procurement."""
+        agreement = self.get_object()
+        partner_id = int(request.data.get('partner_id') or 0)
+        payout_type = str(request.data.get('payout_type') or 'CAPITAL_RETURN').upper()
+        amount = Decimal(str(request.data.get('amount') or '0')).quantize(Decimal('0.01'))
+        reasons = []
+        if payout_type not in {'CAPITAL_RETURN', 'PROFIT'}:
+            reasons.append('Unsupported payout_type.')
+        if partner_id <= 0:
+            reasons.append('Выберите участника договора.')
+        else:
+            member = AgreementPartner.objects.filter(agreement=agreement, partner_id=partner_id).select_related('partner').first()
+            if member is None:
+                reasons.append('Выбранная сторона не входит в договор.')
+            elif member.role == AgreementPartner.Role.OPERATOR:
+                reasons.append('Бизнес-позиция показывается как отчётность; payout самому себе не создаётся.')
+        if amount <= 0:
+            reasons.append('Укажите сумму выплаты.')
+        breakdown, total_available, remaining = ([], Decimal('0.00'), amount)
+        if not reasons:
+            breakdown, total_available, remaining = self._aggregate_payout_breakdown(
+                agreement=agreement,
+                partner_id=partner_id,
+                payout_type=payout_type,
+                amount=amount,
+            )
+            if remaining > 0:
+                reasons.append(f'Доступно только {total_available} UZS.')
+        return Response({
+            'allowed': False,
+            'agreement_id': agreement.id,
+            'partner_id': partner_id or None,
+            'payout_type': payout_type,
+            'amount_uzs': str(amount),
+            'available_uzs': str(total_available),
+            'remaining_uzs': str(remaining),
+            'breakdown': breakdown,
+            'blocking_reasons': reasons + [
+                'Agreement aggregate payout is superseded by E23 policy group decision.',
+            ],
+        })
+
+    @action(detail=True, methods=['post'], url_path='aggregate-payouts')
+    def aggregate_payouts(self, request, pk=None):
+        """Execute an aggregate payout by creating per-procurement facts."""
+        agreement = self.get_object()
+        preview_response = self.aggregate_payout_preview(request, pk=pk)
+        preview = preview_response.data
+        if not preview['allowed']:
+            raise ValidationError({'detail': 'Aggregate payout is blocked.', 'blocking_reasons': preview['blocking_reasons']})
+        partner_id = int(preview['partner_id'])
+        payout_type = str(preview['payout_type'])
+        from_account_id = request.data.get('from_account_id')
+        if not from_account_id:
+            raise ValidationError({'from_account_id': 'This field is required for payout execution.'})
+        created = []
+        try:
+            with transaction.atomic():
+                for row in preview['breakdown']:
+                    if payout_type == 'PROFIT':
+                        created.append(pay_dividend(
+                            tenant_id=request.tenant_id,
+                            partner_id=partner_id,
+                            procurement_id=row['procurement_id'],
+                            amount=Decimal(str(row['amount_uzs'])),
+                            currency='UZS',
+                            from_account_id=from_account_id,
+                        ))
+                    else:
+                        created.append(add_agreement_withdrawal(
+                            tenant_id=request.tenant_id,
+                            agreement_id=agreement.id,
+                            partner_id=partner_id,
+                            procurement_id=row['procurement_id'],
+                            from_account_id=from_account_id,
+                            amount=Decimal(str(row['amount_uzs'])),
+                            currency='UZS',
+                            reason='aggregate-proceeds-payout',
+                            created_by_id=request.user.id if request.user.is_authenticated else None,
+                        ))
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response({
+            'agreement_id': agreement.id,
+            'payout_type': payout_type,
+            'created_count': len(created),
+            'breakdown': preview['breakdown'],
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='capital-positions')
+    def capital_positions(self, request, pk=None):
+        """B (participant↔pool): net capital position per partner vs the pool."""
+        agreement = self.get_object()
+        positions = read_positions(agreement)
+        members = {m.partner_id: m for m in agreement.partners.select_related('partner').all()}
+        rows = []
+        for partner_id, pos in positions.items():
+            member = members.get(partner_id)
+            rows.append({
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+                'deployed': str(pos['deployed']),
+                'paid_in': str(pos['paid_in']),
+                'net': str(pos['net']),
+                'owed': str(pos['owed']),
+                'withdrawable': str(pos['withdrawable']),
+                'deployed_uzs': str(pos.get('deployed_uzs', '0.00')),
+                'capital_recovered_uzs': str(pos.get('capital_recovered_uzs', '0.00')),
+                'remaining_inventory_capital_uzs': str(pos.get('remaining_inventory_capital_uzs', '0.00')),
+                'liability_capital_recovered_uzs': str(pos.get('liability_capital_recovered_uzs', '0.00')),
+                'provisional_profit_uzs': str(pos.get('provisional_profit_uzs', '0.00')),
+                'loss_uzs': str(pos.get('loss_uzs', '0.00')),
+                'partner_liability_loss_uzs': str(pos.get('partner_liability_loss_uzs', '0.00')),
+                'capital_returned_uzs': str(pos.get('capital_returned_uzs', '0.00')),
+                'dividends_paid_uzs': str(pos.get('dividends_paid_uzs', '0.00')),
+                'capital_rolled_to_pool_uzs': str(pos.get('capital_rolled_to_pool_uzs', '0.00')),
+                'capital_return_available_uzs': str(pos.get('capital_return_available_uzs', '0.00')),
+                'provisional_profit_available_uzs': str(pos.get('provisional_profit_available_uzs', '0.00')),
+                'negative_position_uzs': str(pos.get('negative_position_uzs', '0.00')),
+                'currency': agreement.currency,
+            })
+        rows.sort(key=lambda r: r['partner_id'])
+        return Response(rows)
+
+    @action(detail=True, methods=['post'], url_path='settle-partner-capital')
+    def settle_partner_capital_action(self, request, pk=None):
+        agreement = self.get_object()
+        serializer = SettlePartnerCapitalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            settle_partner_capital(
+                tenant_id=request.tenant_id,
+                agreement_id=agreement.id,
+                partner_id=serializer.validated_data['partner_id'],
+                amount=serializer.validated_data['amount'],
+                source=serializer.validated_data['source'],
+                from_account_id=serializer.validated_data.get('from_account_id'),
+                client_request_id=serializer.validated_data.get('client_request_id'),
+            )
+        except (ValueError, NotImplementedError) as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return self.capital_positions(request, pk=pk)
 
 
 class ProcurementViewSet(viewsets.ModelViewSet):
     ordering = ['-opened_at']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan'):
+        if self.action in ('list', 'retrieve', 'ledger', 'receive', 'receive_plan', 'venture_summary', 'close_preview'):
             return [IsWarehouse()]
         return [IsOwner()]
 
     def get_queryset(self):
-        queryset = Procurement.objects.filter(
-            tenant_id=self.request.tenant_id,
-        ).select_related('supplier', 'balance', 'contract').prefetch_related(
-            'items__product_variant',
-            'expenses__targets',
-            'balance__contributions__partner',
-            'balance__withdrawals',
-            'balance__withdrawals__partner',
-            'balance__exchanges',
-            'contract__contract_partners__partner',
-            'receive_batches__warehouse',
-            'receive_batches__lines__item__product_variant',
-            'receive_batches__lines__lot',
-            'receive_batches__expenses__expense',
-            'receive_batches__capital_allocations__partner',
-        )
-
+        queryset = workspace_queryset(self.request.tenant_id)
         status_value = self.request.query_params.get('status')
         if status_value:
             queryset = queryset.filter(status=status_value)
-
-        procurement_type = self.request.query_params.get('procurement_type')
-        if procurement_type:
-            queryset = queryset.filter(procurement_type=procurement_type)
+        funding_source = self.request.query_params.get('funding_source')
+        if funding_source:
+            queryset = queryset.filter(funding_source=funding_source)
 
         return queryset
 
     def get_serializer_class(self):
         if self.action in ('create', 'update', 'partial_update'):
             return ProcurementCreateSerializer
-        if self.action == 'retrieve':
-            return ProcurementDetailSerializer
-        return ProcurementListSerializer
+        return ProcurementCreateSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        rows = [build_workspace_payload(procurement) for procurement in queryset[:50]]
+        return Response(rows)
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(build_workspace_payload(self.get_object()))
+
+    @action(detail=True, methods=['get'], url_path='venture-summary')
+    def venture_summary(self, request, pk=None):
+        """E16: current procurement-venture economic buckets in functional UZS."""
+        from .venture import procurement_has_active_lots
+        from .models import ProcurementReceiveBatchLine
+
+        procurement = self.get_object()
+        positions = read_venture_positions(procurement)
+        members = {}
+        if procurement.agreement_id:
+            members = {
+                member.partner_id: member
+                for member in procurement.agreement.partners.select_related('partner').all()
+            }
+        rows = []
+        totals = {
+            'deployed_uzs': Decimal('0.00'),
+            'capital_recovered_uzs': Decimal('0.00'),
+            'remaining_inventory_capital_uzs': Decimal('0.00'),
+            'liability_capital_recovered_uzs': Decimal('0.00'),
+            'provisional_profit_uzs': Decimal('0.00'),
+            'loss_uzs': Decimal('0.00'),
+            'partner_liability_loss_uzs': Decimal('0.00'),
+            'capital_returned_uzs': Decimal('0.00'),
+            'dividends_paid_uzs': Decimal('0.00'),
+            'capital_rolled_to_pool_uzs': Decimal('0.00'),
+            'capital_return_available_uzs': Decimal('0.00'),
+            'provisional_profit_available_uzs': Decimal('0.00'),
+            'negative_position_uzs': Decimal('0.00'),
+        }
+        for partner_id, pos in positions.items():
+            member = members.get(partner_id)
+            row = {
+                'partner_id': partner_id,
+                'partner_name': getattr(member.partner, 'display_name', str(partner_id)) if member else str(partner_id),
+                'role': member.role if member else '',
+            }
+            for key in totals:
+                value = Decimal(str(pos.get(key, '0.00'))).quantize(Decimal('0.01'))
+                row[key] = str(value)
+                totals[key] += value
+            rows.append(row)
+        rows.sort(key=lambda item: item['partner_id'])
+
+        audit_warnings = []
+        suspicious_fx_lines = list(
+            ProcurementReceiveBatchLine.objects
+            .filter(
+                tenant_id=procurement.tenant_id,
+                batch__procurement=procurement,
+                batch__is_reversal=False,
+                item__currency='USD',
+                item__fx_rate__lte=Decimal('1'),
+            )
+            .select_related('item__product_variant')
+            .order_by('id')[:5]
+        )
+        if suspicious_fx_lines:
+            audit_warnings.append({
+                'code': 'SUSPICIOUS_USD_COST_FX',
+                'message': (
+                    'В полученных USD-товарах найден FX snapshot <= 1. '
+                    'Себестоимость, прибыль/убыток и сверка венчура могут быть искажены.'
+                ),
+                'line_ids': [line.id for line in suspicious_fx_lines],
+            })
+        return Response({
+            'procurement_id': procurement.id,
+            'agreement_id': procurement.agreement_id,
+            'currency': 'UZS',
+            'positions': rows,
+            'totals': {key: str(value.quantize(Decimal('0.01'))) for key, value in totals.items()},
+            'has_active_lots': procurement_has_active_lots(procurement),
+            'audit_warnings': audit_warnings,
+        })
+
+    @action(detail=True, methods=['get'], url_path='close-preview')
+    def close_preview(self, request, pk=None):
+        """E17: derived close read-model — show_close (wind-down reached),
+        closeable, and the remaining steps. Gates live on the backend."""
+        from .venture import procurement_close_state
+
+        procurement = self.get_object()
+        return Response({
+            'procurement_id': procurement.id,
+            'status': procurement.status,
+            **procurement_close_state(procurement=procurement),
+        })
+
+    @action(detail=True, methods=['post'], url_path='close')
+    def close(self, request, pk=None):
+        """E17: close the procurement venture once every gate passes. Idempotent;
+        blocking reasons surface as HTTP 400 so the UI shows what to fix first."""
+        from .venture import close_procurement_venture, procurement_close_blocking_reasons
+
+        procurement = self.get_object()
+        if procurement.status == Procurement.Status.CLOSED:
+            return Response(build_workspace_payload(procurement))
+        try:
+            closed = close_procurement_venture(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            return Response(
+                {
+                    'detail': str(error),
+                    'blocking_reasons': procurement_close_blocking_reasons(procurement=procurement),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(build_workspace_payload(closed))
+
+    @action(detail=True, methods=['post'], url_path='repay-debt')
+    def repay_debt(self, request, pk=None):
+        """E17 T-5.3: repay a partner's negative venture position. Idempotent;
+        ValueError (overpay / currency mismatch / no debt / closed) → HTTP 400."""
+        from .serializers import RepayVentureDebtSerializer
+        from .venture import repay_partner_venture_debt
+
+        procurement = self.get_object()
+        serializer = RepayVentureDebtSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            repay_partner_venture_debt(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                partner_id=data['partner_id'],
+                amount=data['amount'],
+                currency=data.get('currency') or 'UZS',
+                paid_to_account_id=data['paid_to_account_id'],
+                client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(build_workspace_payload(procurement))
+
+    @action(detail=True, methods=['post'], url_path='venture-settlements')
+    def venture_settlements(self, request, pk=None):
+        """E16: create constructive/final procurement venture settlement."""
+        from .venture import create_venture_settlement
+
+        procurement = self.get_object()
+        try:
+            settlement = create_venture_settlement(
+                tenant_id=request.tenant_id,
+                procurement_id=procurement.id,
+                settlement_type=request.data.get('settlement_type', 'CONSTRUCTIVE'),
+                inventory_value_uzs=request.data.get('inventory_value_uzs', '0'),
+                reserve_uzs=request.data.get('reserve_uzs', '0'),
+                notes=request.data.get('notes', ''),
+                client_request_id=request.data.get('client_request_id'),
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response({
+            'id': settlement.id,
+            'procurement_id': settlement.procurement_id,
+            'settlement_type': settlement.settlement_type,
+            'settled_at': settlement.settled_at,
+            'inventory_value_uzs': str(settlement.inventory_value_uzs),
+            'reserve_uzs': str(settlement.reserve_uzs),
+            'totals': settlement.totals,
+            'partner_positions': settlement.partner_positions,
+            'notes': settlement.notes,
+        }, status=status.HTTP_201_CREATED)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -221,20 +942,18 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
 
         try:
-            procurement = open_procurement(
+            procurement = create_workspace(
                 tenant_id=request.tenant_id,
-                procurement_type=data['procurement_type'],
+                funding_source=data['funding_source'],
                 supplier_id=data.get('supplier_id'),
                 notes=data.get('notes', ''),
                 client_request_id=str(data['client_request_id']) if data.get('client_request_id') else None,
                 agreement_id=data.get('agreement_id'),
-                contract=dict(data['contract']) if data.get('contract') else None,
-                items=[dict(item) for item in data.get('items', [])],
-                expenses=[dict(expense) for expense in data.get('expenses', [])],
             )
+            procurement = self._apply_workspace_payload(procurement, data)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response(ProcurementDetailSerializer(procurement).data, status=status.HTTP_201_CREATED)
+        return Response(build_workspace_payload(procurement), status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         procurement = self.get_object()
@@ -243,77 +962,96 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
 
         try:
-            procurement = update_open_procurement(
-                tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                procurement_type=data['procurement_type'],
-                supplier_id=data.get('supplier_id'),
-                notes=data.get('notes', ''),
-                agreement_id=data.get('agreement_id'),
-                contract=dict(data['contract']) if data.get('contract') else None,
-                items=[dict(item) for item in data.get('items', [])],
-                expenses=[dict(expense) for expense in data.get('expenses', [])],
-            )
+            procurement = self._apply_workspace_payload(procurement, data, update_source=True)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response(ProcurementDetailSerializer(procurement).data)
+        return Response(build_workspace_payload(procurement))
+
+    def _apply_workspace_payload(self, procurement, data, *, update_source=False):
+        if data.get('contract'):
+            procurement = dispatch_workspace_action(
+                tenant_id=self.request.tenant_id,
+                procurement=procurement,
+                action='CREATE_INVESTMENT_AGREEMENT',
+                payload={'payload': dict(data['contract'])},
+                user_id=self.request.user.id if self.request.user.is_authenticated else None,
+            )
+        elif data.get('agreement_id') and procurement.funding_source == Procurement.FundingSource.PARTNERSHIP:
+            procurement = dispatch_workspace_action(
+                tenant_id=self.request.tenant_id,
+                procurement=procurement,
+                action='LINK_INVESTMENT_AGREEMENT',
+                payload={'payload': {'agreement_id': data['agreement_id']}},
+                user_id=self.request.user.id if self.request.user.is_authenticated else None,
+            )
+
+        if update_source:
+            procurement = dispatch_workspace_action(
+                tenant_id=self.request.tenant_id,
+                procurement=procurement,
+                action='UPDATE_SOURCE',
+                payload={'payload': {
+                    'funding_source': data['funding_source'],
+                    'supplier_id': data.get('supplier_id'),
+                    'agreement_id': data.get('agreement_id') or procurement.agreement_id,
+                    'notes': data.get('notes', ''),
+                }},
+                user_id=self.request.user.id if self.request.user.is_authenticated else None,
+            )
+
+        if data.get('items') or data.get('expenses'):
+            procurement = dispatch_workspace_action(
+                tenant_id=self.request.tenant_id,
+                procurement=procurement,
+                action='UPDATE_ITEMS',
+                payload={'payload': {
+                    'items': [dict(item) for item in data.get('items', [])],
+                    'expenses': [dict(expense) for expense in data.get('expenses', [])],
+                }},
+                user_id=self.request.user.id if self.request.user.is_authenticated else None,
+            )
+
+        if data.get('terms'):
+            terms_payload = dict(data['terms'])
+            terms_payload['schedule'] = [dict(row) for row in data.get('schedule', [])]
+            procurement = dispatch_workspace_action(
+                tenant_id=self.request.tenant_id,
+                procurement=procurement,
+                action='UPDATE_SETTLEMENT',
+                payload={'payload': terms_payload},
+                user_id=self.request.user.id if self.request.user.is_authenticated else None,
+            )
+
+        return procurement
 
     @action(detail=True, methods=['post'], url_path='contributions')
     def contributions(self, request, pk=None):
         procurement = self.get_object()
-        serializer = BalanceContributionCreateSerializer(data=request.data)
+        serializer = AgreementContributionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            contribution = add_contribution(
+            procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                partner_id=serializer.validated_data['partner_id'],
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
-                notes=serializer.validated_data.get('notes', ''),
+                procurement=procurement,
+                action='RECORD_CAPITAL_CONTRIBUTION',
+                payload={'payload': dict(serializer.validated_data)},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response(BalanceContributionSerializer(contribution).data, status=status.HTTP_201_CREATED)
+        return Response(build_workspace_payload(procurement), status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='withdrawals')
     def withdrawals(self, request, pk=None):
-        procurement = self.get_object()
-        serializer = BalanceWithdrawalCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            withdrawal = add_withdrawal(
-                tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                partner_id=serializer.validated_data.get('partner_id'),
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
-                reason=serializer.validated_data.get('reason', ''),
-            )
-        except ValueError as error:
-            raise ValidationError({'detail': str(error)}) from error
-        return Response(BalanceWithdrawalSerializer(withdrawal).data, status=status.HTTP_201_CREATED)
+        raise ValidationError({
+            'detail': 'Balance withdrawals are not part of the E07 procurement workspace contract yet.'
+        })
 
     @action(detail=True, methods=['post'], url_path='balance-exchanges')
     def balance_exchanges(self, request, pk=None):
-        procurement = self.get_object()
-        serializer = BalanceExchangeCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            exchange = exchange_procurement_balance(
-                tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                from_currency=serializer.validated_data['from_currency'],
-                from_amount=serializer.validated_data['from_amount'],
-                to_currency=serializer.validated_data['to_currency'],
-                rate=serializer.validated_data['rate'],
-                notes=serializer.validated_data.get('notes', ''),
-            )
-        except ValueError as error:
-            raise ValidationError({'detail': str(error)}) from error
-        return Response(ProcurementBalanceExchangeSerializer(exchange).data, status=status.HTTP_201_CREATED)
+        raise ValidationError({
+            'detail': 'Balance exchange is not part of the E07 procurement workspace contract yet.'
+        })
 
     @action(detail=True, methods=['post'], url_path='pay-items')
     def pay_items(self, request, pk=None):
@@ -321,18 +1059,20 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         serializer = PayProcurementItemsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            items = pay_procurement_items(
+            procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                item_ids=serializer.validated_data.get('item_ids'),
-                reason=serializer.validated_data.get('reason', ''),
+                procurement=procurement,
+                action='PAY_COSTS',
+                payload={'payload': {
+                    'item_ids': serializer.validated_data.get('item_ids'),
+                    'cash_account_id': serializer.validated_data.get('cash_account_id'),
+                    'notes': serializer.validated_data.get('reason', ''),
+                }},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response({
-            'count': len(items),
-            'status': 'paid',
-        }, status=status.HTTP_200_OK)
+        return Response(build_workspace_payload(procurement), status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='pay-expenses')
     def pay_expenses(self, request, pk=None):
@@ -340,18 +1080,20 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         serializer = PayProcurementExpensesSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            expenses = pay_procurement_expenses(
+            procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                expense_ids=serializer.validated_data.get('expense_ids'),
-                reason=serializer.validated_data.get('reason', ''),
+                procurement=procurement,
+                action='PAY_COSTS',
+                payload={'payload': {
+                    'expense_ids': serializer.validated_data.get('expense_ids'),
+                    'cash_account_id': serializer.validated_data.get('cash_account_id'),
+                    'notes': serializer.validated_data.get('reason', ''),
+                }},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response({
-            'count': len(expenses),
-            'status': 'paid',
-        }, status=status.HTTP_200_OK)
+        return Response(build_workspace_payload(procurement), status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='expense-targets')
     def expense_targets(self, request, pk=None):
@@ -359,32 +1101,27 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         serializer = ProcurementExpenseTargetsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            expense = update_procurement_expense_targets(
+            procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                expense_id=serializer.validated_data['expense_id'],
-                target_item_ids=serializer.validated_data.get('target_item_ids', []),
+                procurement=procurement,
+                action='UPDATE_EXPENSES',
+                payload={'payload': {
+                    'expenses': [{
+                        'expense_id': serializer.validated_data['expense_id'],
+                        'target_item_ids': serializer.validated_data.get('target_item_ids', []),
+                    }],
+                }},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        return Response(ProcurementExpenseSerializer(expense).data, status=status.HTTP_200_OK)
+        return Response(build_workspace_payload(procurement), status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='split-item')
     def split_item(self, request, pk=None):
-        procurement = self.get_object()
-        serializer = ProcurementItemSplitSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            split_procurement_item(
-                tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                item_id=serializer.validated_data['item_id'],
-                quantity=serializer.validated_data['quantity'],
-            )
-        except ValueError as error:
-            raise ValidationError({'detail': str(error)}) from error
-        procurement.refresh_from_db()
-        return Response(ProcurementDetailSerializer(procurement).data, status=status.HTTP_200_OK)
+        raise ValidationError({
+            'detail': 'Item split must be implemented as an E07 workspace correction document, not via legacy split service.'
+        })
 
     @action(detail=True, methods=['post'], url_path='receive')
     def receive(self, request, pk=None):
@@ -392,45 +1129,81 @@ class ProcurementViewSet(viewsets.ModelViewSet):
         serializer = ReceiveProcurementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            procurement = receive_procurement(
+            procurement = dispatch_workspace_action(
                 tenant_id=request.tenant_id,
-                procurement_id=procurement.id,
-                destination_warehouse_id=serializer.validated_data['destination_warehouse_id'],
-                item_ids=serializer.validated_data.get('item_ids'),
-                capital_allocations=serializer.validated_data.get('capital_allocations'),
+                procurement=procurement,
+                action='RECEIVE_BATCH',
+                payload={'payload': {
+                    'destination_warehouse_id': serializer.validated_data['destination_warehouse_id'],
+                    'item_ids': serializer.validated_data.get('item_ids'),
+                    'capital_allocations': serializer.validated_data.get('capital_allocations'),
+                }},
+                user_id=request.user.id if request.user.is_authenticated else None,
             )
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
-        detail = ProcurementDetailSerializer(procurement).data
-        detail['items_count'] = procurement.items.count()
-        return Response(detail)
+        return Response(build_workspace_payload(procurement))
+
+    @action(detail=True, methods=['post'], url_path='terms/amend')
+    def terms_amend(self, request, pk=None):
+        procurement = self.get_object()
+        if not hasattr(procurement, 'terms'):
+            raise ValidationError({'detail': 'Procurement has no terms to amend.'})
+        serializer = TermsAmendmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            procurement = dispatch_workspace_action(
+                tenant_id=request.tenant_id,
+                procurement=procurement,
+                action='AMEND_SETTLEMENT',
+                payload={'payload': {
+                    **serializer.validated_data['new_fields'],
+                    'reason': serializer.validated_data.get('reason', ''),
+                }},
+                user_id=request.user.id if request.user.is_authenticated else None,
+            )
+        except ValueError as error:
+            raise ValidationError({'detail': str(error)}) from error
+        return Response(build_workspace_payload(procurement), status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='terms/amendments')
+    def terms_amendments(self, request, pk=None):
+        procurement = self.get_object()
+        if not hasattr(procurement, 'terms'):
+            return Response([])
+        amendments = (
+            procurement.terms.amendments
+            .filter(tenant_id=request.tenant_id)
+            .select_related('changed_by_user')
+            .order_by('-amended_at', '-id')
+        )
+        return Response(ProcurementTermsAmendmentSerializer(amendments, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='consignment-return')
+    def consignment_return(self, request, pk=None):
+        raise ValidationError({
+            'detail': 'Consignment return must be implemented through RETURN_CONSIGNMENT workspace action.'
+        })
 
     @action(detail=True, methods=['get'], url_path='ledger')
     def ledger(self, request, pk=None):
         procurement = self.get_object()
-        ledgers = ProcurementPartnerLedger.objects.filter(
-            tenant_id=request.tenant_id,
-            procurement=procurement,
-        ).select_related('partner').prefetch_related('entries').order_by('partner_id')
+        payload = build_workspace_payload(procurement)
         return Response({
             'procurement_id': procurement.id,
-            'partners': ProcurementLedgerSerializer(ledgers, many=True).data,
+            'investment': payload['documents']['investment'],
+            'history': payload['history'],
         })
 
     @action(detail=True, methods=['get'], url_path='receive-plan')
     def receive_plan(self, request, pk=None):
         procurement = self.get_object()
-        raw_item_ids = request.query_params.get('item_ids', '')
-        item_ids = [
-            int(value)
-            for value in raw_item_ids.split(',')
-            if value.strip()
-        ] or None
-        return Response(get_procurement_receive_plan(
-            tenant_id=request.tenant_id,
-            procurement_id=procurement.id,
-            item_ids=item_ids,
-        ))
+        payload = build_workspace_payload(procurement)
+        return Response({
+            'procurement_id': procurement.id,
+            'receive_ready': payload['readiness']['receive_ready'],
+            'policy': payload['policy'],
+        })
 
 
 class DividendPaymentViewSet(viewsets.ModelViewSet):
@@ -463,15 +1236,34 @@ class DividendPaymentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            payment = pay_dividend(
-                tenant_id=request.tenant_id,
-                partner_id=serializer.validated_data['partner_id'],
-                procurement_id=serializer.validated_data['procurement_id'],
-                amount=serializer.validated_data['amount'],
-                currency=serializer.validated_data['currency'],
-                fx_rate=serializer.validated_data['fx_rate'],
-                from_account_id=serializer.validated_data.get('paid_from_account_id'),
-            )
+            with transaction.atomic():
+                obligation_id = serializer.validated_data.get('payout_obligation_id')
+                decision_id = serializer.validated_data.get('payout_decision_id')
+                if not obligation_id and not decision_id:
+                    raise ValueError('Profit payout requires a policy payout decision.')
+                if decision_id:
+                    raise ValueError('Use the policy group decision endpoint to execute profit payout decisions.')
+                payment = pay_dividend(
+                    tenant_id=request.tenant_id,
+                    partner_id=serializer.validated_data['partner_id'],
+                    procurement_id=serializer.validated_data['procurement_id'],
+                    amount=serializer.validated_data['amount'],
+                    currency=serializer.validated_data['currency'],
+                    fx_rate=serializer.validated_data.get('fx_rate'),
+                    from_account_id=serializer.validated_data.get('paid_from_account_id'),
+                )
+                if obligation_id:
+                    from .lifecycle_services import record_payout_obligation
+                    obligation = PayoutObligation.objects.get(
+                        tenant_id=request.tenant_id,
+                        pk=obligation_id,
+                        procurement_id=payment.procurement_id,
+                        recipient_id=payment.partner_id,
+                        kind=PayoutObligation.Kind.PROFIT,
+                    )
+                    record_payout_obligation(obligation=obligation, payment=payment)
         except ValueError as error:
             raise ValidationError({'detail': str(error)}) from error
+        except PayoutObligation.DoesNotExist as error:
+            raise ValidationError({'payout_obligation_id': 'Payout obligation was not found for this dividend.'}) from error
         return Response(DividendPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)

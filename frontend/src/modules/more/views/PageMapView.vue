@@ -9,8 +9,6 @@ import {
   Boxes,
   CircleDollarSign,
   Download,
-  FolderTree,
-  History,
   LockKeyhole,
   Map,
   Package,
@@ -22,6 +20,8 @@ import {
 
 import { useAuthStore } from '@/stores/auth'
 import { UserRole } from '@/types/enums'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import ResponsiveFlowColumns from '@/components/layout/ResponsiveFlowColumns.vue'
 
 interface PageMapItem {
   title: string
@@ -115,6 +115,7 @@ const sections = computed<PageMapSection[]>(() => [
     items: [
       { title: t('pageMap.sections.investor.dashboard'), description: t('pageMap.sections.investor.dashboardDescription'), routeName: 'investor-dashboard', roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.agreements'), description: t('pageMap.sections.investor.agreementsDescription'), routeName: 'investor-agreements', roles: [UserRole.INVESTOR] },
+      { title: t('pageMap.sections.investor.funds'), description: t('pageMap.sections.investor.fundsDescription'), routeName: 'investor-funds', roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.agreement'), description: t('pageMap.sections.investor.agreementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
       { title: t('pageMap.sections.investor.procurement'), description: t('pageMap.sections.investor.procurementDescription'), contextual: true, roles: [UserRole.INVESTOR] },
     ],
@@ -169,13 +170,13 @@ function openItem(item: PageMapItem): void {
 
 <template>
   <div class="page-map">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('pageMap.title') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('pageMap.title')" :eyebrow="t('nav.settings')">
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="intro">
@@ -188,49 +189,51 @@ function openItem(item: PageMapItem): void {
         </div>
       </section>
 
-      <section v-for="section in visibleSections" :key="section.title" class="map-section">
-        <div class="section-head">
-          <span class="section-icon"><component :is="section.icon" :size="17" :stroke-width="1.75" /></span>
-          <div class="section-copy">
-            <h3>{{ section.title }}</h3>
-            <p>{{ section.description }}</p>
-          </div>
-          <button
-            v-if="section.primaryRouteName && canOpenSection(section)"
-            class="section-open"
-            type="button"
-            :aria-label="`${t('pageMap.open')} ${section.title}`"
-            @click="openRoute(section.primaryRouteName)"
-          >
-            {{ t('pageMap.open') }}
-          </button>
-        </div>
-
-        <div class="page-list">
-          <article v-for="item in section.items" :key="`${section.title}-${item.title}`" class="page-row">
-            <span class="page-marker" :class="{ 'page-marker--context': item.contextual }">
-              <LockKeyhole v-if="item.contextual" :size="13" :stroke-width="1.8" />
-              <ReceiptText v-else-if="section.primaryRouteName === 'reports'" :size="13" :stroke-width="1.8" />
-              <Boxes v-else :size="13" :stroke-width="1.8" />
-            </span>
-            <span class="page-copy">
-              <strong>{{ item.title }}</strong>
-              <span>{{ item.description }}</span>
-              <em>{{ rolesLabel(item.roles) }}</em>
-            </span>
+      <ResponsiveFlowColumns class="map-flow">
+        <section v-for="section in visibleSections" :key="section.title" class="map-section">
+          <div class="section-head">
+            <span class="section-icon"><component :is="section.icon" :size="17" :stroke-width="1.75" /></span>
+            <div class="section-copy">
+              <h3>{{ section.title }}</h3>
+              <p>{{ section.description }}</p>
+            </div>
             <button
-              v-if="canOpenItem(item)"
-              class="page-open"
+              v-if="section.primaryRouteName && canOpenSection(section)"
+              class="section-open"
               type="button"
-              :aria-label="`${t('pageMap.open')} ${item.title}`"
-              @click="openItem(item)"
+              :aria-label="`${t('pageMap.open')} ${section.title}`"
+              @click="openRoute(section.primaryRouteName)"
             >
-              {{ t('pageMap.go') }}
+              {{ t('pageMap.open') }}
             </button>
-            <span v-else class="context-label">{{ item.contextual ? t('pageMap.fromContext') : t('pageMap.noAccess') }}</span>
-          </article>
-        </div>
-      </section>
+          </div>
+
+          <div class="page-list">
+            <article v-for="item in section.items" :key="`${section.title}-${item.title}`" class="page-row">
+              <span class="page-marker" :class="{ 'page-marker--context': item.contextual }">
+                <LockKeyhole v-if="item.contextual" :size="13" :stroke-width="1.8" />
+                <ReceiptText v-else-if="section.primaryRouteName === 'reports'" :size="13" :stroke-width="1.8" />
+                <Boxes v-else :size="13" :stroke-width="1.8" />
+              </span>
+              <span class="page-copy">
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.description }}</span>
+                <em>{{ rolesLabel(item.roles) }}</em>
+              </span>
+              <button
+                v-if="canOpenItem(item)"
+                class="page-open"
+                type="button"
+                :aria-label="`${t('pageMap.open')} ${item.title}`"
+                @click="openItem(item)"
+              >
+                {{ t('pageMap.go') }}
+              </button>
+              <span v-else class="context-label">{{ item.contextual ? t('pageMap.fromContext') : t('pageMap.noAccess') }}</span>
+            </article>
+          </div>
+        </section>
+      </ResponsiveFlowColumns>
     </main>
   </div>
 </template>
@@ -241,26 +244,6 @@ function openItem(item: PageMapItem): void {
   background: var(--color-bg-primary);
 }
 
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: grid;
-  grid-template-columns: 40px 1fr 40px;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--header-height);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-primary);
-}
-
-.page-title {
-  color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  text-align: center;
-}
 
 .back-btn,
 .header-spacer {
@@ -281,6 +264,15 @@ function openItem(item: PageMapItem): void {
   gap: var(--space-3);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+@media (min-width: 768px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+}
+
+@media (min-width: 1280px) {
+  .page-map { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
 }
 
 .intro {

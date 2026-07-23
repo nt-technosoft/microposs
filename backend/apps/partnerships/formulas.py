@@ -6,18 +6,7 @@ flows use one source of truth.
 
 from decimal import Decimal
 
-
-ZERO = Decimal('0')
-MONEY_Q = Decimal('0.01')
-RATIO_Q = Decimal('0.000001')
-
-
-def money(amount: Decimal | str | int | float) -> Decimal:
-    return Decimal(str(amount)).quantize(MONEY_Q)
-
-
-def ratio(amount: Decimal | str | int | float) -> Decimal:
-    return Decimal(str(amount)).quantize(RATIO_Q)
+from .money_utils import ZERO, money, ratio
 
 
 def profit_shares_from_capital(
@@ -148,6 +137,77 @@ def calculate_profit_distribution(
         quantity=quantity,
         unit_landed_cost=unit_landed_cost,
     )
+
+
+def calculate_sale_realization_distribution(
+    *,
+    contract_snapshot: dict | None,
+    sale_proceeds: Decimal | str | int | float,
+    cost_basis: Decimal | str | int | float,
+) -> dict[str, dict[str, str]]:
+    """Split one realized sale slice into capital recovery, provisional P&L.
+
+    Sale realization is not final venture settlement. It records the economic
+    fact that inventory capital has been converted into sale proceeds and,
+    depending on proceeds vs cost, either provisional profit or loss appeared.
+    """
+
+    proceeds = money(sale_proceeds)
+    cost = money(cost_basis)
+    snapshot = contract_snapshot or {}
+    partners = snapshot.get('partners') or []
+    if proceeds <= 0 or cost <= 0 or not partners:
+        return {}
+
+    recovered_total = min(proceeds, cost)
+    provisional_profit_total = max(ZERO, proceeds - cost)
+    loss_total = max(ZERO, cost - proceeds)
+
+    profit_distribution = distribute_profit_from_snapshot(
+        contract_snapshot=contract_snapshot,
+        gross_profit=provisional_profit_total,
+    )
+    loss_distribution = distribute_loss_by_capital_from_snapshot(
+        contract_snapshot=contract_snapshot,
+        loss_amount=loss_total,
+    )
+
+    result: dict[str, dict[str, str]] = {}
+    operator = next((p for p in partners if p.get('role') == 'OPERATOR'), None)
+    recovered_distributed = ZERO
+
+    for partner in partners:
+        partner_id = partner.get('partner_id')
+        if partner_id is None:
+            continue
+        partner_key = str(partner_id)
+        capital_share = Decimal(str(partner.get('capital_share', '0')))
+        capital_recovered = money(recovered_total * capital_share)
+        recovered_distributed += capital_recovered
+        result[partner_key] = {
+            'capital_recovered': str(capital_recovered),
+            'provisional_profit': str(Decimal(str(profit_distribution.get(partner_key, '0')))),
+            'loss': str(Decimal(str(loss_distribution.get(partner_key, '0')))),
+        }
+
+    if operator is not None:
+        residue = money(recovered_total - recovered_distributed)
+        if residue:
+            operator_key = str(operator['partner_id'])
+            row = result.setdefault(operator_key, {
+                'capital_recovered': '0.00',
+                'provisional_profit': '0.00',
+                'loss': '0.00',
+            })
+            row['capital_recovered'] = str(
+                money(Decimal(str(row['capital_recovered'])) + residue),
+            )
+
+    return {
+        partner_id: values
+        for partner_id, values in result.items()
+        if any(Decimal(str(amount)) != 0 for amount in values.values())
+    }
 
 
 def distribute_loss_by_capital_from_snapshot(

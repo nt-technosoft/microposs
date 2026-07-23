@@ -14,6 +14,7 @@ from apps.core.management.commands.excel_workflow_audit import (
     SCENARIOS,
     SNAPSHOT_DEFAULT,
     IN_TRANSIT_PRODUCT,
+    resolve_snapshot_path,
 )
 
 
@@ -59,9 +60,7 @@ class Command(BaseCommand):
         engine.stderr = self.stderr
         engine.style = self.style
 
-        snapshot_path = Path(options['snapshot'])
-        if not snapshot_path.is_absolute():
-            snapshot_path = Path.cwd() / snapshot_path
+        snapshot_path = resolve_snapshot_path(options['snapshot'])
         if not snapshot_path.exists():
             raise CommandError(f'Snapshot not found: {snapshot_path}')
 
@@ -348,7 +347,7 @@ class Command(BaseCommand):
 
         procurement = (
             Procurement.objects
-            .filter(tenant=business, procurement_type=Procurement.Type.PARTNERSHIP)
+            .filter(tenant=business, funding_source=Procurement.FundingSource.PARTNERSHIP)
             .order_by('id')
             .first()
         )

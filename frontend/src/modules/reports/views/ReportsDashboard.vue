@@ -12,18 +12,19 @@ import {
   type SaleProfitabilityRow,
   type ProductProfitabilityRow,
   type ProcurementProfitabilityRow,
+  type ReportCurrencyMeta,
 } from '@/api/finance'
 import type { DebtSummaryItem } from '@/api/customers'
 import type { PayablesSummaryItem } from '@/api/suppliers'
 import type { StockSummaryItem } from '@/api/inventory'
 import { useToast } from '@/composables/useToast'
-import { useFxRate } from '@/composables/useFxRate'
 import { intlLocale } from '@/i18n/format'
 import { formatPrice } from '@/utils/currency'
 import {
   procurementStatusLabel as domainProcurementStatusLabel,
   procurementTypeLabel as domainProcurementTypeLabel,
 } from '@/utils/domainLabels'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,11 +45,6 @@ interface PeriodOption {
 const toast = useToast()
 const router = useRouter()
 const { t, locale } = useI18n()
-const {
-  rate: latestUsdRate,
-  error: latestUsdRateError,
-  load: loadLatestUsdRate,
-} = useFxRate()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +78,7 @@ const expandedSaleId = ref<number | null>(null)
 const expandedProductId = ref<number | null>(null)
 const expandedProcurementId = ref<number | null>(null)
 const reportCurrency = ref<ReportCurrency>('UZS')
+const reportCurrencyMeta = ref<ReportCurrencyMeta | null>(null)
 
 const loadingSummary = ref(false)
 const loadingCashFlow = ref(false)
@@ -197,9 +194,13 @@ const cashBalance = computed(() => {
     .reduce((sum, line) => sum + parseFloat(line.balance || '0'), 0)
 })
 
+const operationalCashAccounts = computed(() =>
+  cashAccounts.value.filter((account) => account.kind !== 'agreement_capital' && account.kind !== 'fund_capital'),
+)
+
 const nativeCashByCurrency = computed(() => {
   const totals = new Map<string, number>()
-  for (const account of cashAccounts.value) {
+  for (const account of operationalCashAccounts.value) {
     const currency = String(account.currency || 'UZS').toUpperCase()
     const amount = parseFloat(account.balance || '0') || 0
     totals.set(currency, (totals.get(currency) || 0) + amount)
@@ -238,7 +239,8 @@ function reportNumberFromUzs(value: string | number | null | undefined): number 
   const raw = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '0'))
   const amount = Number.isFinite(raw) ? raw : 0
   if (reportCurrency.value === 'UZS') return amount
-  const fx = Number.parseFloat(latestUsdRate.value || '0')
+  if (reportCurrencyMeta.value?.currency !== 'USD') return amount
+  const fx = Number.parseFloat(reportCurrencyMeta.value?.fx_rate || '0')
   return Number.isFinite(fx) && fx > 0 ? amount / fx : amount
 }
 
@@ -259,6 +261,24 @@ function formatReportPrice(value: string | number | null | undefined): string {
   return formatPrice(reportNumberFromUzs(value), reportCurrency.value)
 }
 
+function reportFxSourceLabel(source: string | null | undefined): string {
+  if (source === 'CBU') return 'ЦБ'
+  if (source === 'MANUAL') return 'ручной'
+  if (source === 'FUNCTIONAL') return 'UZS'
+  return 'курс'
+}
+
+const reportUsdProvenance = computed(() => {
+  if (reportCurrency.value !== 'USD') return null
+  const meta = reportCurrencyMeta.value
+  if (meta?.currency !== 'USD' || !meta.fx_rate) return 'Курс для отображения не загружен'
+  const date = meta.rate_date
+    ? new Date(meta.rate_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+    : ''
+  const rate = Number(meta.fx_rate).toLocaleString(intlLocale(locale.value), { maximumFractionDigits: 2 })
+  return `Отображение по курсу ${reportFxSourceLabel(meta.source)}: 1 USD = ${rate} UZS${date ? ` на ${date}` : ''}`
+})
+
 function formatRowReportPrice(
   row: { display?: { currency: string; amounts: Record<string, string> } },
   key: string,
@@ -276,16 +296,15 @@ async function setReportCurrency(currency: ReportCurrency): Promise<void> {
   if (_currencyDebounceTimer !== null) clearTimeout(_currencyDebounceTimer)
   _currencyDebounceTimer = setTimeout(async () => {
     _currencyDebounceTimer = null
-    if (currency === 'USD' && !latestUsdRate.value) {
-      try {
-        await loadLatestUsdRate()
-      } catch {
+    try {
+      await Promise.all([loadSummary(), loadAnalytics()])
+      if (currency === 'USD' && reportCurrencyMeta.value?.currency !== 'USD') {
         reportCurrency.value = 'UZS'
-        toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
-        return
+        toast.error(errorSummary.value || t('procurements.syncUsdRateFirst'))
       }
+    } catch {
+      reportCurrency.value = 'UZS'
     }
-    await loadAnalytics()
   }, 300)
 }
 
@@ -492,6 +511,11 @@ let _analyticsAbort: AbortController | null = null
 let _computingPollTimer: ReturnType<typeof setInterval> | null = null
 
 function _applySummaryResult(result: Awaited<ReturnType<typeof fetchReportSummary>>): void {
+  reportCurrencyMeta.value = result.report_currency ?? null
+  const metaCurrency = result.report_currency?.currency
+  if ((metaCurrency === 'UZS' || metaCurrency === 'USD') && reportCurrency.value !== metaCurrency) {
+    reportCurrency.value = metaCurrency
+  }
   summaries.value = result.daily_summary
   cashFlow.value = result.cash_flow
   debtItems.value = result.debt
@@ -519,7 +543,10 @@ async function loadSummary(): Promise<void> {
   errorSummary.value = null
   try {
     const range = getDateRange(period.value)
-    const result = await fetchReportSummary(range, _summaryAbort.signal)
+    const result = await fetchReportSummary(
+      { ...range, report_currency: reportCurrency.value },
+      _summaryAbort.signal,
+    )
 
     _applySummaryResult(result)
     isComputing.value = result.is_computing
@@ -534,7 +561,7 @@ async function loadSummary(): Promise<void> {
           return
         }
         try {
-          const poll = await fetchReportSummary(range)
+          const poll = await fetchReportSummary({ ...range, report_currency: reportCurrency.value })
           if (!poll.is_computing) {
             clearInterval(_computingPollTimer!)
             _computingPollTimer = null
@@ -642,11 +669,9 @@ function openProcurementAudit(procurementId: number): void {
 <template>
   <div class="reports-page">
 
-    <!-- ── Header ─────────────────────────────────────────────── -->
-    <header class="page-header">
-      <h1 class="page-title">{{ t('reports.title') }}</h1>
-
-      <div class="period-selector">
+    <PageChrome :title="t('reports.title')" :eyebrow="t('nav.finance')">
+      <template #primary>
+        <div class="period-selector">
         <button
           class="period-btn"
           :class="{ open: periodMenuOpen }"
@@ -673,8 +698,9 @@ function openProcurementAudit(procurementId: number): void {
             </li>
           </ul>
         </Transition>
-      </div>
-    </header>
+        </div>
+      </template>
+    </PageChrome>
 
     <section v-if="period === 'custom'" class="custom-range">
       <div class="custom-range-fields">
@@ -722,23 +748,36 @@ function openProcurementAudit(procurementId: number): void {
             </div>
 
             <div class="overview-actions">
-              <div class="currency-switch" role="group" :aria-label="t('reports.reportCurrency')">
-                <button
-                  type="button"
-                  class="currency-switch__btn"
-                  :class="{ active: reportCurrency === 'UZS' }"
-                  @click="setReportCurrency('UZS')"
+              <div class="report-currency-control">
+                <div class="currency-switch" role="group" :aria-label="t('reports.reportCurrency')">
+                  <button
+                    type="button"
+                    class="currency-switch__btn"
+                    :class="{ active: reportCurrency === 'UZS' }"
+                    :aria-pressed="reportCurrency === 'UZS'"
+                    @click="setReportCurrency('UZS')"
+                  >
+                    UZS
+                  </button>
+                  <button
+                    type="button"
+                    class="currency-switch__btn"
+                    :class="{ active: reportCurrency === 'USD' }"
+                    :aria-pressed="reportCurrency === 'USD'"
+                    :aria-describedby="reportUsdProvenance ? 'report-usd-provenance' : undefined"
+                    @click="setReportCurrency('USD')"
+                  >
+                    USD
+                  </button>
+                </div>
+                <p
+                  v-if="reportUsdProvenance"
+                  id="report-usd-provenance"
+                  class="report-usd-provenance"
+                  aria-live="polite"
                 >
-                  UZS
-                </button>
-                <button
-                  type="button"
-                  class="currency-switch__btn"
-                  :class="{ active: reportCurrency === 'USD' }"
-                  @click="setReportCurrency('USD')"
-                >
-                  USD
-                </button>
+                  {{ reportUsdProvenance }}
+                </p>
               </div>
               <button class="action-pill" type="button" @click="openCurrencyExchange">
                 {{ t('finance.exchange') }}
@@ -1292,7 +1331,7 @@ function openProcurementAudit(procurementId: number): void {
                   </button>
 
                   <div v-if="expandedProcurementId === procurement.procurement_id" class="analytics-details">
-                    <span class="detail-chip">{{ procurementTypeLabel(procurement.procurement_type) }}</span>
+                    <span class="detail-chip">{{ procurementTypeLabel(procurement.funding_source) }}</span>
                     <span class="detail-chip">{{ procurementStatusLabel(procurement.status) }}</span>
                     <span class="detail-chip">{{ t('reports.revenueLine', { amount: formatRowReportPrice(procurement, 'revenue', procurement.revenue) }) }}</span>
                     <span class="detail-chip">{{ t('reports.cogsLine', { amount: formatRowReportPrice(procurement, 'cogs', procurement.cogs) }) }}</span>
@@ -1387,26 +1426,6 @@ function openProcurementAudit(procurementId: number): void {
     radial-gradient(circle at top right, color-mix(in srgb, var(--color-brand-50) 70%, transparent) 0, transparent 32%),
     var(--color-bg-primary);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
-}
-
-.page-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  background: color-mix(in srgb, var(--color-bg-primary) 92%, white);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-semibold);
-  color: var(--color-text-primary);
 }
 
 .period-selector { position: relative; }
@@ -1611,6 +1630,19 @@ function openProcurementAudit(procurementId: number): void {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.report-currency-control {
+  min-width: 160px;
+  display: grid;
+  gap: 4px;
+}
+
+.report-usd-provenance {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.25;
 }
 
 .currency-switch {
@@ -2167,8 +2199,41 @@ function openProcurementAudit(procurementId: number): void {
   }
 }
 
+@media (min-width: 1024px) {
+  .reports-page {
+    padding-bottom: var(--space-8);
+  }
+
+  .content {
+    gap: var(--space-5);
+    padding: clamp(1.25rem, 2vw, 2rem);
+  }
+
+  .overview-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .overview-primary {
+    grid-column: span 2;
+    grid-row: span 2;
+    align-content: center;
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .summary-footer {
+    grid-column: 1 / -1;
+  }
+
+  .analytics-toggle {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+    padding: var(--space-4) var(--space-5);
+  }
+}
+
 @media (max-width: 640px) {
-  .page-header,
   .custom-range,
   .content {
     padding-left: var(--space-4);
@@ -2198,6 +2263,18 @@ function openProcurementAudit(procurementId: number): void {
     align-items: center;
     width: 100%;
     gap: 6px;
+  }
+
+  .report-currency-control {
+    min-width: 0;
+    flex: 1 1 112px;
+  }
+
+  .report-usd-provenance {
+    max-width: 156px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .currency-switch {

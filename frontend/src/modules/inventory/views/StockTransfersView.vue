@@ -11,6 +11,8 @@ import AppEmptyState from '@/components/feedback/AppEmptyState.vue'
 import { useToast } from '@/composables/useToast'
 import { intlLocale } from '@/i18n/format'
 import { getApiErrorMessage } from '@/utils/errors'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import WorkspaceSplit from '@/components/layout/WorkspaceSplit.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -300,17 +302,20 @@ onMounted(async () => {
 
 <template>
   <div class="transfer-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="goBack">
-        <ArrowLeft :size="20" :stroke-width="2" />
-      </button>
-      <div class="page-headings">
-        <h1 class="page-title">{{ t('inventory.transferTitle') }}</h1>
-        <p class="page-subtitle">{{ t('inventory.transferSubtitle') }}</p>
-      </div>
-    </header>
+    <PageChrome
+      :title="t('inventory.transferTitle')"
+      :eyebrow="t('nav.products')"
+      :description="t('inventory.transferSubtitle')"
+    >
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="goBack">
+          <ArrowLeft :size="20" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <div class="content">
+      <WorkspaceSplit class="transfer-workspace" sticky-main>
       <section class="panel">
         <div class="section-title-row">
           <h2 class="section-title">{{ t('inventory.newOperation') }}</h2>
@@ -327,12 +332,14 @@ onMounted(async () => {
             <span>{{ directionLabel }}</span>
           </div>
 
-          <BaseSelect
-            v-model="form.fromWarehouseId"
-            :options="sourceOptions"
-            :title="t('inventory.source')"
-            :placeholder="t('inventory.chooseSource')"
-          />
+          <div class="form-field form-field--source">
+            <BaseSelect
+              v-model="form.fromWarehouseId"
+              :options="sourceOptions"
+              :title="t('inventory.source')"
+              :placeholder="t('inventory.chooseSource')"
+            />
+          </div>
 
           <div class="swap-row">
             <button class="swap-btn" type="button" @click="swapWarehouses">
@@ -340,27 +347,33 @@ onMounted(async () => {
             </button>
           </div>
 
-          <BaseSelect
-            v-model="form.toWarehouseId"
-            :options="destinationOptions"
-            :title="t('inventory.destination')"
-            :placeholder="t('inventory.chooseDestination')"
-          />
+          <div class="form-field form-field--destination">
+            <BaseSelect
+              v-model="form.toWarehouseId"
+              :options="destinationOptions"
+              :title="t('inventory.destination')"
+              :placeholder="t('inventory.chooseDestination')"
+            />
+          </div>
 
-          <BaseSelect
-            v-model="form.lotId"
-            :options="lotOptions"
-            :title="t('inventory.batch')"
-            :placeholder="t('inventory.chooseLot')"
-            :disabled="isLoadingLots || lotOptions.length === 0"
-          />
+          <div class="form-field form-field--lot">
+            <BaseSelect
+              v-model="form.lotId"
+              :options="lotOptions"
+              :title="t('inventory.batch')"
+              :placeholder="t('inventory.chooseLot')"
+              :disabled="isLoadingLots || lotOptions.length === 0"
+            />
+          </div>
 
-          <BaseInput
-            v-model="form.quantity"
-            :label="t('common.quantity')"
-            type="number"
-            :placeholder="t('inventory.quantityExample')"
-          />
+          <div class="form-field form-field--quantity">
+            <BaseInput
+              v-model="form.quantity"
+              :label="t('common.quantity')"
+              type="number"
+              :placeholder="t('inventory.quantityExample')"
+            />
+          </div>
 
           <p v-if="selectedLot" class="helper-text">
             {{ t('inventory.availableToMove', { count: selectedLotAvailable }) }}
@@ -391,7 +404,8 @@ onMounted(async () => {
         </AppEmptyState>
       </section>
 
-      <section class="panel">
+      <template #aside>
+        <section class="panel">
         <div class="section-title-row">
           <div class="section-heading">
             <h2 class="section-title">{{ t('inventory.historyTitle') }}</h2>
@@ -453,7 +467,9 @@ onMounted(async () => {
         >
           {{ isLoadingMoreTransfers ? t('common.loadingMore') : t('common.loadMore') }}
         </button>
-      </section>
+        </section>
+      </template>
+      </WorkspaceSplit>
     </div>
   </div>
 </template>
@@ -461,15 +477,6 @@ onMounted(async () => {
 <style scoped>
 .transfer-page {
   min-height: 100dvh;
-  background: var(--color-bg-primary);
-}
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-primary);
 }
 
@@ -486,28 +493,36 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.page-headings {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.page-title {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--color-text-primary);
-}
-
-.page-subtitle {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
 .content {
-  display: grid;
-  gap: var(--space-4);
   padding: var(--space-4);
   padding-bottom: calc(var(--bottom-nav-height) + var(--space-8));
+}
+
+@media (min-width: 1024px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .direction-strip,
+  .helper-text,
+  .inline-error,
+  .primary-btn {
+    grid-column: 1 / -1;
+  }
+
+  .form-field--source { grid-column: 1; }
+  .swap-row { grid-column: 2; margin: 0; padding-bottom: 2px; }
+  .form-field--destination { grid-column: 3; }
+  .form-field--lot { grid-column: 1 / 3; }
+  .form-field--quantity { grid-column: 3; }
+}
+
+@media (min-width: 1280px) {
+  .transfer-page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
 }
 
 .panel {

@@ -4,8 +4,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ChevronDown, ChevronRight, PackageSearch, RefreshCcw, Scale, Wallet } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
-import { fetchInvestorAgreementDetail } from '@/api/investors'
+import {
+  confirmInvestorPayoutObligation,
+  disputeInvestorPayoutObligation,
+  fetchInvestorAgreementDetail,
+  fetchInvestorPayoutObligations,
+} from '@/api/investors'
 import type { AgreementProfitabilityDetail } from '@/api/finance'
+import type { PayoutObligation } from '@/api/partnerships'
 import {
   agreementStatusLabel,
   formatBalanceLabel,
@@ -26,6 +32,10 @@ const loading = ref(false)
 const error = ref('')
 const expandedProcurementId = ref<number | null>(null)
 const selectedReportCurrency = ref<'UZS' | 'USD' | ''>('')
+const payoutObligations = ref<PayoutObligation[]>([])
+const disputeTargetId = ref<number | null>(null)
+const disputeStatement = ref('')
+const payoutActionError = ref('')
 
 const agreementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.agreement ?? null)
@@ -100,14 +110,45 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    report.value = await fetchInvestorAgreementDetail(
-      agreementId.value,
-      selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
-    )
+    const [reportRow, payouts] = await Promise.all([
+      fetchInvestorAgreementDetail(
+        agreementId.value,
+        selectedReportCurrency.value ? { report_currency: selectedReportCurrency.value } : undefined,
+      ),
+      fetchInvestorPayoutObligations(),
+    ])
+    report.value = reportRow
+    payoutObligations.value = payouts.filter((row) => row.agreement === agreementId.value)
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : t('investors.loadAgreementFailed')
   } finally {
     loading.value = false
+  }
+}
+
+async function confirmPayout(row: PayoutObligation): Promise<void> {
+  payoutActionError.value = ''
+  try {
+    await confirmInvestorPayoutObligation(row.id)
+    await load()
+  } catch (err: unknown) {
+    payoutActionError.value = err instanceof Error ? err.message : 'Не удалось подтвердить выплату.'
+  }
+}
+
+async function submitDispute(row: PayoutObligation): Promise<void> {
+  if (!disputeStatement.value.trim()) {
+    payoutActionError.value = 'Опишите причину спора.'
+    return
+  }
+  payoutActionError.value = ''
+  try {
+    await disputeInvestorPayoutObligation(row.id, { statement: disputeStatement.value.trim() })
+    disputeTargetId.value = null
+    disputeStatement.value = ''
+    await load()
+  } catch (err: unknown) {
+    payoutActionError.value = err instanceof Error ? err.message : 'Не удалось зафиксировать спор.'
   }
 }
 
@@ -211,6 +252,24 @@ onMounted(load)
             <strong class="investor-summary-stat__value tabular-nums">{{ summary.procurements_count }}</strong>
             <span class="investor-summary-stat__hint">{{ t('investors.linkedProcurementsHint') }}</span>
           </article>
+        </section>
+
+        <section class="investor-panel">
+          <div class="investor-panel__head">
+            <div class="investor-panel__copy">
+              <h2 class="investor-panel__title">Выплаты по договору</h2>
+              <p class="investor-panel__hint">Деньги перечисляются офлайн: здесь подтверждается или оспаривается зафиксированный факт.</p>
+            </div>
+          </div>
+          <p v-if="payoutActionError" class="investor-state investor-state--error">{{ payoutActionError }}</p>
+          <p v-if="!payoutObligations.length" class="investor-panel__hint">Сейчас нет обязательств по выплате.</p>
+          <div v-else class="investor-list">
+            <article v-for="row in payoutObligations" :key="row.id" class="investor-list-row investor-payout-row">
+              <div class="investor-list-row__main"><strong class="investor-list-row__title">{{ row.kind === 'PROFIT' ? 'Прибыль к выплате' : 'Возврат капитала' }}</strong><span class="investor-list-row__meta">Срок {{ formatDateTime(row.due_at) }} · {{ row.status }} · выплачено {{ formatAmount(row.paid_amount, row.currency) }}</span></div>
+              <div class="investor-list-row__side"><strong class="investor-list-row__value">{{ formatAmount(row.amount, row.currency) }}</strong><div v-if="row.status === 'RECORDED'" class="investor-payout-actions"><button type="button" class="investor-action-button" @click="confirmPayout(row)">Подтвердить</button><button type="button" class="investor-action-button investor-action-button--danger" @click="disputeTargetId = row.id">Оспорить</button></div><button v-else-if="row.status === 'PENDING' || row.status === 'DISPUTED'" type="button" class="investor-action-button investor-action-button--danger" @click="disputeTargetId = row.id">Оспорить</button></div>
+              <form v-if="disputeTargetId === row.id" class="investor-dispute-form" @submit.prevent="submitDispute(row)"><textarea v-model="disputeStatement" rows="2" placeholder="Причина спора" /><button type="submit" class="investor-action-button investor-action-button--danger">Отправить спор</button></form>
+            </article>
+          </div>
         </section>
 
         <section class="investor-panel">
@@ -397,7 +456,7 @@ onMounted(load)
                 <div class="investor-list-row__main">
                   <div class="agreement-row__head">
                     <strong class="investor-list-row__title">
-                      {{ procurementTypeLabel(procurement.procurement_type) }} #{{ procurement.procurement_id }}
+                      {{ procurementTypeLabel(procurement.funding_source) }} #{{ procurement.procurement_id }}
                     </strong>
                     <span class="investor-chip" :class="`investor-chip--${procurementStatusTone(procurement.status)}`">
                       {{ procurementStatusLabel(procurement.status) }}
@@ -599,6 +658,49 @@ onMounted(load)
   color: var(--color-brand-800);
 }
 
+.investor-payout-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+}
+
+.investor-payout-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.investor-action-button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-brand-700) 24%, transparent);
+  border-radius: 10px;
+  color: var(--color-brand-800);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+
+.investor-action-button--danger {
+  border-color: color-mix(in srgb, var(--color-danger-500) 28%, transparent);
+  color: var(--color-danger-500);
+}
+
+.investor-dispute-form {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.investor-dispute-form textarea {
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
 @media (max-width: 420px) {
   .agreement-row__side {
     grid-template-columns: 1fr auto;
@@ -607,6 +709,14 @@ onMounted(load)
   .investor-currency-switch {
     justify-self: stretch;
     width: 100%;
+  }
+
+  .investor-payout-row {
+    grid-template-columns: 1fr;
+  }
+
+  .investor-payout-actions {
+    justify-content: flex-start;
   }
 }
 </style>

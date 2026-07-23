@@ -48,8 +48,3 @@ class ProductionSafetyGuardTests(SimpleTestCase):
         with override_settings(DEBUG=False, ALLOW_UNSAFE_MANAGEMENT_COMMANDS_IN_TESTS=False):
             with self.assertRaisesMessage(CommandError, 'Refusing to run bootstrap_deploy_baseline'):
                 call_command('bootstrap_deploy_baseline', stdout=StringIO())
-
-    def test_seed_from_excel_requires_confirmation_in_production(self):
-        with override_settings(DEBUG=False, ALLOW_UNSAFE_MANAGEMENT_COMMANDS_IN_TESTS=False):
-            with self.assertRaisesMessage(CommandError, 'Refusing to run seed_from_excel'):
-                call_command('seed_from_excel', stdout=StringIO())

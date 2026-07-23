@@ -14,6 +14,7 @@ import {
 } from '@/api/finance'
 import { formatPrice } from '@/utils/currency'
 import { useFxRate } from '@/composables/useFxRate'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -25,6 +26,8 @@ const isSaving = ref(false)
 const formError = ref<string | null>(null)
 const {
   rate: latestUsdUzsRate,
+  rateDate: latestUsdUzsRateDate,
+  source: latestUsdUzsRateSource,
   error: latestUsdUzsRateError,
   load: loadLatestUsdUzsRate,
 } = useFxRate({ baseCurrency: 'USD', quoteCurrency: 'UZS' })
@@ -107,6 +110,12 @@ const exchangeDirectionHint = computed(() => {
 
 function suggestedRate(): string {
   return latestUsdUzsRate.value
+}
+
+function rateSourceLabel(source: string): string {
+  if (source === 'CBU') return 'ЦБ Узбекистана'
+  if (source === 'MANUAL') return 'ручной курс'
+  return source || 'источник не указан'
 }
 
 function syncRate(): void {
@@ -256,13 +265,13 @@ onMounted(async () => {
 
 <template>
   <div class="exchange-page">
-    <header class="page-header">
-      <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('finance.exchange') }}</h1>
-      <div class="header-spacer" />
-    </header>
+    <PageChrome :title="t('finance.exchange')" :eyebrow="t('nav.finance')">
+      <template #primary>
+        <button class="back-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+          <ArrowLeft :size="18" :stroke-width="2" />
+        </button>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="card intro-card">
@@ -347,6 +356,11 @@ onMounted(async () => {
                 {{ latestUsdUzsRate ? trimTrailingZeros(latestUsdUzsRate) : t('finance.noRate') }}
               </strong>
             </div>
+            <p v-if="latestUsdUzsRate" class="helper-note">
+              Справочный курс: 1 USD = {{ trimTrailingZeros(latestUsdUzsRate) }} UZS ·
+              {{ rateSourceLabel(latestUsdUzsRateSource) }} · {{ latestUsdUzsRateDate || 'дата не указана' }}.
+              Курс в поле выше — фактический курс этой операции.
+            </p>
             <p v-if="latestUsdUzsRateError" class="helper-error">{{ latestUsdUzsRateError }}</p>
             <div class="helper-row">
               <span>{{ t('finance.exchangeDirection') }}</span>
@@ -475,9 +489,7 @@ onMounted(async () => {
 
 <style scoped>
 .exchange-page { min-height: 100%; background: var(--color-bg-primary); }
-.page-header { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: var(--space-3); height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-.page-title { flex: 1; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
-.back-btn, .header-spacer { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-text-primary); }
+.back-btn { width:40px; height:40px; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-md); color:var(--color-text-primary); }
 .content { display: grid; gap: var(--space-4); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-12)); }
 .card { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--color-border-subtle); background: var(--color-bg-elevated); }
 .intro-card p, .empty-state p { color: var(--color-text-secondary); line-height: 1.45; }
@@ -495,6 +507,7 @@ onMounted(async () => {
 .rate-reset { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: calc(var(--radius-md) - 2px); border: 1px solid var(--color-border-default); background: var(--color-bg-elevated); color: var(--color-text-primary); font-size: var(--text-sm); font-weight: var(--font-medium); }
 .helper-card { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-brand-50); color: var(--color-brand-700); }
 .helper-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.helper-note { margin: 0; font-size: var(--font-size-xs); line-height: 1.45; color: var(--color-text-secondary); }
 .helper-error { margin: 0; font-size: var(--font-size-xs); line-height: 1.4; color: var(--color-danger); }
 .error-box { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-error-bg); color: var(--color-danger); }
 .section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
@@ -509,6 +522,26 @@ onMounted(async () => {
 .sheet-form { display:grid; gap: var(--space-3); padding-bottom: var(--space-4); }
 .footer { position: sticky; bottom: 0; padding: var(--space-4); background: linear-gradient(to top, var(--color-bg-primary), transparent); }
 .submit-btn { width: 100%; height: 48px; border-radius: var(--radius-lg); background: var(--color-brand-500); color: var(--color-text-inverse); font-weight: var(--font-semibold); }
+@media (min-width: 768px) {
+  .content {
+    max-width:1120px;
+    margin:0 auto;
+    grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr);
+    align-items:start;
+    padding:var(--space-6);
+    padding-bottom:var(--space-6);
+  }
+  .intro-card,.content > .muted,.content > .empty-state { grid-column:1 / -1; }
+  .form-card { grid-column:1; align-self:start; }
+  .account-card { grid-column:2; align-self:start; }
+  .footer { position:static; max-width:1120px; margin:0 auto; padding:0 var(--space-6) var(--space-8); background:none; }
+  .submit-btn { width:auto; min-width:220px; margin-left:auto; padding:0 var(--space-6); }
+}
+@media (min-width: 1280px) {
+  .exchange-page { background: transparent; }
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+  .footer { max-width:none; margin:0; padding-inline:var(--space-8); }
+}
 @media (max-width: 520px) {
   .field-row { grid-template-columns: 1fr; }
   .account-row,

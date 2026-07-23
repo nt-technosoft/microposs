@@ -12,6 +12,7 @@ import {
 } from '@/api/core'
 import { useToast } from '@/composables/useToast'
 import { intlLocale } from '@/i18n/format'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const router = useRouter()
 const toast = useToast()
@@ -92,15 +93,14 @@ onMounted(loadData)
 
 <template>
   <div class="investors-page">
-    <header class="page-header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <h1 class="page-title">{{ t('investors.ownerTitle') }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="loadData">
-        <RefreshCcw :size="16" :stroke-width="1.75" />
-      </button>
-    </header>
+    <PageChrome :title="t('investors.ownerTitle')" :eyebrow="t('settings.management')">
+      <template #primary>
+        <div class="page-header-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()"><ArrowLeft :size="18" :stroke-width="2" /></button>
+          <button class="icon-btn" type="button" :aria-label="t('common.refresh')" @click="loadData"><RefreshCcw :size="16" :stroke-width="1.75" /></button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section class="invite-panel">
@@ -120,58 +120,62 @@ onMounted(loadData)
 
       <div v-if="errorMessage" class="error-box">{{ errorMessage }}</div>
 
-      <section class="section">
-        <h2 class="section-title">{{ t('investors.linkedInvestors') }}</h2>
-        <div v-if="isLoading" class="muted">{{ t('investors.loading') }}</div>
-        <div v-else-if="activeRelations.length === 0" class="muted">{{ t('investors.noActiveInvestors') }}</div>
-        <div v-else class="list">
-          <article v-for="relation in activeRelations" :key="relation.id" class="row-item">
-            <div>
-              <strong>{{ relation.partner_name }}</strong>
-              <span>{{ relation.source === 'INVITE' ? t('investors.inviteSource') : t('investors.manualSource') }}</span>
-            </div>
-            <span class="status active">{{ t('investors.active') }}</span>
-          </article>
-        </div>
-      </section>
+      <div class="investor-workspace">
+        <section class="section investor-workspace__relations">
+          <h2 class="section-title">{{ t('investors.linkedInvestors') }}</h2>
+          <div v-if="isLoading" class="muted">{{ t('investors.loading') }}</div>
+          <div v-else-if="activeRelations.length === 0" class="muted">{{ t('investors.noActiveInvestors') }}</div>
+          <div v-else class="list">
+            <article v-for="relation in activeRelations" :key="relation.id" class="row-item">
+              <div>
+                <strong>{{ relation.partner_name }}</strong>
+                <span>{{ relation.source === 'INVITE' ? t('investors.inviteSource') : t('investors.manualSource') }}</span>
+              </div>
+              <span class="status active">{{ t('investors.active') }}</span>
+            </article>
+          </div>
+        </section>
 
-      <section class="section">
-        <h2 class="section-title">{{ t('investors.pendingInvites') }}</h2>
-        <div v-if="pendingInvites.length === 0" class="muted">{{ t('investors.noPendingInvites') }}</div>
-        <div v-else class="list">
-          <article v-for="invite in pendingInvites" :key="invite.id" class="row-item">
-            <div>
-              <strong>{{ invite.display_name || invite.email || t('investors.investorFallback') }}</strong>
-              <span>{{ t('investors.expiresAt', { date: formatDate(invite.expires_at) }) }}</span>
+        <aside class="investor-workspace__context">
+          <section class="section section--pending">
+            <h2 class="section-title">{{ t('investors.pendingInvites') }}</h2>
+            <div v-if="pendingInvites.length === 0" class="muted">{{ t('investors.noPendingInvites') }}</div>
+            <div v-else class="list">
+              <article v-for="invite in pendingInvites" :key="invite.id" class="row-item">
+                <div>
+                  <strong>{{ invite.display_name || invite.email || t('investors.investorFallback') }}</strong>
+                  <span>{{ t('investors.expiresAt', { date: formatDate(invite.expires_at) }) }}</span>
+                </div>
+                <button class="copy-btn" type="button" @click="copyInvite(invite)">
+                  <Copy :size="15" :stroke-width="2" />
+                  <span>{{ t('investors.copy') }}</span>
+                </button>
+              </article>
             </div>
-            <button class="copy-btn" type="button" @click="copyInvite(invite)">
-              <Copy :size="15" :stroke-width="2" />
-              <span>{{ t('investors.copy') }}</span>
-            </button>
-          </article>
-        </div>
-      </section>
+          </section>
 
-      <section class="section">
-        <div class="note-row">
-          <Link :size="16" :stroke-width="1.75" />
-          <span>{{ t('investors.accessNote') }}</span>
-        </div>
-      </section>
+          <section class="section section--note">
+            <div class="note-row">
+              <Link :size="16" :stroke-width="1.75" />
+              <span>{{ t('investors.accessNote') }}</span>
+            </div>
+          </section>
+        </aside>
+      </div>
     </main>
   </div>
 </template>
 
 <style scoped>
 .investors-page { min-height: 100%; background: var(--color-bg-primary); }
-.page-header { position: sticky; top: 0; z-index: var(--z-sticky); display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: var(--space-3); min-height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-.page-title { text-align: center; font-size: var(--text-lg); font-weight: var(--font-semibold); color: var(--color-text-primary); }
+.page-header-actions { display:flex; align-items:center; gap:var(--space-2); }
 .icon-btn { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-text-primary); }
 .content { display: grid; gap: var(--space-4); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-8)); }
 .invite-panel { display: grid; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle); }
 .panel-copy h2, .section-title { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
 .panel-copy p, .muted, .row-item span, .note-row { margin-top: 4px; font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); }
 .invite-form, .section, .list { display: grid; gap: var(--space-2); }
+.investor-workspace, .investor-workspace__context { display: grid; gap: var(--space-4); }
 .input-field { min-height: 44px; border-radius: var(--radius-md); border: 1px solid var(--color-border-default); background: var(--color-bg-primary); color: var(--color-text-primary); padding: 0 var(--space-3); font-size: var(--text-sm); }
 .primary-btn, .copy-btn { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border-radius: var(--radius-md); font-weight: var(--font-semibold); }
 .primary-btn { background: var(--color-brand-500); color: var(--color-text-inverse); }
@@ -183,4 +187,24 @@ onMounted(loadData)
 .status.active { color: var(--color-success); background: var(--color-success-bg); }
 .note-row { display: flex; align-items: center; gap: var(--space-2); margin-top: 0; }
 .error-box { border-radius: var(--radius-md); border: 1px solid var(--color-error); background: var(--color-error-bg); color: var(--color-error); padding: var(--space-3); font-size: var(--text-sm); }
+@media (min-width:768px) {
+  .content { max-width:1120px; margin:0 auto; padding:var(--space-6); padding-bottom:var(--space-8); }
+  .invite-panel { grid-template-columns:minmax(220px, .7fr) minmax(0, 1.3fr); align-items:start; }
+  .invite-form { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .invite-form .primary-btn { grid-column:1 / -1; justify-self:end; padding-inline:var(--space-5); }
+}
+@media (min-width:1024px) {
+  .content { max-width:none; margin:0; padding-inline:var(--space-8); }
+  .invite-panel { grid-template-columns:minmax(220px, .75fr) minmax(0, 1.65fr); }
+  .invite-form { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) auto; align-items:center; }
+  .invite-form .primary-btn { grid-column:auto; justify-self:stretch; padding-inline:var(--space-4); }
+  .investor-workspace { grid-template-columns:minmax(0, 2fr) minmax(280px, 1fr); align-items:start; gap:var(--space-6); }
+  .investor-workspace__relations { min-width:0; }
+  .investor-workspace__context { align-content:start; gap:var(--space-4); }
+  .section--pending { border-left:1px solid var(--color-border-subtle); padding-left:var(--space-6); }
+  .section--note { border-left:1px solid var(--color-border-subtle); padding-left:var(--space-6); }
+}
+@media (min-width:1280px) {
+  .investors-page { background:transparent; }
+}
 </style>

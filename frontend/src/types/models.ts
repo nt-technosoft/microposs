@@ -82,6 +82,9 @@ export interface ProductVariant extends BaseModel {
   stock_at_location?: number | null
   stock_by_location?: StockByLocation[]
   availability_state?: StockAvailabilityState
+  supplier_preferred?: boolean
+  supplier_last_unit_price?: string | null
+  supplier_last_currency?: string | null
 }
 
 export type StockAvailabilityState = 'in_shop' | 'warehouse_only' | 'out_of_stock'

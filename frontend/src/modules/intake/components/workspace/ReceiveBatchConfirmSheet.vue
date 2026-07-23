@@ -1,0 +1,948 @@
+<script setup lang="ts">
+import { ref, computed, watch, toRef } from 'vue'
+import { ArrowDownToLine, ArrowRightLeft, CheckCircle2, Circle, ChevronLeft, Pencil, Repeat2 } from 'lucide-vue-next'
+import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import DatePickerField from '@/components/forms/DatePickerField.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+import CashDepositSheet from '@/modules/finance/views/CashDepositSheet.vue'
+import CashTransferSheet from '@/modules/finance/views/CashTransferSheet.vue'
+import CurrencyExchangeSheet from '@/modules/finance/views/CurrencyExchangeSheet.vue'
+import { fetchLocations } from '@/api/inventory'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
+import { useActiveLines } from '@/modules/intake/composables/useActiveLines'
+import type { Location } from '@/types/models'
+import type { ProcurementWorkspacePayload } from '@/api/partnerships'
+
+type Item = ProcurementWorkspacePayload['documents']['items'][number]
+type Expense = ProcurementWorkspacePayload['documents']['expenses'][number]
+
+const REASONS = [
+  { key: 'NONE', label: 'Без расхождения' },
+  { key: 'MISSING_EXPECTED_LATER', label: 'Не привезли, ждём' },
+  { key: 'DAMAGED', label: 'Повреждено' },
+  { key: 'QUALITY_REJECT', label: 'Брак' },
+  { key: 'ACCEPT_AS_SHORTFALL', label: 'Принять недовоз' },
+] as const
+
+type ReasonKey = typeof REASONS[number]['key']
+
+interface LineState {
+  itemId: number
+  qtyReceived: string
+  reason: ReasonKey
+}
+
+interface CapAlloc { partnerId: number; amount: string; currency: string; isCorrected?: boolean }
+type Partner = NonNullable<ProcurementWorkspacePayload['documents']['investment']>['partners'][number]
+
+const props = defineProps<{ open: boolean; procurement: ProcurementWorkspacePayload }>()
+const emit = defineEmits<{
+  'update:open': [value: boolean]
+  dispatch: [actionKey: string, payload: Record<string, unknown>]
+}>()
+
+const { items: activeItems } = useActiveLines(toRef(props, 'procurement'))
+
+const warehouseId = ref<number | null>(null)
+const receivedAt = ref(new Date().toISOString().slice(0, 10))
+const lines = ref<LineState[]>([])
+const selectedItemIds = ref<Set<number>>(new Set())
+const capAllocs = ref<CapAlloc[]>([])
+const warehouses = ref<Location[]>([])
+const cashAccounts = ref<CashAccountRecord[]>([])
+const selectedCashAccountId = ref<number | null>(null)
+const paymentAmount = ref('')
+const depositSheetOpen = ref(false)
+const exchangeSheetOpen = ref(false)
+const transferSheetOpen = ref(false)
+const transferSourceAccountId = ref<number | null>(null)
+const errors = ref<Record<number, string>>({})
+const sharesConfirmed = ref(false)
+
+const investment = computed(() => props.procurement.documents.investment)
+const isPartnership = computed(() => props.procurement.documents.source.funding_source === 'PARTNERSHIP')
+const isAtReceipt = computed(() => props.procurement.documents.settlement?.type === 'AT_RECEIPT')
+const isPrepaid = computed(() => props.procurement.documents.settlement?.type === 'PREPAID')
+const isOwnFunds = computed(() => !isPartnership.value)
+
+// ─── Wizard steps (dynamic by funding/settlement) ───
+type StepKey = 'where' | 'items' | 'shares' | 'payment'
+const STEP_TITLES: Record<StepKey, string> = {
+  where: 'Куда и когда',
+  items: 'Что приняли',
+  shares: 'Доли капитала',
+  payment: 'Оплата',
+}
+const currentStepIndex = ref(0)
+// Order: goods first → money snapshot (shares / payment) → where & when last.
+const steps = computed<StepKey[]>(() => {
+  const s: StepKey[] = ['items']
+  if (isPartnership.value) s.push('shares')
+  if (isAtReceipt.value && isOwnFunds.value) s.push('payment')
+  s.push('where')
+  return s
+})
+
+// ─── Items step: receipt mode + per-row expand ───
+const receiptMode = ref<'full' | 'partial'>('full')
+const expandedItemId = ref<number | null>(null)
+function orderedQty(item: Item): number {
+  return Math.round(parseFloat(item.remaining_quantity) || 0)
+}
+function acceptedQty(item: Item): number {
+  const line = lines.value.find((l) => l.itemId === item.id)
+  return parseInt(line?.qtyReceived ?? item.remaining_quantity) || 0
+}
+function itemLineAmount(item: Item): number {
+  return (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_purchase_price) || 0)
+}
+function landedUnitDisplay(item: Item): string {
+  const raw = item.estimated_landed_cost_per_unit ?? item.actual_landed_cost_per_unit
+  const value = parseFloat(raw ?? '')
+  if (!Number.isFinite(value) || value <= 0) return ''
+  const digits = item.currency === 'USD' ? 2 : 0
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: digits })} ${item.currency}/шт`
+}
+
+const reasonOptions = REASONS.map((r) => ({ value: r.key as string, label: r.label }))
+const warehouseOptions = computed(() => warehouses.value.map((w) => ({ value: w.id, label: w.name })))
+// Money discipline: only cash registers in the obligation's currency can pay it.
+// No paying a USD obligation from a UZS register (and vice versa) — convert/top up first.
+const sameCurrencyAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) => (a.currency || 'UZS').toUpperCase() === batchObligationCurrency.value,
+  ),
+)
+const cashOptions = computed(() =>
+  sameCurrencyAccounts.value.map((a) => ({
+    value: a.id,
+    label: `${a.name} · ${parseFloat(a.balance).toLocaleString('ru-RU')} ${a.currency}`,
+  })),
+)
+const selectedCashAccount = computed(() =>
+  cashAccounts.value.find((a) => a.id === selectedCashAccountId.value) ?? null,
+)
+const paymentTargetAccount = computed(() =>
+  selectedCashAccount.value ?? sameCurrencyAccounts.value[0] ?? null,
+)
+const paymentShortfall = computed(() => {
+  const acc = paymentTargetAccount.value
+  if (!acc) return 0
+  return Math.max(0, (parseFloat(paymentAmount.value || '0') || 0) - (parseFloat(acc.balance || '0') || 0))
+})
+const paymentExceedsBalance = computed(() => {
+  const acc = selectedCashAccount.value
+  if (!acc) return false
+  return parseFloat(paymentAmount.value || '0') > parseFloat(acc.balance || '0')
+})
+const exchangeSourceAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) =>
+      a.is_active !== false &&
+      a.currency.toUpperCase() !== batchObligationCurrency.value &&
+      parseFloat(a.balance || '0') > 0,
+  ),
+)
+const transferSourceAccounts = computed(() =>
+  cashAccounts.value.filter(
+    (a) =>
+      a.is_active !== false &&
+      a.id !== paymentTargetAccount.value?.id &&
+      a.currency.toUpperCase() === batchObligationCurrency.value &&
+      parseFloat(a.balance || '0') > 0,
+  ),
+)
+const canQuickDeposit = computed(() => Boolean(paymentTargetAccount.value))
+const canQuickExchange = computed(() => Boolean(paymentTargetAccount.value && exchangeSourceAccounts.value.length))
+const canQuickTransfer = computed(() => Boolean(paymentTargetAccount.value && transferSourceAccounts.value.length))
+const quickActionColumns = computed(() => canQuickTransfer.value ? 'grid-cols-3' : 'grid-cols-2')
+const currentStep = computed<StepKey>(() => steps.value[currentStepIndex.value] ?? 'where')
+const isLastStep = computed(() => currentStepIndex.value >= steps.value.length - 1)
+const stepTitle = computed(() => STEP_TITLES[currentStep.value])
+
+const allReceivableItems = computed(() =>
+  activeItems.value.filter((it) => {
+    if (parseFloat(it.remaining_quantity) <= 0) return false
+    if (it.lifecycle_state === 'RECEIVED') return false
+    if (isPrepaid.value && it.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    return true
+  }),
+)
+const receivableItems = computed(() =>
+  allReceivableItems.value.filter((it) => selectedItemIds.value.has(it.id)),
+)
+
+const receivableExpenses = computed(() =>
+  props.procurement.documents.expenses.filter((expense) => {
+    if (expense.lifecycle_state === 'RECEIVED' || expense.lifecycle_state === 'CANCELLED') return false
+    if (isPrepaid.value && expense.lifecycle_state !== 'READY_FOR_RECEIVE') return false
+    return true
+  }),
+)
+
+const hasDelayedItems = computed(() =>
+  allReceivableItems.value.some((item) => !selectedItemIds.value.has(item.id)),
+)
+
+const partialExpenseScopeNotice = computed(() => {
+  if (!hasDelayedItems.value) return ''
+  for (const expense of receivableExpenses.value) {
+    const targetIds = expense.target_item_ids ?? []
+    if (!targetIds.length) return 'Общие расходы будут распределены пропорционально между принятой и отложенной частью.'
+    const touchesSelected = targetIds.some((id) => selectedItemIds.value.has(id))
+    const touchesDelayed = targetIds.some((id) => !selectedItemIds.value.has(id))
+    if (touchesSelected && touchesDelayed) {
+      return 'Расход будет распределён пропорционально: часть попадёт в текущую приёмку, остаток останется на отложенные товары.'
+    }
+  }
+  return ''
+})
+
+const receivableBatchExpenses = computed<Expense[]>(() => {
+  if (!hasDelayedItems.value) return receivableExpenses.value
+  return receivableExpenses.value.filter((expense) =>
+    !(expense.target_item_ids ?? []).length
+    || (expense.target_item_ids ?? []).some((id) => selectedItemIds.value.has(id)),
+  )
+})
+
+function expenseBatchAmount(expense: Expense): number {
+  const targetIds = new Set(expense.target_item_ids ?? [])
+  const scopeItems = activeItems.value.filter((item) =>
+    item.lifecycle_state !== 'CANCELLED'
+    && (!targetIds.size || targetIds.has(item.id)),
+  )
+  const selectedScopeItems = scopeItems.filter((item) => selectedItemIds.value.has(item.id))
+  if (!selectedScopeItems.length) return 0
+  const basis = (item: Item) =>
+    expense.allocation_method === 'BY_QUANTITY'
+      ? (parseFloat(item.quantity) || 0)
+      : itemLineAmount(item)
+  const totalBasis = scopeItems.reduce((sum, item) => sum + basis(item), 0)
+  if (totalBasis <= 0) return 0
+  const selectedBasis = selectedScopeItems.reduce((sum, item) => sum + basis(item), 0)
+  return (parseFloat(expense.amount) || 0) * selectedBasis / totalBasis
+}
+
+const blockedPrepaidItems = computed(() =>
+  isPrepaid.value
+    ? activeItems.value.filter(
+        (it) => it.lifecycle_state !== 'READY_FOR_RECEIVE' && it.lifecycle_state !== 'RECEIVED',
+      )
+    : [],
+)
+
+const totalReceived = computed(() =>
+  lines.value.reduce((s, l) => selectedItemIds.value.has(l.itemId) ? s + (parseFloat(l.qtyReceived) || 0) : s, 0),
+)
+const totalPlanned = computed(() => receivableItems.value.reduce((s, it) => s + (parseFloat(it.remaining_quantity) || 0), 0))
+
+const receiveBatchCostByCurrency = computed((): Record<string, number> => {
+  const totals: Record<string, number> = {}
+  for (const l of lines.value) {
+    const item = receivableItems.value.find((it) => it.id === l.itemId)
+    if (!item) continue
+    const qty = parseInt(l.qtyReceived) || 0
+    const price = parseFloat(item.unit_purchase_price) || 0
+    const cur = item.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + qty * price
+  }
+  for (const expense of receivableBatchExpenses.value) {
+    const cur = expense.currency || 'UZS'
+    totals[cur] = (totals[cur] ?? 0) + expenseBatchAmount(expense)
+  }
+  return totals
+})
+
+const batchObligationCurrency = computed((): string => {
+  const currencies = Object.keys(receiveBatchCostByCurrency.value)
+  return currencies[0] ?? (props.procurement.documents.payment_status?.currency ?? 'UZS')
+})
+
+const batchObligationTotal = computed((): number =>
+  receiveBatchCostByCurrency.value[batchObligationCurrency.value] ?? 0,
+)
+const capitalAllocatedTotal = computed(() =>
+  capAllocs.value.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0),
+)
+const capitalShortfall = computed(() =>
+  Math.max(0, Number((batchObligationTotal.value - capitalAllocatedTotal.value).toFixed(2))),
+)
+const receiveMixedCurrency = computed(() =>
+  Object.keys(receiveBatchCostByCurrency.value).filter((currency) => receiveBatchCostByCurrency.value[currency] > 0).length > 1,
+)
+
+function prefillCapAllocs(): void {
+  const inv = investment.value
+  if (!inv) return
+  const total = batchObligationTotal.value
+  const currency = batchObligationCurrency.value
+  capAllocs.value = distributeCapital(total, inv.partners, currency)
+}
+
+function partnerWeight(partner: Partner): number {
+  const planned = parseFloat(partner.planned_capital_share)
+  if (planned > 0) return planned
+  const profit = parseFloat(partner.profit_share)
+  return profit > 0 ? profit : 1
+}
+
+function receiveAvailable(partnerId: number, currency: string): number {
+  const inv = investment.value
+  if (!inv) return 0
+  if (isAtReceipt.value) {
+    return Math.max(0, parseFloat(inv.available_by_partner?.[String(partnerId)]?.[currency] ?? '0') || 0)
+  }
+  let available = 0
+  for (const allocation of inv.allocations) {
+    if (allocation.partner_id !== partnerId || allocation.currency !== currency) continue
+    const amount = parseFloat(allocation.amount) || 0
+    available += allocation.direction === 'TO_PROCUREMENT' ? amount : -amount
+  }
+  for (const batch of props.procurement.documents.receive_batches) {
+    const snapshot = batch.capital_snapshot as {
+      partners?: Array<{
+        partner_id: number
+        capital_amount_contract_currency?: string
+        capital_amount?: string
+      }>
+    } | null
+    for (const partner of snapshot?.partners ?? []) {
+      if (partner.partner_id === partnerId) {
+        const consumed = partner.capital_amount_contract_currency ?? partner.capital_amount ?? '0'
+        available -= parseFloat(consumed) || 0
+      }
+    }
+  }
+  return Math.max(0, available)
+}
+
+function distributeCapital(total: number, partners: Partner[], currency: string): CapAlloc[] {
+  const weightTotal = partners.reduce((sum, p) => sum + partnerWeight(p), 0) || partners.length || 1
+  const rows = partners.map((p) => {
+    const contractedAmount = total * partnerWeight(p) / weightTotal
+    const available = receiveAvailable(p.partner_id, currency)
+    const amount = Math.min(contractedAmount, available)
+    return {
+      partnerId: p.partner_id,
+      amount: amount.toFixed(2),
+      currency,
+      isCorrected: amount < contractedAmount - 0.001,
+    }
+  })
+  let remaining = Number((total - rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0)).toFixed(2))
+  for (const row of rows) {
+    if (remaining <= 0) break
+    const headroom = Math.max(0, receiveAvailable(row.partnerId, currency) - (parseFloat(row.amount) || 0))
+    const topUp = Math.min(headroom, remaining)
+    row.amount = ((parseFloat(row.amount) || 0) + topUp).toFixed(2)
+    remaining = Number((remaining - topUp).toFixed(2))
+  }
+  return rows
+}
+
+function redistributeCapital(changedPartnerId: number, rawValue: string): void {
+  const inv = investment.value
+  if (!inv) return
+  const currency = batchObligationCurrency.value
+  const changed = Math.min(Math.max(parseFloat(rawValue) || 0, 0), receiveAvailable(changedPartnerId, currency))
+  const otherPartners = inv.partners.filter((p) => p.partner_id !== changedPartnerId)
+  const remainder = Math.max(0, batchObligationTotal.value - changed)
+  capAllocs.value = [
+    {
+      partnerId: changedPartnerId,
+      amount: changed.toFixed(2),
+      currency,
+      isCorrected: changed + 0.001 >= receiveAvailable(changedPartnerId, currency),
+    },
+    ...distributeCapital(remainder, otherPartners, currency),
+  ].sort((a, b) => {
+    const aIndex = inv.partners.findIndex((p) => p.partner_id === a.partnerId)
+    const bIndex = inv.partners.findIndex((p) => p.partner_id === b.partnerId)
+    return aIndex - bIndex
+  })
+}
+
+// E14: the reconciliation path is fixed on the agreement; the receive only
+// reflects it. FACTUAL → editable allocation grid (dynamic recalc); AGREED →
+// hold agreed shares, show the resulting inter-partner debt read-only.
+const reconciliationMode = computed(() => investment.value?.reconciliation_mode ?? 'FACTUAL')
+const isAgreedMode = computed(() => reconciliationMode.value === 'AGREED')
+
+const partnerAgreedAmounts = computed(() => {
+  const inv = investment.value
+  if (!inv) return []
+  const total = batchObligationTotal.value
+  const currency = batchObligationCurrency.value
+  const weightTotal = inv.partners.reduce((s, p) => s + (parseFloat(p.planned_capital_share) || 0), 0)
+    || inv.partners.length || 1
+  return inv.partners.map((p) => {
+    const agreed = total * (parseFloat(p.planned_capital_share) || 0) / weightTotal
+    const actual = receiveAvailable(p.partner_id, currency)
+    return { partnerId: p.partner_id, name: p.partner_name, agreed, actual, delta: Number((agreed - actual).toFixed(2)) }
+  })
+})
+
+// Pair under-contributors (debtors) to over-contributors (creditors) pro-rata.
+const advancePreview = computed(() => {
+  const debtors = partnerAgreedAmounts.value.filter((r) => r.delta > 0.001).map((r) => ({ name: r.name, owed: r.delta }))
+  const creditors = partnerAgreedAmounts.value.filter((r) => r.delta < -0.001).map((r) => ({ name: r.name, avail: -r.delta }))
+  const out: Array<{ debtor: string; creditor: string; amount: number }> = []
+  let ci = 0
+  for (const d of debtors) {
+    let owed = d.owed
+    while (owed > 0.001 && ci < creditors.length) {
+      const c = creditors[ci]
+      const take = Math.min(owed, c.avail)
+      if (take > 0.001) out.push({ debtor: d.name, creditor: c.name, amount: Number(take.toFixed(2)) })
+      owed = Number((owed - take).toFixed(2))
+      c.avail = Number((c.avail - take).toFixed(2))
+      if (c.avail <= 0.001) ci += 1
+    }
+  }
+  return out
+})
+
+const totalReceiveAvailable = computed(() => {
+  const inv = investment.value
+  if (!inv) return 0
+  return inv.partners.reduce((s, p) => s + receiveAvailable(p.partner_id, batchObligationCurrency.value), 0)
+})
+const agreedModeFunded = computed(() => totalReceiveAvailable.value + 0.01 >= batchObligationTotal.value)
+
+function fmtAmount(n: number): string {
+  return n.toLocaleString('ru-RU', { maximumFractionDigits: 2 })
+}
+
+function intQty(val: string | number): string {
+  return String(Math.round(parseFloat(String(val)) || 0))
+}
+
+function initLines(items: Item[]): void {
+  lines.value = items.map((it) => ({
+    itemId: it.id,
+    qtyReceived: intQty(it.remaining_quantity),
+    reason: 'NONE',
+  }))
+}
+
+watch(() => props.open, async (isOpen) => {
+  if (!isOpen) return
+  currentStepIndex.value = 0
+  receiptMode.value = 'full'
+  expandedItemId.value = null
+  sharesConfirmed.value = false
+  receivedAt.value = new Date().toISOString().slice(0, 10)
+  errors.value = {}
+  selectedItemIds.value = new Set(allReceivableItems.value.map((it) => it.id))
+  initLines(allReceivableItems.value)
+  if (isPartnership.value) prefillCapAllocs()
+  if (!warehouses.value.length) {
+    try { warehouses.value = await fetchLocations() } catch { warehouses.value = [] }
+  }
+  if (!warehouseId.value && warehouses.value.length) {
+    warehouseId.value = warehouses.value[0].id
+  }
+  if (isAtReceipt.value && isOwnFunds.value) {
+    if (!cashAccounts.value.length) {
+      try { cashAccounts.value = await fetchCashAccounts() } catch { cashAccounts.value = [] }
+    }
+    // Prefill with a register in the obligation's currency (never a mismatch).
+    if (sameCurrencyAccounts.value.length) {
+      const stillValid = sameCurrencyAccounts.value.some((a) => a.id === selectedCashAccountId.value)
+      if (!stillValid) selectedCashAccountId.value = sameCurrencyAccounts.value[0].id
+    } else {
+      selectedCashAccountId.value = null
+    }
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
+  }
+})
+
+async function reloadCashAccounts(): Promise<void> {
+  try { cashAccounts.value = await fetchCashAccounts() } catch { cashAccounts.value = [] }
+}
+
+async function handleCashActionDone(): Promise<void> {
+  depositSheetOpen.value = false
+  exchangeSheetOpen.value = false
+  transferSheetOpen.value = false
+  await reloadCashAccounts()
+}
+
+function openDepositSheet(): void {
+  if (!paymentTargetAccount.value) return
+  depositSheetOpen.value = true
+}
+
+function openExchangeSheet(): void {
+  if (!paymentTargetAccount.value || !exchangeSourceAccounts.value.length) return
+  exchangeSheetOpen.value = true
+}
+
+function openTransferSheet(): void {
+  const source = transferSourceAccounts.value[0]
+  if (!source || !paymentTargetAccount.value) return
+  transferSourceAccountId.value = source.id
+  transferSheetOpen.value = true
+}
+
+function onQtyChange(itemId: number, val: string): void {
+  const l = lines.value.find((x) => x.itemId === itemId)
+  if (!l) return
+  l.qtyReceived = intQty(val)
+  const item = receivableItems.value.find((it) => it.id === itemId)
+  if (item && parseInt(l.qtyReceived) < Math.round(parseFloat(item.remaining_quantity)) && l.reason === 'NONE') {
+    l.reason = 'MISSING_EXPECTED_LATER'
+  }
+  if (isPartnership.value) prefillCapAllocs()
+  if (isAtReceipt.value && isOwnFunds.value) {
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
+  }
+}
+
+function validate(): boolean {
+  const errs: Record<number, string> = {}
+  for (const l of lines.value) {
+    if (!selectedItemIds.value.has(l.itemId)) continue
+    const item = receivableItems.value.find((it) => it.id === l.itemId)
+    if (!item) continue
+    const qty = parseInt(l.qtyReceived) || 0
+    const rem = Math.round(parseFloat(item.remaining_quantity) || 0)
+    if (qty > rem) { errs[l.itemId] = `Не более ${rem}`; continue }
+    if (qty < rem && l.reason === 'NONE') errs[l.itemId] = 'Укажите причину расхождения'
+  }
+  errors.value = errs
+  return Object.keys(errs).length === 0
+}
+
+function toggleItemSelection(itemId: number): void {
+  const next = new Set(selectedItemIds.value)
+  next.has(itemId) ? next.delete(itemId) : next.add(itemId)
+  selectedItemIds.value = next
+  if (isPartnership.value) prefillCapAllocs()
+  if (isAtReceipt.value && isOwnFunds.value) {
+    paymentAmount.value = batchObligationTotal.value.toFixed(2)
+  }
+}
+
+function onSave(): void {
+  if (!validate() || !warehouseId.value) return
+  if (isPartnership.value && !sharesConfirmed.value) return
+  if (isAtReceipt.value && isOwnFunds.value && !selectedCashAccountId.value) return
+  const itemDiscrepancies: Record<string, { qty_received: string; discrepancy_reason: string }> = {}
+  for (const l of lines.value) {
+    if (!selectedItemIds.value.has(l.itemId)) continue
+    itemDiscrepancies[String(l.itemId)] = { qty_received: l.qtyReceived, discrepancy_reason: l.reason }
+  }
+  const payload: Record<string, unknown> = {
+    warehouse_id: warehouseId.value,
+    received_at: receivedAt.value,
+    item_ids: [...selectedItemIds.value],
+    item_discrepancies: itemDiscrepancies,
+  }
+  // FACTUAL sends the (editable) allocation grid. AGREED omits it: the backend
+  // auto-derives actual contributions from available capital, pins the agreed
+  // shares, and records the funding gap as an advance.
+  if (isPartnership.value && !isAgreedMode.value && capAllocs.value.length) {
+    payload.capital_allocations = capAllocs.value.map((a) => ({ partner_id: a.partnerId, amount: a.amount, currency: a.currency }))
+  }
+  if (isAtReceipt.value && isOwnFunds.value) {
+    const acct = cashAccounts.value.find((a) => a.id === selectedCashAccountId.value)
+    payload.payment_payload = {
+      cash_account_id: selectedCashAccountId.value,
+      amount: paymentAmount.value,
+      currency: acct?.currency ?? 'UZS',
+    }
+  }
+  emit('dispatch', 'RECEIVE_BATCH', payload)
+  emit('update:open', false)
+}
+
+// ─── Wizard navigation ───
+const canProceed = computed(() => {
+  switch (currentStep.value) {
+    case 'where': return !!warehouseId.value
+    case 'items': return receivableItems.value.length > 0 && !receiveMixedCurrency.value
+    case 'shares': return !receiveMixedCurrency.value && (
+      isAgreedMode.value ? agreedModeFunded.value : capitalShortfall.value <= 0
+    )
+    case 'payment': return !!selectedCashAccountId.value && parseFloat(paymentAmount.value) > 0 && !paymentExceedsBalance.value
+    default: return true
+  }
+})
+
+function goNext(): void {
+  if (!canProceed.value) return
+  if (currentStep.value === 'items' && !validate()) return
+  if (currentStep.value === 'shares') sharesConfirmed.value = true
+  if (isLastStep.value) { onSave(); return }
+  currentStepIndex.value += 1
+}
+
+function goBack(): void {
+  if (currentStepIndex.value <= 0) { emit('update:open', false); return }
+  currentStepIndex.value -= 1
+  if (currentStep.value === 'shares') sharesConfirmed.value = false
+}
+
+function setReceiptMode(mode: 'full' | 'partial'): void {
+  receiptMode.value = mode
+  expandedItemId.value = null
+  errors.value = {}
+  if (mode === 'full') {
+    // Full receipt: every item in, full ordered quantity, no discrepancy.
+    selectedItemIds.value = new Set(allReceivableItems.value.map((it) => it.id))
+    initLines(allReceivableItems.value)
+  }
+}
+</script>
+
+<template>
+  <AppBottomSheet :open="open" :title="isAtReceipt ? 'Принять и оплатить' : 'Приёмка товара'" @close="emit('update:open', false)">
+    <div class="flex flex-col gap-4">
+      <!-- Progress -->
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm font-semibold text-foreground">{{ stepTitle }}</span>
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1">
+            <span
+              v-for="(s, i) in steps"
+              :key="s"
+              :class="cn('h-1.5 rounded-full transition-all', i === currentStepIndex ? 'w-5 bg-green-600' : i < currentStepIndex ? 'w-1.5 bg-green-400' : 'w-1.5 bg-neutral-200')"
+            />
+          </div>
+          <span class="text-xs tabular-nums text-neutral-400">{{ currentStepIndex + 1 }}/{{ steps.length }}</span>
+        </div>
+      </div>
+
+      <!-- STEP: where -->
+      <template v-if="currentStep === 'where'">
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Склад</span>
+          <BaseSelect
+            :model-value="warehouseId"
+            :options="warehouseOptions"
+            title="Склад"
+            placeholder="Выберите склад"
+            @update:model-value="(v) => (warehouseId = v as number | null)"
+          />
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Дата приёмки</span>
+          <DatePickerField v-model="receivedAt" />
+        </div>
+      </template>
+
+      <!-- STEP: items -->
+      <template v-else-if="currentStep === 'items'">
+        <p v-if="allReceivableItems.length === 0" class="text-sm text-neutral-500">
+          Нет позиций для приёмки.{{ isPrepaid ? ' Сначала оплатите товары.' : '' }}
+        </p>
+
+        <template v-else>
+          <!-- Mode: full (one-tap) vs partial (per-item) -->
+          <div class="flex rounded-[10px] bg-neutral-100 p-1">
+            <button
+              type="button"
+              :class="cn('flex-1 rounded-[8px] py-1.5 text-sm transition-colors', receiptMode === 'full' ? 'bg-surface font-medium text-foreground shadow-sm' : 'text-neutral-500')"
+              @click="setReceiptMode('full')"
+            >Полная приёмка</button>
+            <button
+              type="button"
+              :class="cn('flex-1 rounded-[8px] py-1.5 text-sm transition-colors', receiptMode === 'partial' ? 'bg-surface font-medium text-foreground shadow-sm' : 'text-neutral-500')"
+              @click="setReceiptMode('partial')"
+            >Частичная</button>
+          </div>
+
+          <!-- FULL: compact read-only confirmation -->
+          <template v-if="receiptMode === 'full'">
+            <p class="text-xs leading-relaxed text-neutral-500">
+              Все {{ allReceivableItems.length }} {{ allReceivableItems.length === 1 ? 'позиция принимается' : 'позиции принимаются' }} полностью. Для недовоза или брака переключите на «Частичная».
+            </p>
+            <div class="flex flex-col">
+              <div
+                v-for="item in allReceivableItems"
+                :key="item.id"
+                class="flex items-center gap-2.5 border-b border-neutral-100 py-2 last:border-0"
+              >
+                <CheckCircle2 class="size-4 shrink-0 text-primary" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm text-foreground">{{ item.product_variant_name }}</span>
+                  <span v-if="landedUnitDisplay(item)" class="block truncate text-[11px] text-neutral-500">
+                    себестоимость {{ landedUnitDisplay(item) }}
+                  </span>
+                </span>
+                <span class="shrink-0 text-sm font-medium tabular-nums text-foreground">{{ orderedQty(item) }} шт</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- PARTIAL: per-item, compact by default, fields on explicit edit -->
+          <div v-else class="flex flex-col gap-1.5">
+            <div
+              v-for="item in allReceivableItems"
+              :key="item.id"
+              :class="cn('rounded-[10px] border transition-colors', selectedItemIds.has(item.id) ? 'border-primary' : 'border-neutral-100 bg-neutral-50')"
+            >
+              <div role="button" class="flex cursor-pointer items-center gap-2 px-2.5 py-2" @click="toggleItemSelection(item.id)">
+                <component :is="selectedItemIds.has(item.id) ? CheckCircle2 : Circle" :class="cn('size-5 shrink-0', selectedItemIds.has(item.id) ? 'text-primary' : 'text-neutral-300')" />
+                <span :class="cn('min-w-0 flex-1', selectedItemIds.has(item.id) ? 'text-foreground' : 'text-neutral-400 line-through')">
+                  <span class="block truncate text-sm">{{ item.product_variant_name }}</span>
+                  <span v-if="landedUnitDisplay(item)" class="block truncate text-[11px] text-neutral-500">
+                    себестоимость {{ landedUnitDisplay(item) }}
+                  </span>
+                </span>
+                <template v-if="selectedItemIds.has(item.id)">
+                  <span :class="cn('shrink-0 text-sm tabular-nums', acceptedQty(item) < orderedQty(item) ? 'font-medium text-warning' : 'text-neutral-600')">
+                    {{ acceptedQty(item) }}<span v-if="acceptedQty(item) < orderedQty(item)" class="text-neutral-400">/{{ orderedQty(item) }}</span> шт
+                  </span>
+                  <button
+                    type="button"
+                    :class="cn('flex size-7 shrink-0 items-center justify-center rounded-md transition-colors', expandedItemId === item.id ? 'bg-primary/10 text-primary' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600')"
+                    aria-label="Изменить количество"
+                    @click.stop="expandedItemId = expandedItemId === item.id ? null : item.id"
+                  >
+                    <Pencil class="size-3.5" />
+                  </button>
+                </template>
+              </div>
+              <div v-if="selectedItemIds.has(item.id) && expandedItemId === item.id" class="flex flex-col gap-2 border-t border-neutral-100 px-2.5 py-2.5" @click.stop>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs text-neutral-500">Заказано {{ orderedQty(item) }}</span>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-neutral-500">Принято</span>
+                    <input
+                      class="h-9 w-20 rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      type="number"
+                      min="0"
+                      :max="orderedQty(item)"
+                      step="1"
+                      :value="lines.find(l => l.itemId === item.id)?.qtyReceived ?? intQty(item.remaining_quantity)"
+                      @input="onQtyChange(item.id, ($event.target as HTMLInputElement).value)"
+                    />
+                  </div>
+                </div>
+                <BaseSelect
+                  v-if="acceptedQty(item) < orderedQty(item)"
+                  :model-value="lines.find(l => l.itemId === item.id)?.reason ?? 'NONE'"
+                  :options="reasonOptions"
+                  title="Причина расхождения"
+                  @update:model-value="(v) => { const l = lines.find(x => x.itemId === item.id); if (l) l.reason = v as ReasonKey }"
+                />
+              </div>
+              <p v-if="errors[item.id]" class="px-2.5 pb-2 text-xs text-negative">{{ errors[item.id] }}</p>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="blockedPrepaidItems.length">
+          <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Ожидают оплаты</span>
+          <div class="flex flex-col gap-1.5">
+            <div v-for="item in blockedPrepaidItems" :key="item.id" class="flex items-center justify-between rounded-[10px] bg-warning/10 px-3.5 py-2.5">
+              <span class="text-sm text-neutral-600">{{ item.product_variant_name }}</span>
+              <span class="text-sm tabular-nums text-neutral-500">{{ item.quantity }} шт</span>
+            </div>
+          </div>
+        </template>
+
+        <p v-if="receiveMixedCurrency" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          В выбранной приёмке разные валюты. Разделите приёмку на отдельные партии.
+        </p>
+        <p v-if="partialExpenseScopeNotice" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          {{ partialExpenseScopeNotice }}
+        </p>
+      </template>
+
+      <!-- STEP: shares (partnership) -->
+      <template v-else-if="currentStep === 'shares' && investment">
+        <div class="flex items-center justify-between rounded-[10px] bg-neutral-50 px-3.5 py-3">
+          <span class="text-sm text-neutral-500">Стоимость приёмки</span>
+          <span class="text-sm font-semibold tabular-nums text-foreground">{{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}</span>
+        </div>
+        <p v-if="receivableBatchExpenses.length" class="text-xs leading-relaxed text-neutral-500">
+          В сумму включены расходы: {{ receivableBatchExpenses.map((expense) => expense.expense_type).join(', ') }}.
+        </p>
+
+        <!-- FACTUAL: доли следуют факту — редактируемая сетка (динамический пересчёт) -->
+        <template v-if="!isAgreedMode">
+          <p class="text-xs leading-relaxed text-neutral-500">
+            Доли по факту: предзаполнено из плановых, можно скорректировать в пределах доступного капитала. Фиксируется при приёмке.
+          </p>
+          <div class="flex flex-col gap-2.5">
+            <div v-for="alloc in capAllocs" :key="alloc.partnerId" class="grid grid-cols-[minmax(0,1fr)_120px_auto] items-center gap-2">
+              <div class="min-w-0">
+                <span class="block truncate text-sm text-foreground">{{ investment.partners.find(p => p.partner_id === alloc.partnerId)?.partner_name ?? ('#' + alloc.partnerId) }}</span>
+                <small class="block text-xs text-neutral-400">доступно {{ fmtAmount(receiveAvailable(alloc.partnerId, alloc.currency)) }} {{ alloc.currency }}</small>
+                <small v-if="alloc.isCorrected" class="text-xs text-warning">↓ по доступному</small>
+              </div>
+              <input
+                class="h-10 w-full rounded-[8px] border border-neutral-200 bg-surface px-2 text-right text-sm tabular-nums outline-none focus:border-green-500"
+                type="number"
+                min="0"
+                step="0.01"
+                :value="alloc.amount"
+                @input="redistributeCapital(alloc.partnerId, ($event.target as HTMLInputElement).value)"
+              />
+              <span class="text-sm text-neutral-500">{{ alloc.currency }}</span>
+            </div>
+          </div>
+          <div v-if="capitalShortfall > 0" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+            Не хватает капитала: {{ capitalShortfall.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }}. Пополните капитал договора.
+          </div>
+        </template>
+
+        <!-- AGREED: держим договорные доли — разницу показываем как долг (read-only) -->
+        <template v-else>
+          <p class="text-sm leading-relaxed text-neutral-600">
+            Доли в этой партии — как в договоре. Если кто-то внёс меньше своей доли, разницу за него покрывает другая сторона — и это становится долгом.
+          </p>
+          <div class="flex flex-col gap-2">
+            <div v-for="row in partnerAgreedAmounts" :key="row.partnerId" class="rounded-[10px] border border-neutral-200 px-3.5 py-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="min-w-0 truncate text-sm font-medium text-foreground">{{ row.name }}</span>
+                <span v-if="row.delta > 0.01" class="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
+                  должен {{ fmtAmount(row.delta) }} {{ batchObligationCurrency }}
+                </span>
+                <span v-else-if="row.delta < -0.01" class="shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                  покрыл {{ fmtAmount(-row.delta) }} {{ batchObligationCurrency }}
+                </span>
+                <span v-else class="shrink-0 text-xs text-neutral-400">ровно по договору</span>
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-500">
+                <span>Доля по договору</span>
+                <span class="tabular-nums text-foreground">{{ fmtAmount(row.agreed) }} {{ batchObligationCurrency }}</span>
+              </div>
+              <div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-neutral-500">
+                <span>Фактически внёс</span>
+                <span class="tabular-nums text-foreground">{{ fmtAmount(row.actual) }} {{ batchObligationCurrency }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="advancePreview.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-3 text-sm">
+            <p v-for="(a, i) in advancePreview" :key="i" class="leading-relaxed text-foreground">
+              <strong>{{ a.creditor }}</strong> внёс <strong class="tabular-nums">{{ fmtAmount(a.amount) }} {{ batchObligationCurrency }}</strong> за <strong>{{ a.debtor }}</strong>.
+            </p>
+            <p class="mt-2 text-xs leading-relaxed text-neutral-500">
+              {{ advancePreview.length === 1 ? 'Эту сумму' : 'Эти суммы' }} должник вернёт позже — деньгами или из своей прибыли. Долг зафиксируется при приёмке.
+            </p>
+          </div>
+          <div v-else class="rounded-[10px] bg-neutral-50 px-3.5 py-2.5 text-sm text-neutral-500">
+            Все внесли ровно по договору — долга не возникнет.
+          </div>
+          <div v-if="!agreedModeFunded" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+            Не хватает капитала в пуле договора на эту приёмку. Пополните договор.
+          </div>
+        </template>
+      </template>
+
+      <!-- STEP: payment (own funds AT_RECEIPT) -->
+      <template v-else-if="currentStep === 'payment'">
+        <p class="text-xs leading-relaxed text-neutral-500">
+          Оплата только с кассы в валюте обязательства ({{ batchObligationCurrency }}). Для другой валюты — обмен или пополнение в разделе «Касса».
+        </p>
+        <!-- No register in the obligation currency -->
+        <div v-if="!cashOptions.length" class="rounded-[10px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-foreground">
+          Нет кассы в валюте {{ batchObligationCurrency }}. Создайте кассу этой валюты, пополните её или сделайте обмен через «Касса».
+        </div>
+        <template v-else>
+          <div class="flex flex-col gap-1.5">
+            <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Касса ({{ batchObligationCurrency }})</span>
+            <BaseSelect
+              :model-value="selectedCashAccountId"
+              :options="cashOptions"
+              title="Касса"
+              placeholder="Выберите кассу"
+              @update:model-value="(v) => (selectedCashAccountId = v as number | null)"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <span class="text-xs font-medium uppercase tracking-wide text-neutral-500">Сумма ({{ batchObligationCurrency }})</span>
+            <Input v-model="paymentAmount" type="number" min="0" step="0.01" class="h-11 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+            <p v-if="paymentExceedsBalance" class="text-sm text-negative">
+              Недостаточно средств в кассе. Пополните её или сделайте обмен валют — оплата из кассы другой валюты невозможна.
+            </p>
+            <p v-else-if="batchObligationTotal > 0 && parseFloat(paymentAmount) < batchObligationTotal" class="text-xs text-warning">
+              Меньше стоимости приёмки ({{ batchObligationTotal.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) }} {{ batchObligationCurrency }})
+            </p>
+          </div>
+          <div
+            v-if="paymentExceedsBalance && (canQuickDeposit || canQuickExchange || canQuickTransfer)"
+            :class="cn('grid gap-2', quickActionColumns)"
+          >
+            <Button
+              v-if="canQuickDeposit"
+              variant="outline"
+              size="sm"
+              class="h-10"
+              type="button"
+              @click="openDepositSheet"
+            >
+              <ArrowDownToLine data-icon="inline-start" />
+              Пополнить
+            </Button>
+            <Button
+              v-if="canQuickExchange"
+              variant="outline"
+              size="sm"
+              class="h-10"
+              type="button"
+              @click="openExchangeSheet"
+            >
+              <ArrowRightLeft data-icon="inline-start" />
+              Обменять
+            </Button>
+            <Button
+              v-if="canQuickTransfer"
+              variant="outline"
+              size="sm"
+              class="h-10"
+              type="button"
+              @click="openTransferSheet"
+            >
+              <Repeat2 data-icon="inline-start" />
+              Перевести
+            </Button>
+          </div>
+        </template>
+      </template>
+
+      <!-- Footer nav -->
+      <div class="flex items-center gap-2 pt-2">
+        <Button variant="outline" class="h-12 flex-1" @click="goBack">
+          <ChevronLeft class="mr-1 size-4" />{{ currentStepIndex === 0 ? 'Отмена' : 'Назад' }}
+        </Button>
+        <Button class="h-12 flex-[2] text-base" :disabled="!canProceed" @click="goNext">
+          {{ isLastStep ? (isAtReceipt && isOwnFunds ? 'Принять и оплатить' : 'Принять — ' + Math.round(totalReceived) + '/' + Math.round(totalPlanned)) : 'Далее' }}
+        </Button>
+      </div>
+    </div>
+  </AppBottomSheet>
+
+  <CashDepositSheet
+    :open="depositSheetOpen"
+    :account="paymentTargetAccount"
+    @close="depositSheetOpen = false"
+    @deposited="handleCashActionDone"
+  />
+
+  <CurrencyExchangeSheet
+    :open="exchangeSheetOpen"
+    :accounts="cashAccounts"
+    :target-currency="batchObligationCurrency"
+    :to-account-id="paymentTargetAccount?.id ?? null"
+    @close="exchangeSheetOpen = false"
+    @exchanged="handleCashActionDone"
+  />
+
+  <CashTransferSheet
+    :open="transferSheetOpen"
+    :accounts="cashAccounts"
+    :from-account-id="transferSourceAccountId"
+    :preferred-to-account-id="paymentTargetAccount?.id ?? null"
+    @close="transferSheetOpen = false"
+    @transferred="handleCashActionDone"
+  />
+</template>

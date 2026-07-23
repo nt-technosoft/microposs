@@ -7,12 +7,14 @@ from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
+from django.utils import timezone
 
+from apps.core.demo_constants import DEFAULT_DEMO_USD_UZS_RATE
 from apps.catalog.models import DiscountReason
 from apps.core.management.safety import require_debug_or_confirmation
 from apps.core.models import Business, BusinessInvestorRelation, Partner
 from apps.finance.chart_of_accounts import setup_chart_of_accounts
-from apps.finance.models import Account, CashAccount
+from apps.finance.models import Account, CashAccount, ExchangeRate
 from apps.inventory.models import Warehouse
 from apps.investors.models import Investor
 
@@ -154,6 +156,18 @@ class Command(BaseCommand):
         users: dict[str, User],
     ) -> None:
         setup_chart_of_accounts(business.id)
+        ExchangeRate.objects.create(
+            tenant=business,
+            base_currency='USD',
+            quote_currency='UZS',
+            rate_date=timezone.localdate(),
+            rate=DEFAULT_DEMO_USD_UZS_RATE,
+            source=ExchangeRate.Source.MANUAL,
+            is_manual=True,
+            notes='Workflow baseline seed rate',
+            raw_payload={},
+            fetched_at=timezone.now(),
+        )
         cash_account = Account.objects.get(tenant_id=business.id, code='1000')
         bank_account = Account.objects.get(tenant_id=business.id, code='1010')
 

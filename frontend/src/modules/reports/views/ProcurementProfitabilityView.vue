@@ -13,6 +13,7 @@ import { fetchProcurement, type ProcurementDetail } from '@/api/partnerships'
 import { formatPrice } from '@/utils/currency'
 import { intlLocale } from '@/i18n/format'
 import { partnerRoleLabel, procurementStatusLabel, procurementTypeLabel } from '@/utils/domainLabels'
+import PageChrome from '@/components/layout/PageChrome.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,8 +30,8 @@ const procurementId = computed(() => Number(route.params.id))
 const summary = computed(() => report.value?.procurement ?? null)
 const itemRows = computed(() => report.value?.items ?? [])
 const activeReportCurrency = computed(() => report.value?.report_currency?.currency ?? 'UZS')
-const participantTotals = computed(() => procurementDetail.value?.balance.participant_totals ?? [])
-const balanceHistory = computed(() => procurementDetail.value?.balance.history ?? [])
+const participantTotals = computed(() => procurementDetail.value?.balance?.participant_totals ?? [])
+const balanceHistory = computed(() => procurementDetail.value?.balance?.history ?? [])
 const visibleHistory = computed(() => balanceHistory.value.slice(0, 4))
 
 function formatAmount(value: string | number, currency = 'UZS'): string {
@@ -146,19 +147,23 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <header class="page-header">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" :stroke-width="2" />
-      </button>
-      <div class="header-copy">
-        <h1 class="title">{{ t('reports.procurementAudit') }}</h1>
-        <p class="subtitle">{{ t('reports.procurementAuditSubtitle') }}</p>
-      </div>
-      <button class="ghost-btn" type="button" @click="openOperationalCard">
-        <ExternalLink :size="14" :stroke-width="2" />
-        {{ t('reports.operationalProcurement') }}
-      </button>
-    </header>
+    <PageChrome
+      :title="t('reports.procurementAudit')"
+      :eyebrow="t('reports.title')"
+      :description="t('reports.procurementAuditSubtitle')"
+    >
+      <template #primary>
+        <div class="page-header-actions">
+          <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
+            <ArrowLeft :size="18" :stroke-width="2" />
+          </button>
+          <button class="ghost-btn" type="button" @click="openOperationalCard">
+            <ExternalLink :size="14" :stroke-width="2" />
+            {{ t('reports.operationalProcurement') }}
+          </button>
+        </div>
+      </template>
+    </PageChrome>
 
     <main class="content">
       <section v-if="loading" class="hero">
@@ -175,7 +180,7 @@ onBeforeUnmount(() => {
             <p class="hero-kicker">{{ t('reports.procurementNumber', { id: summary.procurement_id }) }}</p>
             <h2 class="hero-title">{{ summary.supplier_name || t('reports.procurementNoSupplier') }}</h2>
             <div class="hero-meta">
-              <span>{{ procurementTypeLabel(summary.procurement_type ?? '') }}</span>
+              <span>{{ procurementTypeLabel(summary.funding_source ?? '') }}</span>
               <span>{{ procurementStatusLabel(summary.status ?? '') }}</span>
               <span>{{ formatDateTime(summary.received_at || summary.opened_at) }}</span>
             </div>
@@ -382,14 +387,7 @@ onBeforeUnmount(() => {
   background: var(--color-bg);
 }
 
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 16px 14px;
-  border-bottom: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-surface) 92%, white 8%);
-}
+.page-header-actions { display:flex; align-items:center; gap:var(--space-2); }
 
 .header-copy {
   min-width: 0;
@@ -765,5 +763,10 @@ onBeforeUnmount(() => {
   .detail-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+}
+
+@media (min-width: 1280px) {
+  .page { background: transparent; }
+  .content { max-width: none; margin: 0; padding-inline: var(--space-8); }
 }
 </style>

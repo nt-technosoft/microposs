@@ -20,7 +20,7 @@ export interface SaleLineInput {
 export interface SalePaymentInput {
   amount: string
   currency: string
-  fx_rate?: string
+  fx_rate?: string | number | null
   method: PaymentMethod
   account_id?: number | null
 }
@@ -59,7 +59,7 @@ export interface ReturnRefundPaymentPayload {
   method: PaymentMethod | 'RECEIVABLE_OFFSET'
   amount: string
   currency: string
-  fx_rate?: string
+  fx_rate?: string | number | null
   account_id?: number | null
 }
 
@@ -85,6 +85,8 @@ export interface SaleReturn {
     amount: string
     currency: string
     fx_rate: string
+    fx_rate_source?: string
+    fx_rate_date?: string | null
     method: string
     account_id: number | null
   }>
@@ -104,6 +106,8 @@ export interface SaleReturnPreviewLine {
   operation_currency: string
   operation_unit_price: string
   fx_rate_snapshot: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
 }
 
 export interface SaleReturnPreview {
@@ -127,6 +131,9 @@ export interface SaleExplanationPartnerSplit {
   role: 'INVESTOR' | 'OPERATOR' | 'UNKNOWN'
   capital_share: string | null
   profit_share: string | null
+  capital_recovered?: string
+  provisional_profit?: string
+  loss?: string
   profit_amount: string
 }
 
@@ -155,7 +162,7 @@ export interface SaleExplanationLine {
   }
   procurement: null | {
     id: number
-    procurement_type: string
+    funding_source: string
     status: string
     opened_at: string
     received_at: string | null
@@ -182,6 +189,8 @@ export interface SaleExplanationReceivableEntry {
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   source_ref: string
 }
 
@@ -203,13 +212,14 @@ export interface SaleExplanationJournalEntry {
   lines: SaleExplanationJournalLine[]
 }
 
-export interface SaleExplanationLedgerEntry {
+export interface SaleExplanationRealizationEntry {
   id: number
   date: string
-  entry_type: string
-  amount: string
-  currency: string
-  functional_amount_uzs: string
+  event_type: 'REALIZATION' | 'REVERSAL' | 'LOSS' | string
+  capital_recovered_uzs: string
+  provisional_profit_uzs: string
+  loss_uzs: string
+  is_partner_liability: boolean
   source_ref: string
   partner_id: number
   partner_name: string
@@ -244,13 +254,15 @@ export interface SaleExplanation {
   amount: string
   currency: string
   fx_rate: string
+  fx_rate_source?: string
+  fx_rate_date?: string | null
   functional_amount_uzs?: string
   account_id: number | null
   }>
   cash_entries: SaleExplanationCashEntry[]
   receivable_entries: SaleExplanationReceivableEntry[]
   journal_entries: SaleExplanationJournalEntry[]
-  ledger_entries: SaleExplanationLedgerEntry[]
+  realization_entries: SaleExplanationRealizationEntry[]
   lines: SaleExplanationLine[]
 }
 

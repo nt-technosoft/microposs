@@ -12,8 +12,10 @@ import { getStoredLocale, i18n, setI18nLocale } from './i18n'
 // Styles (order matters)
 import './assets/styles/tokens.css'
 import './assets/styles/reset.css'
+import './assets/styles/tailwind.css'
 import './assets/styles/typography.css'
 import './assets/styles/animations.css'
+import './assets/styles/badges.css'
 import './assets/styles/investor-cabinet.css'
 
 function installNumberInputGuard(): void {

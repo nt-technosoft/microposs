@@ -7,7 +7,10 @@ import { useSalesStore } from '@/stores/sales'
 import { useSessionStore } from '@/stores/session'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
-import AppBottomSheet from '@/components/feedback/AppBottomSheet.vue'
+import ListWorkbench from '@/components/layout/ListWorkbench.vue'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
+import ResponsiveOverlay from '@/components/layout/ResponsiveOverlay.vue'
 import { PaymentMethod, SaleStatus } from '@/types/enums'
 import type { Sale, SaleLine, SalePayment } from '@/types/models'
 import { fetchReturnPreview, type ReturnReason, type ReturnResolution, type SaleReturnPreview } from '@/api/sales'
@@ -559,6 +562,8 @@ function openExplanation(): void {
 
 <template>
   <div class="history-page">
+    <PageChrome class="desktop-page-chrome" :title="t('sales.history')" />
+
     <!-- ── Sticky header ─────────────────────────────────────── -->
     <header class="page-header">
       <h1 class="page-title">{{ t('sales.history') }}</h1>
@@ -567,6 +572,9 @@ function openExplanation(): void {
       </button>
     </header>
 
+    <PageContainer class="history-container" size="wide" :padded="false">
+    <ListWorkbench aside="wide" :sticky-aside="true">
+    <template #toolbar>
     <!-- ── Payment filter chips ──────────────────────────────── -->
     <div class="filter-row" role="group" :aria-label="t('sales.filterByPayment')">
       <button
@@ -579,7 +587,9 @@ function openExplanation(): void {
         {{ chip.label }}
       </button>
     </div>
+    </template>
 
+    <template #aside>
     <section class="session-summary" :class="{ 'session-summary--inactive': !hasActiveSession }">
       <div class="session-summary__header">
         <div class="session-summary__title-wrap">
@@ -618,6 +628,7 @@ function openExplanation(): void {
         {{ t('sales.filterHint') }}
       </p>
     </section>
+    </template>
 
     <!-- ── Content ───────────────────────────────────────────── -->
     <div class="content">
@@ -706,11 +717,14 @@ function openExplanation(): void {
         </button>
       </template>
     </div>
+    </ListWorkbench>
+    </PageContainer>
 
     <!-- ── Sale detail bottom sheet ──────────────────────────── -->
-    <AppBottomSheet
+    <ResponsiveOverlay
       :open="detailOpen"
       :title="selectedSale ? t('sales.saleTitle', { id: selectedSale.id }) : ''"
+      presentation="side"
       @close="closeDetail"
     >
       <template v-if="detailLoading">
@@ -856,9 +870,9 @@ function openExplanation(): void {
           {{ t('sales.returnSale') }}
         </button>
       </template>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
 
-    <AppBottomSheet
+    <ResponsiveOverlay
       :open="returnOpen"
       :title="t('sales.returnSaleTitle')"
       @close="closeReturnSheet"
@@ -953,7 +967,7 @@ function openExplanation(): void {
           <span v-else>{{ t('sales.confirmReturn') }}</span>
         </button>
       </div>
-    </AppBottomSheet>
+    </ResponsiveOverlay>
   </div>
 </template>
 
@@ -965,6 +979,15 @@ function openExplanation(): void {
   flex-direction: column;
   min-height: 100%;
   background: var(--color-bg-primary);
+}
+
+.desktop-page-chrome {
+  display: none;
+}
+
+.history-container :deep(.list-workbench__toolbar),
+.history-container :deep(.list-workbench__aside) {
+  margin-bottom: 0;
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
@@ -1907,6 +1930,131 @@ function openExplanation(): void {
   .btn-return,
   .btn-retry {
     transition: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .history-page {
+    min-height: 100%;
+  }
+
+  .desktop-page-chrome {
+    display: block;
+  }
+
+  .page-header {
+    display: none;
+  }
+
+  .history-container {
+    padding: var(--space-5) clamp(var(--space-5), 3vw, var(--space-8)) var(--space-8);
+  }
+
+  .history-container :deep(.list-workbench__toolbar) {
+    margin-bottom: var(--space-5);
+  }
+
+  .filter-row {
+    padding: 0;
+  }
+
+  .session-summary {
+    margin: 0;
+    border-radius: var(--radius-lg);
+    box-shadow: none;
+  }
+
+  .session-summary__grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .session-summary__metric {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .content {
+    min-width: 0;
+    padding: 0 0 var(--space-8);
+    gap: var(--space-4);
+  }
+
+  .sale-group {
+    gap: 0;
+    margin-top: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-elevated);
+  }
+
+  .group-label {
+    padding: var(--space-2) var(--space-4);
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .sale-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+    gap: var(--space-5);
+    min-height: 68px;
+    padding: var(--space-3) var(--space-4);
+    border: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .sale-card:last-child {
+    border-bottom: 0;
+  }
+
+  .sale-card:hover {
+    background: var(--color-bg-secondary);
+    box-shadow: none;
+  }
+
+  .sale-left {
+    display: grid;
+    grid-template-columns: minmax(150px, 0.38fr) minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .sale-items {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sale-right {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) minmax(110px, auto);
+    align-items: center;
+    gap: 2px var(--space-4);
+  }
+
+  .sale-amount,
+  .sale-trace {
+    grid-column: 1;
+    justify-self: end;
+  }
+
+  .sale-right > .badge,
+  .sale-payment-note {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .sale-amount,
+  .sale-right > .badge {
+    grid-row: 1;
+  }
+
+  .sale-trace,
+  .sale-payment-note {
+    grid-row: 2;
   }
 }
 

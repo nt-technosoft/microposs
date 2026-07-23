@@ -1,5 +1,13 @@
 # Customers & Suppliers — Дебиторы и Кредиторы
 
+> **Терминологическая заметка.** В этом документе и в `apps/suppliers/`-коде
+> сущность «условия закупки» называется `ProcurementTerms`. В E07-документах
+> (`docs/roadmap/E07-*`) и в target-архитектуре эта же сущность называется
+> `SupplierSettlement` — это синоним, в коде переименование запланировано
+> (E08, Фаза 2). При любых новых правках используй target-имя
+> `SupplierSettlement`; legacy-упоминания `ProcurementTerms` оставляем как
+> есть до переименования.
+
 ## Customers (Дебиторы)
 
 ### Модель Receivable
@@ -74,6 +82,37 @@
 | `fx_rate_snapshot` | Decimal | Курс на момент платежа |
 | `payment_method` | CASH / CARD / TRANSFER | Метод |
 | `date` | date | Дата |
+
+### Модель SupplierPayable
+Кредиторское обязательство перед поставщиком. Возникает из `ProcurementTerms`, если условия не являются полной предоплатой.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `supplier` | FK | Поставщик |
+| `procurement` | FK? | Приход-источник |
+| `original_amount` | Decimal | Исходная сумма обязательства |
+| `paid_amount` | Decimal | Сколько погашено |
+| `remaining_amount` | Decimal | Остаток к оплате |
+| `currency_of_obligation` | str | Валюта долга |
+| `fx_rate_at_obligation` | Decimal | Зафиксированный курс на дату возникновения |
+| `status` | OPEN / PARTIALLY_PAID / FULLY_PAID / CANCELLED | Состояние |
+
+USD-долг не переоценивается каждый день: курс фиксируется на момент обязательства. Курсовая разница может возникнуть только при оплате в другой валюте.
+
+### Модель PaymentSchedule
+График платежей для `INSTALLMENT`-условий. Погашение может быть привязано к конкретной строке графика.
+
+### Мульти-кассовая оплата поставщику
+`SupplierPayment.allocations` хранит фактические источники оплаты:
+
+```json
+[
+  {"cash_account_id": 1, "amount": "400", "currency": "USD"},
+  {"cash_account_id": 2, "amount": "6000000", "currency": "UZS"}
+]
+```
+
+Сервис `record_payable_payment()` уменьшает `SupplierPayable`, списывает деньги с нужных `CashAccount`, обновляет график и создаёт финансовые проводки.
 
 ### `record_supplier_payment(tenant_id, supplier_id, amount, payment_method, ...)`
 Регистрирует оплату поставщику.

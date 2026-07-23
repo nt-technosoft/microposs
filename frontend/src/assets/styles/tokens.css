@@ -114,18 +114,92 @@
 
   /* === Z-Index Scale === */
   --z-base: 0;
-  --z-dropdown: 100;
-  --z-sticky: 200;
-  --z-overlay: 300;
-  --z-modal: 400;
-  --z-toast: 500;
-  --z-float: 600;
+  --z-dropdown: 20;
+  --z-sticky: 30;
+  --z-float: 35;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-toast: 60;
 
   /* === Layout === */
   --bottom-nav-height: 64px;
   --header-height: 56px;
-  --sidebar-width: 260px;
+  --app-header-height: 64px;
+  --sticky-offset: var(--app-header-height);
+  --desktop-sidebar-expanded: 232px;
+  --desktop-sidebar-collapsed: 64px;
+  --sidebar-width: var(--desktop-sidebar-expanded);
   --max-content-width: 1200px;
+
+  /* ============================================================
+   * E10 DESIGN.md canon — OKLCH layer (calm confidence)
+   * Additive: legacy --color-* above stay for un-migrated screens.
+   * The shadcn-vue bridge below points HERE, so redesigned surfaces
+   * (currently: procurement list + nav + dialog/sheet chrome) render
+   * in the new language; legacy Base* screens keep the teal palette
+   * until each is intentionally migrated (screen-by-screen, E10).
+   * ============================================================ */
+
+  /* Brand — deep emerald / pine (hue 165) */
+  --green-50:  oklch(0.97 0.012 165);
+  --green-100: oklch(0.94 0.022 165);
+  --green-200: oklch(0.88 0.040 165);
+  --green-300: oklch(0.80 0.060 165);
+  --green-400: oklch(0.66 0.085 165);
+  --green-500: oklch(0.55 0.098 165);
+  --green-600: oklch(0.47 0.098 165);  /* primary action */
+  --green-700: oklch(0.40 0.085 165);  /* hover / pressed */
+  --green-800: oklch(0.32 0.065 165);
+  --green-900: oklch(0.24 0.045 165);
+
+  /* Neutrals — green-tinted (hue 165) */
+  --bg:        oklch(0.99 0.004 165);  /* app background, warm off-white */
+  --surface:   oklch(0.995 0.002 165); /* raised surface (never pure #fff) */
+  --neutral-50:  oklch(0.975 0.005 165);
+  --neutral-100: oklch(0.95 0.006 165);
+  --neutral-200: oklch(0.90 0.006 165);  /* hairlines, borders */
+  --neutral-300: oklch(0.82 0.006 165);
+  --neutral-400: oklch(0.68 0.007 165);  /* disabled, placeholder */
+  --neutral-500: oklch(0.55 0.008 165);  /* secondary text */
+  --neutral-600: oklch(0.44 0.008 165);
+  --neutral-700: oklch(0.35 0.008 165);
+  --neutral-800: oklch(0.26 0.007 165);
+  --neutral-900: oklch(0.18 0.006 165);  /* primary text */
+
+  /* Accent — warm sand (hue ~72). Brand accent, used sparingly.
+   * NOTE: this is NOT the shadcn --accent (that one is a subtle hover
+   * surface, mapped to a neutral below). Use --sand-* deliberately. */
+  --sand-400: oklch(0.82 0.090 75);
+  --sand-500: oklch(0.76 0.120 72);  /* accent */
+  --sand-600: oklch(0.68 0.130 68);  /* hover */
+
+  /* Semantic (data) — distinct from brand hue, always paired with sign/icon */
+  --positive: oklch(0.62 0.150 145);  /* profit / in — distinct from brand 165 */
+  --negative: oklch(0.56 0.120 35);   /* loss / out — calm terracotta, NOT alarm red */
+  --warning:  oklch(0.76 0.130 75);   /* attention — amber */
+  --info:     oklch(0.60 0.080 235);  /* neutral info — muted blue */
+
+  /* === shadcn-vue / Tailwind v4 bridge → OKLCH canon === */
+  --background: var(--bg);
+  --foreground: var(--neutral-900);
+  --card: var(--surface);
+  --card-foreground: var(--neutral-900);
+  --popover: var(--surface);
+  --popover-foreground: var(--neutral-900);
+  --primary: var(--green-600);
+  --primary-foreground: var(--neutral-50);
+  --secondary: var(--neutral-100);
+  --secondary-foreground: var(--neutral-900);
+  --muted: var(--neutral-100);
+  --muted-foreground: var(--neutral-500);
+  --accent: var(--neutral-100);          /* subtle hover surface, not brand sand */
+  --accent-foreground: var(--neutral-900);
+  --destructive: var(--color-error);     /* true destructive stays red; --negative is for data-loss display */
+  --destructive-foreground: var(--neutral-50);
+  --border: var(--neutral-200);
+  --input: var(--neutral-200);
+  --ring: var(--green-600);
+  --radius: var(--radius-md);
 }
 
 /* === Dark Theme === */

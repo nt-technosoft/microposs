@@ -1,261 +1,207 @@
-# Finance — Бухгалтерия, Кэш, FX, Отчётность
+# Finance — Target Accounting, Cash and Reporting Model
 
-## Двойная бухгалтерия
+> E07 target document. Previous implementation details remain available in Git history. Current work must follow `docs/roadmap/E07-procurement-workspace.md`.
 
-### Модель Account (План счетов)
+## Purpose
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `code` | str | Уникальный код счёта в рамках тенанта |
-| `name` | str | Название счёта |
-| `account_type` | ASSET / LIABILITY / EQUITY / INCOME / EXPENSE | Тип |
-| `parent` | FK self? | Родительский счёт (иерархия) |
-| `is_system` | bool | Системный счёт (нельзя удалить) |
+Finance records every material money, inventory, payable, receivable, capital and profit event as auditable documents and journal entries.
 
-**Нормальное сальдо:**
-- ASSET / EXPENSE → дебетовое (debit − credit)
-- LIABILITY / EQUITY / INCOME → кредитовое (credit − debit)
+UI workflows may be simple, but financial facts must be explicit, append-only where appropriate and traceable to source documents.
 
-**Системные счета (используются в автоматических проводках):**
-
-| Код | Название | Тип |
-|---|---|---|
-| 1000 | Касса | ASSET |
-| 1010 | Банк / POS-терминал | ASSET |
-| 1100 | Товары на складе | ASSET |
-| 1200 | Дебиторская задолженность | ASSET |
-| 2000 | Кредиторская задолженность (поставщики) | LIABILITY |
-| 2200 | Консигнационные обязательства | LIABILITY |
-| 3000 | Капитал владельца | EQUITY |
-| 3100 | Инвесторский капитал (Мударабá) | EQUITY |
-| 3110 | Инвесторский капитал (Мушарáка) | EQUITY |
-| 4000 | Выручка | INCOME |
-| 5000 | Себестоимость | EXPENSE |
-| 5300 | Операционные расходы | EXPENSE |
-
----
-
-### JournalEntry (иммутабельная проводка)
-
-| Поле | Тип | Назначение |
-|---|---|---|
-| `operation_type` | SALE / RECEIPT / PAYMENT / RETURN / WRITEOFF / TRANSFER / DEBT_PAYMENT | Тип операции |
-| `operation_id` | int | ID исходной операции для трассировки |
-| `date` | date | Дата |
-| `is_reversal` | bool | Является ли сторнирующей проводкой |
-| `reversed_entry` | FK self? | Ссылка на оригинал (для сторно) |
-| `status` | str | Всегда `confirmed` |
-
-**Инвариант:** `Σ debits == Σ credits`. Нарушение → `ValueError`. Физическое удаление запрещено; исправление только через сторно (`create_reversal_entry`).
-
-### JournalLine
-
-| Поле | Тип | Назначение |
-|---|---|---|
-| `account` | FK Account | Счёт |
-| `debit` | Decimal | Дебет (0 если кредитовая строка) |
-| `credit` | Decimal | Кредит (0 если дебетовая строка) |
-| `description` | str | Описание строки |
-
----
-
-## Автоматические проводки при операциях
-
-### Продажа
-```
-CASH:   Debit 1000 (Касса)     Credit 4000 (Выручка)
-CARD:   Debit 1010 (Банк)      Credit 4000 (Выручка)
-CREDIT: Debit 1200 (Дебиторка) Credit 4000 (Выручка)
-        Debit 5000 (СС)        Credit 1100 (Товары)    ← COGS
-```
-
-### Приёмка товара
-```
-BUSINESS_OWNED:   Debit 1100 (Товары) Credit 1000 (Касса)
-SUPPLIER_PURCHASE:Debit 1100 (Товары) Credit 2000 (Поставщики)
-CONSIGNMENT:      Debit 1100 (Товары) Credit 2200 (Консигнация)
-MUDARABA:         Debit 1100 (Товары) Credit 3100 (Инв. Капитал М)
-MUSHARAKA:        Debit 1100 (Товары) Credit 3110 (Инв. Капитал Ш)
-```
-
-### Оплата поставщику
-```
-Debit 2000 (Кредиторка) Credit 1000 (Касса)
-```
-
-### Погашение дебиторки
-```
-Debit 1000 (Касса) Credit 1200 (Дебиторка)
-```
-
-### Расход
-```
-Debit 5300 (Расходы) Credit 1000 (Касса / счёт)
-```
-
-### Внесение капитала владельца
-```
-Debit 1000 (Касса) Credit 3000 (Капитал владельца)
-```
-
-### Возврат (RESTOCK)
-```
-Debit 4000 (Выручка)   Credit 1000/1010/1200 (по методу оплаты)
-Debit 1100 (Товары)    Credit 5000 (СС)
-```
-
----
-
-## Кэш-слой
+## Core Documents
 
 ### CashAccount
-Операционный кассовый счёт (один тенант, одна валюта).
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `currency` | str | Валюта счёта |
-| `kind` | CASH / CARD_TERMINAL / BANK | Тип |
-| `balance` | Decimal | Текущий баланс (поддерживается автоматически) |
-| `linked_account` | FK Account? | Ссылка на счёт COA для journal entries |
+Business cash/bank/card account.
 
-**Инвариант:** `balance` — производная от `CashEntry`-журнала. Никогда не устанавливается напрямую — только через `create_cash_entry`.
+Used for:
 
-### CashEntry (append-only)
-| Поле | Тип | Назначение |
-|---|---|---|
-| `direction` | IN / OUT | Приход/расход |
-| `amount` | Decimal | Сумма |
-| `source_ref_type` | str | Тип источника ('sale', 'payment', ...) |
-| `source_ref_id` | int | ID источника |
+- own-funds procurement payments;
+- supplier payable payments;
+- sales collections;
+- owner contributions;
+- operating expenses;
+- currency exchange.
 
-### `create_cash_entry(tenant_id, account, direction, amount, ...)`
-- Создаёт `CashEntry`
-- Атомарно обновляет `CashAccount.balance` через `F()`-выражение: `+= amount` (IN) или `-= amount` (OUT)
-- **Вызывается внутри `transaction.atomic()`**
+Balance is derived through cash entries and must not be manually mutated.
 
----
+### CashEntry
 
-## FX-курсы
+Append-only cash movement.
 
-### ExchangeRate
-История курса на дату для конкретного тенанта.
+Stores:
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `base_currency` | str | Базовая валюта |
-| `quote_currency` | str | Котируемая валюта |
-| `rate_date` | date | Дата курса |
-| `rate` | Decimal | Курс |
-| `source` | CBU / MANUAL | Источник |
-| `is_manual` | bool | Ручной ввод |
+- account;
+- direction;
+- amount;
+- currency;
+- source document;
+- date.
 
-**Инвариант:** уникальный `(tenant, base_currency, quote_currency, rate_date)`. Сама строка курса может быть обновлена ручным вводом или official CBU sync (`overwrite_manual=true`). Иммутабельность финансовой операции обеспечивается не строкой `ExchangeRate`, а сохранённым `fx_rate_snapshot` в продаже, расходе, платеже, леджере или обмене.
+### Payment
 
-### Валютный контракт отчётности
-- `UZS` — functional currency: journal, P&L, COGS, сверка и `Sale.total_amount` считаются в UZS.
-- `USD` и другие валюты — native/operation currency: кассы, платежи и взносы хранят реальные суммы в валюте операции.
-- `report_currency` — display/report currency: отчёт может показать UZS-эквивалент в USD по выбранному курсу, не меняя бухгалтерские записи.
-- Для USD-продаж `SaleLine.unit_price` хранит UZS-эквивалент, а `operation_currency`, `operation_unit_price`, `fx_rate_snapshot` хранят исходную цену.
+Logical payment document.
 
-### `exchange_currency(tenant_id, from_account_id, to_account_id, from_amount, rate, ...)`
-Атомарный обмен валюты между двумя CashAccount.
-- `from_account.balance -= from_amount`
-- `to_account.balance += from_amount × rate`
-- Создаёт `CurrencyExchange` запись
-- Публикует `OutboxEvent('finance.currency_exchange')`
+Payments can be split across accounts/currencies through allocations.
 
----
+Every payment must state:
 
-## Отчётность
+- source account or capital pool;
+- target document;
+- amount;
+- operation currency;
+- FX snapshot;
+- date;
+- idempotency key;
+- journal reference.
 
-### DailySummary (pre-aggregated)
-Ежедневный P&L-снимок. Создаётся/обновляется Celery-задачей `aggregate_daily_pnl`.
+### SupplierPayable
 
-| Поле | Назначение |
+Liability to supplier.
+
+Created from supplier settlement when goods/services are received or terms require obligation tracking.
+
+Paid through supplier payments. Remaining amount is derived from original amount minus paid amount.
+
+### PaymentSchedule
+
+Installment schedule for supplier payable.
+
+Rows are operational expectations. Actual payment remains a `Payment`.
+
+### PartnerLedgerEntry
+
+Append-only partner economic ledger.
+
+Tracks capital, allocations, profit, reversals, losses and dividends.
+
+### JournalEntry
+
+Immutable double-entry accounting document.
+
+Rules:
+
+- debit total equals credit total;
+- no physical delete;
+- correction through reversal or explicit adjustment;
+- generated by services/events, not manually from UI.
+
+## Funding Rules
+
+### Own Funds Procurement
+
+Payment source: business `CashAccount`.
+
+No procurement capital balance is required.
+
+Typical entries:
+
+| Event | Accounting intent |
 |---|---|
-| `date` | Дата |
-| `total_revenue` | Выручка |
-| `total_cogs` | Себестоимость |
-| `gross_profit` | Валовая прибыль |
-| `investor_share` | Доля инвесторов (из PartnerLedgerEntry.PROFIT_ACCRUED) |
-| `net_business_profit` | Чистая прибыль бизнеса (gross − investor − writeoffs − expenses) |
-| `total_sales_count` | Количество продаж |
-| `total_returns_count` | Количество возвратов |
+| pay supplier immediately | reduce cash, record paid procurement cost or payable settlement |
+| receive inventory | recognize inventory at landed cost |
+| deferred receive | debit inventory, credit supplier payable |
+| later supplier payment | debit payable, credit cash |
 
-### CashFlowSummary (pre-aggregated)
+Target backend design must explicitly choose and document the accounting point for each event. It must avoid double-counting cash, payables and inventory; no accounting effect should be inferred only from UI line status.
 
-| Поле | Назначение |
+### Partnership Procurement
+
+Payment source: investment capital pool with explicit allocation into procurement/receive batch.
+
+Capital pool exists to prove whose money funded each batch.
+
+Typical events:
+
+| Event | Accounting intent |
 |---|---|
-| `cash_in_sales` | Наличные от продаж |
-| `cash_in_debt_payments` | Погашения дебиторки |
-| `cash_out_purchases` | Расходы на закупки |
-| `cash_out_supplier_payments` | Оплаты поставщикам |
-| `cash_out_expenses` | Операционные расходы |
-| `net_cash_flow` | Чистый кэш-поток |
+| capital contribution | record partner capital in |
+| allocate/pay procurement cost | consume capital pool for procurement |
+| receive inventory | recognize inventory funded by partner/operator capital |
+| sale | record revenue/COGS and accrue partner profit from lot snapshot |
+| dividend payout | reduce payable/profit due to partner and cash |
 
----
+## Supplier Settlement Rules
 
-## Profitability-отчёты
+| Settlement | Financial output |
+|---|---|
+| `PREPAID` | cash payment, no remaining payable |
+| `PARTIAL` | payment + payable for remaining amount |
+| `DEFERRED` | payable with deadline |
+| `INSTALLMENT` | payable + schedule |
+| `CONSIGNMENT` | consignment liability / supplier obligation based on mode |
 
-Все три эндпоинта кэшируются на 5 минут. Ключ кэша = hash(tenant + params + версия). Версия инвалидируется при каждой новой продаже или закупке.
+Supplier settlement is separate from funding source. The same settlement can be paid from different sources only where policy allows it.
 
-### `get_sales_profitability_rows(tenant_id, date_from?, date_to?, location_id?, report_currency?)`
-Прибыльность по каждой продаже. Колонки: выручка, COGS, валовая прибыль, доля инвестора, прибыль бизнеса, маржа%, наценка%.
+## FX Rules
 
-### `get_product_profitability_rows(tenant_id, date_from?, date_to?, location_id?, warehouse_id?, report_currency?)`
-Прибыльность по варианту товара. Включает прогнозируемую прибыль на оставшийся сток (`projected_revenue`, `projected_gross_profit`).
+- Functional currency is UZS.
+- Operation currency is stored on payments, item prices, contributions and obligations.
+- FX snapshot is stored on every financial fact.
+- Historical facts are never revalued by changing exchange-rate rows.
+- Reporting currency is display-only.
 
-### `get_procurement_profitability_rows(tenant_id, date_from?, date_to?, report_currency?)`
-Прибыльность по закупке (агрегат по всем позициям и лотам).
+## Inventory Valuation
 
----
+Inventory value comes from receive batch landed cost.
 
-## Combined API эндпоинты (оптимизация)
+`Lot.landed_cost_per_unit` is immutable.
 
-### `GET /api/v1/finance/reports/summary/`
-Объединяет в 1 запрос: daily_summary + cash_flow + debt + parity (trial_balance + cash_accounts + payables + stock).
+For partnership lots, `contract_snapshot` is also immutable and affects profit distribution, not physical stock quantity.
 
-Ответ:
-```json
-{
-  "is_computing": false,
-  "daily_summary": [...],
-  "cash_flow": [...],
-  "debt": [...],
-  "parity": {
-    "payables": [...],
-    "stock": [...],
-    "trial_balance": [...],
-    "cash_accounts": [...]
-  }
-}
+## Profit Distribution
+
+Sales use FIFO lots.
+
+Gross profit per sale line:
+
+```text
+gross_profit = sale_revenue - lot_landed_cost
 ```
 
-**`is_computing: true`** — означает что фоновые Celery-задачи ещё работают над агрегацией. Фронтенд должен делать polling каждые 5 секунд (максимум 12 попыток = 60 секунд).
+If lot has partner snapshot:
 
-### `GET /api/v1/finance/reports/analytics/`
-Объединяет в 1 запрос: sales profitability + products profitability + procurements profitability.
+- investor/operator profit is calculated from snapshot;
+- `PartnerLedgerEntry.PROFIT_ACCRUED` is created;
+- reports read partner ledger, not current agreement state.
 
----
+## Required Journal Coverage
 
-## Функция `_ensure_finance_aggregates`
+Every service below must either create journal entries or explicitly document why not:
 
-Вызывается при каждом запросе к daily-summaries, cash-flow и reports/summary.
+- own-funds procurement payment;
+- supplier payable creation;
+- supplier payable payment;
+- partnership capital contribution;
+- partnership capital allocation;
+- receive batch inventory recognition;
+- sale revenue;
+- COGS;
+- sale return;
+- writeoff/loss;
+- consignment return/conversion;
+- dividend payout;
+- currency exchange.
 
-1. Определяет диапазон дат через `_resolve_operation_window()` (UNION-запрос по 5 таблицам)
-2. Проверяет `warmup_key` в Redis (кэш «всё прогрето»)
-3. Проверяет какие даты диапазона уже есть в `DailySummary`
-4. Для отсутствующих дат → `aggregate_daily_pnl.delay()` (неблокирующий)
-5. Возвращает `(date_from, date_to, is_computing)`
+## Reporting Dependencies
 
-`is_computing=True` если задачи были задиспатчены (данных ещё нет).
+E03 Real Value Reporting depends on E07 finance alignment.
 
----
+Reports must be able to answer:
 
-## Связи с другими доменами
+- business cash by account/currency;
+- inventory value by ownership/funding source;
+- supplier payables;
+- partner capital deployed;
+- partner pending profit;
+- business equity in inventory;
+- consignment liabilities;
+- realized and projected gross profit.
 
-- **Sales:** journal entries создаются из `create_sale` и `process_return`
-- **Customers:** `record_debt_payment_journal` при погашении дебиторки
-- **Suppliers:** `record_supplier_payment_journal` при оплате поставщику
-- **Partnerships:** `PartnerLedgerEntry.PROFIT_ACCRUED` → `investor_share` в DailySummary
-- **Analytics:** Celery-задача строит DailySummary / CashFlowSummary
+## Related Domains
+
+- Procurement: source of purchase, settlement and receive events.
+- Partnerships: capital and profit ledger.
+- Suppliers: payables and schedules.
+- Inventory: lot valuation.
+- Sales: revenue, COGS and profit accrual.

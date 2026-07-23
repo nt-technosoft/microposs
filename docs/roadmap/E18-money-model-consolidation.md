@@ -1,0 +1,605 @@
+# E18 — Money Model Consolidation: Dimensioned GL + Thin Provisional Layer + Single Read-Model
+
+**Статус:** `IN_REVIEW` (Ф1–Ф8 ✅ 2026-06-16; T-5.2 settlement-true-up дропнут как опциональный)
+**Прогресс:** ~100% ядро. Денежная модель консолидирована: read-model с независимым tag-источником
+(доказано == легаси на всех realized-flows + property-based), дисплей-дивергенция S1/S4 устранена,
+мёртвый код/дубли снесены, conservation exact-0 по UZS. Остаток вне E18: ретайр `AgreementAllocation`/
+удаление 3 узлов (не дубль — pre-receive intent), split `get_partner_aggregate` (cross-app).
+**Зависит от:** E11, E12, E14, E15, E16, E17 (вся партнёрская денежная база)
+**Блокирует:** E03 (Real Value Reporting — нужен чистый read-model), масштабирование, доверие к деньгам у первого клиента
+
+> Источник: независимый вакуум-аудит денежной архитектуры — [`docs/money-architecture-audit.md`](../money-architecture-audit.md) (2026-06-15). Раздел C аудита (большой rewrite в один новый журнал) **отклонён** после red-team как заякоренный и мис-скейленный; принят откалиброванный синтез (см. «Решённые вопросы»). Этот эпик — наложение синтеза на код безопасными фазами.
+
+---
+
+## Цель
+
+Свести партнёрскую денежную модель к **одной правде без подгонок**: реализованные деньги
+опираются на уже корректный GL (дименсионированный по partner/agreement/procurement/карману),
+провизорный партнёрский сплит остаётся тонким честным слоем, а позиции читаются из **одного**
+материализованного read-model. Итог: расхождение трёх узлов позиций (корень S1/S4-багов)
+исчезает, в истории денег нет фиктивных записей, корректность доказуема числами + сохранением +
+идентичностью GL.
+
+## Контекст и обоснование
+
+E11–E17 нарастили партнёрскую экономику инкрементально и оставили «шрам-tissue» (полный разбор
+— в аудите, разделы A–B). Корень один: денежные факты — это **денормализованные per-partner
+строки в ~10 таблицах разной гранулярности**, поэтому:
+
+- **три параллельных узла позиций** на трёх базисах (`partner_capital_positions`,
+  `procurement_venture_positions`, `_agreement_available_by_partner`) могут разойтись — и
+  именно это породило баги приёмки S1/S4;
+- источники сшиваются **эвристикой по `CashEntry.account`** (пул/операционка) минимум в 3 местах;
+- есть **подделка фактов**: FROM_PROFIT-сеттл пишет несуществующие «дивиденд выплачен» +
+  «взнос сделан», чтобы derived-баланс сошёлся (`advances.py:175‑183`);
+- сохранение денег **переучитывается live** на каждый запрос, а не вытекает из структуры;
+- остался мёртвый код (`CapitalAdvanceSettlement`) и дубли хелперов (quantize ×5, equity-map ×2,
+  operator-residue ×4).
+
+В деньгах техдолг быстро становится продуктовым риском. Эпик лечит **причину** (множественность
+источников + подгонки), а не симптомы, и делает это **без big-bang миграции живых денег**.
+
+Почему именно этот подход (а не большой rewrite в новый журнал): red-team показал, что ценность
+была не в «event-log», а в (1) едином read-источнике, (2) явных типах, (3) сносе подгонок. Всё
+это достижимо **консолидацией на месте**: реализованные деньги уже корректно лежат в GL —
+дублировать их параллельным журналом не нужно; провизорный сплит (recovered/profit/loss по долям
+до settlement) в GL не лежит и **не должен** — он остаётся отдельным тонким слоем. Чище, чем
+rewrite: нет дублирования GL, уважается различие реализованного и провизорного, near-zero
+миграционный риск.
+
+## Сценарии (use cases)
+
+- **US-1 (честный профит→капитал).** Партнёр гасит капитальный долг из своей нераспределённой
+  прибыли. В системе появляется **одна** честная запись «прибыль → капитал»; в истории взносов
+  и выплат **нет** фиктивных «дивиденд» и «взнос». Цифры и GL — те же.
+- **US-2 (честная сверка).** Venture-settlement пересчитывает recovered/profit/loss по
+  net-стоимости. Пересчёт оформляется **честным true-up-событием** (append-only, поверх
+  оригиналов), а не live-перетиранием и не подложными строками. История показывает реальный ход.
+- **US-3 (явный тип возврата).** Возврат капитала партнёру явно помечен как «из пула» или «из
+  выручки»; система не вычисляет смысл задним числом по тому, с какого счёта ушёл `CashEntry`.
+- **US-4 (одна позиция).** Любой экран/отчёт показывает партнёрскую позицию из **одного**
+  read-model; разные узлы не могут показать разные числа.
+- **US-5 (доказуемое закрытие).** Close прихода/договора гейтится сохранением с **точным нулём**
+  по UZS (ε только на FX-ноге); невозможно закрыть венчур с утечкой, спрятанной под толеранс.
+- **US-6 (аудируемость).** Аудитор может проследить **каждое** число позиции либо до GL-строки
+  (реализованное), либо до провизорного события (сплит/true-up); фантомных строк нет.
+
+## Текущее состояние
+
+- ✅ **Что уже есть и остаётся правильным:** finance GL (`CashAccount/CashEntry/Payment/JournalEntry`,
+  `record_capital_pool_*`) — консолидирован и корректен; sharia-формулы неттинга (`formulas.py`);
+  immutability `contract_snapshot`; lifecycle receive→sale→settlement→close; read-only локи;
+  3-карманный conservation-инвариант как **концепция**.
+- ⚠️ **Что начато, но кривое:** позиции считаются в 3 узлах (расходятся); conservation
+  переучитывается live; `ProcurementVentureSettlement.partner_positions` (JSON-снимок) в чтениях
+  не переиспользуется; GL не несёт партнёрское измерение (эквити по роли 3100/3110/3000, не по
+  партнёру).
+- ❌ **Чего нет:** единого read-model; явных типов возврата (POOL/PROCEEDS); честного
+  профит→капитал и честного settlement-true-up (вместо подгонок/перетирания); инварианта
+  `replay==read-model`; дименсий на GL.
+
+## Целевая модель
+
+Два слоя денег + один read-model над ними. Без параллельного журнала-дубля.
+
+### Слой 1 — Реализованные деньги = GL + partnerships-owned дименсии (tag-слой)
+
+Каждое **партнёр-гранулярное** движение кэша/эквити получает аналитические измерения
+`{partner_id, agreement_id, procurement_id, pocket}` — но они живут **не на `JournalLine`**, а в
+**partnerships-owned tag-таблице `PartnerJournalLineTag`** (`journal_line FK → finance`,
+направление зависимости **partnerships→finance**). finance остаётся **домен-агностичным**: он не
+знает ни про партнёрства, ни про существование tag-таблицы; суммы денег живут в GL **один раз**,
+тег лишь указывает НА строку (не копия факта, не вторая бухгалтерия). Тег пишется транзакционно
+вместе с journal entry. Дименсионируются: взносы (paid_in), возвраты капитала, дивиденды,
+погашения долга, профит→капитал.
+
+- **Источник правды реализованного слоя** — GL-строка (сумма) + её tag (партнёр/карман), а не
+  bespoke-таблица. «Сколько у партнёра» читается **единым `GROUP BY` по tag-таблице + join к
+  `JournalLine` за суммами** — одна равномерная агрегация вместо UNION по 10 доменным таблицам.
+- **Доменные таблицы намерения** (`AgreementContribution`/`Withdrawal`/`DividendPayment`/…)
+  остаются как записи **намерения + идемпотентность + аудит**, но **деньги из них не читаются
+  никогда** — только GL/tag-слой.
+- **Сохранение реализованного слоя — бесплатно и точно:** это врождённый инвариант GL
+  (debit=credit). Переизобретать его не нужно — нужно не сломать.
+- `pocket` ∈ {CAPITAL, PROCEEDS, DISTRIBUTION} — выравнен на уже доказанную 3-карманную рамку
+  `venture_conservation`. Новый «карман» не вводим.
+
+### Слой 2 — Провизорный венчурный сплит = тонкий append-only слой (в GL нет и не должно быть)
+
+`ProcurementSaleRealization` **сохраняется** как единственный носитель того, чего GL не несёт:
+per-slice распределение `recovered / profit / loss / fx` по **неизменяемым долям** до settlement.
+Это управленческая аллокация экономики продажи между партнёрами, у которой **нет кэш-ноги**, пока
+она не станет реальной (дивиденд/возврат). Поэтому ей не место в GL.
+
+- **deployed-per-partner — производное, не факт:** `batch total (из finance) × snapshot
+  capital_share`. Отдельной таблицей не хранится.
+- **settlement-true-up — честные события (US-2):** на settlement net-пересчёт
+  (`_net_capital_loss_entitlements` / `_net_profit_entitlements`) **не перетирает** live-числа, а
+  вычисляет нетто-энтайтлмент и **дописывает дельта-события** в провизорный слой (тип
+  `SETTLEMENT_TRUEUP`): «recovered партнёра A +X, partner B −X», «profit netted …». Оригинальные
+  realization-строки **не мутируются**. Read-model фолдит `оригиналы + true-up = settled
+  position`. Те же числа — честная история. Сохранение держится, т.к. true-up — это
+  **перераспределение** внутри венчура (Σ дельт по венчуру = 0), не создание денег.
+
+### Read-model — один материализованный источник позиции
+
+Таблица `PartnerPositionReadModel`, ключ `(agreement, procurement, partner, currency)`,
+обновляется **транзакционно в том же atomic-блоке**, что и порождающая операция. Объединяет
+оба слоя: реализованное (GROUP BY дименсионированного GL) + провизорное (свёртка
+realization + true-up) + производный deployed.
+
+- Заменяет все три live-узла; `_agreement_available_by_partner` удаляется как класс.
+- **Полностью восстановим реплеем источников** → инвариант `replay(GL+провизор) == read-model`
+  как anti-drift (ловит рассинхрон write/read-side).
+- Чтения O(1) индексированным select (попутно убирает N×M-передеривание на рендере workspace) и
+  даёт queryable read-side под E03.
+
+### Явные типы вместо дискриминаторов
+
+- Возврат капитала: явный тип/поле `return_kind ∈ {FROM_POOL, FROM_PROCEEDS}` (US-3). Дискриминатор
+  по `CashEntry.account` удаляется во всех 3 местах.
+- Профит→капитал: явный тип (US-1) вместо синтетических dividend+contribution.
+
+### Принцип «честное событие, не подгонка» (сквозной)
+
+Никакая производная не «подгоняется» подложными строками и не перетирается live. Любой пересчёт
+(settlement-true-up, промежуточный/финальный net-recompute, профит→капитал) рождает **честное
+append-only событие** с реальным экономическим смыслом. Read-model — функция от честных событий,
+а не наоборот.
+
+### Conservation — остаётся гейтом, но читается из чистых слоёв
+
+3-карманный residual = JOIN (реализованное из GL) + (провизорное из слоя 2). **Точный 0 по
+функциональному UZS** (Decimal), ε только на native-FX-ноге. Гейтит FINAL settlement и close
+(как сейчас) — регресс невозможен незаметно.
+
+## Доказательство эквивалентности (контракт с аудиторской сессией)
+
+Золотые сценарии и эталонные цифры готовит **аудиторская сессия**; этот эпик с ними состыковывается.
+Эквивалентность доказывается **четырьмя** калибрами на каждом golden-сценарии:
+
+1. **Числа поле-в-поле:** `read-model(partner) == текущие procurement_venture_positions /
+   partner_capital_positions(partner)` по всем полям.
+2. **Сохранение:** `residual(pocket,currency)` = **точный 0** по UZS, ≤ε только на FX-ноге — тот
+   же критерий, что гейтит FINAL/close сейчас.
+3. **GL идентичен:** множество `JournalEntry`-строк по операции совпадает до и после (те же
+   finance-вызовы; `JournalLine` вообще не меняется — дименсии живут в отдельном partnerships-owned
+   tag-слое, money-суммы не двигаются) → Excel-replay и отчётность не меняются.
+4. **Anti-drift:** `replay(источники) == read-model` на всех сценариях.
+
+> Важно: дименсионирование — запись partnerships-owned тегов, ссылающихся на GL-строки, **не перенос
+> денег** и **не изменение `JournalLine`**. Backfill тегов на исторические строки — read-only
+> обогащение из `source_ref`, не money-миграция.
+
+## План реализации
+
+Каждая фаза **зелёная независимо**. **Никакого переноса живых денег в новую схему.**
+Верификационная оснастка (shadow read-model, dual-read-сверки) — **временная**: удаляется в
+финале, это доказательство эквивалентности, а не compatibility-слой.
+
+### Фаза 1 — Честный профит→капитал (standalone, не зависит от архитектуры)
+Убрать FROM_PROFIT-подделку: вместо `PartnerLedgerEntry.DIVIDEND_PAID` + фиктивного
+`AgreementContribution` — **одна** честная запись «прибыль → капитал» (тот же GL-эффект:
+профит-кэш операционка→пул, retained earnings 3200 → эквити партнёра). Те же цифры, честная
+история. Ценно само по себе; шиппится первым.
+
+### Фаза 2 — Декомпозиция `workspace.py` (behavior-preserving)
+`workspace.py` (4406 строк) — **не денежное ядро**, поэтому денежные фазы E18 его НЕ уменьшат
+(в отличие от venture/models/advances, которые усыхают как побочный эффект консолидации). Ему
+нужна **отдельная** ранняя фаза: чистый перенос кода по границам, **без переписывания логики**,
+ноль изменений в числах/GL/conservation. Размещена рано — сразу после Ф1, **до** денежных фаз,
+чтобы они работали уже по чистым модулям. Продолжение паттерна, которым ранее был отколот
+`workspace_support.py`. Полный аудит файла (trigger-map, кластеры, мёртвый код, швы) — ниже,
+в разделе «Аудит `workspace.py`».
+
+Метод (строго по шагам, не смешивать в одном коммите):
+- **(a) Зафиксировать поведение.** Прогнать существующий suite; дописать характеризующие тесты
+  на границе workspace-API для непокрытых путей; задокументировать trigger-map (что что вызывает).
+- **(b) Первый вынос — read/payload-слой** (`build_workspace_payload` + всё семейство `_*_payload`,
+  `_display`, `_flow_*`, money-neutral). Чистый перенос без переписывания логики; suite зелёный.
+- **(c) Далее funding / payment / receive-кластеры** — чистый перенос. Сеть =
+  `docs/money-equivalence-contract.md` (контракт аудита) + suite.
+- **(d) Удаление доказанно-мёртвого кода** — **отдельным** шагом/коммитом ПОСЛЕ переноса, не в
+  одном коммите с move (`_draft_cost_total_uzs`, `_payment_amount_for_terms` — доказательство ниже).
+- **(e) После каждого шага** — воспроизвести те же сценарии + trigger-map, доказать идентичность поведения.
+
+**Обязательные условия переноса (инварианты Фазы 2):**
+
+1. **Ре-экспорт shell'а собран механически, не «на глаз».** Перед переносом — `grep` ВСЕХ внешних
+   `from …workspace import` (views + serializers + 4 management-команды + ~10 тестов), развернуть
+   многострочные `import (...)` в плоский список имён, и ре-экспортировать из `workspace.py`
+   **ровно этот набор**. Заявленных 7–8 точек входа НЕдостаточно как источника истины — источник
+   только grep. Цель: **ни один внешний импорт не падает** (поломка на импорте маскирует
+   корректность переноса). Проверка: `python -c "import apps.partnerships.workspace"` + полный
+   suite собирается.
+2. **Межкластерные вызовы = DAG, без циклов.** Граф рёбер построен по коду (см. «Межкластерный DAG»
+   в аудите): все рёбра ведут В funding (B); B ни в кого не звонит. Если при выносе появляется
+   **взаимозависимая пара** — общий вызываемый **спускается в `workspace_common.py`**, ребро
+   разрывается. **Ни один кластер не импортирует shell** (`workspace.py`); shell импортирует
+   handler'ы из кластеров, не наоборот.
+3. **Чистый перенос сохраняет дословно.** `@transaction.atomic`, `publish_event`/OutboxEvent-вызовы,
+   любые декораторы и порядок сайд-эффектов переезжают **байт-в-байт**, без переписывания. Любой
+   хелпер, используемый **≥2 кластерами**, имеет **единственный дом в `workspace_common.py`** и
+   **НИКОГДА не копируется** (копия = два расходящихся источника правды).
+
+> **Реструктуризация 2026-06-16 (после Ф2):** порядок Ф3–4 уточнён, чтобы сверка эквивалентности
+> не выродилась в тавтологию (read-model, кэширующий 3 узла, тривиально «равен» им). Осмысленная
+> сверка возможна только когда read-model питается из **независимого** источника (tag-слой), поэтому
+> Ф3 = каркас, **настоящее доказательство — в Ф4**. Плюс явно добавлены ранее неучтённые пункты
+> (снос `AgreementAllocation`-как-капитал, расщепление `get_partner_aggregate`).
+
+### Фаза 3 — Заморозка golden-контракта + read-model КАРКАС (scaffold)
+Аудиторская сессия замораживает **все 10** golden-сценариев (G1/G5/G8/G9/G10 — снять прогоном
+против закрытого E17; контракт аудиторский, лид цифры не правит). Добавить сценарий, специально
+бьющий по **расхождению 3-го узла** (`_agreement_available_by_partner` vs pool-read — корень S1/S4).
+Построить `PartnerPositionReadModel` (таблица + транзакционный write-hook на каждой денежной
+операции). **Интерим источник — канонические узлы** (это ещё НЕ независимая сверка). Verify:
+таблица заполняется; **инвариант `replay(events)==read-model`**; suite зелёный. ⚠️ НЕ заявлять
+«read-model == 3 узла» как доказательство — на этом этапе оно тавтологично.
+
+### Фаза 4 — Дименсии реализованного слоя (tag-слой) + ОСМЫСЛЕННАЯ сверка
+Завести partnerships-owned `PartnerJournalLineTag` (`journal_line FK→finance`, FK направлен
+partnerships→finance; `JournalLine` не трогаем). Писать теги `{partner, agreement, procurement,
+pocket}` **вперёд** транзакционно; best-effort backfill по однозначному `source_ref`. Теперь
+read-model питается из **независимого** источника: реализованное = `GROUP BY` tag-слой + join к
+`JournalLine`; провизорное = `ProcurementSaleRealization`. **Здесь и доказывается эквивалентность:**
+`read-model (из тегов+провизора) == легаси-3-узла` поле-в-поле на всех 10 golden + conservation
+**точный 0** UZS + GL/`JournalLine` не изменились.
+
+### Фаза 5 — Явные типы + честный settlement-true-up
+`return_kind` (FROM_POOL/FROM_PROCEEDS) на возврате → снос дискриминатора по `CashEntry.account`
+(3 места). Net-пересчёт на settlement → честные `SETTLEMENT_TRUEUP`-события вместо live-перетирания.
+Verify: golden + conservation точный 0 UZS; история показывает реальные события.
+
+### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано 2026-06-16)
+> **Реструктуризация после focused-паса.** Прежняя формулировка («удалить 3 узла» + «ретайр
+> AgreementAllocation») переамбициозна и частично неверна — см. ниже.
+
+**Делаем:**
+- **Дисплей-reads → материализованная таблица.** Read-model уже несёт все нужные поля (pool+venture+
+  `available`). Дисплей-сайты: `serializers.py:400` (get_participant_totals), `views.py:391/435`
+  (partner_capital_positions), `views.py:206/260/383/524` (procurement_venture_positions),
+  `workspace_payload.py:667` (_agreement_available). Это убирает дисплей-передеривание = поверхность S1/S4.
+- **Полнота хуков (prereq):** аудит ВСЕХ денежных мутаций → у каждой есть `rebuild`-hook (баг overpayment
+  в 4c-ii показал, что дыры бывают). Проверка байт-в-байт (дисплей-из-таблицы == дисплей-из-легаси) сама
+  ловит пропущенный хук.
+- Verify: API байт-в-байт (read-model==легаси доказан в Ф4); close-гейты идентичны; suite зелёный.
+
+**НЕ делаем (вынесено за E18 / descoped):**
+- Валидация-/гейт-reads (`workspace_funding` allocation-валидация, close-гейты) — **остаются на живых
+  узлах** (нужна транзакционная свежесть; S4-гейт уже на каноне).
+- 3 узла **НЕ удаляем** — остаются rebuild-внутренним источником + валидацией записи.
+- **`AgreementAllocation`-ретайр — отдельный анализ вне E18:** это **не** чистый дубль
+  `ReceiveBatchCapitalAllocation`, а **намерение до приёмки** (pre-receive intent) vs **факт на приёмке** —
+  разные стадии жизненного цикла. Нельзя просто снести.
+
+### Фаза 7 — Снос мёртвого/дублей + удаление оснастки
+Удалить `CapitalAdvanceSettlement` (модель+enum, мёртв); расщепить/депрекейтнуть
+`get_partner_aggregate`-франкенштейн (смешанный источник: леджер + венчур — опасен новым
+потребителям); дедупнуть quantize (×5) / equity-map (×2) / operator-residue (×4). Денежные
+god-модули (venture/models/advances) к этому моменту усохли как побочный эффект консолидации.
+**Удалить shadow-оснастку** (интерим-источник Ф3, dual-read-сверки) — доказательство сделано.
+Verify: сьют зелёный, оснастки нет, дубль-скан=0.
+
+### Фаза 8 — Тест-режим (канон валидности + property-based)
+Разовая чистка сьюта по канону «тест валиден ⇔ ловит реальный регресс». Перевод ядра на
+golden + property-based (сохранение как свойство). Ужесточить ε: точный 0 по UZS-карманам/гейтам,
+ε только native-FX (вкл. `agreement_profit_reinvestment_residual`). Может стартовать в Ф3
+(golden-контракт) и финализироваться здесь.
+
+## Задачи (чек-лист)
+
+### Фаза 1 — Честный профит→капитал ✅ (commit ниже, money sign-off APPROVE 2026-06-15)
+- [x] T-1.1 Спроектировать честный тип/проводку «прибыль → капитал» (GL-эффект = текущему).
+- [x] T-1.2 Заменить `_settle_partner_from_profit`: убрать фиктивные DIVIDEND_PAID + contribution.
+- [x] T-1.3 Golden: FROM_PROFIT-сценарий — числа/GL/conservation идентичны; в истории нет фантомов.
+  (+ conservation вариант A: тавтологичный карман убран → честный agreement-level кросс-чек `agreement_profit_reinvestment_residual` в close-гейте.)
+
+### Фаза 2 — Декомпозиция `workspace.py` (behavior-preserving)
+**Слайс 1 ✅ (лид-аудит PASS 2026-06-16):** import integrity ok, `makemigrations --check` чисто,
+338 passed = бейзлайн, ни один кластер не импортирует shell, payload→common без цикла.
+- [x] T-2.1 (a) Зафиксировать поведение: прогон suite + характеризующие тесты на границе
+  workspace-API для непокрытых путей; задокументировать trigger-map.
+- [x] T-2.2 (инвариант 1) `grep` всех внешних `from …workspace import` (views/serializers/4 команды/
+  ~10 тестов), развернуть многострочные импорты в плоский список → собрать **точный** набор ре-экспорта
+  shell'а. Проверка: `import apps.partnerships.workspace` + сборка suite не падает.
+- [x] T-2.3 (инвариант 2) Построить/зафиксировать межкластерный DAG; вынести хелперы с ≥2 кластерами
+  в `workspace_common.py` (`_require_workspace_agreement`, `_amount_uzs_to_currency`,
+  `_with_client_request_id`, `_normalize_currency`+fx-семейство, `_expense_value_uzs`,
+  `_has_capital_activity`, `_has_payment_activity`, generic `_add_amount`/`_coerce_datetime`).
+  Лид-уточнение: `_agreement_available_by_partner` — это A+B (≥2 кластера) → **остаётся в
+  `workspace_common`** (не мигрирует в funding); удаляется в Фазе 6 при переходе на read-model.
+- [x] T-2.4 (b) Первый вынос — read/payload-слой → `workspace_payload.py` (`build_workspace_payload` +
+  `_*_payload` + `_display`/`_flow_*`, money-neutral); чистый перенос; suite зелёный.
+- [x] T-2.5 (c) `workspace_funding.py` (10 B-функций) ✅ лид-аудит PASS 2026-06-16: 338 passed,
+  makemigrations чисто, без shell-импортов/циклов. Call-graph поправил 3 размещения:
+  `_spend_allocated_partnership_capital`→funding (B-only), `_receive_funding_breakdown`+
+  `_ensure_source_editable`→common (≥2 кластера). `workspace.py` 4406→2693.
+- [x] T-2.6 (c) `workspace_payment.py` ✅ лид-аудит PASS 2026-06-16: 338 passed, makemigrations чисто,
+  без shell-импортов/циклов. `_has_procurement_cost_payment` оставлен в payment как доменный предикат
+  (импортируется D/E-guard'ом, ацикл — прецедент `_payment_status_block`); `_resolve_action_datetime`/
+  `_draft_cost_total_in_obligation_currency` — C-only. `workspace.py` 108083→84862 байт.
+- [x] T-2.7 (c) `workspace_receive.py` ✅ лид-аудит PASS 2026-06-16: 338 passed, makemigrations чисто,
+  без shell-импортов/циклов; receive корректно импортирует funding-версии `_pre_allocate`/
+  `_resolve_workspace_capital_snapshot`. Call-graph добавил receive-only `_check_prepaid_coverage`/
+  `_receivable_line_states`; `_landed_expense_allocations` остаётся в common (A+D). `workspace.py` 85k→52k байт.
+  ⚠️ Вскрыто: 2 shadow-def в shell со слайса 2 (дубли funding) — мёртвые, в T-2.9.
+- [x] T-2.8 (c) `workspace_amendments.py` ✅ лид-аудит PASS 2026-06-16: 338 passed, makemigrations чисто,
+  без shell-импортов/циклов, дубль-скан без новых дублей. Кластер E (source/lines/settlement/amend/
+  split/cancel + upsert/draft-семейство) вынесен. **Shell 4406→557 строк** (диспетчер + create/queryset +
+  ре-экспорты + 2 shadow-def и 1 dead для step-d).
+- [x] T-2.9 (d) ✅ лид-аудит PASS 2026-06-16: отдельным коммитом удалены `_draft_cost_total_uzs`,
+  `_payment_amount_for_terms` + 2 shadow-def (`_pre_allocate…`, `_resolve_workspace_capital_snapshot`;
+  канон остался в funding, import-для-re-export сохранён) + 5 осиротевших импортов. **Дубль-скан = 0**,
+  re-export цел, 338 passed. `workspace.py` 557→343 строк.
+- [x] T-2.10 (инвариант 3 + e) ✅ дословность сохранена (ноль stray-логики во всех слайсах),
+  ни один кластер не импортирует shell, межкластерный DAG ацикличен на каждом шаге.
+- [x] T-2.11 Acceptance ✅ `makemigrations --check` чисто; полный suite 338 passed (== бейзлайн);
+  ноль изменений чисел/GL/conservation; `workspace.py` 4406→343 строк + 6 модулей по границам
+  (`workspace_payload/funding/payment/receive/amendments/common`).
+
+**Фаза 2 ЗАВЕРШЕНА ✅ (лид-аудит PASS 2026-06-16, сантехническая, без независимого sign-off).**
+Слайсы 1–6: commits 50d506f, d9f5ba5, 430b873, 6b98b0e, 74cf7b2, + step-d. Поведение идентично
+(338=338 на каждом шаге), миграций нет, дублей нет.
+
+### Фаза 3 — Заморозка golden + read-model каркас (scaffold) ✅ (лид-аудит PASS 2026-06-16)
+- [x] T-3.1 Заморожены **все 10** golden (G1/G5/G8/G9/G10 — инвариант-сценарии, верификация=проходящий
+  тест; commit d447bec). Сценарий на расхождение 3-го узла → перенесён в Ф4-сверку (там осмыслен).
+- [x] T-3.2 ✅ `PartnerPositionReadModel` (models.py) + `rebuild_agreement_positions` (read_models.py) +
+  транзакционные write-hook'и на всех денежных мутациях; интерим-источник = канон-узлы. Reads НЕ переключены.
+- [x] T-3.3 ✅ replay-тест (`full_rebuild == incremental`) + hook-coverage (`RM == canonical` после каждой
+  мутации). Equivalence НЕ заявлен (тавтология до Ф4).
+- [x] T-3.4 ✅ suite 342 (338+4), `makemigrations --check` чисто (миграция 0028 CreateModel), reads легаси,
+  golden не тронут. Каркас инертен (поведение не изменилось).
+
+### Фаза 4 — Tag-слой + ОСМЫСЛЕННАЯ сверка эквивалентности
+**Слайс 1 (4a+4b) ✅ (лид-аудит PASS 2026-06-16, инертно):** модель + 5 реализованных тег-функций +
+backfill; finance агностичен, FK partnerships→finance, reads/rebuild не тронуты, 347 passed.
+- [x] T-4.1 ✅ `PartnerJournalLineTag` (models.py; FK→finance.JournalLine, partner/agreement/
+  procurement?/pocket{CAPITAL/PROCEEDS/DISTRIBUTION}; тег без суммы — сумма на journal-строке).
+- [x] T-4.2 ✅ Теги на 5 реализованных операциях (contribution/withdrawal/dividend/profit→capital/
+  debt-repay). **`deploy` НЕ тегируется** (лид-правка: `deployed` — провизорное из `ReceiveBatchCapitalAllocation`,
+  агрегированная 1100-строка не несёт per-partner суммы → был бы over-count).
+- [x] T-4.3 ✅ Best-effort idempotent backfill по однозначному `source_ref`.
+- [x] T-4.4 ✅ (слайс 4c-ii) read-model realized **венчур-UZS** поля → теги (`GROUP BY partner,flow`,
+  + `flow`-размерность на теге, миграция 0031); пуловые (валюта договора) и провизорные — из таблиц
+  (валюто-корректно). Ф5 `return_kind` лёг раньше (разблокировал честный `paid_in`).
+- [x] T-4.5 ✅ (слайс 4c-ii) **Доказательство (лид-аудит PASS + независимый sign-off APPROVE 2026-06-16):**
+  `canonical(tag-sourced) == legacy-3-узла` поле-в-поле на всех realized-flows (вкл. overpayment-refund,
+  capital_returned=20.00 нетривиально); независимость подтверждена (venture.py — ноль ссылок на теги);
+  цепочка `table==rebuild==canonical==legacy`; reads НЕ переключены; 351 passed; conservation легаси не изменён.
+  Пойман и починен реальный баг: overpayment-refund не имел rebuild-хука.
+
+### Фаза 5 — Явные типы + честный true-up
+- [x] T-5.1 ✅ лид-аудит PASS 2026-06-16 (поведенчески-сохраняющий, 349=347+2): `return_kind`
+  (FROM_POOL/FROM_PROCEEDS) на `AgreementWithdrawal` + миграция 0030 с backfill; классификация =
+  прежней логике (числа идентичны); дискриминатор по `CashEntry.account` снят в 3 местах (grep=0);
+  `tag_capital_withdrawal` pocket по kind. Сделано **до 4c** (разблокирует честный `paid_in`).
+  Binding независимый sign-off — на 4c (там return_kind переутвердится через golden).
+- [ ] T-5.2 `SETTLEMENT_TRUEUP`-события; net-пересчёт перестаёт перетирать live. **Отложено** (честность/
+  оптимизация, НЕ блокирует 4c; провизор в 4c берётся из `ProcurementSaleRealization` с live-неттингом).
+- [ ] T-5.3 Verify: conservation точный 0 UZS; honest history (закроется с T-5.2).
+
+### Фаза 6 — Переключение дисплей-чтений на read-model (откалибровано) ✅ (лид PASS + независимый APPROVE 2026-06-16)
+- [x] T-6.1 ✅ Полнота хуков: добит `convert_agreement_pool`-hook (multicurrency:146); все мутации хукнуты.
+- [x] T-6.2 ✅ Дисплей-reads → таблица (`read_positions`/`read_venture_positions`/`read_available_by_partner`):
+  serializers, views (5 эндпоинтов), workspace_payload. Валидация/close-гейты — на живых узлах (подтверждено).
+- [x] T-6.3 ✅ `test_display_endpoints_match_legacy_reads` — 8 живых эндпоинтов, table-vs-patched-legacy
+  байт-в-байт; close-гейты идентичны; 352 passed; миграций нет. **Независимый sign-off APPROVE.**
+  Follow-up: 1 тест на convert-pool freshness (единственный хук без выделенной freshness-сверки).
+- ~~Удаление 3 узлов / ретайр AgreementAllocation~~ → **вынесено за E18** (узлы = rebuild+валидация;
+  AgreementAllocation = pre-receive intent, не дубль). Отдельный анализ.
+
+### Фаза 7 — Чистка ✅ (лид-аудит PASS 2026-06-16, поведенчески-сохраняюще, 353 passed)
+- [x] T-7.1 ✅ Снесена мёртвая модель `CapitalAdvanceSettlement`; enum извлечён в `CapitalSettlementSource`;
+  drop-table миграция 0032; grep вне миграций = 0.
+- [x] T-7.2 ✅ `get_partner_aggregate` — warning-докстринг (НЕ расщеплён: активно используется в investors-app
+  → cross-app, отдельная задача).
+- [x] T-7.3 ✅ Дедуп quantize/ratio/functional/equity-map/operator-residue → один дом `money_utils.py`; дубль-скан = 0.
+- ~~T-7.4 снос shadow-оснастки~~ → **N/A:** легаси-узлы нужны rebuild'у (pool/provisional source);
+  `legacy_partner_position_rows` = регресс-страховка. Оставлены.
+
+### Фаза 8 — Тест-режим
+- [x] T-8.3 ✅ (сделано с Ф7) ε per-currency: UZS-гейты/карманы exact-0 (`agreement_services` net/pool/reinvest;
+  `ConservationReport.imbalances` threshold=0 для UZS), ε только native-FX. Сьют 353 зелёный → скрытых
+  sub-cent UZS-утечек нет.
+- [x] T-8.1 ✅ Консервативный прунинг: structural count-check → экономический ассерт; канон зафиксирован
+  в `_helpers.py`. Массового удаления нет (тесты с числами/GL/conservation не тронуты).
+- [x] T-8.2 ✅ `test_e18_property_conservation.py` — 15 многошаговых сценариев (sell/return/settle/dividend/
+  writeoff/repay в разном порядке), после каждого шага: conservation UZS exact-0 + `read-model==canonical==legacy`.
+  **Поймал реальный прод-баг** (RESTOCK rebuild до `stock.save` → stale `remaining_inventory`); пофикшен
+  реордером в `process_return` (чистый перенос, ноль экономики), s04/s13/s15 усилены до полной сверки.
+
+## Аудит `workspace.py` (приложение к Фазе 2)
+
+Фактический аудит на 2026-06-15 (95 top-level defs, 4406 строк). Привязки `file:line` — для границ.
+
+### Точки входа (вызываются извне workspace.py)
+
+Импортируются из `views.py` / `serializers.py` + management-команд:
+`create_workspace` (131), `build_workspace_payload` (165, читается и в serializers.py),
+`workspace_queryset` (211), `dispatch_workspace_action` (409), `allocate_workspace_capital` (1434),
+`build_workspace_capital_allocation_preview` (1608), `reverse_workspace_receive_batch` (614),
+`apply_items_amendment` (729). Всё прочее — **внутренние хелперы** (вызываются только изнутри).
+
+**`dispatch_workspace_action` (409)** — единственный action-диспетчер, маршрутизирует 18 действий
+в handler'ы (все — внутренние функции этого же файла; `GENERATE_INSTALLMENT_SCHEDULE` уходит в
+`workspace_support`):
+UPDATE_SOURCE→`update_workspace_source`, UPDATE_SETTLEMENT→`update_workspace_settlement`,
+UPDATE_LINES→`update_workspace_lines`, SPLIT_ITEM→`split_workspace_item`, PAY_COSTS→`pay_workspace_costs`,
+RESOLVE_OVERPAYMENT→`resolve_workspace_overpayment`, PAY_SUPPLIER_PAYABLE→`pay_workspace_supplier_payable`,
+CREATE_INVESTMENT_AGREEMENT→`create_and_link_workspace_agreement`, LINK_INVESTMENT_AGREEMENT→`link_workspace_agreement`,
+RECORD_CAPITAL_CONTRIBUTION→`record_workspace_capital_contribution`, ALLOCATE_CAPITAL→`allocate_workspace_capital`,
+CONVERT_CAPITAL_POOL→`convert_workspace_capital_pool`, RECEIVE_BATCH→`receive_workspace_batch`,
+CANCEL_PROCUREMENT→`cancel_workspace_procurement`, REVERSE_BATCH→`reverse_workspace_receive_batch`,
+AMEND_ITEMS→`apply_items_amendment`, AMEND_EXPENSES→`apply_expenses_amendment`.
+
+### Cohesion-кластеры (кандидатные границы модулей)
+
+- **A. read/payload (money-neutral)** — `build_workspace_payload` (165) + `_display` (2589),
+  `_policy_payload`/`_flow_payload`/`_flow_step`/`_funding_flow_complete`/`_payment_obligation_complete`
+  (2607–2799), `_allowed_action_keys`/`_first_blocker`/`_readiness_payload`/`_sections_payload`/
+  `_documents_payload` (2829–2940), `_item_payload`/`_expense_payload`/`_payment_status_block`/
+  `_settlement_payload`/`_payable_payload`/`_payment_payload`/`_investment_payload`/`_receive_batch_payload`/
+  `_summaries_payload`/`_history_payload` (2941–3360), `_section_key`/`_legacy_payment_state` (3361/3493),
+  `_payments_for_procurement` (3785). **Кандидат на ПЕРВЫЙ вынос (шаг b).** Шов: `_investment_payload`
+  читает `_agreement_available_by_partner` (позиционный шов — см. ниже).
+- **B. funding / капитал** — `create_and_link_workspace_agreement`/`link_workspace_agreement` (1309/1343),
+  `record_workspace_capital_contribution`/`convert_workspace_capital_pool`/`allocate_workspace_capital`/
+  `build_workspace_capital_allocation_preview` (1360–1672), `_resolve_workspace_capital_snapshot` (3874),
+  `_pre_allocate_at_receipt_partnership_capital` (3799), `_procurement_capital_available_by_partner` (4018),
+  `_auto_capital_amounts` (4049), `_agreement_available_by_partner` (4370), `_require_workspace_agreement` (4347).
+- **C. payment** — `pay_workspace_costs` (1672), `resolve_workspace_overpayment` (1778),
+  `_record_own_funds_overpayment_refund` (1849), `_return_partnership_overpayment_to_pool` (1958),
+  `_resolve_overpayment_partner_splits` (2141), `pay_workspace_supplier_payable` (2194),
+  `_has_procurement_cost_payment` (3484).
+- **D. receive** — `receive_workspace_batch` (2247), `reverse_workspace_receive_batch` (614),
+  `_sync_procurement_status_after_reversal`/`_after_receive` (714/4080), `_receive_funding_breakdown` (4100),
+  `_partnership_receive_lines_already_paid` (4138), `_prepaid_partnership_receive_base_cost` (4146),
+  `_spend_allocated_partnership_capital` (4168), `_fund_partnership_receive_from_pools` (4218),
+  `_ensure_supplier_payable_after_receive` (4283), `_record_receive_journal` (4308),
+  `_expenses_for_receive` (3658), `_landed_expense_allocations` (3685).
+- **E. amendments / source / lines** — `update_workspace_source`/`update_workspace_settlement`/
+  `update_workspace_lines` (233–316), `_resync_draft_terms_total` (371), `apply_items_amendment`/
+  `apply_expenses_amendment` (729/805), `split_workspace_item` (1187), `cancel_workspace_procurement` (565),
+  семейство `_upsert_*`/`_amendment_*`/`_draft_*_for_update`/`_replace_expense_targets` (897–1308),
+  `_ensure_source_editable`/`_validate_source_transition` (4384/4398), `_items_snapshot`/`_expenses_snapshot`.
+- **F. action-диспетчер** — `dispatch_workspace_action` (409) — тонкий роутер; остаётся точкой входа
+  (в shell `workspace.py`), импортирует handler'ы из кластеров B–E. **Ни один кластер не импортирует shell.**
+- **G. shared-хелперы → `workspace_common.py`** (новый модуль, НЕ `workspace_support.py`: support — это
+  доменный модуль agreement/terms/ledger, а не утилиты; существующие `money`/`ratio`/`functional_uzs`
+  в support **остаются на месте**). Сюда: `create_workspace` (131), `workspace_queryset` (211),
+  currency/value-математика (`_primary_currency`/`_normalize_currency`/`_resolve_*_fx_rate`/`_item_value_uzs`/
+  `_expense_*_value_uzs`/`_remaining_obligation_cost_*`/`_derive_items_currency`), `_with_client_request_id`/
+  `_add_amount`/`_coerce_datetime`. Конкретный список «общих для ≥2 кластеров» — в DAG ниже.
+
+### Межкластерный DAG (рёбра построены по коду)
+
+Рёбра между кластерами по фактическим call-site (caller-line → cluster):
+
+- **D (receive) → B (funding):** `_resolve_workspace_capital_snapshot` (B:3874, зовётся из receive:2385),
+  `_pre_allocate_at_receipt_partnership_capital` (B:3799, из receive:2377,2571).
+- **A (payload) → B (funding):** `_agreement_available_by_partner` (B:4370, из `_investment_payload`:3129).
+- **F (shell) → B/C/D/E:** диспетчер зовёт handler'ы.
+
+**Все рёбра ведут В funding (B); B ни в один кластер не звонит → граф ацикличен.** Цикла receive↔funding
+нет: общие точки — это funding-функции, вызываемые из receive (D→B), и вынесенные в common хелперы.
+
+**Хелперы, общие для ≥2 кластеров → единственный дом в `workspace_common.py` (доказано по callers):**
+`_require_workspace_agreement` (B,C,D), `_amount_uzs_to_currency` (B,D), `_with_client_request_id` (B,C),
+`_normalize_currency` (shell,E,C + fx-семейство), `_expense_value_uzs` (E,D), `_has_capital_activity` (A,E),
+`_has_payment_activity` (A,E). Generic-утили (`_add_amount`, `_coerce_datetime`, `_primary_currency`,
+`_item_value_uzs`) — туда же по природе, даже если сейчас 1 кластер. **Никогда не копировать — только переносить.**
+
+### Кандидаты в мёртвый код (с доказательством)
+
+- **`_draft_cost_total_uzs` (3749)** — **0 вызовов** в prod и тестах (только строка определения).
+  Вероятно вытеснен `_draft_cost_total_in_obligation_currency` (3754, жив). → удалить (шаг d).
+- **`_payment_amount_for_terms` (2809)** — **0 вызовов** в prod и тестах. → удалить (шаг d).
+
+> Проверено: `grep -rInw <name> apps --include=*.py` даёт только def-строку. Удаление — отдельным
+> коммитом после переносов (шаг d), не вместе с move.
+
+### Швы (что поедет при денежных фазах E18)
+
+- **Finance-шов:** кластеры **C (payment)**, **D (receive)**, **B (funding)** вызывают
+  `create_cash_entry` / `create_journal_entry` / `record_journal_from_cash_entry` /
+  `record_capital_pool_payment` (workspace.py:1922,1931,2050,4203,4262,4324) и
+  `create_payable_from_procurement` (suppliers). **Именно здесь Фаза 4 (tag-слой)** будет дописывать
+  `PartnerJournalLineTag` к проводкам — т.е. дименсии встают по этим швам. Декомпозиция в Ф2 их
+  изолирует → Ф4 правит чистые модули, а не god-файл.
+- **Позиционный шов:** `_agreement_available_by_partner` (4370) — это **3-й live-узел позиций**,
+  подлежащий удалению в **Фазе 6**. Его читают кластеры B (allocate preview 1645, snapshot 3829),
+  A (`_investment_payload` 3129) и D (pre-allocate 1497). При выносе оставить его в кластере B как
+  единственный носитель; Ф6 заменит тело на чтение read-model — точечно, в одном модуле, а не по файлу.
+
+## Тест-режим (канон валидности)
+
+67 тест-файлов, значимая часть — «зелёные ради зелёных». **Тест валиден ⇔ ловит реальный регресс.**
+Допустим, только если делает хотя бы одно:
+1. проверяет **реальное движение денег** (GL-строки сбалансированы и совпадают с эталоном), или
+2. проверяет **бизнес-инвариант** (`conservation residual=0`; `Σprofit_share=1`; `net` сходится;
+   `replay==read-model`), или
+3. **падал бы на конкретном реальном регрессе** (тот самый double-count S1/S4).
+
+**Запрещены как самоцель:** «функция вернула dict с ключом X», «поле сериализатора присутствует»,
+«создалась строка» без проверки экономики — ложная уверенность + стоимость поддержки без
+anti-regression-ценности. **Сдвиг формы:** golden-сценарии + property-based вместо примерно-богатых
+unit-тестов. **Метрика чистки:** нет ответа на «какой баг ловит» → удалить/переписать в инвариант.
+
+## Открытые вопросы
+
+Все архитектурные/денежные развилки закрыты владельцем 2026-06-15 — см. «Решённые вопросы».
+Остаётся go/no-go по фазам.
+
+- ⚠️ **Шов functional-currency (учесть в read-model/conservation, НЕ реализовывать в E18).**
+  Функциональная валюта сейчас захардкожена `UZS` (`_uzs`-поля, литерал `'UZS'` в
+  `venture_conservation`, GL). В read-model/tag/conservation **не хардкодить функциональный
+  литерал** — параметризовать как «functional currency тенанта» (дефолт UZS), чтобы будущий
+  переход на базовую валюту бизнеса (USD-бизнес) был флипом конфига + сменой fx-резолва, а не
+  перепроектированием read-model. Сам переход — отдельный будущий эпic (см. backlog), строить при
+  появлении non-UZS-бизнеса. Связано: FROM_PROFIT non-UZS и [[E13]] mixed-currency приход.
+
+## Решённые вопросы (история)
+
+- ✓ 2026-06-15: Большой rewrite в один новый event-журнал (раздел C аудита) → **отклонён** после
+  собственного red-team как заякоренный (вектор «event-log+projection+CQRS» был задан владельцем,
+  не выведен независимо) и мис-скейленный (CQRS «под масштаб» не оправдан на этом масштабе;
+  унификация сливала реализованное и провизорное; наивысший миграционный риск на живых деньгах).
+- ✓ 2026-06-15: Принят синтез — **дименсионированный GL (реализованное) + тонкий провизорный слой
+  (сплит до settlement) + один материализованный read-model + явные типы**. Чище C: нет
+  дублирования GL, уважает реализованное vs провизорное, near-zero миграционный риск.
+- ✓ 2026-06-15: Принцип **«честное событие, не подгонка»** — обязателен для FROM_PROFIT (Фаза 1),
+  settlement-true-up и net-пересчётов; никаких подложных строк и live-перетирания.
+- ✓ 2026-06-15: Сохранение — **точный 0 по функциональному UZS**, ε допустим только на native-FX-ноге.
+- ✓ 2026-06-15: **Носитель дименсий (развилка №1)** → **partnerships-owned `PartnerJournalLineTag`**
+  (`journal_line FK→finance`, partner/agreement/procurement/pocket; FK направлен partnerships→finance;
+  `JournalLine` не трогаем). Колонки прямо на `JournalLine` **отклонены**: связывали бы finance с
+  partnerships (ломая однонаправленность слоёв), давали бы NULL-колонки у большинства не-партнёрских
+  проводок, а перф-выигрыш на нашем масштабе несостоятелен (один join — микросекунды). Generic-механизм
+  дименсий в finance — **только при появлении второго потребителя** (sales/расходы/экосистема), не раньше
+  (иначе спекулятивная общность). finance остаётся домен-агностичным.
+- ✓ 2026-06-15: **Read-model (развилка №2)** → **материализованная таблица** (queryable под E03,
+  anti-drift через replay; ценой транзакционного обновления).
+- ✓ 2026-06-15: **Таблицы намерения (развилка №3)** → **сохранить** как intent/идемпотентность/аудит;
+  **деньги из них не читать никогда** — только GL + tag-слой. Коллапс не делаем (избегаем миграции).
+- ✓ 2026-06-15: **Backfill (развилка №4)** → **вперёд + best-effort** по однозначному `source_ref`;
+  неоднозначную историю читать через legacy-путь до естественного истечения.
+- ✓ 2026-06-15: **Декомпозиция god-модулей (развилка №5, уточнено)** → разделено по природе модуля:
+  **(1) денежные god-модули** (`venture.py`/`models.py`/`advances.py`) **усыхают как побочный эффект**
+  консолидации (3 узла→read-model, явные типы, снос дублей) — **отдельной работы не требуют**;
+  **(2) `workspace.py`** — **НЕ денежное ядро**, денежные фазы E18 его не уменьшат, поэтому ему нужна
+  **отдельная явная фаза** (Фаза 2, behavior-preserving, ранняя) — продолжение паттерна откола
+  `workspace_support.py`. Полную нарезку прочих god-модулей сверх этого — отдельным cleanup-эпиком,
+  если разрастётся.
+- ✓ 2026-06-15: **Раскладка декомпозиции `workspace.py` — одобрена** (7 кластеров A–G). Модули:
+  `workspace_payload` / `workspace_funding` / `workspace_payment` / `workspace_receive` /
+  `workspace_amendments` / `workspace.py` (shell: dispatcher+create+queryset+ре-экспорты) /
+  `workspace_common.py`. **Старт при go: Фаза 1 → Фаза 2, read/payload выносится первым.**
+- ✓ 2026-06-15: **Decomp-OQ1** (единственный `_agreement_available_by_partner`) → **принято**: держать
+  единственный экземпляр в `workspace_funding` до его замены на чтение read-model в Фазе 6.
+- ✓ 2026-06-15: **Decomp-OQ2 переигран** → generic-хелперы кластера G идут в **новый `workspace_common.py`**,
+  НЕ в `workspace_support.py` (support — доменный модуль agreement/terms/ledger, а не утили). Существующие
+  `money`/`ratio`/`functional_uzs` в `workspace_support.py` остаются на месте.
+- ✓ 2026-06-15: **Инварианты Фазы 2** зафиксированы: (1) ре-экспорт shell'а собран механически из grep
+  всех внешних импортов (не «на глаз»), ни один импорт не падает; (2) межкластерные вызовы = DAG без
+  циклов (все рёбра в funding; common разрывает любую взаимозависимость; кластеры не импортируют shell);
+  (3) чистый перенос дословно сохраняет `@transaction.atomic`/publish_event/декораторы, хелпер ≥2
+  кластеров — единственный дом в `workspace_common.py`, никогда не копируется.
+- ✓ 2026-06-16: **Глубокий E18 разбужен.** Прежнее «спят до триггера E03» переиграно владельцем:
+  делаем сейчас, пока есть окно, ради чистой архитектуры под будущие расширения (а не «дождаться боли,
+  потом чинить»). Лид согласился: это легитимнее паузы для цели читаемости/грамотного роста.
+- ✓ 2026-06-16: **Реструктуризация Ф3–4 (после Ф2).** Ф3 (read-model, кэширующий 3 узла) дал бы
+  **тавтологичную** сверку «==3 узла» (source=кэш тех же узлов) — тот же класс, что зарубленный
+  conservation-гейт. Решение: Ф3 = каркас (таблица + write-hook + `replay==read-model`, интерим-источник
+  = канон-узлы, БЕЗ заявления эквивалентности); **осмысленная сверка переезжает в Ф4**, где read-model
+  питается из независимого источника (tag-слой + провизор) и сверяется с легаси-3-узла на всех 10 golden.
+- ✓ 2026-06-16: **Доп. пункты, вскрытые при пересмотре** (ранее неявные → теперь явные в задачах):
+  Ф6 — ретайр `AgreementAllocation`-как-капитал-истины (двойной учёт с `ReceiveBatchCapitalAllocation`);
+  Ф7 — расщепление `get_partner_aggregate` (смешанный источник леджер+венчур); Ф3 — golden-сценарий
+  специально на расхождение 3-го узла (корень S1/S4). Цель — привести проект к грамотному
+  архитектурному состоянию, не только закрыть формальный скоуп.
+- ✓ 2026-06-16: **«Заморожено» по golden** = эталонные цифры зафиксированы/проверены = неизменяемый
+  оракул (это готовность, не блок). Цель Ф3 — заморозить **все 10** (G1/G5/G8/G9/G10 ещё черновики,
+  снять прогоном против закрытого E17). Размораживать проверенные не нужно.

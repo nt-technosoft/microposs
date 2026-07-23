@@ -14,6 +14,8 @@ from .views import (
     JournalEntryViewSet,
     CashFlowSummaryViewSet,
     OwnerContributionViewSet,
+    OwnerDrawingViewSet,
+    CashTransferViewSet,
     RefundViewSet,
     SaleProfitabilityView,
     ProductProfitabilityView,
@@ -31,6 +33,8 @@ router.register('cash-entries', CashEntryViewSet, basename='cash-entry')
 router.register('currency-exchanges', CurrencyExchangeViewSet, basename='currency-exchange')
 router.register('refunds', RefundViewSet, basename='refund')
 router.register('owner-contributions', OwnerContributionViewSet, basename='owner-contribution')
+router.register('owner-drawings', OwnerDrawingViewSet, basename='owner-drawing')
+router.register('cash-transfers', CashTransferViewSet, basename='cash-transfer')
 router.register('journal-entries', JournalEntryViewSet, basename='journal-entry')
 router.register('expenses', ExpenseViewSet, basename='expense')
 router.register('daily-summaries', DailySummaryViewSet, basename='daily-summary')

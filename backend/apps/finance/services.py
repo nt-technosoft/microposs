@@ -11,11 +11,15 @@ from apps.core.services import publish_event
 
 from .models import (
     Account, CashAccount, CashEntry, CurrencyExchange, Expense,
-    JournalEntry, JournalLine, OwnerContribution, Refund,
+    JournalEntry, JournalLine, OwnerContribution, OwnerDrawing, CashTransfer,
+    Payment, PaymentAllocation, Refund,
 )
 from .fx_rates import (
+    FxRateSnapshot,
     get_fx_rate_for_date,
+    OperationFxRateSource,
     resolve_fx_rate_snapshot,
+    resolve_fx_rate_snapshot_details,
     sync_official_exchange_rate,
     to_functional_amount_uzs,
     upsert_exchange_rate,
@@ -29,6 +33,21 @@ from .report_currency import (
 
 def _to_decimal(value: str | int | float | Decimal) -> Decimal:
     return Decimal(str(value))
+
+
+RESTRICTED_CAPITAL_ACCOUNT_KINDS = frozenset({
+    CashAccount.Kind.AGREEMENT_CAPITAL,
+    CashAccount.Kind.FUND_CAPITAL,
+})
+
+
+def require_operating_cash_account(account: CashAccount, *, action: str = 'this operation') -> None:
+    """Keep contract/fund pools out of generic business cash operations."""
+    if account.kind in RESTRICTED_CAPITAL_ACCOUNT_KINDS:
+        raise ValueError(
+            f'{action} cannot use a restricted capital pool. '
+            'Use the explicit agreement or fund lifecycle action instead.'
+        )
 
 
 def get_account(tenant_id: int, code: str) -> Account:
@@ -235,30 +254,54 @@ def record_sale_cogs_journal(
     sale_id: int,
     total_cogs: Decimal,
     date=None,
+    consignment_legs: list[dict] | None = None,
 ) -> JournalEntry | None:
-    """Record the cost/inventory side of a sale once per completed sale."""
+    """
+    DR 5000 (COGS) for total_cogs.
+
+    Credits split:
+      - CR 1100 (Inventory) for owned portion = total_cogs - Σ(legs.amount_uzs)
+      - CR 2000 (A/P Suppliers) per consignment leg with payable reference in description
+    """
     normalized_cogs = _to_decimal(total_cogs).quantize(Decimal('0.01'))
     if normalized_cogs <= 0:
         return None
+
+    legs = consignment_legs or []
+    total_consigned = sum(
+        (_to_decimal(leg['amount_uzs']) for leg in legs),
+        Decimal('0'),
+    ).quantize(Decimal('0.01'))
+    total_owned = (normalized_cogs - total_consigned).quantize(Decimal('0.01'))
+
+    journal_lines = [
+        {
+            'account_code': '5000',
+            'debit': normalized_cogs,
+            'credit': Decimal('0'),
+            'description': f'Sale #{sale_id} cost of goods',
+        },
+    ]
+    if total_owned > 0:
+        journal_lines.append({
+            'account_code': '1100',
+            'debit': Decimal('0'),
+            'credit': total_owned,
+            'description': f'Sale #{sale_id} inventory reduction (owned)',
+        })
+    for leg in legs:
+        journal_lines.append({
+            'account_code': '2000',
+            'debit': Decimal('0'),
+            'credit': _to_decimal(leg['amount_uzs']).quantize(Decimal('0.01')),
+            'description': f'Sale #{sale_id} consignment obligation payable#{leg["payable_id"]}',
+        })
 
     return create_journal_entry(
         tenant_id=tenant_id,
         operation_type='sale',
         operation_id=sale_id,
-        lines=[
-            {
-                'account_code': '5000',
-                'debit': normalized_cogs,
-                'credit': Decimal('0'),
-                'description': f'Sale #{sale_id} cost of goods',
-            },
-            {
-                'account_code': '1100',
-                'debit': Decimal('0'),
-                'credit': normalized_cogs,
-                'description': f'Sale #{sale_id} inventory reduction',
-            },
-        ],
+        lines=journal_lines,
         description=f'Sale #{sale_id} COGS',
         date=date,
     )
@@ -442,6 +485,455 @@ def record_supplier_payment_journal(
     )
 
 
+def record_generic_cash_payment(
+    *,
+    tenant_id: int,
+    cash_account_id: int,
+    target_type: str,
+    target_id: int,
+    amount: Decimal,
+    currency: str | None = None,
+    fx_rate: Decimal | None = None,
+    fx_rate_source: str = '',
+    fx_rate_date=None,
+    paid_at=None,
+    counterpart_account_code: str,
+    operation_type: str = 'payment',
+    description: str = '',
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """
+    E07 generic payment from a CashAccount.
+
+    Creates one append-only Payment fact, one CashEntry OUT, one balanced
+    JournalEntry and links the journal back to Payment.
+    """
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Payment amount must be > 0')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=cash_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        require_operating_cash_account(account, action='Generic payment')
+        payment_currency = str(currency or account.currency or 'UZS').upper()
+        if payment_currency != str(account.currency or '').upper():
+            raise ValueError('Payment currency must match CashAccount currency.')
+        if account.balance < amount:
+            raise ValueError(
+                f'Insufficient cash in {account.name}: have {account.balance}, need {amount}.'
+            )
+
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=tenant_id,
+            operation_currency=payment_currency,
+            operation_at=paid_at,
+            fx_rate_snapshot=fx_rate,
+        )
+        resolved_fx_source = fx_rate_source or fx_snapshot.source
+        resolved_fx_date = fx_rate_date or fx_snapshot.rate_date
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CASH_ACCOUNT,
+            source_id=account.pk,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=resolved_fx_source,
+            fx_rate_date=resolved_fx_date,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = _record_cash_payment_journal(
+            tenant_id=tenant_id,
+            cash_entry=cash_entry,
+            operation_type=operation_type,
+            operation_id=payment.pk,
+            counterpart_account_code=counterpart_account_code,
+            description=description or f'Payment #{payment.pk}',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'target_type': target_type,
+                'target_id': target_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'source_type': payment.source_type,
+                'source_id': payment.source_id,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return payment
+
+
+def record_capital_pool_contribution(
+    *,
+    tenant_id: int,
+    pool_account_id: int,
+    partner_id: int,
+    contribution_id: int,
+    amount: Decimal,
+    equity_account_code: str,
+    target_type: str = Payment.TargetType.CAPITAL_CONTRIBUTION,
+    currency: str = 'UZS',
+    fx_rate: Decimal | None = None,
+    fx_rate_source: str = '',
+    fx_rate_date=None,
+    paid_at=None,
+    from_cash_account_id: int | None = None,
+    allow_restricted_source: bool = False,
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """E11: move real cash into an investment agreement's capital pool.
+
+    The pool is a CashAccount of kind AGREEMENT_CAPITAL (linked COA 1300).
+    Two physical shapes, both backing the AgreementContribution with cash:
+
+      - External (from_cash_account_id is None): new money enters from outside
+        the business. CashEntry IN to pool; journal DR 1300 / CR equity, where
+        equity is role-correct (`equity_account_code`: investor → 3100/3110,
+        operator → 3000). Payment.source_type = EXTERNAL_PARTNER.
+
+      - Turnover (from_cash_account_id set): the business commits money it
+        already holds. CashEntry OUT of the operating account + CashEntry IN to
+        the pool; journal DR 1300 / CR <operating linked>. No new equity is
+        recognised (asset ↔ asset). Payment.source_type = CASH_ACCOUNT.
+
+    Contribution currency must match the pool currency (no cross-currency
+    contribution into a pool in the MVP). One Payment fact per contribution.
+    """
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Contribution payment amount must be > 0')
+
+    payment_currency = str(currency or 'UZS').upper()
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        pool = CashAccount.objects.select_for_update().get(
+            pk=pool_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if pool.kind not in RESTRICTED_CAPITAL_ACCOUNT_KINDS:
+            raise ValueError('Capital contribution target must be an agreement or fund capital pool.')
+        if str(pool.currency or '').upper() != payment_currency:
+            raise ValueError(
+                'Contribution currency must match the agreement capital pool currency.'
+            )
+        fx_snapshot = resolve_fx_rate_snapshot_details(
+            tenant_id=tenant_id,
+            operation_currency=payment_currency,
+            operation_at=paid_at,
+            fx_rate_snapshot=fx_rate,
+        )
+        resolved_fx_source = fx_rate_source or fx_snapshot.source
+        resolved_fx_date = fx_rate_date or fx_snapshot.rate_date
+
+        if from_cash_account_id is not None:
+            source_type = Payment.SourceType.CASH_ACCOUNT
+            source_id = from_cash_account_id
+        else:
+            source_type = Payment.SourceType.EXTERNAL_PARTNER
+            source_id = partner_id
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=source_type,
+            source_id=source_id,
+            target_type=target_type,
+            target_id=contribution_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=resolved_fx_source,
+            fx_rate_date=resolved_fx_date,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=target_type,
+            target_id=contribution_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+
+        # GL is functional UZS; the pool cash subledger is the agreement currency.
+        functional_uzs = (amount * fx_snapshot.rate).quantize(Decimal('0.01'))
+
+        pool_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=pool,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+
+        if from_cash_account_id is not None:
+            operating = CashAccount.objects.select_for_update().get(
+                pk=from_cash_account_id,
+                tenant_id=tenant_id,
+                is_active=True,
+            )
+            if not allow_restricted_source:
+                require_operating_cash_account(operating, action='Capital contribution')
+            if str(operating.currency or '').upper() != payment_currency:
+                raise ValueError(
+                    'Turnover contribution requires an operating account in the '
+                    'agreement currency. Use «Касса → Обменять валюту» first.'
+                )
+            if operating.balance < amount:
+                raise ValueError(
+                    f'Insufficient cash in {operating.name}: '
+                    f'have {operating.balance}, need {amount}.'
+                )
+            create_cash_entry(
+                tenant_id=tenant_id,
+                account=operating,
+                direction=CashEntry.Direction.OUT,
+                amount=amount,
+                date=paid_at,
+                source_ref_type='finance_payment',
+                source_ref_id=payment.pk,
+            )
+            # Pure relocation of an asset: DR pool / CR operating.
+            counterpart_code = (
+                operating.linked_account.code
+                if operating.linked_account_id
+                else '1000'
+            )
+            journal = record_pool_journal_functional(
+                tenant_id=tenant_id,
+                cash_entry=pool_entry,
+                functional_amount_uzs=functional_uzs,
+                operation_type='capital_contribution',
+                operation_id=payment.pk,
+                counterpart_account_code=counterpart_code,
+                description=f'Capital contribution #{contribution_id} (from turnover)',
+                date=paid_at,
+            )
+        else:
+            # New money from outside: DR pool / CR role-correct equity.
+            journal = record_pool_journal_functional(
+                tenant_id=tenant_id,
+                cash_entry=pool_entry,
+                functional_amount_uzs=functional_uzs,
+                operation_type='capital_contribution',
+                operation_id=payment.pk,
+                counterpart_account_code=equity_account_code,
+                description=f'Capital contribution #{contribution_id}',
+                date=paid_at,
+            )
+
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.capital_contribution_payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'partner_id': partner_id,
+                'contribution_id': contribution_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'pool_account_id': pool.pk,
+                'from_cash_account_id': from_cash_account_id,
+            },
+            tenant_id=tenant_id,
+        )
+    return payment
+
+
+def record_capital_pool_payment(
+    *,
+    tenant_id: int,
+    pool_account_id: int,
+    target_type: str,
+    target_id: int,
+    amount: Decimal,
+    functional_amount_uzs: Decimal,
+    counterpart_account_code: str,
+    currency: str = 'UZS',
+    fx_rate: Decimal | None = None,
+    paid_at=None,
+    operation_type: str = 'procurement_payment',
+    description: str = '',
+    client_request_id=None,
+    notes: str = '',
+) -> Payment:
+    """E11: settle a cost out of an agreement capital pool.
+
+    The pool cash drops by `amount` (agreement currency); the GL books
+    `functional_amount_uzs`: DR counterpart / CR 1300. Used so a partnership
+    procurement's inventory is funded by the pool (counterpart 1100) rather
+    than by re-crediting investor equity at receive. One Payment fact with
+    source_type = CAPITAL_POOL.
+    """
+    paid_at = paid_at or timezone.now()
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    functional_amount_uzs = _to_decimal(functional_amount_uzs).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Capital pool payment amount must be > 0')
+
+    payment_currency = str(currency or 'UZS').upper()
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = (
+                Payment.objects
+                .filter(tenant_id=tenant_id, client_request_id=client_request_id)
+                .first()
+            )
+            if existing is not None:
+                return existing
+
+        pool = CashAccount.objects.select_for_update().get(
+            pk=pool_account_id,
+            tenant_id=tenant_id,
+            is_active=True,
+        )
+        if pool.kind != CashAccount.Kind.AGREEMENT_CAPITAL:
+            raise ValueError('Only an agreement capital pool can pay procurement costs.')
+        if str(pool.currency or '').upper() != payment_currency:
+            raise ValueError('Payment currency must match the agreement capital pool currency.')
+        if pool.balance < amount:
+            raise ValueError(
+                f'Insufficient capital pool funds in {pool.name}: '
+                f'have {pool.balance}, need {amount}.'
+            )
+        if fx_rate is not None or payment_currency == 'UZS':
+            fx_snapshot = resolve_fx_rate_snapshot_details(
+                tenant_id=tenant_id,
+                operation_currency=payment_currency,
+                operation_at=paid_at,
+                fx_rate_snapshot=fx_rate,
+            )
+        else:
+            fx_snapshot = FxRateSnapshot(
+                rate=(functional_amount_uzs / amount).quantize(Decimal('0.000001')),
+                rate_date=paid_at.date() if hasattr(paid_at, 'date') else paid_at,
+                source=OperationFxRateSource.DERIVED,
+            )
+
+        payment = Payment.objects.create(
+            tenant_id=tenant_id,
+            source_type=Payment.SourceType.CAPITAL_POOL,
+            source_id=pool.pk,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
+            paid_at=paid_at,
+            client_request_id=client_request_id,
+            notes=notes,
+        )
+        PaymentAllocation.objects.create(
+            tenant_id=tenant_id,
+            payment=payment,
+            target_type=target_type,
+            target_id=target_id,
+            amount=amount,
+            currency=payment_currency,
+        )
+        pool_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=pool,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=paid_at,
+            source_ref_type='finance_payment',
+            source_ref_id=payment.pk,
+        )
+        journal = record_pool_journal_functional(
+            tenant_id=tenant_id,
+            cash_entry=pool_entry,
+            functional_amount_uzs=functional_amount_uzs,
+            operation_type=operation_type,
+            operation_id=payment.pk,
+            counterpart_account_code=counterpart_account_code,
+            description=description or f'Capital pool payment #{payment.pk}',
+            date=paid_at,
+        )
+        payment.journal_entry = journal
+        payment.save(update_fields=['journal_entry', 'updated_at'])
+
+        publish_event(
+            event_type='finance.payment.posted',
+            payload={
+                'payment_id': payment.pk,
+                'target_type': target_type,
+                'target_id': target_id,
+                'amount': str(amount),
+                'currency': payment_currency,
+                'source_type': payment.source_type,
+                'source_id': payment.source_id,
+            },
+            tenant_id=tenant_id,
+        )
+    return payment
+
+
 def record_expense(
     *,
     tenant_id: int,
@@ -462,7 +954,7 @@ def record_expense(
         raise ValueError('operation_amount must be > 0')
 
     currency = str(operation_currency or 'UZS').upper()
-    rate = resolve_fx_rate_snapshot(
+    fx_snapshot = resolve_fx_rate_snapshot_details(
         tenant_id=tenant_id,
         operation_currency=currency,
         operation_at=occurred_at,
@@ -473,7 +965,7 @@ def record_expense(
         functional = to_functional_amount_uzs(
             operation_amount=amount,
             operation_currency=currency,
-            fx_rate_snapshot=rate,
+            fx_rate_snapshot=fx_snapshot.rate,
         )
     else:
         functional = Decimal(str(functional_amount_uzs)).quantize(Decimal('0.01'))
@@ -494,7 +986,9 @@ def record_expense(
             source_account_code=cash_account_code,
             operation_currency=currency,
             operation_amount=amount,
-            fx_rate_snapshot=rate,
+            fx_rate_snapshot=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             functional_amount_uzs=functional,
             occurred_at=occurred_at,
             notes=notes,
@@ -678,6 +1172,90 @@ def record_journal_from_cash_entry(
     )
 
 
+def record_pool_journal_functional(
+    *,
+    tenant_id: int,
+    cash_entry: CashEntry,
+    functional_amount_uzs: Decimal,
+    operation_type: str,
+    operation_id: int,
+    counterpart_account_code: str,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    """Journal for a capital-pool CashEntry, booked in functional UZS.
+
+    The pool CashAccount tracks the agreement (transaction) currency, but the
+    GL is functional UZS everywhere. So the CashEntry amount (agreement
+    currency) and the journal amount (`functional_amount_uzs`) differ for
+    non-UZS agreements. Direction IN → DR 1300 / CR counterpart; OUT → reverse.
+    """
+    cash_account = cash_entry.account
+    if not cash_account.linked_account_id:
+        raise ValueError(f'CashAccount {cash_account.pk} has no linked COA account.')
+    cash_code = cash_account.linked_account.code
+    amount = _to_decimal(functional_amount_uzs).quantize(Decimal('0.01'))
+
+    if cash_entry.direction == CashEntry.Direction.IN:
+        dr_code, cr_code = cash_code, counterpart_account_code
+    else:
+        dr_code, cr_code = counterpart_account_code, cash_code
+
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type=operation_type,
+        operation_id=operation_id,
+        lines=[
+            {'account_code': dr_code, 'debit': amount, 'credit': Decimal('0'),
+             'description': description},
+            {'account_code': cr_code, 'debit': Decimal('0'), 'credit': amount,
+             'description': description},
+        ],
+        description=description,
+        date=date or cash_entry.date,
+    )
+
+
+def _record_cash_payment_journal(
+    *,
+    tenant_id: int,
+    cash_entry: CashEntry,
+    operation_type: str,
+    operation_id: int,
+    counterpart_account_code: str,
+    description: str = '',
+    date=None,
+) -> JournalEntry:
+    cash_account = cash_entry.account
+    cash_code = (
+        cash_account.linked_account.code
+        if cash_account.linked_account_id
+        else '1000'
+    )
+    amount = cash_entry.amount
+    return create_journal_entry(
+        tenant_id=tenant_id,
+        operation_type=operation_type,
+        operation_id=operation_id,
+        lines=[
+            {
+                'account_code': counterpart_account_code,
+                'debit': amount,
+                'credit': Decimal('0'),
+                'description': description,
+            },
+            {
+                'account_code': cash_code,
+                'debit': Decimal('0'),
+                'credit': amount,
+                'description': description,
+            },
+        ],
+        description=description,
+        date=date or cash_entry.date,
+    )
+
+
 def exchange_currency(
     *,
     tenant_id: int,
@@ -687,6 +1265,7 @@ def exchange_currency(
     rate: Decimal,
     date=None,
     notes: str = '',
+    allow_restricted_accounts: bool = False,
 ) -> CurrencyExchange:
     """
     Atomically exchange from_amount from from_account into to_account at rate.
@@ -711,6 +1290,9 @@ def exchange_currency(
         to_acc = CashAccount.objects.select_for_update().get(
             pk=to_account_id, tenant_id=tenant_id,
         )
+        if not allow_restricted_accounts:
+            require_operating_cash_account(from_acc, action='Currency exchange')
+            require_operating_cash_account(to_acc, action='Currency exchange')
 
         if from_acc.balance < from_amount:
             raise ValueError(
@@ -727,6 +1309,8 @@ def exchange_currency(
             to_amount=to_amount,
             to_currency=to_acc.currency,
             effective_rate=rate,
+            fx_rate_source=OperationFxRateSource.CUSTOM,
+            fx_rate_date=date.date() if hasattr(date, 'date') else date,
             date=date,
             notes=notes,
         )
@@ -761,7 +1345,7 @@ def refund_customer(
     sale_id: int,
     amount: Decimal,
     currency: str = 'UZS',
-    fx_rate: Decimal = Decimal('1'),
+    fx_rate: Decimal | None = None,
     method: str,
     account_id: int | None = None,
     return_ref_id: int | None = None,
@@ -779,6 +1363,12 @@ def refund_customer(
 
     amount = _to_decimal(amount).quantize(Decimal('0.01'))
     currency = currency.upper()
+    fx_snapshot = resolve_fx_rate_snapshot_details(
+        tenant_id=tenant_id,
+        operation_currency=currency,
+        operation_at=date,
+        fx_rate_snapshot=fx_rate,
+    )
 
     if amount <= 0:
         raise ValueError('Refund amount must be > 0')
@@ -815,6 +1405,7 @@ def refund_customer(
             account = CashAccount.objects.select_for_update().get(
                 pk=account_id, tenant_id=tenant_id,
             )
+            require_operating_cash_account(account, action='Customer refund')
             if account.balance < amount:
                 raise ValueError(
                     f'Insufficient cash in {account.name}: '
@@ -850,7 +1441,9 @@ def refund_customer(
                 date=date,
                 amount=-amount,
                 currency=currency,
-                fx_rate=fx_rate,
+                fx_rate=fx_snapshot.rate,
+                fx_rate_source=fx_snapshot.source,
+                fx_rate_date=fx_snapshot.rate_date,
                 entry_type=ReceivableEntry.EntryType.ADJUSTMENT,
                 source_ref=f'refund:pending',
             )
@@ -861,7 +1454,9 @@ def refund_customer(
             date=date,
             amount=amount,
             currency=currency,
-            fx_rate=fx_rate,
+            fx_rate=fx_snapshot.rate,
+            fx_rate_source=fx_snapshot.source,
+            fx_rate_date=fx_snapshot.rate_date,
             account=account,
             method=method,
             return_ref_id=return_ref_id,
@@ -926,6 +1521,7 @@ def record_owner_contribution(
         account = CashAccount.objects.select_for_update().get(
             pk=to_account_id, tenant_id=tenant_id,
         )
+        require_operating_cash_account(account, action='Owner contribution')
 
         contribution = OwnerContribution.objects.create(
             tenant_id=tenant_id,
@@ -969,6 +1565,208 @@ def record_owner_contribution(
         )
 
     return contribution
+
+
+def record_owner_drawing(
+    *,
+    tenant_id: int,
+    from_account_id: int,
+    amount: Decimal,
+    currency: str = 'UZS',
+    date=None,
+    notes: str = '',
+    client_request_id=None,
+) -> OwnerDrawing:
+    """
+    Record owner withdrawal from a CashAccount.
+    DR Owner Drawings (3001) | CR CashAccount.
+    """
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Drawing amount must be > 0')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = OwnerDrawing.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        account = CashAccount.objects.select_for_update().get(
+            pk=from_account_id, tenant_id=tenant_id,
+        )
+        require_operating_cash_account(account, action='Owner drawing')
+        if account.balance < amount:
+            raise ValueError(
+                f'Insufficient balance in {account.name}: have {account.balance}, need {amount}.'
+            )
+
+        drawing = OwnerDrawing.objects.create(
+            tenant_id=tenant_id,
+            amount=amount,
+            currency=currency,
+            from_account=account,
+            date=date,
+            notes=notes,
+            client_request_id=client_request_id,
+        )
+
+        cash_entry = create_cash_entry(
+            tenant_id=tenant_id,
+            account=account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=date,
+            source_ref_type='owner_drawing',
+            source_ref_id=drawing.pk,
+        )
+
+        if account.linked_account_id:
+            record_journal_from_cash_entry(
+                tenant_id=tenant_id,
+                cash_entry=cash_entry,
+                operation_type='owner_drawing',
+                operation_id=drawing.pk,
+                counterpart_account_code='3001',
+                description=f'Owner drawing #{drawing.pk}',
+                date=date,
+            )
+
+        publish_event(
+            event_type='finance.owner_drawing',
+            payload={
+                'drawing_id': drawing.pk,
+                'amount': str(amount),
+                'currency': currency,
+                'account_id': account.pk,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return drawing
+
+
+def record_cash_transfer(
+    *,
+    tenant_id: int,
+    from_account_id: int,
+    to_account_id: int,
+    amount: Decimal,
+    date=None,
+    notes: str = '',
+    client_request_id=None,
+) -> CashTransfer:
+    """
+    Transfer funds between two same-currency CashAccounts.
+    DR to_account linked | CR from_account linked.
+    For cross-currency movements use exchange_currency() instead.
+    """
+    if date is None:
+        date = timezone.now()
+
+    amount = _to_decimal(amount).quantize(Decimal('0.01'))
+    if amount <= 0:
+        raise ValueError('Transfer amount must be > 0')
+
+    if from_account_id == to_account_id:
+        raise ValueError('Cannot transfer to the same account.')
+
+    with transaction.atomic():
+        if client_request_id is not None:
+            existing = CashTransfer.objects.filter(
+                tenant_id=tenant_id, client_request_id=client_request_id,
+            ).first()
+            if existing is not None:
+                return existing
+
+        from_account = CashAccount.objects.select_for_update().get(
+            pk=from_account_id, tenant_id=tenant_id,
+        )
+        to_account = CashAccount.objects.select_for_update().get(
+            pk=to_account_id, tenant_id=tenant_id,
+        )
+        require_operating_cash_account(from_account, action='Cash transfer')
+        require_operating_cash_account(to_account, action='Cash transfer')
+
+        if from_account.currency != to_account.currency:
+            raise ValueError(
+                f'CashTransfer requires same currency: '
+                f'{from_account.currency} ≠ {to_account.currency}. '
+                f'Use CurrencyExchange for cross-currency movements.'
+            )
+
+        currency = from_account.currency
+
+        if from_account.balance < amount:
+            raise ValueError(
+                f'Insufficient balance in {from_account.name}: '
+                f'have {from_account.balance}, need {amount}.'
+            )
+
+        transfer = CashTransfer.objects.create(
+            tenant_id=tenant_id,
+            from_account=from_account,
+            to_account=to_account,
+            amount=amount,
+            currency=currency,
+            date=date,
+            notes=notes,
+            client_request_id=client_request_id,
+        )
+
+        create_cash_entry(
+            tenant_id=tenant_id,
+            account=from_account,
+            direction=CashEntry.Direction.OUT,
+            amount=amount,
+            date=date,
+            source_ref_type='cash_transfer',
+            source_ref_id=transfer.pk,
+        )
+        create_cash_entry(
+            tenant_id=tenant_id,
+            account=to_account,
+            direction=CashEntry.Direction.IN,
+            amount=amount,
+            date=date,
+            source_ref_type='cash_transfer',
+            source_ref_id=transfer.pk,
+        )
+
+        if from_account.linked_account_id and to_account.linked_account_id:
+            from_code = from_account.linked_account.code
+            to_code = to_account.linked_account.code
+            create_journal_entry(
+                tenant_id=tenant_id,
+                operation_type='cash_transfer',
+                operation_id=transfer.pk,
+                lines=[
+                    {'account_code': to_code, 'debit': amount, 'credit': Decimal('0'),
+                     'description': f'Cash transfer #{transfer.pk}'},
+                    {'account_code': from_code, 'debit': Decimal('0'), 'credit': amount,
+                     'description': f'Cash transfer #{transfer.pk}'},
+                ],
+                description=f'Cash transfer #{transfer.pk}: {from_account.name} → {to_account.name}',
+                date=date,
+            )
+
+        publish_event(
+            event_type='finance.cash_transfer',
+            payload={
+                'transfer_id': transfer.pk,
+                'from_account_id': from_account.pk,
+                'to_account_id': to_account.pk,
+                'amount': str(amount),
+                'currency': currency,
+            },
+            tenant_id=tenant_id,
+        )
+
+    return transfer
 
 
 def _money(value: Decimal | int | float | str) -> Decimal:
@@ -1289,6 +2087,8 @@ def get_procurement_profitability_rows(
     from apps.partnerships.models import Procurement
     from apps.sales.models import Sale, SaleLine
     from apps.partnerships.formulas import calculate_profit_distribution
+    from apps.partnerships.models import ProcurementSaleRealization
+    from apps.partnerships.venture import procurement_venture_positions
 
     display_context = resolve_report_currency_context(
         tenant_id=tenant_id,
@@ -1351,6 +2151,14 @@ def get_procurement_profitability_rows(
         for stock in remaining_stock
         if stock.lot.procurement_item_id
     }
+    realization_qs = ProcurementSaleRealization.objects.filter(tenant_id=tenant_id)
+    if date_from:
+        realization_qs = realization_qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        realization_qs = realization_qs.filter(created_at__date__lte=date_to)
+    procurement_ids |= set(realization_qs.values_list('procurement_id', flat=True))
+    if procurement_id:
+        procurement_ids = {pid for pid in procurement_ids if pid == procurement_id}
 
     procurements = (
         Procurement.objects
@@ -1371,7 +2179,7 @@ def get_procurement_profitability_rows(
         if row is None:
             row = {
                 'procurement_id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,
@@ -1391,6 +2199,13 @@ def get_procurement_profitability_rows(
                 'projected_gross_profit': Decimal('0.00'),
                 'projected_investor_profit': Decimal('0.00'),
                 'projected_business_profit': Decimal('0.00'),
+                'venture_deployed_uzs': Decimal('0.00'),
+                'venture_capital_recovered_uzs': Decimal('0.00'),
+                'venture_capital_rolled_to_pool_uzs': Decimal('0.00'),
+                'venture_capital_return_available_uzs': Decimal('0.00'),
+                'venture_provisional_profit_available_uzs': Decimal('0.00'),
+                'venture_loss_uzs': Decimal('0.00'),
+                'venture_negative_position_uzs': Decimal('0.00'),
             }
             rows[procurement_id] = row
         return row
@@ -1452,6 +2267,37 @@ def get_procurement_profitability_rows(
         row['projected_business_profit'] = _money(
             row['projected_gross_profit'] - row['projected_investor_profit']
         )
+        procurement = procurement_map.get(row['procurement_id'])
+        if procurement is not None:
+            venture_positions = procurement_venture_positions(procurement=procurement)
+            row['venture_deployed_uzs'] = _money(sum(
+                (Decimal(str(pos.get('deployed_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_recovered_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_recovered_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_rolled_to_pool_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_rolled_to_pool_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_capital_return_available_uzs'] = _money(sum(
+                (Decimal(str(pos.get('capital_return_available_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_provisional_profit_available_uzs'] = _money(sum(
+                (Decimal(str(pos.get('provisional_profit_available_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_loss_uzs'] = _money(sum(
+                (Decimal(str(pos.get('loss_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
+            row['venture_negative_position_uzs'] = _money(sum(
+                (Decimal(str(pos.get('negative_position_uzs', '0'))) for pos in venture_positions.values()),
+                Decimal('0.00'),
+            ))
         result.append(_attach_display(row, display_context))
 
     result.sort(
@@ -1503,7 +2349,7 @@ def get_procurement_profitability_detail(
     )
     summary = summary_rows[0] if summary_rows else {
         'procurement_id': procurement.id,
-        'procurement_type': procurement.procurement_type,
+        'funding_source': procurement.funding_source,
         'status': procurement.status,
         'opened_at': procurement.opened_at,
         'received_at': procurement.received_at,
@@ -1708,6 +2554,15 @@ def get_agreement_profitability_detail(
         requested_currency=report_currency,
         default_currency=agreement.currency,
     )
+    # Per-partner capital movements are presented in the agreement currency
+    # (label = agreement_currency), independent of the report-currency toggle.
+    # All movements are accumulated in functional UZS and converted here through
+    # the report fx model — never emitted raw under a foreign label.
+    agreement_currency_context = resolve_report_currency_context(
+        tenant_id=tenant_id,
+        requested_currency=agreement.currency,
+        default_currency=agreement.currency,
+    )
 
     procurement_rows: list[dict] = []
     totals = {
@@ -1738,7 +2593,7 @@ def get_agreement_profitability_detail(
         else:
             row = {
                 'procurement_id': procurement.id,
-                'procurement_type': procurement.procurement_type,
+                'funding_source': procurement.funding_source,
                 'status': procurement.status,
                 'opened_at': procurement.opened_at,
                 'received_at': procurement.received_at,
@@ -1769,17 +2624,17 @@ def get_agreement_profitability_detail(
         totals['quantity_sold'] += int(row['quantity_sold'])
         totals['remaining_quantity'] += int(row['remaining_quantity'])
         for item in procurement.items.all():
-            if item.status == 'PAID':
+            if item.lifecycle_state == 'READY_FOR_RECEIVE':
                 pending_paid_items_count += 1
                 procurement_pending_cost += _money(
                     Decimal(str(item.quantity))
                     * Decimal(str(item.unit_purchase_price))
                     * Decimal(str(item.fx_rate or '1'))
                 )
-            elif item.status == 'DRAFT':
+            elif item.lifecycle_state == 'DRAFT':
                 draft_items_count += 1
         for expense in procurement.expenses.all():
-            if expense.status == 'PAID':
+            if expense.lifecycle_state == 'READY_FOR_RECEIVE':
                 procurement_pending_cost += _money(
                     Decimal(str(expense.amount))
                     * Decimal(str(expense.fx_rate or '1'))
@@ -1884,34 +2739,23 @@ def get_agreement_profitability_detail(
         if key:
             target[key] += Decimal(str(row['total'] or '0'))
 
-    def _to_agreement_currency(amount, currency, fx_rate) -> Decimal:
-        amount_dec = Decimal(str(amount))
-        source = str(currency or agreement.currency or 'UZS').upper()
-        target = str(agreement.currency or 'UZS').upper()
-        rate_dec = Decimal(str(fx_rate or '1'))
-        if source == target:
-            return _money(amount_dec)
-        if source == 'USD' and target == 'UZS':
-            return _money(amount_dec * rate_dec)
-        if source == 'UZS' and target == 'USD':
-            if rate_dec <= 0:
-                return Decimal('0.00')
-            return _money(amount_dec / rate_dec)
-        return _money(amount_dec)
+    def _entry_functional_uzs(amount, fx_rate) -> Decimal:
+        # fx_rate is the entry-currency → functional-UZS snapshot, so
+        # amount * fx_rate is the entry value in functional UZS. A UZS entry
+        # carries fx_rate=1; a USD entry carries the USD→UZS rate.
+        return _money(Decimal(str(amount)) * Decimal(str(fx_rate or '1')))
 
     for contribution in agreement.contributions.all():
         if contribution.partner_id in partner_rows:
-            partner_rows[contribution.partner_id]['agreement_contributed'] += _to_agreement_currency(
+            partner_rows[contribution.partner_id]['agreement_contributed'] += _entry_functional_uzs(
                 contribution.amount,
-                contribution.currency,
                 contribution.fx_rate,
             )
 
     for withdrawal in agreement.withdrawals.all():
         if withdrawal.partner_id in partner_rows:
-            partner_rows[withdrawal.partner_id]['agreement_withdrawn'] += _to_agreement_currency(
+            partner_rows[withdrawal.partner_id]['agreement_withdrawn'] += _entry_functional_uzs(
                 withdrawal.amount,
-                withdrawal.currency,
                 withdrawal.fx_rate,
             )
 
@@ -1920,9 +2764,8 @@ def get_agreement_profitability_detail(
     returned_by_partner: dict[int, Decimal] = {}
     for allocation in allocations:
         if allocation.partner_id in partner_rows:
-            agreement_amount = _to_agreement_currency(
+            agreement_amount = _entry_functional_uzs(
                 allocation.amount,
-                allocation.currency,
                 allocation.fx_rate,
             )
             key = (
@@ -1971,14 +2814,38 @@ def get_agreement_profitability_detail(
                 pending_prepaid_by_partner.get(partner_id, Decimal('0.00')) + share_amount
             )
 
+    # E17 T-1.2/T-1.3: partner profit/capital economics come from the venture
+    # model (single source of truth), aggregated across the agreement's
+    # procurements in functional UZS. The legacy PartnerLedgerEntry profit triad
+    # (profit_accrued/reversed/losses_incurred) is no longer written, so it
+    # stays at zero here and is kept only as a physical/audit echo.
+    from apps.partnerships.venture import procurement_venture_positions
+
+    _venture_keys = (
+        'capital_recovered_uzs',
+        'capital_rolled_to_pool_uzs',
+        'capital_return_available_uzs',
+        'provisional_profit_uzs',
+        'provisional_profit_available_uzs',
+        'loss_uzs',
+        'negative_position_uzs',
+    )
+    venture_by_partner: dict[int, dict[str, Decimal]] = {}
+    for procurement in procurements:
+        for partner_id, pos in procurement_venture_positions(procurement=procurement).items():
+            target = venture_by_partner.setdefault(
+                partner_id, {key: Decimal('0.00') for key in _venture_keys},
+            )
+            for key in _venture_keys:
+                target[key] += Decimal(str(pos.get(key, '0.00')))
+
     serialized_partners = []
     for row in partner_rows.values():
-        profit_pending = (
-            row['profit_accrued']
-            - row['profit_reversed']
-            - row['losses_incurred']
-            - row['dividends_paid']
+        venture = venture_by_partner.get(
+            row['partner_id'], {key: Decimal('0.00') for key in _venture_keys},
         )
+        for key in _venture_keys:
+            row[f'venture_{key}'] = _money(venture[key])
         row['allocated_functional_uzs'] = allocated_by_partner.get(row['partner_id'], Decimal('0.00'))
         row['returned_functional_uzs'] = returned_by_partner.get(row['partner_id'], Decimal('0.00'))
         row['pending_prepaid_cost_estimate_uzs'] = pending_prepaid_by_partner.get(row['partner_id'], Decimal('0.00'))
@@ -1988,7 +2855,18 @@ def get_agreement_profitability_detail(
             - row['agreement_allocated']
             + row['agreement_returned']
         )
-        row['profit_pending_payout'] = max(Decimal('0.00'), profit_pending)
+        # Movements are accumulated in functional UZS; present them in the
+        # agreement currency via the report fx model (no raw UZS under a USD label).
+        for _agreement_key in (
+            'agreement_contributed',
+            'agreement_withdrawn',
+            'agreement_allocated',
+            'agreement_returned',
+            'agreement_available',
+        ):
+            row[_agreement_key] = agreement_currency_context.convert_uzs(row[_agreement_key])
+        # Authoritative payable profit = venture profit available after settlement.
+        row['profit_pending_payout'] = _money(venture['provisional_profit_available_uzs'])
         row['display'] = {
             **display_context.meta(),
             'amounts': display_context.values(row, [
@@ -2002,6 +2880,13 @@ def get_agreement_profitability_detail(
                 'losses_incurred',
                 'dividends_paid',
                 'profit_pending_payout',
+                'venture_capital_recovered_uzs',
+                'venture_capital_rolled_to_pool_uzs',
+                'venture_capital_return_available_uzs',
+                'venture_provisional_profit_uzs',
+                'venture_provisional_profit_available_uzs',
+                'venture_loss_uzs',
+                'venture_negative_position_uzs',
             ]),
         }
         for key, value in list(row.items()):

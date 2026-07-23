@@ -21,13 +21,6 @@ from apps.inventory.models import Lot, Warehouse
 from apps.inventory.services import transfer_lot_stock
 from apps.investors.models import Investor
 from apps.partnerships.models import Procurement
-from apps.partnerships.services import (
-    add_contribution,
-    open_procurement,
-    pay_procurement_expenses,
-    pay_procurement_items,
-    receive_procurement,
-)
 from apps.sales.models import PosSession, SalePayment
 from apps.sales.services import create_sale, open_pos_session
 from apps.suppliers.models import Supplier
@@ -422,79 +415,88 @@ class Command(BaseCommand):
         ).first()
 
         if procurement is None:
-            procurement = open_procurement(
+            from apps.partnerships.workspace import create_workspace, dispatch_workspace_action
+            procurement = create_workspace(
                 tenant_id=business.id,
-                procurement_type=Procurement.Type.PARTNERSHIP,
+                funding_source=Procurement.FundingSource.PARTNERSHIP,
                 supplier_id=baseline['supplier'].id,
                 notes=BASELINE_PROCUREMENT_NOTES,
-                client_request_id=BASELINE_PROCUREMENT_REQUEST_ID,
-                contract={
+                client_request_id=str(BASELINE_PROCUREMENT_REQUEST_ID),
+            )
+            procurement = dispatch_workspace_action(
+                tenant_id=business.id,
+                procurement=procurement,
+                action='CREATE_INVESTMENT_AGREEMENT',
+                payload={'payload': {
                     'mudaraba_ratio': Decimal('0.571429'),
-                    'planned_budget': Decimal('550'),
+                    'planned_budget': Decimal('200.00'),
                     'currency': 'USD',
                     'partners': [
                         {
                             'partner_id': baseline['investor_partner'].id,
                             'role': 'INVESTOR',
-                            'planned_capital_share': Decimal('385'),
+                            'planned_capital_share': Decimal('140.00'),
                             'profit_share': Decimal('0.4'),
                         },
                         {
                             'partner_id': baseline['operator'].id,
                             'role': 'OPERATOR',
-                            'planned_capital_share': Decimal('165'),
+                            'planned_capital_share': Decimal('60.00'),
                             'profit_share': Decimal('0.6'),
                         },
                     ],
-                },
-                items=[{
-                    'product_variant_id': variant,
-                    'quantity': Decimal('50'),
-                    'unit_purchase_price': Decimal('10'),
-                    'currency': 'USD',
-                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
-                }],
-                expenses=[{
-                    'expense_type': 'CUSTOMS',
-                    'amount': Decimal('50'),
-                    'currency': 'USD',
-                    'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
-                    'notes': 'Baseline customs allocation',
-                }],
+                }},
+                user_id=users['owner'].id,
             )
-            add_contribution(
+            procurement = dispatch_workspace_action(
                 tenant_id=business.id,
-                procurement_id=procurement.id,
-                partner_id=baseline['investor_partner'].id,
-                amount=Decimal('385'),
-                currency='USD',
-                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
-                notes='Baseline investor capital',
+                procurement=procurement,
+                action='UPDATE_ITEMS',
+                payload={'payload': {
+                    'items': [{
+                        'product_variant_id': variant,
+                        'quantity': Decimal('10'),
+                        'unit_purchase_price': Decimal('10.00'),
+                        'currency': 'USD',
+                        'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
+                    }],
+                }},
+                user_id=users['owner'].id,
             )
-            add_contribution(
+            dollar_account = baseline['cash_accounts']['KASSA DOLLAR']
+            for partner_id, amount in [
+                (baseline['investor_partner'].id, Decimal('140.00')),
+                (baseline['operator'].id, Decimal('60.00')),
+            ]:
+                dispatch_workspace_action(
+                    tenant_id=business.id,
+                    procurement=procurement,
+                    action='RECORD_CAPITAL_CONTRIBUTION',
+                    payload={'payload': {
+                        'partner_id': partner_id,
+                        'amount': amount,
+                        'currency': 'USD',
+                        'fx_rate': DEFAULT_DEMO_USD_UZS_RATE,
+                        'cash_account_id': dollar_account.id,
+                    }},
+                    user_id=users['owner'].id,
+                )
+            procurement = dispatch_workspace_action(
                 tenant_id=business.id,
-                procurement_id=procurement.id,
-                partner_id=baseline['operator'].id,
-                amount=Decimal('165'),
-                currency='USD',
-                fx_rate=DEFAULT_DEMO_USD_UZS_RATE,
-                notes='Baseline operator capital',
+                procurement=procurement,
+                action='ALLOCATE_CAPITAL',
+                payload={'payload': {'allocations': [
+                    {'partner_id': baseline['investor_partner'].id, 'amount': Decimal('140.00'), 'currency': 'USD', 'fx_rate': DEFAULT_DEMO_USD_UZS_RATE},
+                    {'partner_id': baseline['operator'].id, 'amount': Decimal('60.00'), 'currency': 'USD', 'fx_rate': DEFAULT_DEMO_USD_UZS_RATE},
+                ]}},
             )
-            pay_procurement_items(
+            procurement = dispatch_workspace_action(
                 tenant_id=business.id,
-                procurement_id=procurement.id,
-                reason='Baseline item payment',
+                procurement=procurement,
+                action='RECEIVE_BATCH',
+                payload={'payload': {'warehouse_id': baseline['storage'].id}},
             )
-            pay_procurement_expenses(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                reason='Baseline expense payment',
-            )
-            procurement = receive_procurement(
-                tenant_id=business.id,
-                procurement_id=procurement.id,
-                destination_warehouse_id=baseline['storage'].id,
-            )
+            procurement = Procurement.objects.get(pk=procurement.pk)
 
         lot = Lot.objects.filter(
             tenant=business,

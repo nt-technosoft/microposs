@@ -1,200 +1,275 @@
-# Procurement — Закупка и Приход Товара
+# Procurement — Target Domain Model
 
-## Обзор
+> E07 target document. Previous implementation details remain available in Git history. Current work must follow `docs/roadmap/E07-procurement-workspace.md`.
 
-`Procurement` — основной путь поступления товара в систему (замена устаревшего `Receipt`). Охватывает весь цикл от создания заявки на закупку до фактической приёмки товаров на склад и создания `Lot`-ов.
+## Purpose
 
----
+Procurement is the user-facing workspace for bringing goods into the business. It coordinates product lines, landed costs, supplier settlement, funding source, payments, physical receive batches, lot creation and audit history.
 
-## Жизненный цикл Procurement
+Procurement is not itself an investment agreement, a supplier debt, a cash payment or a warehouse receive document. Those are separate documents coordinated inside one workspace.
 
-```
-OPEN
- ├─ Добавление ProcurementItem + ProcurementExpense
- ├─ Привязка InvestmentContract (для Partnership/Musharaka)
- ├─ Частичная приёмка → PARTIALLY_RECEIVED
- ├─ Полная приёмка → RECEIVED
- └─ Закрытие вручную → CLOSED / CANCELLED
-```
+## Core Principle
 
-**Статусы:**
+Every procurement answers three independent questions:
 
-| Статус | Значение |
-|---|---|
-| `OPEN` | Закупка создана, товар ещё не получен |
-| `PARTIALLY_RECEIVED` | Часть позиций получена |
-| `RECEIVED` | Все позиции получены |
-| `CLOSED` | Финансово закрыта |
-| `CANCELLED` | Отменена |
-
----
-
-## Типы закупок
-
-| Тип | Финансирование | Контракт нужен |
+| Question | Domain Document | Examples |
 |---|---|---|
-| `OWN_FUNDS` | Собственные средства бизнеса | Нет |
-| `PARTNERSHIP` | Партнёрский капитал (InvestmentAgreement) | Да |
-| `MUSHARAKA` | Прямой Мушарака-контракт | Да |
-| `DISTRIBUTOR` | Заморожен, не реализован | — |
+| What are we buying? | `Procurement` + items + expenses | carpets, qty, unit price, logistics |
+| Whose money is used? | `FundingSource` / investment layer | own funds, partnership capital |
+| How do we settle with supplier? | `SupplierSettlement` | prepaid, deferred, installment, consignment |
 
----
+The UI may show one flow, but backend must preserve these boundaries.
 
-## Ключевые модели
+## Workspace Sections
+
+| Section | Responsibility |
+|---|---|
+| Overview | status, readiness, next action, key totals |
+| Source | supplier, funding source, investment agreement if needed |
+| Items & Landed Cost | products, quantities, prices, expenses, expense targets, landed cost preview |
+| Settlement | supplier terms, payable preview, schedule, consignment mode, supplier payments |
+| Capital | partnership commitments, contributions, available capital, allocations |
+| Receive | warehouse, receive plan, partial receive, batch capital allocation |
+| History | payments, amendments, capital movements, receive batches, journal refs |
+
+## Target Documents
 
 ### Procurement
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `procurement_type` | OWN_FUNDS / PARTNERSHIP / MUSHARAKA | Тип финансирования |
-| `status` | OPEN / ... | Текущий статус |
-| `supplier` | FK? | Поставщик (опционально) |
-| `agreement` | FK? | Родительский InvestmentAgreement |
-| `reference_number` | str | Номер заказа/договора |
-| `notes` | str | Комментарии |
+The purchase workspace root.
+
+Holds:
+
+- tenant;
+- status;
+- supplier link if relevant;
+- business notes/reference;
+- item lines;
+- landed expenses;
+- funding source;
+- settlement reference;
+- receive batches.
+
+It must not silently mutate financial facts after payment or receive.
 
 ### ProcurementItem
-Позиция закупки (один вариант товара).
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `product_variant` | FK | Вариант товара |
-| `quantity` | Decimal | Количество |
-| `unit_purchase_price` | Decimal | Цена поставщика |
-| `currency` | str | Валюта (USD / UZS / ...) |
-| `fx_rate` | Decimal | Курс на дату |
-| `status` | DRAFT / PAID / RECEIVED | Статус позиции |
+Planned item line.
+
+Key fields:
+
+- product variant;
+- quantity;
+- unit purchase price;
+- operation currency;
+- FX snapshot;
+- lifecycle state: draft / ready for receive / received / cancelled.
+
+Payment state must be derived from `Payment` allocations or funding documents, not hidden inside a line status. After a line is financially or physically affected, correction must be explicit: split, new line, cancellation/reversal where allowed.
 
 ### ProcurementExpense
-Посадочные расходы (перевозка, таможня, комиссии).
 
-| Поле | Тип | Назначение |
+Landed cost component.
+
+Examples:
+
+- logistics;
+- customs;
+- fee;
+- other.
+
+Expenses live with items, not with supplier terms. They affect `landed_cost_per_unit` and must support target assignment for partial receipt.
+
+### SupplierSettlement
+
+Supplier-side commercial terms.
+
+Allowed terms:
+
+- `PREPAID`;
+- `PARTIAL`;
+- `DEFERRED`;
+- `INSTALLMENT`;
+- `CONSIGNMENT`.
+
+If settlement creates future obligation, supplier is required and `SupplierPayable` is created at the proper accounting point.
+
+### FundingSource
+
+Determines where payment money comes from.
+
+MVP options:
+
+- `OWN_FUNDS`;
+- `PARTNERSHIP`.
+
+`MUSHARAKA` is not a primary procurement type in UI. If needed, it is a legal/contract label inside investment agreement.
+
+### Payment
+
+Append-only money movement.
+
+For own funds, procurement payment uses business `CashAccount`.
+
+For partnership, procurement item/expense payment uses partnership capital pool and explicit `InvestmentAllocation`.
+
+Payment must store:
+
+- source account/pool;
+- recipient or target document;
+- amount;
+- operation currency;
+- FX snapshot;
+- date;
+- idempotency key;
+- journal reference.
+
+### ReceiveBatch
+
+Physical warehouse receive document.
+
+One procurement may have multiple receive batches. Each batch can receive a subset of paid/ready items.
+
+Batch records:
+
+- warehouse;
+- received item lines;
+- included expenses;
+- landed cost result;
+- inventory total;
+- capital allocation snapshot for partnership funding.
+
+### LotSnapshot / Lot
+
+Immutable inventory/profit snapshot created from a receive batch and attached to the lot.
+
+For partnership-funded goods, each lot stores the batch's capital/profit snapshot. FIFO sales later use that snapshot, not current agreement values.
+
+## Funding × Settlement Rules
+
+| Funding | Settlement | MVP Rule |
 |---|---|---|
-| `expense_type` | LOGISTICS / CUSTOMS / FEE / OTHER | Тип |
-| `amount` | Decimal | Сумма |
-| `currency` | str | Валюта |
-| `fx_rate` | Decimal | Курс |
-| `allocation_method` | BY_VALUE / BY_QUANTITY / BY_WEIGHT | Метод распределения |
-| `status` | DRAFT / PAID / RECEIVED | Статус |
-| `targets` | M2M → ProcurementItem | Какие позиции несут этот расход |
+| Own funds | Prepaid | allowed; supplier optional |
+| Own funds | Partial | allowed; supplier required |
+| Own funds | Deferred | allowed; supplier required |
+| Own funds | Installment | allowed; supplier required and schedule required |
+| Own funds | Consignment | allowed; supplier required |
+| Partnership | Prepaid | allowed; investment agreement required |
+| Partnership | Partial | blocked in MVP |
+| Partnership | Deferred | blocked in MVP |
+| Partnership | Installment | blocked in MVP |
+| Partnership | Consignment | blocked in MVP |
 
-### ProcurementReceiveBatch
-Один акт физической приёмки товаров.
+Hybrid partnership + supplier credit requires a separate future model. It must not emerge from accidental selector combinations.
 
-| Поле | Тип | Назначение |
-|---|---|---|
-| `received_at` | datetime | Время приёмки |
-| `warehouse` | FK | Склад назначения |
-| `items_count` | int | Количество позиций |
-| `total_inventory_uzs` | Decimal | Итоговая стоимость в UZS |
-| `contract_snapshot` | JSON | Снимок контракта (если партнёрство) |
+## Own Funds Flow
 
----
+### Prepaid
 
-## Посадочные расходы (Landed Costs)
+1. Create procurement.
+2. Add items and landed expenses.
+3. Select business cash/bank account.
+4. Pay items/expenses directly from `CashAccount`.
+5. Receive goods.
+6. Create lots and inventory journal.
 
-Расходы распределяются по позициям закупки по выбранному методу:
+No procurement capital balance is required.
 
-| Метод | Формула |
+### Deferred / Installment / Partial
+
+1. Supplier is required.
+2. Settlement terms are recorded.
+3. Receive batch creates inventory and payable as needed.
+4. Payments reduce `SupplierPayable`.
+5. Installment rows track schedule state.
+
+## Partnership Flow
+
+1. Select or create `InvestmentAgreement`.
+2. Record planned commitments.
+3. Record actual contributions.
+4. Pay items/expenses from partnership capital pool.
+5. Receive batch.
+6. Resolve actual batch capital allocation.
+7. Create lots with immutable snapshot.
+
+Partial receipts are first-class: one procurement may create batches with different factual capital shares.
+
+## Partial Receive
+
+Partial receive is required for real workflows.
+
+Rules:
+
+- only eligible lines may be received;
+- expenses touching received and delayed items must be targeted or split;
+- each receive batch gets its own cost and capital snapshot;
+- received lines become immutable except through explicit correction documents.
+
+## Amendments After Facts
+
+Procurement amendments are append-only corrections. They change the current
+procurement document, but they do not rewrite posted money movements, receive
+batches or lots.
+
+Production rules:
+
+- paid but unreceived items/expenses may be amended;
+- hard removal/cancellation is allowed only for `DRAFT` lines without payment or
+  receive facts;
+- received quantities, receive batches and lot snapshots are immutable;
+- if an amendment increases obligation after payment/capital allocation,
+  `payment_status` must show an underpaid delta and the user must create an
+  explicit top-up/allocation;
+- if an amendment decreases obligation after payment/capital allocation,
+  `payment_status` must show `overpaid`; the excess is closed only by explicit
+  `RESOLVE_OVERPAYMENT`: own-funds procurement records a supplier refund into a
+  selected cash account, partnership procurement returns the excess from the
+  procurement back to the agreement capital pool;
+- partially allocated expenses may be increased for future receive batches, but
+  cannot be reduced below the amount already allocated into received batches.
+
+## Consignment
+
+Consignment has two commercial modes:
+
+- `FIXED_SUPPLIER_PRICE`: supplier price is fixed, business margin is sale price minus supplier price;
+- `COMMISSION`: supplier remains economic owner, business earns commission/percentage.
+
+Consignment must support:
+
+- return to supplier;
+- supplier-loss disposal;
+- business-loss disposal;
+- conversion to owned inventory.
+
+## Readiness Checklist
+
+Workspace readiness is policy-driven:
+
+| Key | Meaning |
 |---|---|
-| `BY_VALUE` | `expense × (item_value_uzs / total_items_value_uzs)` |
-| `BY_QUANTITY` | `expense × (item_quantity / total_quantity)` |
-| `BY_WEIGHT` | `expense × (item_weight / total_weight)` *(если есть вес)* |
+| `source_ready` | supplier/funding source valid |
+| `items_ready` | item lines valid |
+| `expenses_ready` | expenses valid or absent |
+| `settlement_ready` | supplier terms valid |
+| `capital_ready` | partnership capital valid if required |
+| `receive_ready` | goods can be received |
 
-**Результат:** для каждой позиции вычисляется `landed_cost_per_unit_uzs`:
-```
-landed_cost_per_unit = (unit_purchase_price × fx_rate + allocated_expense / quantity)
-```
+## Domain Invariants
 
-Это значение сохраняется в `Lot.landed_cost_per_unit` при приёмке — **иммутабельно**.
+- Products enter inventory only through procurement receive batches or initial stock.
+- Payments are append-only financial facts.
+- Receive batches are append-only warehouse facts.
+- Lot snapshots are immutable.
+- Supplier settlement and funding source are different axes.
+- Landed expenses belong with item cost, not with supplier payment terms.
+- All significant operations publish `OutboxEvent`.
 
----
+## Related Domains
 
-## Процесс приёмки (`receive_procurement_batch`)
-
-1. Определяется список позиций для приёма (PAID-items или все DRAFT если нет PAID)
-2. Рассчитываются landed costs для выбранных позиций
-3. Если тип партнёрства: валидируется и фиксируется капитальное распределение по партнёрам
-4. Для каждой позиции создаётся **Lot**:
-   - `quantity_initial = item.quantity`
-   - `unit_purchase_price = item.unit_purchase_price`
-   - `landed_cost_per_unit` = рассчитанное значение
-   - `contract_snapshot` = снимок контракта (из batch)
-   - `received_at` = batch.received_at
-5. Для каждого Lot создаётся **LotStock** (warehouse = batch.warehouse)
-6. Создаётся `StockMovement(type=RECEIPT)`
-7. Статус позиций обновляется → RECEIVED
-8. Статус Procurement → PARTIALLY_RECEIVED / RECEIVED
-9. Публикуется `OutboxEvent('receipt.confirmed')`
-
----
-
-## Партнёрская приёмка: капитальное распределение
-
-При приёмке с типом PARTNERSHIP или MUSHARAKA:
-
-**Preview (`_batch_capital_preview`):**
-- Рассчитывает требуемую сумму в валюте контракта
-- Предлагает распределение по партнёрам пропорционально `planned_capital_share`
-- Проверяет доступный баланс каждого партнёра в InvestmentAgreement
-- Возвращает статус: `READY` или `CAPITAL_SHORTAGE`
-
-**Фиксация (`_resolve_batch_capital_snapshot`):**
-- Валидирует что сумма по всем партнёрам = требуемая сумма
-- Проверяет доступный баланс
-- Возвращает `(contract_snapshot, allocation_rows)` — записывается в batch
-
----
-
-## Предпросмотр стоимости (`build_procurement_cost_preview`)
-
-```
-{
-  "receive_basis": "PAID_ONLY",          // PAID_ONLY или ALL_DRAFT
-  "if_all_current_lines_paid": {
-    "items": [...],
-    "total_uzs": "...",
-    "landed_cost_per_unit": "..."
-  },
-  "reallocation_pending": true,          // если есть DRAFT расходы поверх PAID позиций
-  "message": "..."
-}
-```
-
----
-
-## Legacy Receipt (устаревший путь)
-
-`Receipt` — старая модель прихода товара, используется только для исторических данных. Все новые закупки идут через `Procurement`.
-
-| Тип Receipt | Аналог Procurement |
-|---|---|
-| `BUSINESS_OWNED` | `OWN_FUNDS` |
-| `MUDARABA` | `MUSHARAKA` (старый термин) |
-| `MUSHARAKA` | `MUSHARAKA` |
-| `SUPPLIER_PURCHASE` | с `supplier` |
-| `CONSIGNMENT` | с `consignment_rule` |
-
-**Инвариант:** `Receipt.status = confirmed` → иммутабельно навсегда. Нельзя ни изменить, ни физически удалить.
-
----
-
-## Консигнация
-
-Consignment-товар имеет `consignment_rule` на Receipt:
-```json
-{
-  "mode": "margin",    // или "commission"
-  "value": "0.2"       // 20% маржа или комиссия
-}
-```
-При продаже консигнационного товара поставщику начисляется соответствующая сумма как кредиторская задолженность.
-
----
-
-## Связи с другими доменами
-
-- **Inventory:** Lot + LotStock создаются при приёмке; `contract_snapshot` определяет FIFO-снимок
-- **Finance:** Journal entry `Debit 1100 (Inventory) / Credit 2000 (Payables)` или `3100 (Investor Capital)` при подтверждении
-- **Partnerships:** `InvestmentAgreement` предоставляет партнёрский капитал; `PartnerLedgerEntry` фиксирует вложение
-- **Analytics:** `OutboxEvent('receipt.confirmed')` → инвалидирует profitability-кэш
+- Inventory: lots, stock, FIFO.
+- Partnerships: investment agreement, capital contribution, batch allocation.
+- Suppliers: settlement, payable, payment schedule.
+- Finance: cash accounts, cash entries, journal entries.
+- Sales: FIFO sale lines and profit distribution from lot snapshots.

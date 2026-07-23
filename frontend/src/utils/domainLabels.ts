@@ -32,6 +32,32 @@ export function procurementStatusLabel(status: string): string {
   return meta?.labelKey ? translateNow(meta.labelKey) : (meta?.label ?? status)
 }
 
+const _isLineSettled = (state: string): boolean => state === 'RECEIVED' || state === 'CANCELLED'
+
+/**
+ * Receive-badge label that disambiguates the backend PARTIALLY_RECEIVED state.
+ * The backend holds a procurement at PARTIALLY_RECEIVED while ANY item OR expense
+ * line is still unposted (this keeps the amendment/expense-posting window open).
+ * A flat "Частично" then contradicts a "10/10 goods received" count. When every
+ * goods line is in but a cost line is still unposted, say so explicitly; only call
+ * the goods receipt itself partial when a goods line is genuinely pending.
+ */
+export function procurementReceiveBadgeLabel(
+  status: string,
+  items: Array<{ lifecycle_state: string }> = [],
+  expenses: Array<{ lifecycle_state: string }> = [],
+): string {
+  if (status !== ProcurementStatus.PARTIALLY_RECEIVED) {
+    return procurementStatusLabel(status)
+  }
+  const goodsPending = items.some((item) => !_isLineSettled(item.lifecycle_state))
+  const expensesPending = expenses.some((expense) => !_isLineSettled(expense.lifecycle_state))
+  if (!goodsPending && expensesPending) {
+    return 'Товар принят · расход не проведён'
+  }
+  return 'Товар принят частично'
+}
+
 export function partnerRoleLabel(role: string): string {
   if (role === 'INVESTOR') return translateNow('domain.partnerRole.INVESTOR')
   if (role === 'OPERATOR') return translateNow('domain.partnerRole.OPERATOR')

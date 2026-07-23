@@ -2,21 +2,69 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, BarChart3, Plus, RotateCcw, Send, Wallet } from 'lucide-vue-next'
+import {
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
+  CalendarDays,
+  HandCoins,
+  Plus,
+  RotateCcw,
+  Send,
+  Users,
+  Wallet,
+} from 'lucide-vue-next'
+import BaseSelect from '@/components/base/BaseSelect.vue'
+import MoneyCurrencyInput from '@/components/forms/MoneyCurrencyInput.vue'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   addAgreementContribution,
   addAgreementWithdrawal,
+  closeAgreement,
   createAgreementAllocations,
   fetchAgreementAllocationPreview,
+  fetchAgreementClosePreview,
   fetchInvestmentAgreement,
+  fetchCapitalPositions,
+  fetchAgreementProfitSummary,
+  evaluateAgreementPayouts,
+  fetchAgreementPayoutObligations,
+  fetchProcurementVentureSummary,
+  previewPayoutDecision,
+  executePayoutDecision,
+  resolveAgreementReview,
   type AgreementAllocationPreview,
+  type AgreementProfitRow,
+  type CapitalPositionRow,
+  type ClosePreview,
   type InvestmentAgreementDetail,
+  type ProcurementVentureSummary,
+  type PayoutObligation,
+  type PayoutDecisionPreview,
+  type PayoutDecisionType,
 } from '@/api/partnerships'
+import { fetchCashAccounts, type CashAccountRecord } from '@/api/finance'
+import AgreementAdvancesCard from '@/modules/intake/components/agreement/AgreementAdvancesCard.vue'
+import VentureCloseCard from '@/modules/intake/components/workspace/VentureCloseCard.vue'
+import AgreementPayoutDecisionPanel, {
+  type AgreementRecoveredCapitalDecisionRow,
+} from '@/modules/intake/components/agreement/AgreementPayoutDecisionPanel.vue'
+import AdvanceSettleSheet from '@/modules/intake/components/agreement/AdvanceSettleSheet.vue'
+import RepayDebtSheet from '@/modules/intake/components/agreement/RepayDebtSheet.vue'
+import DividendPaySheet from '@/modules/intake/components/agreement/DividendPaySheet.vue'
 import { formatPrice } from '@/utils/currency'
 import { useToast } from '@/composables/useToast'
 import { useFxRate } from '@/composables/useFxRate'
 import { partnerRoleLabel, procurementStatusLabel } from '@/utils/domainLabels'
 import { intlLocale } from '@/i18n/format'
+import { getApiErrorMessage } from '@/utils/errors'
+import PageChrome from '@/components/layout/PageChrome.vue'
+import PageContainer from '@/components/layout/PageContainer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,16 +74,41 @@ const { t, locale } = useI18n()
 const agreement = ref<InvestmentAgreementDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
+const positions = ref<CapitalPositionRow[]>([])
+const hasInterparty = computed(() => positions.value.some((p) => Math.abs(Number(p.net) || 0) > 0.01))
+const profitRows = ref<AgreementProfitRow[]>([])
+const ventureSummaries = ref<ProcurementVentureSummary[]>([])
+const closePreview = ref<ClosePreview | null>(null)
+const closingAgreement = ref(false)
+const isClosed = computed(() => agreement.value?.status === 'CLOSED')
+const agreementStatusTone = computed<'neutral' | 'positive' | 'warning' | 'negative'>(() => {
+  if (agreement.value?.status === 'ACTIVE' || agreement.value?.status === 'OPEN') return 'positive'
+  if (agreement.value?.status === 'DRAFT') return 'warning'
+  if (agreement.value?.status === 'CANCELLED') return 'negative'
+  return 'neutral'
+})
+const operatingAccounts = ref<CashAccountRecord[]>([])
+const settleOpen = ref(false)
+const activePosition = ref<CapitalPositionRow | null>(null)
+const dividendOpen = ref(false)
 const contributionPartnerId = ref<number | null>(null)
 const contributionAmount = ref('')
-const contributionCurrency = ref('USD')
+type SupportedCurrency = 'USD' | 'UZS'
+const contributionCurrency = ref<SupportedCurrency>('UZS')
 const savingContribution = ref(false)
 const withdrawalPartnerId = ref<number | null>(null)
 const withdrawalAmount = ref('')
-const withdrawalCurrency = ref('USD')
+const withdrawalCurrency = ref<SupportedCurrency>('UZS')
 const savingWithdrawal = ref(false)
+const savingPayoutDecision = ref(false)
+const previewingPayoutDecision = ref(false)
+const payoutDecisionPreview = ref<PayoutDecisionPreview | null>(null)
+const withdrawalError = ref('')
 const allocationProcurementId = ref<number | null>(null)
 const allocationPreview = ref<AgreementAllocationPreview | null>(null)
+const payoutObligations = ref<PayoutObligation[]>([])
+const reviewResolution = ref<'CONTINUE' | 'ORDERLY_SALE' | 'WRITE_OFF' | 'BUYOUT' | 'DISPUTE'>('CONTINUE')
+const resolvingReview = ref(false)
 const allocating = ref(false)
 const {
   rate: latestUsdRate,
@@ -51,20 +124,134 @@ const balanceLabel = computed(() => {
     .map(([currency, amount]) => formatPrice(amount, currency))
   return parts.length ? parts.join(' · ') : '0'
 })
+const primaryCurrency = computed<SupportedCurrency>(() => supportedCurrency(agreement.value?.currency))
+const plannedBudget = computed(() => Number(agreement.value?.planned_budget ?? 0) || 0)
+const availablePrimaryAmount = computed(() => Number(agreement.value?.balances?.[primaryCurrency.value] ?? 0) || 0)
 const contributedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.contributed_amount || 0), 0) ?? 0)
 const allocatedTotal = computed(() => agreement.value?.participant_totals.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) ?? 0)
+const usedTotal = computed(() => Math.max(0, contributedTotal.value - availablePrimaryAmount.value))
+const budgetBase = computed(() => Math.max(plannedBudget.value, contributedTotal.value, 1))
+const availableProgress = computed(() => Math.min(100, (availablePrimaryAmount.value / budgetBase.value) * 100))
+const usedProgress = computed(() => Math.min(100, (usedTotal.value / budgetBase.value) * 100))
+const investorRows = computed(() => (agreement.value?.partners ?? []).filter((partner) => partner.role === 'INVESTOR'))
+const investorName = computed(() => {
+  if (!investorRows.value.length) return 'Инвесторский пул'
+  if (investorRows.value.length === 1) return investorRows.value[0].partner_name || 'Инвестор'
+  return `Инвесторский пул: ${investorRows.value.length}`
+})
+const agreementSideOptions = computed(() => (agreement.value?.partners ?? []).map((partner) => ({
+  value: partner.partner,
+  label: partner.role === 'OPERATOR' ? 'Бизнес' : partner.partner_name,
+})))
+const withdrawalSideOptions = computed(() => agreementSideOptions.value.filter((option) => {
+  const position = positions.value.find((row) => row.partner_id === option.value)
+  const partner = agreement.value?.partners.find((row) => row.partner === option.value)
+  return partner?.role !== 'OPERATOR' && Number(position?.withdrawable || 0) > 0
+}))
+const partyRows = computed(() => {
+  const rows = agreement.value?.participant_totals ?? []
+  const total = contributedTotal.value
+  const planBase = plannedBudget.value
+  return rows.map((row) => {
+    const plannedAmount = Number(row.planned_capital_share || 0)
+    const contributedAmount = Number(row.contributed_amount || 0)
+    const plannedCapitalPercent = planBase > 0 ? Math.round((plannedAmount / planBase) * 100) : null
+    const actualCapitalPercent = total > 0 ? Math.round((contributedAmount / total) * 100) : null
+    return {
+      ...row,
+      displayName: row.display_name || (row.role === 'OPERATOR' ? 'Бизнес' : row.partner_name),
+      plannedAmount,
+      contributedAmount,
+      plannedCapitalPercent,
+      actualCapitalPercent,
+      plannedProfitPercent: Math.round((Number(row.planned_profit_share || 0) || 0) * 100),
+      availableAmount: Number(row.available_amount || 0) || 0,
+      allocatedAmount: Number(row.allocated_amount || 0) || 0,
+      withdrawnAmount: Number(row.withdrawn_amount || 0) || 0,
+    }
+  })
+})
+const recoveredCapitalRows = computed<AgreementRecoveredCapitalDecisionRow[]>(() =>
+  ventureSummaries.value.flatMap((summary) =>
+    summary.positions
+      .filter((row) => row.role !== 'OPERATOR' && Number(row.capital_return_available_uzs || 0) > 0.01)
+      .map((row) => ({
+        key: `${summary.procurement_id}-${row.partner_id}`,
+        procurementId: summary.procurement_id,
+        partnerId: row.partner_id,
+        partnerName: row.partner_name,
+        role: row.role,
+        availableUzs: Number(row.capital_return_available_uzs || 0),
+        recoveredUzs: Number(row.capital_recovered_uzs || 0),
+        returnedUzs: Number(row.capital_returned_uzs || 0),
+        rolledUzs: Number(row.capital_rolled_to_pool_uzs || 0),
+      })),
+  ),
+)
+const withdrawalAmountValue = computed(() => Number.parseFloat(withdrawalAmount.value || '0') || 0)
+// E17 fix: pool-correct availability sourced from capital positions (withdrawable
+// already excludes recovered-capital returns). availableByPartnerCurrency was
+// subtracting ALL withdrawals and falsely blocking valid pool returns.
+const withdrawalAvailableAmount = computed(() => {
+  if (!withdrawalPartnerId.value) return 0
+  const pos = positions.value.find((p) => p.partner_id === withdrawalPartnerId.value)
+  if (!pos) return 0
+  const withdrawableInPool = Number(pos.withdrawable || 0)
+  const agreementCurrency = (agreement.value?.currency || 'UZS').toUpperCase()
+  if (withdrawalCurrency.value === agreementCurrency) return withdrawableInPool
+  // USD request from UZS pool: convert at current rate
+  const rate = Number(latestUsdRate.value || 0)
+  if (withdrawalCurrency.value === 'USD' && agreementCurrency === 'UZS' && rate > 0) {
+    return withdrawableInPool / rate
+  }
+  return 0
+})
+const withdrawalAvailabilityError = computed(() => {
+  if (!withdrawalPartnerId.value || withdrawalAmountValue.value <= 0) return ''
+  if (withdrawalAmountValue.value <= withdrawalAvailableAmount.value + 0.000001) return ''
+  return `Нельзя вернуть ${formatPrice(withdrawalAmountValue.value, withdrawalCurrency.value)}: доступно только ${formatPrice(withdrawalAvailableAmount.value, withdrawalCurrency.value)}.`
+})
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString(intlLocale(locale.value), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+function agreementSideLabel(role: string): string {
+  if (role === 'INVESTOR') return 'Инвестор'
+  if (role === 'OPERATOR') return 'Бизнес'
+  return partnerRoleLabel(role)
+}
+
+function agreementStatusLabel(status: string): string {
+  if (status === 'ACTIVE') return 'Активен'
+  if (status === 'CLOSED') return 'Закрыт'
+  if (status === 'DRAFT') return 'Черновик'
+  return status
+}
+
+function dateOnly(value: string): string {
+  return new Date(value).toLocaleDateString(intlLocale(locale.value), { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function setContributionPartner(value: string | number | boolean | null): void {
+  contributionPartnerId.value = typeof value === 'number' ? value : Number(value) || null
+}
+
+function setWithdrawalPartner(value: string | number | boolean | null): void {
+  withdrawalPartnerId.value = typeof value === 'number' ? value : Number(value) || null
 }
 
 function fxRateForCurrency(currency: string): string {
   return currency === 'USD' ? latestUsdRate.value : '1'
 }
 
+function supportedCurrency(value: string | null | undefined): SupportedCurrency {
+  return String(value || 'UZS').toUpperCase() === 'USD' ? 'USD' : 'UZS'
+}
+
 function ensureFxRate(currency: string): boolean {
   if (currency !== 'USD' || latestUsdRate.value) return true
-  toast.error(latestUsdRateError.value || t('procurements.syncUsdRateFirst'))
+  toast.error(t('procurements.syncUsdRateFirst'))
   return false
 }
 
@@ -73,9 +260,13 @@ async function load(): Promise<void> {
   error.value = ''
   try {
     agreement.value = await fetchInvestmentAgreement(agreementId.value)
+    const contractCurrency = supportedCurrency(agreement.value.currency)
+    contributionCurrency.value = contractCurrency
+    withdrawalCurrency.value = contractCurrency
     contributionPartnerId.value = agreement.value.partners[0]?.partner ?? null
-    withdrawalPartnerId.value = agreement.value.partners[0]?.partner ?? null
+    withdrawalPartnerId.value = withdrawalSideOptions.value[0]?.value ?? null
     allocationProcurementId.value = activeProcurements.value[0]?.id ?? null
+    await loadAdvances()
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : t('procurements.agreementLoadFailed')
   } finally {
@@ -98,14 +289,33 @@ async function saveContribution(): Promise<void> {
     toast.success(t('procurements.contributionAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : t('procurements.contributionAddFailed'))
+    toast.error(getApiErrorMessage(err, t('procurements.contributionAddFailed')))
   } finally {
     savingContribution.value = false
   }
 }
 
+async function resolveReview(): Promise<void> {
+  if (!agreement.value) return
+  resolvingReview.value = true
+  try {
+    await resolveAgreementReview(agreement.value.id, { resolution: reviewResolution.value })
+    toast.success('Решение по пересмотру зафиксировано')
+    await load()
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Пока нельзя зафиксировать пересмотр: проверьте дату и условия договора.'))
+  } finally {
+    resolvingReview.value = false
+  }
+}
+
 async function saveWithdrawal(): Promise<void> {
   if (!agreement.value || !withdrawalPartnerId.value || !withdrawalAmount.value) return
+  withdrawalError.value = withdrawalAvailabilityError.value
+  if (withdrawalError.value) {
+    toast.error(withdrawalError.value)
+    return
+  }
   if (!ensureFxRate(withdrawalCurrency.value)) return
   savingWithdrawal.value = true
   try {
@@ -117,13 +327,173 @@ async function saveWithdrawal(): Promise<void> {
       reason: t('procurements.withdrawalReason'),
     })
     withdrawalAmount.value = ''
+    withdrawalError.value = ''
     toast.success(t('procurements.withdrawalAdded'))
     await load()
   } catch (err: unknown) {
-    toast.error(err instanceof Error ? err.message : t('procurements.withdrawalAddFailed'))
+    withdrawalError.value = getApiErrorMessage(err, t('procurements.withdrawalAddFailed'))
+    toast.error(withdrawalError.value)
   } finally {
     savingWithdrawal.value = false
   }
+}
+
+async function previewRecoveredCapitalDecision(payload: {
+  decisionType: PayoutDecisionType
+  amountUzs: string
+  accountId: number
+}): Promise<void> {
+  if (!agreement.value) return
+  previewingPayoutDecision.value = true
+  try {
+    payoutDecisionPreview.value = await previewPayoutDecision(agreement.value.id, {
+      decision_type: payload.decisionType,
+      amount_uzs: payload.amountUzs,
+      from_account_id: payload.accountId,
+    })
+    if (payoutDecisionPreview.value.allowed) {
+      toast.success('Policy gate пройден')
+    }
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Не удалось проверить решение'))
+  } finally {
+    previewingPayoutDecision.value = false
+  }
+}
+
+async function executeRecoveredCapitalDecision(payload: {
+  decisionType: PayoutDecisionType
+  amountUzs: string
+  accountId: number
+  allocations: Array<{ procurement_id: number; partner_id: number; amount_uzs: string }>
+}): Promise<void> {
+  if (!agreement.value) return
+  savingPayoutDecision.value = true
+  try {
+    await executePayoutDecision(agreement.value.id, {
+      decision_type: payload.decisionType,
+      amount_uzs: payload.amountUzs,
+      from_account_id: payload.accountId,
+      allocations: payload.allocations,
+      client_request_id: crypto.randomUUID(),
+      notes: payload.decisionType === 'ROLL_OVER_CAPITAL' ? 'capital rollover group decision' : 'capital payout group decision',
+    })
+    payoutDecisionPreview.value = null
+    toast.success(payload.decisionType === 'ROLL_OVER_CAPITAL' ? 'Капитал оставлен в деле' : 'Капитал выплачен')
+    await load()
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Не удалось исполнить решение'))
+  } finally {
+    savingPayoutDecision.value = false
+  }
+}
+
+async function loadAdvances(): Promise<void> {
+  try {
+    const [pos, profit, accounts, preview, obligations] = await Promise.all([
+      fetchCapitalPositions(agreementId.value),
+      fetchAgreementProfitSummary(agreementId.value),
+      operatingAccounts.value.length ? Promise.resolve(operatingAccounts.value) : fetchCashAccounts(),
+      fetchAgreementClosePreview(agreementId.value).catch(() => null),
+      fetchAgreementPayoutObligations(agreementId.value).catch(() => []),
+    ])
+    positions.value = pos
+    profitRows.value = profit
+    operatingAccounts.value = accounts.filter((a) => a.kind !== 'agreement_capital' && a.kind !== 'fund_capital')
+    closePreview.value = preview
+    payoutObligations.value = obligations
+    const procurementIds = agreement.value?.procurements.map((procurement) => procurement.id) ?? []
+    ventureSummaries.value = procurementIds.length
+      ? await Promise.all(procurementIds.map((id) => fetchProcurementVentureSummary(id)))
+      : []
+  } catch {
+    // positions/distributions are supplementary — keep the page usable if they fail
+  }
+}
+
+async function evaluatePayouts(): Promise<void> {
+  try {
+    await evaluateAgreementPayouts(agreementId.value)
+    await loadAdvances()
+    toast.success('Обязательства по выплатам обновлены')
+  } catch (err: unknown) {
+    toast.error(getApiErrorMessage(err, 'Не удалось проверить обязательства по выплатам'))
+  }
+}
+
+function openSettle(position: CapitalPositionRow): void {
+  activePosition.value = position
+  settleOpen.value = true
+}
+
+// E17 Bug-2 fix: creditor's excess must return via POOL path (not recovered).
+// Pre-fill the pool withdrawal form so the operator doesn't reach for
+// recovered-capital decision panel by mistake.
+function openPoolWithdrawal(position: CapitalPositionRow): void {
+  withdrawalPartnerId.value = position.partner_id
+  withdrawalCurrency.value = ((position.currency || agreement.value?.currency || 'UZS').toUpperCase()) as 'UZS' | 'USD'
+  withdrawalAmount.value = Number(position.withdrawable || 0).toFixed(2)
+}
+
+// E17 T-5.3: negative venture debts are per-procurement (repayment targets one
+// procurement), so we read them from the per-procurement venture summaries.
+interface VentureDebtRow {
+  procurement_id: number
+  partner_id: number
+  partner_name: string
+  debt_uzs: string
+}
+const ventureDebts = computed<VentureDebtRow[]>(() => {
+  const rows: VentureDebtRow[] = []
+  for (const summary of ventureSummaries.value) {
+    for (const pos of summary.positions) {
+      if ((Number(pos.negative_position_uzs) || 0) > 0.01) {
+        rows.push({
+          procurement_id: summary.procurement_id,
+          partner_id: pos.partner_id,
+          partner_name: pos.partner_name,
+          debt_uzs: pos.negative_position_uzs,
+        })
+      }
+    }
+  }
+  return rows
+})
+const repayOpen = ref(false)
+const repayTarget = ref<VentureDebtRow | null>(null)
+function openRepay(row: VentureDebtRow): void {
+  repayTarget.value = row
+  repayOpen.value = true
+}
+async function onDebtRepaid(): Promise<void> {
+  repayOpen.value = false
+  await load()
+}
+
+async function onCloseAgreement(): Promise<void> {
+  closingAgreement.value = true
+  try {
+    await closeAgreement(agreementId.value)
+    toast.success('Договор закрыт')
+    await load()
+  } catch (err) {
+    const data = (err as { response?: { data?: { detail?: string; blocking_reasons?: string[] } } })?.response?.data
+    const reasons = data?.blocking_reasons ?? []
+    toast.error(reasons[0] ?? data?.detail ?? getApiErrorMessage(err, 'Не удалось закрыть договор'))
+    await loadAdvances()
+  } finally {
+    closingAgreement.value = false
+  }
+}
+
+async function onAdvanceSettled(): Promise<void> {
+  settleOpen.value = false
+  await load()
+}
+
+async function onDividendPaid(): Promise<void> {
+  dividendOpen.value = false
+  await load()
 }
 
 async function loadAllocationPreview(): Promise<void> {
@@ -161,185 +531,397 @@ async function allocateSuggested(): Promise<void> {
 
 onMounted(async () => {
   await Promise.allSettled([load(), loadLatestUsdRate()])
-  if (latestUsdRateError.value) {
-    toast.error(latestUsdRateError.value)
-  }
 })
 </script>
 
 <template>
-  <div class="page">
-    <header class="topbar">
-      <button class="icon-btn" type="button" :aria-label="t('common.back')" @click="router.back()">
-        <ArrowLeft :size="18" />
-      </button>
-      <h1>{{ t('procurements.agreementTitle', { id: route.params.id }) }}</h1>
-      <button class="icon-btn" type="button" :aria-label="t('procurements.report')" @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })">
-        <BarChart3 :size="18" />
-      </button>
-    </header>
+  <main class="min-h-dvh bg-background pb-[calc(var(--bottom-nav-height)+1rem)]">
+    <PageContainer size="wide" :padded="false" class="py-4 sm:py-6">
+      <PageChrome
+        :title="t('procurements.agreementTitle', { id: route.params.id })"
+        eyebrow="Инвестиционный договор"
+        :description="agreement ? `${investorName} · ${dateOnly(agreement.opened_at)}` : ''"
+        :status="agreement ? agreementStatusLabel(agreement.status) : ''"
+        :status-tone="agreementStatusTone"
+      >
+        <template #primary>
+          <div class="flex items-center gap-2">
+            <Button variant="outline" size="icon" type="button" :aria-label="t('common.back')" @click="router.back()">
+              <ArrowLeft />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              type="button"
+              :aria-label="t('procurements.report')"
+              @click="router.push({ name: 'reports-agreement-profitability', params: { id: route.params.id } })"
+            >
+              <BarChart3 />
+            </Button>
+          </div>
+        </template>
+      </PageChrome>
 
-    <main class="content">
-      <div v-if="loading" class="state">{{ t('procurements.loading') }}</div>
-      <div v-else-if="error" class="state state-error">{{ error }}</div>
+    <section class="flex w-full flex-col gap-4 px-4 sm:px-6 lg:px-8">
+      <div v-if="loading" class="grid gap-3">
+        <Skeleton class="h-40 rounded-2xl" />
+        <Skeleton class="h-32 rounded-2xl" />
+        <Skeleton class="h-40 rounded-2xl" />
+      </div>
+      <Alert v-else-if="error" variant="destructive">
+        <AlertDescription>{{ error }}</AlertDescription>
+      </Alert>
 
       <template v-else-if="agreement">
-        <section class="hero">
-          <div>
-            <span>{{ t('procurements.freeBalance') }}</span>
-            <strong>{{ balanceLabel }}</strong>
-          </div>
-          <div class="hero-grid">
-            <div><span>{{ t('procurements.contributed') }}</span><strong>{{ formatPrice(contributedTotal, agreement.currency) }}</strong></div>
-            <div><span>{{ t('procurements.allocatedToProcurements') }}</span><strong>{{ formatPrice(allocatedTotal, agreement.currency) }}</strong></div>
-            <div><span>{{ t('procurements.procurementsTotal') }}</span><strong>{{ agreement.procurements.length }}</strong></div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.participants') }}</h2>
-          </div>
-          <div v-for="row in agreement.participant_totals" :key="row.partner_id" class="partner-row">
-            <div>
-              <strong>{{ row.partner_name }}</strong>
-              <span>{{ partnerRoleLabel(row.role) }} · {{ t('procurements.profitShareShort', { share: (Number(row.planned_profit_share) * 100).toFixed(2) }) }}</span>
+        <Card class="overflow-hidden rounded-2xl bg-background">
+          <CardContent class="flex flex-col gap-3 pt-4">
+            <div class="min-w-0">
+              <p class="text-xs text-muted-foreground">{{ t('procurements.freeBalance') }}</p>
+              <p class="text-2xl font-semibold tabular-nums text-foreground">{{ balanceLabel }}</p>
             </div>
-            <div>
-              <strong>{{ formatPrice(row.available_amount, agreement.currency) }}</strong>
-              <span>{{ t('procurements.available') }}</span>
+            <div class="flex h-1.5 overflow-hidden rounded-full bg-muted">
+              <div class="bg-primary" :style="{ width: `${availableProgress}%` }" />
+              <div class="bg-muted-foreground/40" :style="{ width: `${usedProgress}%` }" />
             </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.contribution') }}</h2>
-            <Wallet :size="17" />
-          </div>
-          <div class="inline-form">
-            <select v-model.number="contributionPartnerId">
-              <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
-            </select>
-            <input v-model="contributionAmount" inputmode="decimal" :placeholder="t('common.amount')" />
-            <select v-model="contributionCurrency">
-              <option value="USD">USD</option>
-              <option value="UZS">UZS</option>
-            </select>
-          </div>
-          <button class="action" type="button" :disabled="savingContribution" @click="saveContribution">
-            <Plus :size="17" /> {{ t('procurements.addContribution') }}
-          </button>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.withdrawalFromAgreement') }}</h2>
-            <RotateCcw :size="17" />
-          </div>
-          <div class="inline-form">
-            <select v-model.number="withdrawalPartnerId">
-              <option v-for="partner in agreement.partners" :key="partner.partner" :value="partner.partner">{{ partner.partner_name }}</option>
-            </select>
-            <input v-model="withdrawalAmount" inputmode="decimal" :placeholder="t('common.amount')" />
-            <select v-model="withdrawalCurrency">
-              <option value="USD">USD</option>
-              <option value="UZS">UZS</option>
-            </select>
-          </div>
-          <button class="action secondary" type="button" :disabled="savingWithdrawal" @click="saveWithdrawal">
-            <RotateCcw :size="17" /> {{ t('procurements.recordWithdrawal') }}
-          </button>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.linkedProcurements') }}</h2>
-            <button type="button" @click="router.push({ name: 'procurement-create', query: { agreement_id: agreement.id } })">{{ t('procurements.new') }}</button>
-          </div>
-          <button
-            v-for="procurement in agreement.procurements"
-            :key="procurement.id"
-            class="proc-row"
-            type="button"
-            @click="router.push({ name: 'procurement-detail', params: { id: procurement.id } })"
-          >
-            <span>#{{ procurement.id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</span>
-            <strong>{{ procurementStatusLabel(procurement.status) }}</strong>
-          </button>
-          <p v-if="agreement.procurements.length === 0" class="muted">{{ t('procurements.noLinkedProcurements') }}</p>
-        </section>
-
-        <section v-if="activeProcurements.length" class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.allocateCapital') }}</h2>
-            <Send :size="17" />
-          </div>
-          <div class="inline-form two">
-            <select v-model.number="allocationProcurementId">
-              <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">{{ t('procurements.procurementNumber', { id: procurement.id }) }}</option>
-            </select>
-            <button type="button" @click="loadAllocationPreview">{{ t('procurements.calculate') }}</button>
-          </div>
-          <div v-if="allocationPreview" class="allocation-box">
-            <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="allocation-row">
-              <span>{{ row.partner_name }}</span>
-              <strong>{{ formatPrice(row.amount, row.currency) }}</strong>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-muted-foreground">
+              <span>План <strong class="font-semibold text-foreground">{{ formatPrice(plannedBudget, primaryCurrency) }}</strong></span>
+              <span>Внесено <strong class="font-semibold text-foreground">{{ formatPrice(contributedTotal, primaryCurrency) }}</strong></span>
+              <span>В приходах <strong class="font-semibold text-foreground">{{ formatPrice(allocatedTotal, primaryCurrency) }}</strong></span>
             </div>
-            <button class="action" type="button" :disabled="allocating" @click="allocateSuggested">{{ t('procurements.confirmAllocation') }}</button>
-          </div>
-        </section>
+          </CardContent>
+        </Card>
 
-        <section class="panel">
-          <div class="section-head">
-            <h2>{{ t('procurements.history') }}</h2>
-            <span>{{ agreement.history.length }}</span>
-          </div>
-          <article v-for="entry in agreement.history.slice(0, 8)" :key="entry.id" class="history-row">
-            <div>
-              <strong>{{ entry.title }}</strong>
-              <span>{{ formatDate(entry.date) }} · {{ entry.partner_name || t('procurements.system') }}</span>
+        <Card class="rounded-2xl bg-background">
+          <CardHeader>
+            <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle class="text-base">Условия, выплаты и пересмотр</CardTitle>
+                <CardDescription class="mt-1">
+                  <template v-if="agreement.current_terms?.review_at">Пересмотр: {{ dateOnly(agreement.current_terms.review_at) }}.</template>
+                  <template v-else>Дата пересмотра пока не задана.</template>
+                  Выплаты создают обязательство, но не переводятся автоматически.
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" type="button" class="self-start" @click="evaluatePayouts">Проверить выплаты</Button>
             </div>
-            <strong>{{ formatPrice(entry.amount, entry.currency) }}</strong>
-          </article>
-        </section>
+          </CardHeader>
+          <CardContent>
+            <div v-if="!payoutObligations.length" class="text-sm text-muted-foreground">Нет обязательств к действию.</div>
+            <div v-else class="divide-y divide-border border-y border-border">
+              <div v-for="row in payoutObligations" :key="row.id" class="flex items-center justify-between gap-3 py-3 text-sm">
+                <span class="min-w-0"><strong class="block truncate text-foreground">{{ row.kind === 'PROFIT' ? 'Прибыль к выплате' : 'Капитал к возврату' }} · {{ row.recipient_name }}</strong><span class="text-xs text-muted-foreground">срок {{ dateOnly(row.due_at) }} · {{ row.status }} · выплачено {{ formatPrice(row.paid_amount || 0, row.currency) }}</span></span>
+                <strong class="shrink-0 tabular-nums text-foreground">{{ formatPrice(row.amount, row.currency) }}</strong>
+              </div>
+            </div>
+            <div v-if="agreement.current_terms?.review_at" class="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4"><select v-model="reviewResolution" class="h-9 rounded-md border border-input bg-background px-2 text-sm"><option value="CONTINUE">Продолжить договор</option><option value="ORDERLY_SALE">План распродажи</option><option value="WRITE_OFF">Зафиксировать убыток</option><option value="BUYOUT">Добровольный выкуп</option><option value="DISPUTE">Зафиксировать спор</option></select><Button variant="outline" size="sm" type="button" :disabled="resolvingReview" @click="resolveReview">Зафиксировать пересмотр</Button></div>
+          </CardContent>
+        </Card>
+
+        <!-- E17: контекстное закрытие договора (видно в wind-down / закрыт) -->
+        <VentureCloseCard
+          v-if="closePreview"
+          entity-label="договор"
+          :preview="closePreview"
+          :busy="closingAgreement"
+          @close="onCloseAgreement"
+        />
+
+        <!-- Взаиморасчёты возникают только под Путём 2 и только при расхождении -->
+        <AgreementAdvancesCard v-if="hasInterparty" :positions="positions" @settle="openSettle" @withdraw="openPoolWithdrawal" />
+
+        <!-- E17 T-5.3: долги партнёров перед венчуром (по приходам) -->
+        <Card v-if="ventureDebts.length && !isClosed" class="rounded-2xl bg-background">
+          <CardHeader>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle class="text-base">Долги перед венчуром</CardTitle>
+                <CardDescription class="mt-1">
+                  Отрицательная позиция партнёра: вывел больше положенного или потерял товар по вине.
+                  Закрытие прихода заблокировано, пока долг не погашен.
+                </CardDescription>
+              </div>
+              <Wallet class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </div>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-2">
+            <div
+              v-for="debt in ventureDebts"
+              :key="`${debt.procurement_id}-${debt.partner_id}`"
+              class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3"
+            >
+              <div class="min-w-0">
+                <span class="block truncate font-medium text-foreground">{{ debt.partner_name }}</span>
+                <span class="mt-0.5 block text-xs text-muted-foreground">приход #{{ debt.procurement_id }}</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-sm font-semibold tabular-nums text-destructive">
+                  {{ formatPrice(debt.debt_uzs, 'UZS') }}
+                </span>
+                <Button size="sm" type="button" @click="openRepay(debt)">Погасить долг</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <AgreementPayoutDecisionPanel
+          v-if="!isClosed"
+          :rows="recoveredCapitalRows"
+          :accounts="operatingAccounts"
+          :preview="payoutDecisionPreview"
+          :previewing="previewingPayoutDecision"
+          :saving="savingPayoutDecision"
+          @preview="previewRecoveredCapitalDecision"
+          @execute="executeRecoveredCapitalDecision"
+        />
+
+        <!-- Распределение прибыли — только когда есть что распределять -->
+        <div v-if="profitRows.length && !isClosed" class="flex flex-wrap items-center gap-2">
+          <Button type="button" @click="dividendOpen = true">
+            <HandCoins data-icon="inline-start" />
+            Распределить прибыль
+          </Button>
+        </div>
+
+        <div class="grid items-start gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <Card class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.participants') }}</CardTitle>
+                  <CardDescription class="mt-1">План договора и текущий факт по капиталу.</CardDescription>
+                </div>
+                <Users class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-4 overflow-x-auto">
+              <div class="grid min-w-[32rem] grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+                <span />
+                <span class="text-right text-xs text-muted-foreground">план</span>
+                <span class="text-right text-xs text-muted-foreground">капитал</span>
+                <span class="text-right text-xs text-muted-foreground">прибыль</span>
+                <template v-for="row in partyRows" :key="`plan-${row.partner_id}`">
+                  <span class="min-w-0 truncate font-medium text-foreground">{{ row.displayName }}</span>
+                  <span class="whitespace-nowrap text-right tabular-nums text-foreground">{{ formatPrice(row.plannedAmount, primaryCurrency) }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.plannedCapitalPercent != null ? `${row.plannedCapitalPercent}%` : '—' }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.plannedProfitPercent }}%</span>
+                </template>
+              </div>
+
+              <Separator />
+
+              <div class="grid min-w-[32rem] grid-cols-[1fr_1fr_0.75fr_0.75fr] items-baseline gap-x-3 gap-y-2 text-sm">
+                <span />
+                <span class="text-right text-xs text-muted-foreground">внёс</span>
+                <span class="text-right text-xs text-muted-foreground">капитал</span>
+                <span class="text-right text-xs text-muted-foreground">доступно</span>
+                <template v-for="row in partyRows" :key="`fact-${row.partner_id}`">
+                  <span class="min-w-0 truncate font-medium text-foreground">{{ row.displayName }}</span>
+                  <span class="whitespace-nowrap text-right tabular-nums text-foreground">{{ formatPrice(row.contributedAmount, primaryCurrency) }}</span>
+                  <span class="text-right tabular-nums text-foreground">{{ row.actualCapitalPercent != null ? `${row.actualCapitalPercent}%` : '—' }}</span>
+                  <span class="whitespace-nowrap text-right font-semibold tabular-nums text-foreground">{{ formatPrice(row.availableAmount, primaryCurrency) }}</span>
+                </template>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div v-if="!isClosed" class="grid gap-4">
+            <Card class="rounded-2xl bg-background">
+              <CardHeader>
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle class="text-base">{{ t('procurements.contribution') }}</CardTitle>
+                    <CardDescription class="mt-1">Пополнение реального денежного пула договора.</CardDescription>
+                  </div>
+                  <Wallet class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </div>
+              </CardHeader>
+              <CardContent class="flex flex-col gap-3">
+                <div class="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
+                  <BaseSelect
+                    :model-value="contributionPartnerId"
+                    :options="agreementSideOptions"
+                    title="Кто пополняет договор"
+                    @update:model-value="setContributionPartner"
+                  />
+                  <MoneyCurrencyInput
+                    v-model="contributionAmount"
+                    v-model:currency="contributionCurrency"
+                    :placeholder="t('common.amount')"
+                    aria-label="Сумма пополнения договора"
+                  />
+                </div>
+                <Button type="button" :disabled="savingContribution" @click="saveContribution">
+                  <Plus data-icon="inline-start" />
+                  {{ t('procurements.addContribution') }}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card v-if="withdrawalSideOptions.length" class="rounded-2xl bg-background">
+              <CardHeader>
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle class="text-base">{{ t('procurements.withdrawalFromAgreement') }}</CardTitle>
+                    <CardDescription class="mt-1">Возврат доступных денег участнику без перерасчёта старых приходов.</CardDescription>
+                  </div>
+                  <RotateCcw class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </div>
+              </CardHeader>
+              <CardContent class="flex flex-col gap-3">
+                <div class="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
+                  <BaseSelect
+                    :model-value="withdrawalPartnerId"
+                    :options="withdrawalSideOptions"
+                    title="Кому вернуть деньги"
+                    @update:model-value="setWithdrawalPartner"
+                  />
+                  <MoneyCurrencyInput
+                    v-model="withdrawalAmount"
+                    v-model:currency="withdrawalCurrency"
+                    :placeholder="t('common.amount')"
+                    aria-label="Сумма возврата из договора"
+                  />
+                </div>
+                <p v-if="withdrawalAvailabilityError || withdrawalError" class="text-sm text-destructive">
+                  {{ withdrawalAvailabilityError || withdrawalError }}
+                </p>
+                <Button
+                  variant="outline"
+                  type="button"
+                  :disabled="savingWithdrawal || Boolean(withdrawalAvailabilityError)"
+                  @click="saveWithdrawal"
+                >
+                  <RotateCcw data-icon="inline-start" />
+                  {{ t('procurements.recordWithdrawal') }}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        <div class="grid items-start gap-4 lg:grid-cols-[1fr_0.9fr]">
+          <Card class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.linkedProcurements') }}</CardTitle>
+                  <CardDescription class="mt-1">Приходы, которые используют капитал этого договора.</CardDescription>
+                </div>
+                <Button v-if="!isClosed" variant="outline" size="sm" type="button" class="self-start" @click="router.push({ name: 'procurement-create', query: { mode: 'partnership', agreement: agreement.id } })">
+                  <Plus data-icon="inline-start" />
+                  Новый приход
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-2">
+              <button
+                v-for="procurement in agreement.procurements"
+                :key="procurement.id"
+                class="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-left transition hover:bg-muted/50"
+                type="button"
+                @click="router.push({ name: 'procurement-detail', params: { id: procurement.id } })"
+              >
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-medium text-foreground">#{{ procurement.id }} · {{ procurement.supplier_name || t('procurements.noSupplier') }}</span>
+                  <span class="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <CalendarDays class="size-3.5" aria-hidden="true" />
+                    {{ procurement.opened_at ? dateOnly(procurement.opened_at) : '—' }}
+                  </span>
+                </span>
+                <span class="flex shrink-0 items-center gap-2">
+                  <Badge variant="secondary">{{ procurementStatusLabel(procurement.status) }}</Badge>
+                  <ArrowRight class="size-4 text-muted-foreground" aria-hidden="true" />
+                </span>
+              </button>
+              <p v-if="agreement.procurements.length === 0" class="rounded-xl bg-muted/60 p-3 text-sm text-muted-foreground">
+                {{ t('procurements.noLinkedProcurements') }}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card v-if="activeProcurements.length && !isClosed" class="rounded-2xl bg-background">
+            <CardHeader>
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle class="text-base">{{ t('procurements.allocateCapital') }}</CardTitle>
+                  <CardDescription class="mt-1">Предложение распределения денег в выбранный приход.</CardDescription>
+                </div>
+                <Send class="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </div>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-3">
+              <div class="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <select
+                  v-model.number="allocationProcurementId"
+                  class="h-9 min-w-0 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option v-for="procurement in activeProcurements" :key="procurement.id" :value="procurement.id">
+                    {{ t('procurements.procurementNumber', { id: procurement.id }) }}
+                  </option>
+                </select>
+                <Button variant="outline" type="button" @click="loadAllocationPreview">{{ t('procurements.calculate') }}</Button>
+              </div>
+
+              <div v-if="allocationPreview" class="flex flex-col gap-2 rounded-xl bg-muted/60 p-3">
+                <div v-for="row in allocationPreview.suggestions" :key="`${row.partner_id}-${row.currency}`" class="flex items-baseline justify-between gap-3 text-sm">
+                  <span class="min-w-0 truncate text-muted-foreground">{{ row.partner_name }}</span>
+                  <span class="font-semibold tabular-nums text-foreground">{{ formatPrice(row.amount, row.currency) }}</span>
+                </div>
+                <Button type="button" :disabled="allocating" @click="allocateSuggested">
+                  <Send data-icon="inline-start" />
+                  {{ t('procurements.confirmAllocation') }}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card class="rounded-2xl bg-background">
+          <CardHeader>
+            <CardTitle class="text-base">{{ t('procurements.history') }}</CardTitle>
+            <CardDescription>{{ agreement.history.length }} операций по договору</CardDescription>
+          </CardHeader>
+          <CardContent class="flex flex-col">
+            <article v-for="entry in agreement.history.slice(0, 8)" :key="entry.id" class="flex items-start justify-between gap-3 border-t border-border py-3 first:border-t-0 first:pt-0 last:pb-0">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-foreground">{{ entry.title }}</p>
+                <p class="mt-0.5 text-xs text-muted-foreground">{{ formatDate(entry.date) }} · {{ entry.partner_name || t('procurements.system') }}</p>
+              </div>
+              <p class="shrink-0 text-sm font-semibold tabular-nums text-foreground">{{ formatPrice(entry.amount, entry.currency) }}</p>
+            </article>
+            <p v-if="agreement.history.length === 0" class="rounded-xl bg-muted/60 p-3 text-sm text-muted-foreground">
+              Истории по договору пока нет.
+            </p>
+          </CardContent>
+        </Card>
       </template>
-    </main>
-  </div>
-</template>
+    </section>
+    </PageContainer>
 
-<style scoped>
-.page { min-height: 100%; background: var(--color-bg-primary); }
-.topbar { position: sticky; top: 0; z-index: var(--z-sticky); display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: var(--space-2); min-height: var(--header-height); padding: 0 var(--space-4); border-bottom: 1px solid var(--color-border-subtle); background: var(--color-bg-primary); }
-h1 { margin: 0; text-align: center; font-size: var(--text-lg); font-weight: var(--font-semibold); }
-.icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; background: transparent; color: var(--color-text-primary); }
-.content { display: grid; gap: var(--space-3); padding: var(--space-4); padding-bottom: calc(var(--bottom-nav-height) + var(--space-4)); }
-.hero { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); background: var(--color-brand-800); color: white; }
-.hero span { color: color-mix(in srgb, white 72%, transparent); font-size: var(--text-xs); }
-.hero strong { display: block; margin-top: 3px; font-size: var(--text-xl); }
-.hero-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
-.hero-grid strong { font-size: var(--text-sm); }
-.panel { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-bg-primary); }
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-h2 { margin: 0; font-size: var(--text-base); font-weight: var(--font-semibold); }
-.section-head button { border: 0; background: transparent; color: var(--color-brand-600); font-weight: var(--font-semibold); }
-.partner-row, .proc-row, .history-row, .allocation-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--color-border-subtle); }
-.partner-row:first-of-type, .history-row:first-of-type { border-top: 0; }
-.partner-row div, .history-row div { display: grid; gap: 3px; min-width: 0; }
-.partner-row strong, .proc-row strong, .history-row strong, .allocation-row strong { color: var(--color-text-primary); font-size: var(--text-sm); }
-.partner-row span, .history-row span, .muted { color: var(--color-text-secondary); font-size: var(--text-xs); }
-.proc-row { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: transparent; text-align: left; }
-.proc-row span { color: var(--color-text-primary); }
-.inline-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 82px; gap: var(--space-2); }
-.inline-form.two { grid-template-columns: minmax(0, 1fr) auto; }
-input, select { min-height: 42px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); padding: 0 var(--space-3); background: var(--color-bg-primary); color: var(--color-text-primary); font: inherit; }
-.action { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 0; border-radius: var(--radius-md); background: var(--color-brand-600); color: white; font-weight: var(--font-semibold); }
-.action.secondary { background: var(--color-bg-elevated); color: var(--color-text-primary); border: 1px solid var(--color-border-default); }
-.action:disabled { opacity: .55; }
-.allocation-box { display: grid; gap: var(--space-2); padding-top: var(--space-2); }
-.state { min-height: 180px; display: grid; place-items: center; color: var(--color-text-secondary); }
-.state-error { color: var(--color-error); }
-@media (max-width: 420px) {
-  .inline-form { grid-template-columns: 1fr; }
-}
-</style>
+    <AdvanceSettleSheet
+      :open="settleOpen"
+      :agreement-id="agreementId"
+      :position="activePosition"
+      :accounts="operatingAccounts"
+      @close="settleOpen = false"
+      @settled="onAdvanceSettled"
+    />
+
+    <DividendPaySheet
+      :open="dividendOpen"
+      :rows="profitRows"
+      :obligations="payoutObligations"
+      :accounts="operatingAccounts"
+      @close="dividendOpen = false"
+      @paid="onDividendPaid"
+    />
+
+    <RepayDebtSheet
+      :open="repayOpen"
+      :target="repayTarget"
+      :accounts="operatingAccounts"
+      @close="repayOpen = false"
+      @repaid="onDebtRepaid"
+    />
+  </main>
+</template>

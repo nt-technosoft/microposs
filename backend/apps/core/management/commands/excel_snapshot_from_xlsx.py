@@ -90,7 +90,7 @@ def _is_required_row(sheet_name: str, row: dict[str, Any]) -> bool:
 class Command(BaseCommand):
     help = (
         'Parse a local .xlsx and build canonical snapshot JSON for '
-        'excel_align_import.'
+        'excel_workflow_staged / excel_workflow_audit.'
     )
 
     def add_arguments(self, parser):
